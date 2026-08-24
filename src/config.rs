@@ -11,6 +11,16 @@ use std::path::PathBuf;
 pub struct Config {
     pub refresh_secs: u64,
     pub alerts: Alerts,
+    pub claude: Claude,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Claude {
+    /// Extra Claude Code config directories beyond the auto-detected ones —
+    /// one per additional account, each a `CLAUDE_CONFIG_DIR`-style dir with
+    /// its own `projects/` transcripts. `~` expands to the home directory.
+    pub dirs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -32,6 +42,7 @@ impl Default for Config {
         Self {
             refresh_secs: 30,
             alerts: Alerts::default(),
+            claude: Claude::default(),
         }
     }
 }
@@ -63,6 +74,13 @@ credits_low_usd = 20.0
 # Claude estimated 5h-block spend (USD) at or above which to alert.
 # Claude records no quota locally, so this is a personal budget. 0 disables.
 claude_block_usd = 0.0
+
+[claude]
+# Extra Claude Code accounts. The default account (~/.claude, or
+# $CLAUDE_CONFIG_DIR) and any ~/.claude-* directory holding transcripts are
+# detected automatically; list additional config dirs here, e.g.
+# dirs = [\"~/claude-accounts/work\"]
+dirs = []
 ";
 
 fn config_path() -> Option<PathBuf> {

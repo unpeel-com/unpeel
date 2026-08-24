@@ -22,7 +22,11 @@ use std::sync::mpsc;
 use std::time::Duration;
 use crate::theme::{nav, Nav};
 use crate::unpeel::StatusReporter;
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use ratatui::crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton,
+    MouseEventKind,
+};
+use ratatui::crossterm::execute;
 
 fn main() {
     let config = Config::load();
@@ -101,6 +105,25 @@ impl App {
             .map(|snapshot| snapshot.providers.len())
             .unwrap_or(0)
     }
+
+    fn select(&mut self, index: usize) {
+        if index != self.selected {
+            self.selected = index;
+            self.expanded = false;
+        }
+    }
+
+    fn select_next(&mut self) {
+        if self.selected + 1 < self.provider_count() {
+            self.select(self.selected + 1);
+        }
+    }
+
+    fn select_prev(&mut self) {
+        if self.selected > 0 {
+            self.select(self.selected - 1);
+        }
+    }
 }
 
 fn run_tui(config: Config) {
@@ -135,6 +158,9 @@ fn run_tui(config: Config) {
     });
 
     let mut terminal = ratatui::init();
+    let _ = execute!(std::io::stdout(), EnableMouseCapture);
+    // Card screen positions from the last frame, for mouse hit-testing.
+    let mut hits: Vec<ui::Hit> = Vec::new();
     while !app.quit {
         while let Ok(snapshot) = snapshot_rx.try_recv() {
             app.apply(snapshot);
@@ -145,55 +171,58 @@ fn run_tui(config: Config) {
             scanning: app.scanning,
             alerts_enabled: app.alerts_enabled,
         };
-        let _ = terminal.draw(|frame| ui::draw(frame, app.snapshot.as_ref(), &view));
+        let _ = terminal.draw(|frame| hits = ui::draw(frame, app.snapshot.as_ref(), &view));
         if !matches!(event::poll(Duration::from_millis(100)), Ok(true)) {
             continue;
         }
         let Ok(read) = event::read() else { break };
-        if let Event::Key(key) = read {
-            if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
-                continue;
+        match read {
+            Event::Key(key) => {
+                if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+                    continue;
+                }
+                match nav(&key) {
+                    Some(Nav::Quit) => app.quit = true,
+                    Some(Nav::Down) => app.select_next(),
+                    Some(Nav::Up) => app.select_prev(),
+                    Some(Nav::Top) => app.select(0),
+                    Some(Nav::Bottom) => app.select(app.provider_count().saturating_sub(1)),
+                    Some(Nav::Select) => app.expanded = !app.expanded,
+                    Some(Nav::Back) => app.expanded = false,
+                    None => match key.code {
+                        KeyCode::Char('r') => {
+                            app.scanning = true;
+                            let _ = trigger_tx.send(());
+                        }
+                        KeyCode::Char('a') => {
+                            app.alerts_enabled = !app.alerts_enabled;
+                            if let Some(snapshot) = app.snapshot.take() {
+                                app.apply(snapshot);
+                            }
+                        }
+                        _ => {}
+                    },
+                }
             }
-            match nav(&key) {
-                Some(Nav::Quit) => app.quit = true,
-                Some(Nav::Down) => {
-                    if app.selected + 1 < app.provider_count() {
-                        app.selected += 1;
-                        app.expanded = false;
-                    }
-                }
-                Some(Nav::Up) => {
-                    if app.selected > 0 {
-                        app.selected -= 1;
-                        app.expanded = false;
-                    }
-                }
-                Some(Nav::Top) => {
-                    app.selected = 0;
-                    app.expanded = false;
-                }
-                Some(Nav::Bottom) => {
-                    app.selected = app.provider_count().saturating_sub(1);
-                    app.expanded = false;
-                }
-                Some(Nav::Select) => app.expanded = !app.expanded,
-                Some(Nav::Back) => app.expanded = false,
-                None => match key.code {
-                    KeyCode::Char('r') => {
-                        app.scanning = true;
-                        let _ = trigger_tx.send(());
-                    }
-                    KeyCode::Char('a') => {
-                        app.alerts_enabled = !app.alerts_enabled;
-                        if let Some(snapshot) = app.snapshot.take() {
-                            app.apply(snapshot);
+            Event::Mouse(mouse) => match mouse.kind {
+                MouseEventKind::ScrollDown => app.select_next(),
+                MouseEventKind::ScrollUp => app.select_prev(),
+                // Click selects a card; a second click on it toggles details.
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if let Some(hit) = hits.iter().find(|hit| hit.contains(mouse.row)) {
+                        if hit.index == app.selected {
+                            app.expanded = !app.expanded;
+                        } else {
+                            app.select(hit.index);
                         }
                     }
-                    _ => {}
-                },
-            }
+                }
+                _ => {}
+            },
+            _ => {}
         }
     }
+    let _ = execute!(std::io::stdout(), DisableMouseCapture);
     ratatui::restore();
     app.status.idle();
     app.status.flush();

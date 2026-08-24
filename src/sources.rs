@@ -10,19 +10,42 @@ pub enum Level {
     Alert,
 }
 
+/// Which tool a card describes — the UI keys its accent color off this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderKind {
+    Codex,
+    Claude,
+}
+
 /// One gauge/value row inside a provider card.
 #[derive(Debug, Clone)]
 pub struct Metric {
     pub label: String,
     /// 0..=100 renders a bar; None renders the value only.
     pub percent: Option<f64>,
+    /// Hourly activity buckets, oldest first; non-empty renders a sparkline
+    /// in place of the bar.
+    pub spark: Vec<f64>,
     pub value: String,
     pub level: Level,
 }
 
+impl Metric {
+    pub fn new(label: impl Into<String>, value: String, level: Level) -> Self {
+        Self {
+            label: label.into(),
+            percent: None,
+            spark: Vec::new(),
+            value,
+            level,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Provider {
-    pub name: &'static str,
+    pub kind: ProviderKind,
+    pub name: String,
     pub badge: String,
     /// The tool's local data directory exists at all.
     pub present: bool,
@@ -35,6 +58,8 @@ pub struct Provider {
     pub alert: Option<String>,
     /// Shortest fragment for the sidebar status line, e.g. "Codex 3%".
     pub status_fragment: Option<String>,
+    /// Estimated spend over the trailing 24h, when the source can price it.
+    pub day_usd: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -44,9 +69,20 @@ pub struct Snapshot {
 
 impl Snapshot {
     pub fn scan(config: &Config) -> Self {
-        Self {
-            providers: vec![crate::codex::scan(config), crate::claude::scan(config)],
-        }
+        let mut providers = vec![crate::codex::scan(config)];
+        providers.extend(crate::claude::scan_all(config));
+        Self { providers }
+    }
+
+    /// Total estimated 24h spend across sources that can price it, for the
+    /// header. None when no source has an estimate.
+    pub fn day_total_usd(&self) -> Option<f64> {
+        let costs: Vec<f64> = self
+            .providers
+            .iter()
+            .filter_map(|provider| provider.day_usd)
+            .collect();
+        (!costs.is_empty()).then(|| costs.iter().sum())
     }
 
     pub fn alerts(&self) -> Vec<&str> {

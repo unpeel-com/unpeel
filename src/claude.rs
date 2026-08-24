@@ -1,25 +1,125 @@
-//! Claude Code: the conversation transcripts under `~/.claude/projects/`
+//! Claude Code: the conversation transcripts under `<config dir>/projects/`
 //! carry per-message token usage. Claude records no quota locally, so this
 //! source reports estimated spend — the rolling 24h total and the current
 //! 5-hour billing block (Anthropic's limit windows start at the first
 //! message and last five hours, anchored to the hour). Costs use public
 //! per-model API prices and are labeled as estimates.
+//!
+//! Multiple accounts: people run second accounts by pointing
+//! `CLAUDE_CONFIG_DIR` at an alternate directory. Every such directory that
+//! holds transcripts becomes its own card — the default `~/.claude` (or the
+//! current `CLAUDE_CONFIG_DIR`), any `~/.claude-*` sibling, and dirs listed
+//! under `[claude] dirs` in config.toml. The account email in the dir's
+//! `.claude.json` labels the card.
 
 use crate::config::Config;
-use crate::sources::{compact_tokens, compact_usd, read_tail, Level, Metric, Provider};
+use crate::sources::{
+    compact_tokens, compact_usd, read_tail, Level, Metric, Provider, ProviderKind,
+};
 use crate::timeparse::{compact_duration, now_epoch_secs, parse_epoch_secs};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Only transcripts touched within the window (plus block slack) matter.
 const LOOKBACK_SECS: i64 = 26 * 3_600;
+const DAY_SECS: i64 = 24 * 3_600;
 const BLOCK_SECS: i64 = 5 * 3_600;
 const TAIL_BYTES: u64 = 4 * 1024 * 1024;
+/// One sparkline cell per hour of the trailing day.
+const SPARK_BUCKETS: usize = 24;
+/// Burn rate needs this much of a block elapsed to mean anything.
+const BURN_MIN_ELAPSED_SECS: i64 = 15 * 60;
 
-fn projects_root() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from)?;
-    Some(home.join(".claude").join("projects"))
+/// One Claude Code config directory — one account.
+struct Account {
+    dir: PathBuf,
+    /// Dir-derived suffix: `~/.claude` → None, `~/.claude-work` → "work".
+    short: Option<String>,
+}
+
+fn home() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(PathBuf::from)
+}
+
+fn expand_home(raw: &str) -> PathBuf {
+    match raw.strip_prefix("~/").and_then(|rest| Some(home()?.join(rest))) {
+        Some(path) => path,
+        None => PathBuf::from(raw),
+    }
+}
+
+fn short_label(dir: &Path) -> Option<String> {
+    let name = dir.file_name()?.to_string_lossy().to_string();
+    let trimmed = name
+        .trim_start_matches('.')
+        .trim_start_matches("claude")
+        .trim_start_matches(['-', '_']);
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// Every Claude config dir on this machine that holds transcripts, default
+/// account first, deduped by canonical path.
+fn discover_accounts(config: &Config) -> Vec<Account> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    if let Some(dir) = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from) {
+        dirs.push(dir);
+    }
+    if let Some(home) = home() {
+        dirs.push(home.join(".claude"));
+        if let Ok(entries) = std::fs::read_dir(&home) {
+            let mut siblings: Vec<PathBuf> = entries
+                .filter_map(|entry| entry.ok())
+                .map(|entry| entry.path())
+                .filter(|path| {
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| {
+                            name.starts_with(".claude-") || name.starts_with(".claude_")
+                        })
+                })
+                .collect();
+            siblings.sort();
+            dirs.extend(siblings);
+        }
+    }
+    dirs.extend(config.claude.dirs.iter().map(|raw| expand_home(raw)));
+
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    dirs.into_iter()
+        .filter(|dir| dir.join("projects").is_dir())
+        .filter(|dir| seen.insert(dir.canonicalize().unwrap_or_else(|_| dir.clone())))
+        .map(|dir| Account {
+            short: short_label(&dir),
+            dir,
+        })
+        .collect()
+}
+
+/// The logged-in account's email, from the dir's `.claude.json` (the default
+/// account keeps that file in `$HOME` instead).
+fn account_email(dir: &Path) -> Option<String> {
+    let mut candidates = vec![dir.join(".claude.json")];
+    if let Some(home) = home() {
+        if dir == home.join(".claude").as_path() {
+            candidates.push(home.join(".claude.json"));
+        }
+    }
+    for path in candidates {
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<Value>(&raw) else {
+            continue;
+        };
+        if let Some(email) = value
+            .pointer("/oauthAccount/emailAddress")
+            .and_then(Value::as_str)
+        {
+            return Some(email.to_string());
+        }
+    }
+    None
 }
 
 struct Entry {
@@ -150,23 +250,68 @@ fn current_block_start(entries: &[Entry], now: i64) -> Option<i64> {
     block_start.filter(|start| now < start + BLOCK_SECS)
 }
 
-pub fn scan(config: &Config) -> Provider {
+/// Hourly cost buckets over the trailing 24h, oldest first.
+fn spark_buckets(entries: &[Entry], now: i64) -> Vec<f64> {
+    let start = now - DAY_SECS;
+    let mut buckets = vec![0.0; SPARK_BUCKETS];
+    for entry in entries.iter().filter(|entry| entry.at >= start) {
+        let index = ((entry.at - start) as usize * SPARK_BUCKETS / DAY_SECS as usize)
+            .min(SPARK_BUCKETS - 1);
+        buckets[index] += entry.cost;
+    }
+    buckets
+}
+
+/// One card per Claude account found on this machine. A machine with no
+/// Claude at all still gets a single "not installed" card.
+pub fn scan_all(config: &Config) -> Vec<Provider> {
+    let accounts = discover_accounts(config);
+    if accounts.is_empty() {
+        return vec![Provider {
+            kind: ProviderKind::Claude,
+            name: "Claude Code".into(),
+            badge: String::new(),
+            present: false,
+            metrics: Vec::new(),
+            detail: Vec::new(),
+            as_of: None,
+            alert: None,
+            status_fragment: None,
+            day_usd: None,
+        }];
+    }
+    let multi = accounts.len() > 1;
+    accounts
+        .iter()
+        .map(|account| scan_account(config, account, multi))
+        .collect()
+}
+
+fn scan_account(config: &Config, account: &Account, multi: bool) -> Provider {
+    let email = account_email(&account.dir);
+    let name = match (&account.short, multi) {
+        (Some(short), true) => format!("Claude Code · {short}"),
+        _ => "Claude Code".to_string(),
+    };
+    // The sidebar fragment names the account only when there is more than one.
+    let fragment_name = match (&account.short, multi) {
+        (Some(short), true) => short.clone(),
+        _ => "Claude".to_string(),
+    };
     let mut provider = Provider {
-        name: "Claude Code",
-        badge: String::new(),
-        present: false,
+        kind: ProviderKind::Claude,
+        name,
+        badge: email.clone().unwrap_or_default(),
+        present: true,
         metrics: Vec::new(),
         detail: Vec::new(),
         as_of: None,
         alert: None,
         status_fragment: None,
+        day_usd: None,
     };
-    let Some(root) = projects_root().filter(|root| root.is_dir()) else {
-        return provider;
-    };
-    provider.present = true;
     let now = now_epoch_secs();
-    let entries = recent_entries(&root, now);
+    let entries = recent_entries(&account.dir.join("projects"), now);
     if entries.is_empty() {
         return provider;
     }
@@ -192,7 +337,7 @@ pub fn scan(config: &Config) -> Provider {
     };
     if block_level == Level::Alert {
         provider.alert = Some(format!(
-            "Claude block at {} (budget {})",
+            "{fragment_name} block at {} (budget {})",
             compact_usd(block_cost),
             compact_usd(budget)
         ));
@@ -200,31 +345,52 @@ pub fn scan(config: &Config) -> Provider {
     let resets = block
         .map(|start| format!(" · resets {}", compact_duration(start + BLOCK_SECS - now)))
         .unwrap_or_default();
-    provider.metrics.push(Metric {
-        label: "5h block".into(),
-        percent: (budget > 0.0).then(|| (block_cost / budget * 100.0).clamp(0.0, 100.0)),
-        value: format!("{} est{resets}", compact_usd(block_cost)),
-        level: block_level,
-    });
+    let mut block_metric = Metric::new(
+        "5h block",
+        format!("{} est{resets}", compact_usd(block_cost)),
+        block_level,
+    );
+    block_metric.percent =
+        (budget > 0.0).then(|| (block_cost / budget * 100.0).clamp(0.0, 100.0));
+    provider.metrics.push(block_metric);
 
-    let day_cost: f64 = entries.iter().map(|entry| entry.cost).sum();
-    let day_tokens: u64 = entries.iter().map(|entry| entry.tokens).sum();
-    provider.metrics.push(Metric {
-        label: "24h".into(),
-        percent: None,
-        value: format!(
+    // Burn rate over the active block, once enough of it has elapsed.
+    if let Some(start) = block {
+        let elapsed = now - start;
+        if elapsed >= BURN_MIN_ELAPSED_SECS && block_cost > 0.0 {
+            let per_hour = block_cost / (elapsed as f64 / 3_600.0);
+            provider.metrics.push(Metric::new(
+                "burn",
+                format!("{}/hr est", compact_usd(per_hour)),
+                Level::Ok,
+            ));
+        }
+    }
+
+    let day_entries: Vec<&Entry> = entries
+        .iter()
+        .filter(|entry| entry.at >= now - DAY_SECS)
+        .collect();
+    let day_cost: f64 = day_entries.iter().map(|entry| entry.cost).sum();
+    let day_tokens: u64 = day_entries.iter().map(|entry| entry.tokens).sum();
+    let mut day_metric = Metric::new(
+        "24h",
+        format!(
             "{} est · {} tok",
             compact_usd(day_cost),
             compact_tokens(day_tokens)
         ),
-        level: Level::Ok,
-    });
+        Level::Ok,
+    );
+    day_metric.spark = spark_buckets(&entries, now);
+    provider.metrics.push(day_metric);
+    provider.day_usd = Some(day_cost);
 
-    provider.status_fragment = Some(format!("Claude {}", compact_usd(block_cost)));
+    provider.status_fragment = Some(format!("{fragment_name} {}", compact_usd(block_cost)));
 
     // Per-model 24h breakdown for the expanded card, largest first.
     let mut by_model: BTreeMap<&str, (f64, u64)> = BTreeMap::new();
-    for entry in &entries {
+    for entry in &day_entries {
         let slot = by_model.entry(entry.model.as_str()).or_default();
         slot.0 += entry.cost;
         slot.1 += entry.tokens;
@@ -237,6 +403,11 @@ pub fn scan(config: &Config) -> Provider {
             short.to_string(),
             format!("{} · {} tok", compact_usd(cost), compact_tokens(tokens)),
         ));
+    }
+    if multi {
+        provider
+            .detail
+            .push(("account".into(), account.dir.to_string_lossy().into_owned()));
     }
     provider
 }

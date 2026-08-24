@@ -13,6 +13,9 @@ pub const HEADER: Color = Color::Rgb(196, 202, 216);
 pub const FOCUS: Color = Color::Rgb(156, 147, 184);
 /// Needs-user accent.
 pub const ATTENTION: Color = Color::LightRed;
+/// Per-provider brand accents: Claude's coral, Codex's teal.
+pub const CLAUDE_ACCENT: Color = Color::Rgb(217, 119, 87);
+pub const CODEX_ACCENT: Color = Color::Rgb(94, 190, 160);
 
 const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 

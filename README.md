@@ -5,18 +5,32 @@ built with [Ratatui](https://ratatui.rs). Everything is read from files your
 AI tools already write on this machine: no API keys, no network, no daemon.
 
 ```
- Usage
-────────────────────────────────────────────
-▎Codex                                  pro
-   week     █░░░░░░░░░░ 3% · resets 6d 18h
-   credits                            $436
+ USAGE                                        24h $12.15 est
+─────────────────────────────────────────────────────────────
+▎● Codex                                                 pro
+   5h       ████████░░░░░░░░░░  42% · resets 1h 20m
+   week     █░░░░░░░░░░░░░░░░░   3% · resets 6d 18h
+   credits                                              $436
 
- Claude Code
-   5h block     $3.24 est · resets 1h 20m
-   24h               $8.91 est · 1.2M tok
+ ● Claude Code                            tommy@uxthemes.com
+   5h block             $3.24 est · resets 1h 20m
+   burn                              $1.20/hr est
+   24h      ▁▁▂▃▅▇▆▃▁▂▄▆█▇▅▃▂▁      $8.91 est · 1.2M tok
+
+ ● Claude Code · work                      work@example.com
+   5h block             $1.02 est · resets 3h 40m
+   24h      ▁▁▁▂▁▁▃▅▂▁▁▁▁▂▁▁▁▁      $3.24 est · 410k tok
 
  j/k select · enter details · q quit
 ```
+
+Each provider renders in its brand accent — Claude coral, Codex teal — with
+a live sparkline of the last 24 hours, the current burn rate, and the 24h
+total across everything in the header.
+
+The dashboard is fully mouse-aware: click a card to select it, click it
+again for details, and scroll to move the selection. The keyboard does
+everything too (`j/k`, `enter`, `r`, `a`, `q`).
 
 ## What it reads
 
@@ -25,8 +39,25 @@ AI tools already write on this machine: no API keys, no network, no daemon.
   credit plans) the actual credits balance. No estimation.
 - **Claude Code** — the transcripts under `~/.claude/projects/` carry per-message
   token usage. Claude records no quota locally, so unpeel-usage shows
-  **estimated** spend from public per-model API prices: the rolling 24h total
-  and the current 5-hour billing block, with its reset time.
+  **estimated** spend from public per-model API prices: the rolling 24h total,
+  the current 5-hour billing block with its reset time, and the burn rate over
+  that block.
+
+## Multiple Claude accounts
+
+Every Claude Code config directory on the machine gets its own card, labeled
+with the account's email (read from that directory's `.claude.json`):
+
+- `~/.claude` — the default account (or `$CLAUDE_CONFIG_DIR` when set)
+- `~/.claude-*` — the common convention for second accounts run with
+  `CLAUDE_CONFIG_DIR=~/.claude-work claude`; detected automatically
+- anything listed under `[claude] dirs` in the config file, for dirs that
+  live elsewhere:
+
+```toml
+[claude]
+dirs = ["~/claude-accounts/personal"]
+```
 
 ## Alerts
 

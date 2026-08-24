@@ -7,6 +7,7 @@
 use crate::config::Config;
 use crate::sources::{
     compact_tokens, compact_usd, level_for_used_percent, read_tail, Level, Metric, Provider,
+    ProviderKind,
 };
 use crate::timeparse::{compact_duration, now_epoch_secs, parse_epoch_secs};
 use serde_json::Value;
@@ -121,7 +122,8 @@ fn window_label(minutes: Option<u64>) -> String {
 
 pub fn scan(config: &Config) -> Provider {
     let mut provider = Provider {
-        name: "Codex",
+        kind: ProviderKind::Codex,
+        name: "Codex".into(),
         badge: String::new(),
         present: false,
         metrics: Vec::new(),
@@ -129,6 +131,7 @@ pub fn scan(config: &Config) -> Provider {
         as_of: None,
         alert: None,
         status_fragment: None,
+        day_usd: None,
     };
     let Some(root) = sessions_root().filter(|root| root.is_dir()) else {
         return provider;
@@ -175,12 +178,9 @@ pub fn scan(config: &Config) -> Provider {
         if provider.status_fragment.is_none() {
             provider.status_fragment = Some(format!("Codex {used:.0}%"));
         }
-        provider.metrics.push(Metric {
-            label,
-            percent: Some(used.clamp(0.0, 100.0)),
-            value: format!("{used:.0}%{resets}"),
-            level,
-        });
+        let mut metric = Metric::new(label, format!("{used:.0}%{resets}"), level);
+        metric.percent = Some(used.clamp(0.0, 100.0));
+        provider.metrics.push(metric);
     }
 
     let credits = &limits["credits"];
@@ -203,12 +203,9 @@ pub fn scan(config: &Config) -> Provider {
             if level == Level::Alert {
                 provider.alert = Some(format!("Codex credits low: {}", compact_usd(balance)));
             }
-            provider.metrics.push(Metric {
-                label: "credits".into(),
-                percent: None,
-                value: compact_usd(balance),
-                level,
-            });
+            provider
+                .metrics
+                .push(Metric::new("credits", compact_usd(balance), level));
         }
     }
 
