@@ -56,7 +56,7 @@ copyable into any app. There is no SDK.
 ## Install
 
 ```sh
-curl -fsSL https://unpeel.com/usage/install.sh | sh
+curl -fsSL https://unpeel.com/install/usage/install.sh | sh
 ```
 
 Or build from source: `cargo build --release`.
