@@ -66,3 +66,23 @@ Or build from source: `cargo build --release`.
 - `unpeel-usage` — the dashboard
 - `unpeel-usage report` — one-shot plain-text snapshot for scripts and
   status bars
+
+## Development
+
+```sh
+cargo run              # the dashboard, against your real local data
+cargo run -- report    # one-shot text output (no TTY needed)
+cargo test
+```
+
+Running any build once self-installs the App manifest into
+`~/.unpeel/apps/unpeel.app.usage/` with that binary's absolute path as the
+launch command — so after `cargo run`, typing
+`target/debug/unpeel-usage` (or launching its seeded preset) inside Unpeel
+shows the branded row, status line, and alerts against your dev build. The
+manifest rewrites on every run, so release and debug builds simply take
+over from each other.
+
+Config lives at `~/.config/unpeel-usage/config.toml`; delete it to restore
+defaults. Data is re-scanned every `refresh_secs` (and on `r`), and the
+sidebar status line updates on every scan.
