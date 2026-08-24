@@ -53,6 +53,14 @@ terminal — and the sidebar shows a live status line like
 `src/install.rs`: plain files and one tiny local HTTP contract, freely
 copyable into any app. There is no SDK.
 
+## Install
+
+```sh
+curl -fsSL https://unpeel.com/usage/install.sh | sh
+```
+
+Or build from source: `cargo build --release`.
+
 ## Commands
 
 - `unpeel-usage` — the dashboard
