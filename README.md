@@ -84,6 +84,13 @@ terminal — and the sidebar shows a live status line like
 `src/install.rs`: plain files and one tiny local HTTP contract, freely
 copyable into any app. There is no SDK.
 
+When an Unpeel home exists (`$UNPEEL_HOME`, or `~/.unpeel`), its
+`app-state.json` presets select and order the dashboard providers. Codex and
+Claude are included at their first matching preset position; additional launch
+variants are deduplicated, while all detected Claude accounts remain grouped
+there. Without an Unpeel folder or a readable presets array, the standalone
+Codex-then-Claude order is unchanged.
+
 ## Install
 
 ```sh

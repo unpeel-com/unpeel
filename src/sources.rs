@@ -2,6 +2,7 @@
 //! files the tools already write — no API keys, no network, no daemon.
 
 use crate::config::Config;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Level {
@@ -69,8 +70,13 @@ pub struct Snapshot {
 
 impl Snapshot {
     pub fn scan(config: &Config) -> Self {
-        let mut providers = vec![crate::codex::scan(config)];
-        providers.extend(crate::claude::scan_all(config));
+        let mut providers = Vec::new();
+        for kind in provider_order() {
+            match kind {
+                ProviderKind::Codex => providers.push(crate::codex::scan(config)),
+                ProviderKind::Claude => providers.extend(crate::claude::scan_all(config)),
+            }
+        }
         Self { providers }
     }
 
@@ -111,6 +117,70 @@ impl Snapshot {
         } else {
             fragments.join(" · ")
         }
+    }
+}
+
+/// Use Unpeel's flat preset list as the provider catalog when an Unpeel home
+/// exists and has readable preset state. Otherwise retain the standalone
+/// dashboard's complete, stable order.
+fn provider_order() -> Vec<ProviderKind> {
+    unpeel_home()
+        .as_deref()
+        .and_then(unpeel_preset_provider_order)
+        .unwrap_or_else(|| vec![ProviderKind::Codex, ProviderKind::Claude])
+}
+
+fn unpeel_home() -> Option<PathBuf> {
+    if let Some(home) = std::env::var_os("UNPEEL_HOME").filter(|home| !home.is_empty()) {
+        return Some(PathBuf::from(home));
+    }
+    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".unpeel"))
+}
+
+/// `Some` means Unpeel has an authoritative presets array, including an empty
+/// one. `None` means there is no usable Unpeel preset contract, so callers
+/// should keep standalone behavior.
+fn unpeel_preset_provider_order(home: &Path) -> Option<Vec<ProviderKind>> {
+    if !home.is_dir() {
+        return None;
+    }
+    let raw = std::fs::read(home.join("app-state.json")).ok()?;
+    provider_order_from_app_state(&raw)
+}
+
+fn provider_order_from_app_state(raw: &[u8]) -> Option<Vec<ProviderKind>> {
+    let state: serde_json::Value = serde_json::from_slice(raw).ok()?;
+    let presets = state.get("presets")?.as_array()?;
+    let mut order = Vec::new();
+    for preset in presets {
+        let Some(kind) = preset
+            .get("command")
+            .and_then(|value| value.as_str())
+            .and_then(provider_kind_for_command)
+        else {
+            continue;
+        };
+        // Several launch variants for one CLI share one usage source. The
+        // first preset therefore chooses the provider's position.
+        if !order.contains(&kind) {
+            order.push(kind);
+        }
+    }
+    Some(order)
+}
+
+/// Match Unpeel's command-head convention: the first whitespace-delimited
+/// token, reduced to its basename so absolute launch paths also work.
+fn provider_kind_for_command(command: &str) -> Option<ProviderKind> {
+    let head = command.split_whitespace().next()?;
+    let executable = Path::new(head)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(head);
+    match executable {
+        "codex" => Some(ProviderKind::Codex),
+        "claude" => Some(ProviderKind::Claude),
+        _ => None,
     }
 }
 
@@ -162,4 +232,51 @@ pub fn read_tail(path: &std::path::Path, cap: u64) -> Option<String> {
         }
     }
     Some(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unpeel_presets_filter_deduplicate_and_order_supported_providers() {
+        let raw = br#"{
+            "presets": [
+                {"command": "/opt/tools/claude --dangerously-skip-permissions"},
+                {"command": "grok --always-approve"},
+                {"command": "codex --yolo", "enabled": true},
+                {"command": "claude"},
+                {"command": "codex", "enabled": false}
+            ]
+        }"#;
+
+        assert_eq!(
+            provider_order_from_app_state(raw),
+            Some(vec![ProviderKind::Claude, ProviderKind::Codex])
+        );
+    }
+
+    #[test]
+    fn an_authoritative_empty_preset_list_selects_no_providers() {
+        assert_eq!(
+            provider_order_from_app_state(br#"{"presets": []}"#),
+            Some(Vec::new())
+        );
+    }
+
+    #[test]
+    fn unusable_state_does_not_override_standalone_provider_defaults() {
+        assert_eq!(provider_order_from_app_state(br#"{}"#), None);
+        assert_eq!(provider_order_from_app_state(b"not json"), None);
+
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock after Unix epoch")
+            .as_nanos();
+        let absent = std::env::temp_dir().join(format!(
+            "unpeel-usage-absent-home-{}-{nonce}",
+            std::process::id()
+        ));
+        assert_eq!(unpeel_preset_provider_order(&absent), None);
+    }
 }
