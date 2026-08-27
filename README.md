@@ -2,7 +2,7 @@
 
 A deliberately small development TUI for proving terminal-to-terminal path
 dragging in Unpeel. Its flat, borderless directory view is built entirely from
-the reusable `Explorer` component in the sibling `../unpeel-tui-kit` crate.
+the reusable `Explorer` component in the sibling `../unpeel-app-kit` crate.
 The interaction model follows
 [`ratatui-explorer`](https://github.com/tatounee/ratatui-explorer): the current
 folder is a single list with a `../` parent row rather than an expanded

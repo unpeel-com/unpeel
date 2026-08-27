@@ -4,7 +4,7 @@ mod unpeel;
 
 use std::path::PathBuf;
 
-use unpeel_tui_kit::Explorer;
+use unpeel_app_kit::Explorer;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     install::ensure_installed();

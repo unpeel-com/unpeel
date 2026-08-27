@@ -9,7 +9,7 @@ license = "MIT"
 crossterm = "0.29"
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
 serde_json = "1"
-unpeel-tui-kit = { path = "../unpeel-tui-kit" }
+unpeel-app-kit = { path = "../unpeel-app-kit" }
 
 [dev-dependencies]
 tempfile = "3"

@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::json;
-use unpeel_tui_kit::ExplorerEntry;
+use unpeel_app_kit::ExplorerEntry;
 
 use crate::install::APP_ID;
 

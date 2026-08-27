@@ -13,7 +13,7 @@ use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
 use ratatui::widgets::Paragraph;
 use ratatui::{Frame, Terminal};
-use unpeel_tui_kit::{
+use unpeel_app_kit::{
     AgentBridge, ColorScheme, DragSurface, Explorer, ExplorerEvent, ExplorerInput, ExplorerTheme,
     KitTheme, MenuItem, MenuTheme, PopupMenu, clipboard_sequence,
 };
