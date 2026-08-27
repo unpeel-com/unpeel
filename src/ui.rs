@@ -17,7 +17,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 use ratatui::{Frame, Terminal};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
-use unpeel_app_kit::{ColorScheme, KitTheme, SELECTABLE_LEFT_PADDING, VerticalScrollbar};
+use unpeel_app_kit::{
+    ColorScheme, DoubleClickTracker, KitTheme, SELECTABLE_LEFT_PADDING, VerticalScrollbar,
+};
 
 use crate::app::{App, Screen};
 use crate::git::{ChangedFile, DiffDocument};
@@ -32,6 +34,7 @@ pub fn run(mut app: App) -> io::Result<()> {
     let mut terminal = TerminalGuard::enter()?;
     let mut reporter = ContextReporter::detect();
     let mut rendered = RenderResult::default();
+    let mut clicks = DoubleClickTracker::new();
     let mut needs_draw = true;
 
     loop {
@@ -52,6 +55,7 @@ pub fn run(mut app: App) -> io::Result<()> {
         }
         match event::read()? {
             Event::Key(key) if key.kind != KeyEventKind::Release => {
+                clicks.reset();
                 let Some(action) = action_for_key(key, app.is_detail()) else {
                     continue;
                 };
@@ -65,6 +69,7 @@ pub fn run(mut app: App) -> io::Result<()> {
                 match mouse.kind {
                     MouseEventKind::Down(MouseButton::Left) => {
                         if app.is_detail() {
+                            clicks.reset();
                             if rendered
                                 .back_button
                                 .is_some_and(|hit| hit.contains(position))
@@ -72,18 +77,23 @@ pub fn run(mut app: App) -> io::Result<()> {
                                 app.back();
                                 needs_draw = true;
                             }
-                        } else if let Some(hit) =
-                            rendered.hits.iter().find(|hit| hit.contains(position))
+                        } else if let Some((index, activate)) =
+                            list_click_at(&rendered, position, &mut clicks)
                         {
-                            app.select(hit.index);
+                            app.select(index);
+                            if activate && let Err(error) = app.open_selected() {
+                                app.fail(error);
+                            }
                             needs_draw = true;
                         }
                     }
                     MouseEventKind::ScrollUp => {
+                        clicks.reset();
                         app.scroll_vertical(-3);
                         needs_draw = true;
                     }
                     MouseEventKind::ScrollDown => {
+                        clicks.reset();
                         app.scroll_vertical(3);
                         needs_draw = true;
                     }
@@ -91,6 +101,7 @@ pub fn run(mut app: App) -> io::Result<()> {
                 }
             }
             Event::Resize(_, _) => {
+                clicks.reset();
                 app.reveal_selected = true;
                 needs_draw = true;
             }
@@ -98,6 +109,23 @@ pub fn run(mut app: App) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+fn list_click_at(
+    rendered: &RenderResult,
+    position: Position,
+    clicks: &mut DoubleClickTracker<usize>,
+) -> Option<(usize, bool)> {
+    let Some(hit) = rendered
+        .hits
+        .iter()
+        .copied()
+        .find(|hit| hit.contains(position))
+    else {
+        clicks.reset();
+        return None;
+    };
+    Some((hit.index, clicks.click(hit.index)))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -773,6 +801,32 @@ mod tests {
         let escape = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
         assert_eq!(action_for_key(escape, true), Some(InputAction::Back));
         assert_eq!(action_for_key(escape, false), None);
+    }
+
+    #[test]
+    fn double_clicking_the_same_file_row_requests_activation() {
+        let rendered = RenderResult {
+            hits: vec![RowHit {
+                index: 2,
+                area: Rect::new(0, 3, 40, 1),
+            }],
+            ..RenderResult::default()
+        };
+        let position = Position::new(12, 3);
+        let mut clicks = DoubleClickTracker::new();
+
+        assert_eq!(
+            list_click_at(&rendered, position, &mut clicks),
+            Some((2, false))
+        );
+        assert_eq!(
+            list_click_at(&rendered, position, &mut clicks),
+            Some((2, true))
+        );
+        assert_eq!(
+            list_click_at(&rendered, Position::new(12, 4), &mut clicks),
+            None
+        );
     }
 
     #[test]

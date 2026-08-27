@@ -52,7 +52,8 @@ Keyboard controls:
 - `r`: reload Git status and the open diff
 - `q` or `Ctrl-C`: quit
 
-Mouse clicks select full rows and activate the Back row. The wheel scrolls the
+One mouse click selects a full row; double-clicking that same row opens its
+diff. The Back action activates with one click, and the wheel scrolls the
 current list or diff.
 
 Set `UNPEEL_TUI_THEME=light` or `UNPEEL_TUI_THEME=dark` to override theme
