@@ -1,0 +1,20 @@
+[package]
+name = "unpeel-diffs"
+version = "0.1.0"
+edition = "2024"
+description = "Standalone borderless Git diff viewer for Unpeel terminals"
+license = "MIT"
+
+[dependencies]
+crossterm = "0.29"
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
+serde_json = "1"
+unicode-width = "0.2"
+unpeel-tui-kit = { path = "../unpeel-tui-kit" }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = true
+strip = true
