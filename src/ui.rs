@@ -95,14 +95,9 @@ pub fn draw(
     view: &View,
     palette: &ui::Palette,
 ) -> RenderResult {
-    let [header, body, footer] = Layout::vertical([
-        Constraint::Length(2),
-        Constraint::Min(0),
-        Constraint::Length(1),
-    ])
-    .areas(frame.area());
+    let [body, footer] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
 
-    render_header(frame, header, snapshot, view, palette);
     let mut result = match snapshot {
         None => {
             render_empty_state(frame, body, view.scanning, palette);
@@ -120,88 +115,13 @@ pub fn draw(
         }
         Some(snapshot) => render_provider_list(frame, body, &snapshot.providers, view, palette),
     };
-    result.alert_button = render_footer(frame, footer, view.hosted, view.detail_open, palette);
+    result.alert_button = render_footer(frame, footer, view.detail_open, palette);
     if let Some(selected) = view.alert_dialog.filter(|_| view.hosted) {
         let (area, hits) = render_alert_dialog(frame, selected, view.alerts, palette);
         result.alert_dialog_area = Some(area);
         result.alert_option_hits = hits;
     }
     result
-}
-
-fn render_header(
-    frame: &mut Frame,
-    area: Rect,
-    snapshot: Option<&Snapshot>,
-    view: &View,
-    palette: &ui::Palette,
-) {
-    if area.is_empty() {
-        return;
-    }
-
-    frame.render_widget(
-        Block::new()
-            .borders(Borders::BOTTOM)
-            .border_style(Style::default().fg(palette.track)),
-        area,
-    );
-
-    let content = Rect::new(area.x, area.y, area.width, area.height.min(1));
-    let summary = header_summary(snapshot, view);
-    let summary_width = Line::from(summary.as_str())
-        .width()
-        .min(area.width.saturating_sub(6) as usize) as u16;
-    let [title_area, summary_area] =
-        Layout::horizontal([Constraint::Min(0), Constraint::Length(summary_width)]).areas(content);
-    let title_padding = SELECTABLE_LEFT_PADDING.min(title_area.width);
-    let padded_title_area = Rect::new(
-        title_area.x.saturating_add(title_padding),
-        title_area.y,
-        title_area.width.saturating_sub(title_padding),
-        title_area.height,
-    );
-
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            "USAGE",
-            Style::default()
-                .fg(palette.header)
-                .add_modifier(Modifier::BOLD),
-        ))),
-        padded_title_area,
-    );
-    frame.render_widget(
-        Paragraph::new(summary)
-            .style(Style::default().fg(palette.muted))
-            .alignment(Alignment::Right),
-        summary_area,
-    );
-}
-
-fn header_summary(snapshot: Option<&Snapshot>, view: &View) -> String {
-    let mut parts = Vec::new();
-    if let Some(total) = snapshot.and_then(Snapshot::day_total_usd) {
-        if total > 0.0 {
-            parts.push(format!("24h {} est", crate::sources::compact_usd(total)));
-        }
-    }
-    if view.hosted {
-        let enabled = view.alerts.enabled_count();
-        parts.push(if enabled == 0 {
-            "alerts off".into()
-        } else {
-            format!("alerts {enabled}/{}", AlertOption::ALL.len())
-        });
-    }
-    if view.scanning {
-        parts.push(ui::spinner_frame().into());
-    }
-    if parts.is_empty() {
-        String::new()
-    } else {
-        format!("{} ", parts.join(" · "))
-    }
 }
 
 fn render_empty_state(frame: &mut Frame, area: Rect, scanning: bool, palette: &ui::Palette) {
@@ -230,71 +150,18 @@ fn render_empty_state(frame: &mut Frame, area: Rect, scanning: bool, palette: &u
 fn render_footer(
     frame: &mut Frame,
     area: Rect,
-    hosted: bool,
     detail_open: bool,
     palette: &ui::Palette,
 ) -> Option<Hit> {
     if area.is_empty() {
         return None;
     }
-    let hints: &[(&str, &str)] = if detail_open && area.width >= 68 {
-        if hosted {
-            &[
-                ("esc/enter", "back"),
-                ("j/k", "scroll"),
-                ("r", "refresh"),
-                ("a", "alerts"),
-                ("t", "theme"),
-                ("q", "quit"),
-            ]
-        } else {
-            &[
-                ("esc/enter", "back"),
-                ("j/k", "scroll"),
-                ("r", "refresh"),
-                ("t", "theme"),
-                ("q", "quit"),
-            ]
-        }
-    } else if detail_open {
-        &[("esc", "back"), ("j/k", "scroll"), ("q", "quit")]
-    } else if area.width >= 68 {
-        if hosted {
-            &[
-                ("j/k", "select"),
-                ("enter", "details"),
-                ("r", "refresh"),
-                ("a", "alerts"),
-                ("t", "theme"),
-                ("q", "quit"),
-            ]
-        } else {
-            &[
-                ("j/k", "select"),
-                ("enter", "details"),
-                ("r", "refresh"),
-                ("t", "theme"),
-                ("q", "quit"),
-            ]
-        }
+    let hints: &[(&str, &str)] = if detail_open {
+        &[("Esc", "back"), ("↑↓", "scroll")]
     } else {
-        &[("j/k", "select"), ("enter", "details"), ("q", "quit")]
+        &[("↑↓", "select"), ("Enter", "details")]
     };
     frame.render_widget(Paragraph::new(ui::hint_line(palette, hints)), area);
-
-    let mut x = area.x.saturating_add(1);
-    for (index, (key, label)) in hints.iter().enumerate() {
-        if index > 0 {
-            x = x.saturating_add(3);
-        }
-        let width =
-            u16::try_from(key.chars().count() + 1 + label.chars().count()).unwrap_or(u16::MAX);
-        if *label == "alerts" {
-            let visible = area.right().saturating_sub(x).min(width);
-            return Hit::from_rect(0, Rect::new(x, area.y, visible, 1));
-        }
-        x = x.saturating_add(width);
-    }
     None
 }
 
@@ -378,9 +245,10 @@ fn render_alert_dialog(
 
     if inner.height >= 1 {
         frame.render_widget(
-            Paragraph::new("↑/↓ select · space toggle · esc close")
-                .style(Style::default().fg(palette.muted))
-                .alignment(Alignment::Center),
+            Paragraph::new(ui::hint_line(
+                palette,
+                &[("Esc", "close"), ("↑↓", "select"), ("Space", "toggle")],
+            )),
             row_at(inner, inner.bottom().saturating_sub(1)),
         );
     }
@@ -1376,17 +1244,12 @@ mod tests {
     #[test]
     fn default_view_is_a_compact_explorer_style_list() {
         let (screen, hits) = render(72, 12, false);
-        assert!(screen.contains("USAGE"), "uppercase brand\n{screen}");
         assert!(
             screen
                 .lines()
                 .next()
-                .is_some_and(|line| line.starts_with("  USAGE")),
-            "header uses the shared two-cell inset\n{screen}"
-        );
-        assert!(
-            screen.contains("24h $17.82 est"),
-            "header 24h total\n{screen}"
+                .is_some_and(|line| line.starts_with("  Codex Pro")),
+            "content starts with the two-cell-inset provider list\n{screen}"
         );
         assert!(screen.contains("Codex Pro"), "provider and badge\n{screen}");
         assert!(
@@ -1574,13 +1437,13 @@ mod tests {
             let expected = selected_row_style(&palette);
             let expected_background = expected.bg.expect("kit selection background");
             assert!(
-                (0..width).all(|x| buffer[(x, 2)].bg == expected_background),
+                (0..width).all(|x| buffer[(x, 0)].bg == expected_background),
                 "selection should paint the complete row"
             );
-            assert_eq!(buffer[(0, 3)].bg, Color::Reset, "unselected row");
-            assert_eq!(buffer[(0, 2)].symbol(), " ");
-            assert_eq!(buffer[(1, 2)].symbol(), " ");
-            assert_eq!(buffer[(2, 2)].symbol(), "C", "two-cell label inset");
+            assert_eq!(buffer[(0, 1)].bg, Color::Reset, "unselected row");
+            assert_eq!(buffer[(0, 0)].symbol(), " ");
+            assert_eq!(buffer[(1, 0)].symbol(), " ");
+            assert_eq!(buffer[(2, 0)].symbol(), "C", "two-cell label inset");
         }
     }
 
@@ -1651,14 +1514,14 @@ mod tests {
 
     #[test]
     fn short_viewport_scrolls_selected_row_into_view() {
-        let (screen, hits) = render_with(72, 5, 2, false);
+        let (screen, hits) = render_with(72, 3, 2, false);
         assert_eq!(hits.first().map(|hit| hit.index), Some(1));
         assert_eq!(hits.last().map(|hit| hit.index), Some(2));
         assert!(screen.contains("Claude · work"), "selected row\n{screen}");
         assert!(screen.contains('┃'), "scrollbar thumb\n{screen}");
         for hit in &hits {
             assert!(
-                hit.bottom < 4,
+                hit.bottom < 2,
                 "hit reaches footer: {}..{}",
                 hit.top,
                 hit.bottom
@@ -1668,7 +1531,7 @@ mod tests {
 
     #[test]
     fn scrollbar_reaches_the_exact_top_and_bottom_rows() {
-        let (top_screen, top) = render_state(72, 5, 0, false, 0, false);
+        let (top_screen, top) = render_state(72, 3, 0, false, 0, false);
         let area = top.scrollbar_area.expect("top scrollbar");
         let top_rows: Vec<&str> = top_screen.lines().collect();
         assert_eq!(
@@ -1677,7 +1540,7 @@ mod tests {
             "thumb should start at the first track row\n{top_screen}"
         );
 
-        let (bottom_screen, bottom) = render_state(72, 5, 2, false, u16::MAX, false);
+        let (bottom_screen, bottom) = render_state(72, 3, 2, false, u16::MAX, false);
         let area = bottom.scrollbar_area.expect("bottom scrollbar");
         let bottom_rows: Vec<&str> = bottom_screen.lines().collect();
         assert_eq!(bottom.scroll_offset, bottom.max_scroll);
@@ -1692,15 +1555,15 @@ mod tests {
 
     #[test]
     fn row_scrolling_keeps_the_last_item_flush_with_the_viewport() {
-        let (screen, rendered) = render_state(72, 5, 2, false, u16::MAX, false);
+        let (screen, rendered) = render_state(72, 3, 2, false, u16::MAX, false);
         let rows: Vec<&str> = screen.lines().collect();
         assert_eq!(rendered.scroll_offset, rendered.max_scroll);
         assert_eq!(rendered.hits.last().map(|hit| hit.index), Some(2));
         assert!(
-            rows[3].contains("Claude · work"),
+            rows[1].contains("Claude · work"),
             "last row should touch the bottom of the list viewport\n{screen}"
         );
-        assert!(rows[2].contains("Claude"), "preceding row\n{screen}");
+        assert!(rows[0].contains("Claude"), "preceding row\n{screen}");
     }
 
     #[test]
@@ -1751,14 +1614,14 @@ mod tests {
         let back = rendered.back_button.expect("back hit");
         assert_eq!(back.left, 0);
         assert_eq!(back.right, 71);
-        assert_eq!(back.top, 2);
-        assert_eq!(back.bottom, 2);
-        assert!(screen.lines().nth(2).unwrap().contains("  ← Back"));
+        assert_eq!(back.top, 0);
+        assert_eq!(back.bottom, 0);
+        assert!(screen.lines().next().unwrap().contains("  ← Back"));
         assert!(rendered.hits.is_empty(), "detail has no provider-row hits");
     }
 
     #[test]
-    fn hosted_alerts_open_as_a_clickable_ratatui_dialog() {
+    fn hosted_alerts_open_as_a_ratatui_dialog_with_contextual_escape_hint() {
         let width = 72;
         let height = 24;
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -1803,11 +1666,15 @@ mod tests {
             "Limit reached",
             "Available again",
             "[x] Available again",
-            "space toggle",
+            "Esc close",
+            "Space toggle",
         ] {
             assert!(screen.contains(expected), "missing {expected:?}\n{screen}");
         }
-        assert!(rendered.alert_button.is_some(), "footer alert hit");
+        assert!(
+            rendered.alert_button.is_none(),
+            "minimal footer has no action hit"
+        );
         assert_eq!(rendered.alert_option_hits.len(), 3);
         let selected = rendered
             .alert_option_hits

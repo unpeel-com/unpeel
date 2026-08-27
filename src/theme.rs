@@ -286,9 +286,9 @@ pub fn spinner_frame() -> &'static str {
     SPINNER_FRAMES[(millis / 100) as usize % SPINNER_FRAMES.len()]
 }
 
-/// Footer hint idiom: `j/k select · enter details · q quit`.
+/// Minimal two-cell-inset footer hint idiom shared by list Apps.
 pub fn hint_line(palette: &Palette, hints: &[(&str, &str)]) -> Line<'static> {
-    let mut spans = vec![Span::raw(" ")];
+    let mut spans = vec![Span::raw("  ")];
     for (index, (key, label)) in hints.iter().enumerate() {
         if index > 0 {
             spans.push(Span::styled(" · ", Style::default().fg(palette.muted)));

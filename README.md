@@ -7,13 +7,11 @@ no pasted API keys and no daemon. Claude live limits use Claude Code's stored
 OAuth login; transcript history stays local.
 
 ```
-  USAGE                                                  24h $12.15 est
-────────────────────────────────────────────────────────────────────────
   Codex Pro                                              7-day 37% used
   Claude Max 20x          5-hour 15% · 7-day 44% · Fable 7-day 85% used
   Claude · work                     5h 28% · Fable 7-day 63% used
 
- j/k select · enter details · r refresh · a alerts · t theme · q quit
+  ↑↓ select · Enter details
 ```
 
 The selected provider gets the same full-width gray row and two-cell label
@@ -22,6 +20,9 @@ account metadata: `5-hour` is Claude's rolling five-hour allowance, `7-day` is
 the overall weekly allowance, and `Fable 7-day` is that model's weekly
 allowance. Every percentage is the amount used. Email addresses and reset
 dates/times stay in the detail view instead of crowding the list.
+Unpeel's Session title owns the App name, so there is no repeated in-App title.
+The minimal bottom-left hint changes to `Esc back` while details are open and
+to `Esc close` while a dialog is open.
 
 Press Enter to open the borderless detail view; a pinned, full-width `← Back`
 row appears at the top and Enter, Escape, or a click returns to the list.

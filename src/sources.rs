@@ -106,17 +106,6 @@ impl Snapshot {
         Self { providers }
     }
 
-    /// Total estimated 24h spend across sources that can price it, for the
-    /// header. None when no source has an estimate.
-    pub fn day_total_usd(&self) -> Option<f64> {
-        let costs: Vec<f64> = self
-            .providers
-            .iter()
-            .filter_map(|provider| provider.day_usd)
-            .collect();
-        (!costs.is_empty()).then(|| costs.iter().sum())
-    }
-
     /// Compact per-provider sidebar status. Notification event copy is
     /// transient and is written separately when an enabled alert edge fires.
     pub fn status_line(&self) -> String {

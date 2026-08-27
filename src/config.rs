@@ -101,13 +101,6 @@ impl Alerts {
             AlertOption::AvailableAgain => self.available_again = !self.available_again,
         }
     }
-
-    pub fn enabled_count(self) -> usize {
-        AlertOption::ALL
-            .into_iter()
-            .filter(|option| self.enabled(*option))
-            .count()
-    }
 }
 
 impl Default for Config {
@@ -202,7 +195,6 @@ mod tests {
     #[test]
     fn alert_notifications_are_opt_in() {
         let alerts = Alerts::default();
-        assert_eq!(alerts.enabled_count(), 0);
         for option in AlertOption::ALL {
             assert!(!alerts.enabled(option));
         }
@@ -220,6 +212,8 @@ mod tests {
     #[test]
     fn legacy_master_switch_does_not_opt_users_in() {
         let config: Config = toml::from_str("[alerts]\nenabled = true\n").unwrap();
-        assert_eq!(config.alerts.enabled_count(), 0);
+        for option in AlertOption::ALL {
+            assert!(!config.alerts.enabled(option));
+        }
     }
 }
