@@ -32,17 +32,18 @@ Keyboard controls:
 - `r`: refresh
 - `q`: quit
 
-Inside an Unpeel-hosted pane, right-click a file or folder for the shared gray
-`PopupMenu`: it offers **Send to agent** when a same-group agent is available,
-and **Copy path**. Sending pastes a safe absolute path reference into the
-agent's input without pressing Enter. Outside Unpeel, the App leaves terminal
-mouse capture disabled and stays keyboard-driven.
+One click selects a file or folder. Double-click a folder (including `../`) to
+enter it, or a file to activate it. Right-click for the shared gray
+`PopupMenu`: it offers **Send to agent** when a same-group Unpeel agent is
+available, and **Copy path**. Sending pastes a safe absolute path reference
+into the agent's input without pressing Enter.
 
-In a hosted pane the App enables mouse reporting for right-click and hover.
-Unpeel's native terminal wrapper intercepts a mapped left-button drag before
-the TUI receives it, so native path dragging still works; an ordinary click is
-replayed to the TUI for selection. While the popup is open, the App publishes
-an empty drag map so a click cannot drag a path hidden beneath the menu.
+The App enables mouse reporting in ordinary terminals as well as hosted panes.
+Inside Unpeel, the native terminal wrapper intercepts a mapped left-button
+drag before the TUI receives it, so native path dragging still works; an
+ordinary click is replayed to the TUI for selection. While the popup is open,
+the App publishes an empty drag map so a click cannot drag a path hidden
+beneath the menu.
 
 ## Drag test
 

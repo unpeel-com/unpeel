@@ -14,8 +14,8 @@ use ratatui::style::Style;
 use ratatui::widgets::Paragraph;
 use ratatui::{Frame, Terminal};
 use unpeel_app_kit::{
-    AgentBridge, ColorScheme, DragSurface, Explorer, ExplorerEvent, ExplorerInput, ExplorerTheme,
-    KitTheme, MenuItem, MenuTheme, PopupMenu, clipboard_sequence,
+    AgentBridge, ColorScheme, DoubleClickTracker, DragSurface, Explorer, ExplorerEvent,
+    ExplorerInput, ExplorerTheme, KitTheme, MenuItem, MenuTheme, PopupMenu, clipboard_sequence,
 };
 
 use crate::unpeel::ContextReporter;
@@ -26,12 +26,12 @@ pub fn run(mut explorer: Explorer) -> io::Result<()> {
     let theme = KitTheme::detected();
     explorer.set_theme(explorer_theme(theme.scheme));
     let mut drags = DragSurface::detect();
-    let mouse_capture = drags.is_available();
-    let mut terminal = TerminalGuard::enter(mouse_capture)?;
+    let mut terminal = TerminalGuard::enter()?;
     let mut reporter = ContextReporter::detect();
     let agent = AgentBridge::new();
     agent.refresh();
     let mut menu = None;
+    let mut clicks = DoubleClickTracker::new();
     let mut status = None;
     let mut needs_draw = true;
 
@@ -53,6 +53,7 @@ pub fn run(mut explorer: Explorer) -> io::Result<()> {
         }
         match event::read()? {
             Event::Key(key) if key.kind != KeyEventKind::Release => {
+                clicks.reset();
                 if is_force_quit(key) {
                     break;
                 }
@@ -93,10 +94,11 @@ pub fn run(mut explorer: Explorer) -> io::Result<()> {
                     }
                 }
             }
-            Event::Mouse(mouse) if mouse_capture => {
+            Event::Mouse(mouse) => {
                 let position = Position::new(mouse.column, mouse.row);
                 match mouse.kind {
                     MouseEventKind::Down(MouseButton::Right) => {
+                        clicks.reset();
                         if let Some(path) = explorer
                             .entry_at(position)
                             .map(|entry| entry.path().to_path_buf())
@@ -116,6 +118,7 @@ pub fn run(mut explorer: Explorer) -> io::Result<()> {
                     }
                     MouseEventKind::Down(MouseButton::Left) => {
                         if let Some(mut open_menu) = menu.take() {
+                            clicks.reset();
                             if open_menu
                                 .item_at(position)
                                 .is_some_and(MenuItem::is_enabled)
@@ -124,11 +127,17 @@ pub fn run(mut explorer: Explorer) -> io::Result<()> {
                                 status = Some(activate_menu(open_menu, &agent));
                             }
                             needs_draw = true;
-                        } else if explorer.select_at(position) {
+                        } else if let Some(activate) =
+                            explorer_click_at(&mut explorer, position, &mut clicks)
+                        {
+                            if activate {
+                                status = handle_explorer(&mut explorer, ExplorerInput::Open);
+                            }
                             needs_draw = true;
                         }
                     }
                     MouseEventKind::ScrollUp => {
+                        clicks.reset();
                         if let Some(open_menu) = menu.as_mut() {
                             open_menu.move_selection(-1);
                             needs_draw = true;
@@ -138,6 +147,7 @@ pub fn run(mut explorer: Explorer) -> io::Result<()> {
                         }
                     }
                     MouseEventKind::ScrollDown => {
+                        clicks.reset();
                         if let Some(open_menu) = menu.as_mut() {
                             open_menu.move_selection(1);
                             needs_draw = true;
@@ -157,11 +167,31 @@ pub fn run(mut explorer: Explorer) -> io::Result<()> {
                     _ => {}
                 }
             }
-            Event::Resize(_, _) => needs_draw = true,
+            Event::Resize(_, _) => {
+                clicks.reset();
+                needs_draw = true;
+            }
             _ => {}
         }
     }
     Ok(())
+}
+
+fn explorer_click_at(
+    explorer: &mut Explorer,
+    position: Position,
+    clicks: &mut DoubleClickTracker<PathBuf>,
+) -> Option<bool> {
+    let Some(path) = explorer
+        .entry_at(position)
+        .map(|entry| entry.path().to_path_buf())
+    else {
+        clicks.reset();
+        return None;
+    };
+    let activate = clicks.click(path);
+    explorer.select_at(position);
+    Some(activate)
 }
 
 fn explorer_theme(scheme: ColorScheme) -> ExplorerTheme {
@@ -336,18 +366,17 @@ fn handle_explorer(explorer: &mut Explorer, input: ExplorerInput) -> Option<Stat
 
 struct TerminalGuard {
     terminal: Terminal<CrosstermBackend<Stdout>>,
-    mouse_capture: bool,
 }
 
 impl TerminalGuard {
-    fn enter(mouse_capture: bool) -> io::Result<Self> {
+    fn enter() -> io::Result<Self> {
         terminal::enable_raw_mode()?;
         let mut stdout = io::stdout();
         if let Err(error) = execute!(stdout, EnterAlternateScreen) {
             let _ = terminal::disable_raw_mode();
             return Err(error);
         }
-        if mouse_capture && let Err(error) = execute!(stdout, EnableMouseCapture) {
+        if let Err(error) = execute!(stdout, EnableMouseCapture) {
             let _ = execute!(stdout, LeaveAlternateScreen);
             let _ = terminal::disable_raw_mode();
             return Err(error);
@@ -356,26 +385,19 @@ impl TerminalGuard {
         let mut terminal = match Terminal::new(backend) {
             Ok(terminal) => terminal,
             Err(error) => {
-                if mouse_capture {
-                    let _ = execute!(io::stdout(), DisableMouseCapture);
-                }
+                let _ = execute!(io::stdout(), DisableMouseCapture);
                 let _ = execute!(io::stdout(), LeaveAlternateScreen);
                 let _ = terminal::disable_raw_mode();
                 return Err(error);
             }
         };
         if let Err(error) = terminal.hide_cursor() {
-            if mouse_capture {
-                let _ = execute!(terminal.backend_mut(), DisableMouseCapture);
-            }
+            let _ = execute!(terminal.backend_mut(), DisableMouseCapture);
             let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
             let _ = terminal::disable_raw_mode();
             return Err(error);
         }
-        Ok(Self {
-            terminal,
-            mouse_capture,
-        })
+        Ok(Self { terminal })
     }
 
     fn draw(
@@ -396,9 +418,7 @@ impl TerminalGuard {
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = self.terminal.show_cursor();
-        if self.mouse_capture {
-            let _ = execute!(self.terminal.backend_mut(), DisableMouseCapture);
-        }
+        let _ = execute!(self.terminal.backend_mut(), DisableMouseCapture);
         let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
         let _ = terminal::disable_raw_mode();
     }
@@ -588,5 +608,54 @@ mod tests {
             format!("Drag {} into another pane", path.display())
         );
         assert!(!status.error);
+    }
+
+    #[test]
+    fn double_clicking_a_folder_row_enters_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let folder = directory.path().join("folder");
+        std::fs::create_dir(&folder).unwrap();
+        let folder = std::fs::canonicalize(folder).unwrap();
+        let mut explorer = Explorer::new(directory.path()).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        let mut drags = DragSurface::disabled();
+        terminal
+            .draw(|frame| {
+                render_frame(
+                    frame,
+                    &mut explorer,
+                    &mut drags,
+                    None,
+                    None,
+                    KitTheme::dark(),
+                )
+            })
+            .unwrap();
+
+        let index = explorer
+            .entries()
+            .iter()
+            .position(|entry| entry.path() == folder)
+            .unwrap();
+        let position = Position::new(
+            explorer.list_area().x,
+            explorer.list_area().y + (index - explorer.scroll_offset()) as u16,
+        );
+        let mut clicks = DoubleClickTracker::new();
+
+        assert_eq!(
+            explorer_click_at(&mut explorer, position, &mut clicks),
+            Some(false)
+        );
+        assert_eq!(explorer.selected().unwrap().path(), folder);
+        assert_eq!(
+            explorer_click_at(&mut explorer, position, &mut clicks),
+            Some(true)
+        );
+        assert_eq!(
+            explorer.handle(ExplorerInput::Open).unwrap(),
+            ExplorerEvent::DirectoryChanged(folder.clone())
+        );
+        assert_eq!(explorer.cwd(), folder);
     }
 }
