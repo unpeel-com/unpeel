@@ -22,16 +22,27 @@ Keyboard controls:
 
 - `↑` / `↓` or `j` / `k`: move
 - `→`, `l`, `Enter`, or `Space`: enter the selected directory
-- `←`, `h`, or `Backspace`: go to the parent
 - `Home` / `End` or `g` / `G`: first / last item
 - `Page Up` / `Page Down`: move by one viewport
+- `/` or `Ctrl-F`: focus the current-folder filename filter
+- while filtering, type normally; `Backspace` edits, `Ctrl-U` clears, and
+  `Tab` returns focus to the file list
+- `Esc`, `←`, `h`, or `Backspace`: go to the parent folder
 - `Ctrl-H`: show or hide dotfiles
 - `r`: refresh
 - `q`: quit
 
-The app intentionally does not enable terminal mouse capture. That leaves the
-pointer with the terminal emulator so Unpeel can initiate a native macOS drag
-using the exact terminal-cell regions published by `unpeel-tui-kit`.
+Inside an Unpeel-hosted pane, right-click a file or folder for the shared gray
+`PopupMenu`: it offers **Send to agent** when a same-group agent is available,
+and **Copy path**. Sending pastes a safe absolute path reference into the
+agent's input without pressing Enter. Outside Unpeel, the App leaves terminal
+mouse capture disabled and stays keyboard-driven.
+
+In a hosted pane the App enables mouse reporting for right-click and hover.
+Unpeel's native terminal wrapper intercepts a mapped left-button drag before
+the TUI receives it, so native path dragging still works; an ordinary click is
+replayed to the TUI for selection. While the popup is open, the App publishes
+an empty drag map so a click cannot drag a path hidden beneath the menu.
 
 ## Drag test
 
@@ -50,6 +61,11 @@ component publishes absolute Host-local paths through `DragSurface`, so the
 same transferable item can be consumed by terminals now and by other Unpeel
 Apps later. The kit also exposes `DraggablePath`, the generic `DragSource<W>`
 wrapper, and the lower-level `DragSurface::register` API.
+
+Appearance comes from the kit's dark/light defaults. Set
+`UNPEEL_TUI_THEME=light` or `UNPEEL_TUI_THEME=dark` to override detection.
+Selected rows span the full list width and keep the shared two-cell content
+inset.
 
 The binary self-registers a development-only App manifest under an existing
 `~/.unpeel/apps/unpeel.app.filetree/` when launched. If it is not installed on
