@@ -14,7 +14,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Widget};
+use ratatui::widgets::{Paragraph, Widget};
 use ratatui::{Frame, Terminal};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use unpeel_tui_kit::{ColorScheme, KitTheme, SELECTABLE_LEFT_PADDING, VerticalScrollbar};
@@ -23,7 +23,6 @@ use crate::app::{App, Screen};
 use crate::git::{ChangedFile, DiffDocument};
 use crate::unpeel::ContextReporter;
 
-const HEADER_ROWS: u16 = 2;
 const FOOTER_ROWS: u16 = 1;
 const DETAIL_GAP_ROWS: u16 = 1;
 const DETAIL_META_ROWS: u16 = 1;
@@ -267,14 +266,9 @@ struct RenderResult {
 }
 
 fn render_frame(frame: &mut Frame<'_>, app: &App, theme: KitTheme) -> RenderResult {
-    let [header, body, footer] = Layout::vertical([
-        Constraint::Length(HEADER_ROWS),
-        Constraint::Min(0),
-        Constraint::Length(FOOTER_ROWS),
-    ])
-    .areas(frame.area());
+    let [body, footer] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(FOOTER_ROWS)]).areas(frame.area());
 
-    render_header(frame, header, app, theme);
     let result = match &app.screen {
         Screen::Files => render_file_list(
             frame,
@@ -298,54 +292,6 @@ fn render_frame(frame: &mut Frame<'_>, app: &App, theme: KitTheme) -> RenderResu
     result
 }
 
-fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App, theme: KitTheme) {
-    let summary = match &app.screen {
-        Screen::Files => format!("{} changed ", app.files.len()),
-        Screen::Diff(document) => {
-            format!("+{} −{} ", document.additions, document.deletions)
-        }
-    };
-    render_header_surface(frame, area, &summary, theme);
-}
-
-fn render_header_surface(frame: &mut Frame<'_>, area: Rect, summary: &str, theme: KitTheme) {
-    if area.is_empty() {
-        return;
-    }
-    frame.render_widget(
-        Block::new()
-            .borders(Borders::BOTTOM)
-            .border_style(Style::new().fg(theme.scrollbar_track.fg.unwrap_or(theme.subtle))),
-        area,
-    );
-
-    let content = Rect::new(area.x, area.y, area.width, area.height.min(1));
-    let summary_width = u16::try_from(Line::from(summary).width())
-        .unwrap_or(u16::MAX)
-        .min(content.width.saturating_sub(8));
-    let [title_area, summary_area] =
-        Layout::horizontal([Constraint::Min(0), Constraint::Length(summary_width)]).areas(content);
-    let padding = SELECTABLE_LEFT_PADDING.min(title_area.width);
-    frame.render_widget(
-        Paragraph::new(Span::styled(
-            "DIFFS",
-            Style::new().fg(theme.text).add_modifier(Modifier::BOLD),
-        )),
-        Rect::new(
-            title_area.x.saturating_add(padding),
-            title_area.y,
-            title_area.width.saturating_sub(padding),
-            title_area.height,
-        ),
-    );
-    frame.render_widget(
-        Paragraph::new(summary)
-            .style(Style::new().fg(theme.muted))
-            .alignment(Alignment::Right),
-        summary_area,
-    );
-}
-
 fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App, theme: KitTheme) {
     if area.is_empty() {
         return;
@@ -353,15 +299,9 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App, theme: KitTheme) 
     let (text, color) = app.notice.as_ref().map_or_else(
         || {
             if app.is_detail() {
-                (
-                    "esc/enter back · ↑↓ scroll · ←→ pan · r refresh · q quit".to_owned(),
-                    theme.muted,
-                )
+                ("Esc back · ↑↓ scroll · ←→ pan".to_owned(), theme.muted)
             } else {
-                (
-                    "↑↓ select · enter diff · r refresh · q quit".to_owned(),
-                    theme.muted,
-                )
+                ("↑↓ select · Enter diff".to_owned(), theme.muted)
             }
         },
         |notice| {
@@ -836,26 +776,21 @@ mod tests {
     }
 
     #[test]
-    fn title_and_file_labels_use_the_shared_two_cell_inset() {
+    fn file_labels_use_the_shared_two_cell_inset_without_an_app_title() {
         let theme = KitTheme::dark();
         let files = vec![ChangedFile::fixture("src/ui.rs", ' ', 'M')];
         let mut terminal = Terminal::new(TestBackend::new(48, 8)).unwrap();
         let mut list_result = RenderResult::default();
         terminal
             .draw(|frame| {
-                let area = frame.area();
-                let [header, body] =
-                    Layout::vertical([Constraint::Length(2), Constraint::Min(0)]).areas(area);
-                render_header_surface(frame, header, "1 changed ", theme);
-                list_result = render_file_list(frame, body, &files, 0, 0, true, theme);
+                list_result = render_file_list(frame, frame.area(), &files, 0, 0, true, theme);
             })
             .unwrap();
 
         let buffer = terminal.backend().buffer();
-        assert!(buffer_line(buffer, 0).starts_with("  DIFFS"));
-        assert!(buffer_line(buffer, 2).starts_with("  M  ui.rs"));
-        assert!(!buffer_line(buffer, 2).contains("src/ui.rs"));
-        assert_eq!(buffer[(47, 2)].bg, theme.selected_row.bg.unwrap());
+        assert!(buffer_line(buffer, 0).starts_with("  M  ui.rs"));
+        assert!(!buffer_line(buffer, 0).contains("src/ui.rs"));
+        assert_eq!(buffer[(47, 0)].bg, theme.selected_row.bg.unwrap());
         assert_eq!(list_result.hits[0].area.width, 48);
     }
 

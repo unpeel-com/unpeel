@@ -5,21 +5,25 @@ The default screen is a compact list of changed files; select one and press
 Enter to open its unified diff.
 
 ```text
-  DIFFS                                                   3 changed
-────────────────────────────────────────────────────────────────────
   M  ui.rs                                               unstaged
   A  git.rs                                                 staged
   ?  notes.txt                                           untracked
+
+  ↑↓ select · Enter diff
 ```
 
 The UI follows the shared `../unpeel-tui-kit` design conventions used by the
 Explorer and Usage Apps:
 
 - borderless, transparent ordinary surfaces
-- two-cell title and row-label inset
+- two-cell row-label and footer inset
 - full-width gray selected rows, with dark/light defaults
 - the shared capless proportional scrollbar
 - a pinned full-width gray Back row in detail views
+
+Unpeel's Session title owns the App name, so the content has no repeated
+in-App title. The minimal bottom-left hint changes to `Esc back` whenever a
+diff is open.
 
 The default list shows only each basename to stay scannable in narrow panes.
 Opening a diff reveals its full repository-relative path.
