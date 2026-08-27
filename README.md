@@ -7,7 +7,7 @@ no pasted API keys and no daemon. Claude live limits use Claude Code's stored
 OAuth login; transcript history stays local.
 
 ```
- USAGE                                                   24h $12.15 est
+  USAGE                                                  24h $12.15 est
 ────────────────────────────────────────────────────────────────────────
   Codex Pro                                              7-day 37% used
   Claude Max 20x          5-hour 15% · 7-day 44% · Fable 7-day 85% used

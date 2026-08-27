@@ -154,15 +154,22 @@ fn render_header(
         .min(area.width.saturating_sub(6) as usize) as u16;
     let [title_area, summary_area] =
         Layout::horizontal([Constraint::Min(0), Constraint::Length(summary_width)]).areas(content);
+    let title_padding = SELECTABLE_LEFT_PADDING.min(title_area.width);
+    let padded_title_area = Rect::new(
+        title_area.x.saturating_add(title_padding),
+        title_area.y,
+        title_area.width.saturating_sub(title_padding),
+        title_area.height,
+    );
 
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            " USAGE",
+            "USAGE",
             Style::default()
                 .fg(palette.header)
                 .add_modifier(Modifier::BOLD),
         ))),
-        title_area,
+        padded_title_area,
     );
     frame.render_widget(
         Paragraph::new(summary)
@@ -1370,6 +1377,13 @@ mod tests {
     fn default_view_is_a_compact_explorer_style_list() {
         let (screen, hits) = render(72, 12, false);
         assert!(screen.contains("USAGE"), "uppercase brand\n{screen}");
+        assert!(
+            screen
+                .lines()
+                .next()
+                .is_some_and(|line| line.starts_with("  USAGE")),
+            "header uses the shared two-cell inset\n{screen}"
+        );
         assert!(
             screen.contains("24h $17.82 est"),
             "header 24h total\n{screen}"
