@@ -2,7 +2,8 @@
 //! installed Unpeel App by writing one manifest. Declaring is the entire
 //! integration — Unpeel then recognizes a hand-typed `unpeel-usage` in any
 //! hosted terminal and brands the session row with the tint below, and the
-//! status reporter's lifecycle events drive the sidebar and notifications.
+//! status reporter drives the sidebar and the App alert endpoint handles
+//! opt-in notifications without changing lifecycle state.
 
 use std::path::PathBuf;
 
@@ -13,7 +14,7 @@ manifest_version = 1
 id = "unpeel.app.usage"
 name = "Usage"
 command = "@LAUNCH_COMMAND@"
-description = "Local AI usage and credits at a glance: Codex window limits and credit balance, Claude Code estimated spend, with low-credit alerts"
+description = "Local AI usage and credits at a glance: Codex and Claude limits, spend, and opt-in limit and recovery alerts"
 
 # Runtime detection: Unpeel recognizes a hand-typed `unpeel-usage` in any
 # hosted terminal and brands the session row with the display tint below.
@@ -48,7 +49,9 @@ pub fn ensure_installed() {
     };
     let manifest = APP_TOML.replace(
         "@LAUNCH_COMMAND@",
-        &exe.to_string_lossy().replace('\\', "\\\\").replace('"', "\\\""),
+        &exe.to_string_lossy()
+            .replace('\\', "\\\\")
+            .replace('"', "\\\""),
     );
     let dir = home.join("apps").join(APP_ID);
     if std::fs::create_dir_all(&dir).is_err() {

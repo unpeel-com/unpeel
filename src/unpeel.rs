@@ -1,6 +1,6 @@
 //! The entire Unpeel integration, self-contained. An Unpeel App is a plain
 //! terminal program; when hosted, Unpeel exports `UNPEEL_SESSION_ID` and
-//! friends, and the App talks back over two tiny surfaces:
+//! friends, and the App talks back over three tiny surfaces:
 //!
 //! - **Activity**: POST the canonical hook events (`UserPromptSubmit` busy,
 //!   `Stop` idle, `PermissionRequest` attention) to `/hook/<session_id>` on
@@ -8,6 +8,9 @@
 //!   `last-hook-event.json` seed so the latch survives frontend restarts.
 //! - **Status text**: the `status.json` marker in the session dir — atomic
 //!   whole-file overwrite, debounced, announced on the state bus.
+//! - **Alerts**: POST bounded informational copy to `/notify/<session_id>`.
+//!   Unpeel records it in Recent and delivers desktop/phone notifications
+//!   without changing Busy/Idle/Attention.
 //!
 //! Outside Unpeel every call is a silent no-op. No SDK required; this file
 //! is the whole contract and is freely copyable into any App.
@@ -88,6 +91,10 @@ impl StatusReporter {
         }
     }
 
+    pub fn is_hosted(&self) -> bool {
+        self.host.is_some()
+    }
+
     /// The session is working — sidebar spinner. Usage scans are quick and
     /// local, so this app never claims Busy; kept because it is part of the
     /// three-event contract any App can use.
@@ -103,8 +110,27 @@ impl StatusReporter {
 
     /// The session needs the user — attention accent, and Unpeel's ordinary
     /// needs-input notification path (desktop banner, phone push).
+    #[allow(dead_code)]
     pub fn attention(&self) {
         self.post_hook_event("PermissionRequest");
+    }
+
+    /// Raise an informational App alert. Unpeel owns persistence, unread,
+    /// Recent surfaces, and desktop/phone delivery; this does not imply that
+    /// the Session needs input and does not touch the lifecycle seed.
+    pub fn alert(&self, title: &str, body: &str) {
+        let Some(host) = &self.host else { return };
+        let title = bounded_single_line(title, 120);
+        let body_text = bounded_single_line(body, 512);
+        if body_text.is_empty() {
+            return;
+        }
+        let body = format!(
+            r#"{{"kind":"alert","title":{},"body":{}}}"#,
+            json_string(&title),
+            json_string(&body_text)
+        );
+        post_json(host, &format!("/notify/{}", host.session_id), &body);
     }
 
     /// Short, single-line sidebar status ("Codex 3% · Claude $2.10").
@@ -189,6 +215,23 @@ fn now_ms() -> u128 {
 
 fn json_string(text: &str) -> String {
     serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into())
+}
+
+fn bounded_single_line(text: &str, maximum_utf16_units: usize) -> String {
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut units = 0;
+    normalized
+        .chars()
+        .take_while(|character| {
+            let next = units + character.len_utf16();
+            if next > maximum_utf16_units {
+                false
+            } else {
+                units = next;
+                true
+            }
+        })
+        .collect()
 }
 
 /// Fire-and-forget local POST to every registered instance. Failures are

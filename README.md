@@ -1,52 +1,125 @@
 # unpeel-usage
 
 Local AI usage & credits at a glance — a small, fast terminal dashboard
-built with [Ratatui](https://ratatui.rs). Everything is read from files your
-AI tools already write on this machine: no API keys, no network, no daemon.
+built entirely from native [Ratatui](https://ratatui.rs) layouts and widgets.
+It reuses the logins and files your AI tools already keep on this machine:
+no pasted API keys and no daemon. Claude live limits use Claude Code's stored
+OAuth login; transcript history stays local.
 
 ```
- USAGE                                        24h $12.15 est
-─────────────────────────────────────────────────────────────
-▎● Codex                                                 pro
-   5h       ████████░░░░░░░░░░  42% · resets 1h 20m
-   week     █░░░░░░░░░░░░░░░░░   3% · resets 6d 18h
-   credits                                              $436
+ USAGE                                                   24h $12.15 est
+────────────────────────────────────────────────────────────────────────
+   Codex Pro                                                          ●
 
- ● Claude Code                            tommy@uxthemes.com
-   5h block             $3.24 est · resets 1h 20m
-   burn                              $1.20/hr est
-   24h      ▁▁▂▃▅▇▆▃▁▂▄▆█▇▅▃▂▁      $8.91 est · 1.2M tok
+ ╭────────────────────────────────────────────────────────────────────╮
+ │                                                                    │
+ │ Weekly                                                             │
+ │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━────────────────────────── │
+ │ 63% left                                            Resets in 3d 6h │
+ │                                                                    │
+ │ Credits                                                       $436 │
+ │                                                                    │
+ ╰────────────────────────────────────────────────────────────────────╯
 
- ● Claude Code · work                      work@example.com
-   5h block             $1.02 est · resets 3h 40m
-   24h      ▁▁▁▂▁▁▃▅▂▁▁▁▁▂▁▁▁▁      $3.24 est · 410k tok
+ ▎ Claude Max 20x                                                    ●
 
- j/k select · enter details · q quit
+ ╭────────────────────────────────────────────────────────────────────╮
+ │                                                                    │
+ │ Session                                                            │
+ │ ━━━━━━━━━━──────────────────────────────────────────────────────── │
+ │ 15% used                                        Resets in 1h 14m   │
+ │                                                                    │
+ │ Weekly                                                  ~8% spare  │
+ │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│──────────────────────────────────── │
+ │ 44% used                                         Resets in 3d 21h  │
+ │                                                                    │
+ │ Fable                                           Limit in 1d 18h    │
+ │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━─────── │
+ │ 85% used                                         Resets in 3d 21h  │
+ │                                                                    │
+ │ Usage Trend                                                        │
+ │ ▁▁▂▃▅▇▆▃▁▂▄▆█▇▅▃▂▁                                                │
+ │                                                                    │
+ │ Today                                   $15.00 est · 29.6M tokens  │
+ │ Yesterday                               $31.13 est · 60.6M tokens  │
+ │ Last 30 Days                              $3.5K est · 4.7B tokens  │
+ │                                                                    │
+ ╰────────────────────────────────────────────────────────────────────╯
+
+ j/k select · enter details · r refresh · a alerts · t theme · q quit
 ```
 
-Each provider renders in its brand accent — Claude coral, Codex teal — with
-a live sparkline of the last 24 hours, the current burn rate, and the 24h
-total across everything in the header.
+Each provider gets a distinct header and an inset Ratatui `Block` with one
+cell of padding on every side. Quotas use a purpose-built Ratatui meter plus
+a separate used-or-remaining/reset row; calendar-day activity uses the native
+`Sparkline` widget. Claude's pace projection adds the same blue / amber / red
+states, spare estimate, run-out estimate, and even-pace marker as OpenUsage.
 
-The dashboard is fully mouse-aware: click a card to select it, click it
-again for details, and scroll to move the selection. The keyboard does
-everything too (`j/k`, `enter`, `r`, `a`, `q`).
+## Light and dark themes
+
+The dashboard queries the terminal's background color when it starts, then
+selects a complete light or dark palette. If that query is unsupported it uses
+`COLORFGBG` where reliable; otherwise it falls back to terminal-default colors,
+which follow the host theme without needing detection. Inside Unpeel, the live
+background query takes priority because `COLORFGBG` records the appearance from
+when that shell started and cannot change with the surrounding pane.
+
+Set the top-level config value to force a palette:
+
+```toml
+theme = "light" # "auto", "light", or "dark"
+```
+
+For a one-off override, use `UNPEEL_USAGE_THEME=light unpeel-usage`. The
+environment variable accepts the same three values and takes precedence over
+`~/.config/unpeel-usage/config.toml`. Press `t` in the dashboard to cycle
+adaptive, light, and dark palettes for the current session.
+
+The provider and metric hierarchy is inspired by the grouped dashboard in
+[OpenUsage](https://github.com/robinebers/openusage), adapted for terminal
+cells and narrow viewports.
+
+The dashboard is fully mouse-aware: click a card to select it, click it again
+for details, use the wheel to scroll by rows, or click and drag the scrollbar.
+The keyboard does everything too (`j/k`, `enter`, `PageUp/PageDown`, `r`, `a`,
+`t`, `q`). The selected provider returns to view after keyboard navigation.
 
 ## What it reads
 
 - **Codex CLI** — the rollout logs under `~/.codex/sessions/` record a rate-limit
   snapshot with every turn: real window utilization, reset times, and (on
   credit plans) the actual credits balance. No estimation.
-- **Claude Code** — the transcripts under `~/.claude/projects/` carry per-message
-  token usage. Claude records no quota locally, so unpeel-usage shows
-  **estimated** spend from public per-model API prices: the rolling 24h total,
-  the current 5-hour billing block with its reset time, and the burn rate over
-  that block.
+- **Claude Code live limits** — the existing Claude Code OAuth credential is
+  read from the macOS Keychain first, then `.credentials.json` as a fallback.
+  The app requests Claude's usage endpoint for the real Session, Weekly,
+  Sonnet/Fable scoped limits, Extra Usage, reset times, and plan name. Responses
+  are cached for five minutes because the endpoint rate-limits aggressively.
+- **Claude Code local history** — transcripts under `~/.claude/projects/`
+  produce the Usage Trend and estimated Today, Yesterday, and Last 30 Days
+  spend/token rows. Logs and calculated history never leave the machine.
+
+Set `live_usage = false` under `[claude]` for a fully offline, transcript-only
+Claude card. When live auth or the network is unavailable, the card keeps its
+local history and falls back to a clearly labeled estimated Session spend row.
 
 ## Multiple Claude accounts
 
-Every Claude Code config directory on the machine gets its own card, labeled
-with the account's email (read from that directory's `.claude.json`):
+The normal account-switching workflow is supported: use `/logout`, then sign in
+to the next Claude account in the same `~/.claude` profile. On refresh,
+unpeel-usage recognizes the changed account email and keeps the previous
+account as a **saved** card. The signed-in account is live; logged-out cards
+show their last successful limits and update again the next time that account
+is signed in.
+
+Only the email, plan, limits, and fetch time are retained for up to 90 days in
+`~/Library/Caches/unpeel-usage/claude-accounts.json`. OAuth access and refresh
+tokens are never copied. Because shared Claude transcripts contain no account
+identity, Usage Trend and the Today / Yesterday / Last 30 Days estimates remain
+combined and appear only on the active profile card.
+
+Separate Claude Code config directories also get independent cards. A live
+card shows the subscription plan in its header; account email and source detail
+remain available with Enter:
 
 - `~/.claude` — the default account (or `$CLAUDE_CONFIG_DIR` when set)
 - `~/.claude-*` — the common convention for second accounts run with
@@ -56,22 +129,31 @@ with the account's email (read from that directory's `.claude.json`):
 
 ```toml
 [claude]
+live_usage = true
 dirs = ["~/claude-accounts/personal"]
 ```
 
 ## Alerts
 
-`~/.config/unpeel-usage/config.toml` (written with commented defaults on
-first run):
+Alerts are an Unpeel App feature: the control is shown only when
+`unpeel-usage` is running in an Unpeel-hosted session. Press `a` or click
+**alerts** in the footer to open the Ratatui dialog. Its independent options
+are all off by default:
 
-- `codex_used_percent` — alert when a Codex window crosses this utilization
-- `credits_low_usd` — alert when the Codex credits balance drops to this
-- `claude_block_usd` — a personal budget line for the Claude 5h block
+- **Close to a limit** — 80% used or pacing that projects an early run-out
+- **Limit reached** — a bounded quota reaches 100%
+- **Available again** — a previously constrained quota resets
 
-Press `a` to toggle alerts for the session. Standalone, an alert shows in
-the dashboard; inside [Unpeel](https://unpeel.com) it raises the session's
-attention state, which means the sidebar accent plus desktop and phone
+The dialog changes the current session. The matching booleans under `[alerts]`
+in `~/.config/unpeel-usage/config.toml` can opt in by default on future runs.
+Enabled events create a first-class Unpeel **Alert**: it appears in Recent and
+the desktop/mobile activity dropdowns, and the native Unpeel Host delivers its
+own macOS banner and phone push. Alerts do not change the session's Busy, Idle,
+or Attention state. Standalone runs have no alert control and send no
 notifications.
+
+The same config section retains `codex_used_percent`, `credits_low_usd`, and
+`claude_block_usd` for card severity and personal budget thresholds.
 
 ## Unpeel
 
@@ -103,7 +185,7 @@ Or build from source: `cargo build --release`.
 
 - `unpeel-usage` — the dashboard
 - `unpeel-usage report` — one-shot plain-text snapshot for scripts and
-  status bars
+  status bars (intentionally non-TUI so it remains pipe-friendly)
 
 ## Development
 

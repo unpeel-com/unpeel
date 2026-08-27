@@ -3,8 +3,9 @@
 //! Standalone-first: a complete terminal dashboard in any shell, reading
 //! only the files your AI tools already write (`~/.codex`, `~/.claude`).
 //! Inside Unpeel it registers as an App: branded sidebar row, live status
-//! line, and low-credit alerts that reach the desktop and phone through
-//! the ordinary attention/notification pipeline.
+//! line, and opt-in informational alerts that reach Recent, desktop, and phone
+//! without changing the session lifecycle. Claude can reuse Claude
+//! Code's stored OAuth login for live limits; history remains local.
 
 mod claude;
 mod codex;
@@ -16,17 +17,19 @@ mod timeparse;
 mod ui;
 mod unpeel;
 
-use config::Config;
-use sources::Snapshot;
-use std::sync::mpsc;
-use std::time::Duration;
 use crate::theme::{nav, Nav};
 use crate::unpeel::StatusReporter;
+use config::{AlertOption, Alerts, Config};
 use ratatui::crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton,
-    MouseEventKind,
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+    MouseButton, MouseEventKind,
 };
 use ratatui::crossterm::execute;
+use sources::{Level, Metric, Snapshot};
+use std::collections::HashMap;
+use std::io;
+use std::sync::mpsc;
+use std::time::Duration;
 
 fn main() {
     let config = Config::load();
@@ -44,7 +47,12 @@ fn main() {
             eprintln!("unknown argument '{other}'. Usage: unpeel-usage [report]");
             std::process::exit(2);
         }
-        None => run_tui(config),
+        None => {
+            if let Err(error) = run_tui(config) {
+                eprintln!("unpeel-usage: {error}");
+                std::process::exit(1);
+            }
+        }
     }
 }
 
@@ -64,38 +72,168 @@ fn report(config: &Config) {
             println!("{}: {} {}", provider.name, metric.label, metric.value);
         }
     }
-    for alert in snapshot.alerts() {
-        println!("ALERT: {alert}");
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum LimitState {
+    Normal,
+    Close,
+    Reached,
+}
+
+#[derive(Debug)]
+struct LimitReading {
+    key: String,
+    title: String,
+    detail: String,
+    state: LimitState,
+}
+
+fn metric_limit_state(metric: &Metric) -> LimitState {
+    let reached = metric.annotation.as_deref() == Some("Limit reached")
+        || metric.percent.is_some_and(|percent| percent >= 99.5);
+    if reached {
+        return LimitState::Reached;
+    }
+    let close = metric.percent.is_some_and(|percent| percent >= 80.0)
+        || (metric.level != Level::Ok && (metric.annotation.is_some() || metric.percent.is_none()));
+    if close {
+        LimitState::Close
+    } else {
+        LimitState::Normal
+    }
+}
+
+fn limit_readings(snapshot: &Snapshot) -> Vec<LimitReading> {
+    snapshot
+        .providers
+        .iter()
+        .flat_map(|provider| {
+            provider.metrics.iter().map(|metric| {
+                let title = format!("{} {}", provider.name, metric.label);
+                LimitReading {
+                    key: format!("{:?}\0{}\0{}", provider.kind, provider.name, metric.label),
+                    title,
+                    detail: metric
+                        .annotation
+                        .clone()
+                        .filter(|detail| !detail.trim().is_empty())
+                        .unwrap_or_else(|| metric.value.clone()),
+                    state: metric_limit_state(metric),
+                }
+            })
+        })
+        .collect()
+}
+
+#[derive(Debug, Default)]
+struct AlertTracker {
+    previous: HashMap<String, LimitState>,
+}
+
+#[derive(Debug, Default)]
+struct AlertUpdate {
+    notification: Option<String>,
+}
+
+impl AlertTracker {
+    /// Observe every metric on every refresh, even while notifications are
+    /// disabled. This lets "Available again" describe a real constrained →
+    /// normal edge after the user opts into it.
+    fn update(&mut self, snapshot: &Snapshot, options: Alerts) -> AlertUpdate {
+        let readings = limit_readings(snapshot);
+        let mut next = HashMap::with_capacity(readings.len());
+        let mut events: Vec<(u8, String)> = Vec::new();
+
+        for reading in readings {
+            let previous = self
+                .previous
+                .get(&reading.key)
+                .copied()
+                .unwrap_or(LimitState::Normal);
+            match (previous, reading.state) {
+                (before, LimitState::Reached) if before < LimitState::Reached => {
+                    if options.limit_reached {
+                        events.push((3, format!("{} limit reached", reading.title)));
+                    } else if before == LimitState::Normal && options.close_to_limit {
+                        events.push((2, format!("{} is at or near its limit", reading.title)));
+                    }
+                }
+                (LimitState::Normal, LimitState::Close) if options.close_to_limit => {
+                    let suffix = (!reading.detail.trim().is_empty())
+                        .then(|| format!(" ({})", reading.detail));
+                    events.push((
+                        2,
+                        format!(
+                            "{} is close to its limit{}",
+                            reading.title,
+                            suffix.unwrap_or_default()
+                        ),
+                    ));
+                }
+                (before, LimitState::Normal)
+                    if before != LimitState::Normal && options.available_again =>
+                {
+                    events.push((1, format!("{} is available again", reading.title)));
+                }
+                _ => {}
+            }
+            next.insert(reading.key, reading.state);
+        }
+
+        self.previous = next;
+        let event_count = events.len();
+        events.sort_by(|left, right| right.0.cmp(&left.0));
+        let notification = events.into_iter().next().map(|(_, mut message)| {
+            if event_count > 1 {
+                message.push_str(&format!(" · {} more changes", event_count - 1));
+            }
+            message
+        });
+        AlertUpdate { notification }
     }
 }
 
 struct App {
     config: Config,
+    palette: theme::Palette,
     status: StatusReporter,
     snapshot: Option<Snapshot>,
     selected: usize,
     expanded: bool,
+    scroll_offset: u16,
+    max_scroll: u16,
+    viewport_height: u16,
+    reveal_selected: bool,
     scanning: bool,
-    alerts_enabled: bool,
-    alerting: bool,
+    hosted: bool,
+    alert_dialog: Option<usize>,
+    alert_tracker: AlertTracker,
     quit: bool,
 }
 
 impl App {
-    /// Fold a fresh scan in: update the sidebar status line and drive the
-    /// alert edge — attention on crossing a threshold, idle on recovery.
+    /// Fold a fresh scan in: update the sidebar status line and emit a
+    /// first-class informational alert when an opted-in edge fires.
     /// Every call is a silent no-op outside Unpeel.
     fn apply(&mut self, snapshot: Snapshot) {
         self.scanning = false;
-        let alerting = self.alerts_enabled && !snapshot.alerts().is_empty();
-        self.status
-            .set_status(&snapshot.status_line(self.alerts_enabled));
-        if alerting && !self.alerting {
-            self.status.attention();
-        } else if !alerting && self.alerting {
-            self.status.idle();
+        self.status.set_status(&snapshot.status_line());
+        if self.hosted {
+            let update = self.alert_tracker.update(&snapshot, self.config.alerts);
+            if let Some(notification) = update.notification {
+                self.status.alert("Usage alert", &notification);
+            }
         }
-        self.alerting = alerting;
+        if snapshot.providers.is_empty() {
+            self.selected = 0;
+            self.expanded = false;
+            self.scroll_offset = 0;
+        } else if self.selected >= snapshot.providers.len() {
+            self.selected = snapshot.providers.len() - 1;
+            self.expanded = false;
+            self.reveal_selected = true;
+        }
         self.snapshot = Some(snapshot);
     }
 
@@ -111,6 +249,7 @@ impl App {
             self.selected = index;
             self.expanded = false;
         }
+        self.reveal_selected = true;
     }
 
     fn select_next(&mut self) {
@@ -124,20 +263,100 @@ impl App {
             self.select(self.selected - 1);
         }
     }
+
+    fn scroll_down(&mut self, rows: u16) {
+        self.scroll_offset = self.scroll_offset.saturating_add(rows).min(self.max_scroll);
+        self.reveal_selected = false;
+    }
+
+    fn scroll_up(&mut self, rows: u16) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(rows);
+        self.reveal_selected = false;
+    }
+
+    fn scroll_to_bar_row(&mut self, row: u16, area: ratatui::layout::Rect) {
+        let track = area.height.saturating_sub(1);
+        let relative = row.saturating_sub(area.y).min(track);
+        self.scroll_offset = if track == 0 {
+            0
+        } else {
+            let numerator = u32::from(relative) * u32::from(self.max_scroll);
+            let rounded = (numerator + u32::from(track) / 2) / u32::from(track);
+            u16::try_from(rounded).unwrap_or(self.max_scroll)
+        };
+        self.reveal_selected = false;
+    }
+
+    fn open_alert_dialog(&mut self) {
+        if self.hosted {
+            self.alert_dialog = Some(0);
+        }
+    }
+
+    fn move_alert_selection(&mut self, delta: isize) {
+        let Some(selected) = self.alert_dialog else {
+            return;
+        };
+        let last = AlertOption::ALL.len().saturating_sub(1);
+        self.alert_dialog = Some(if delta < 0 {
+            selected.saturating_sub(delta.unsigned_abs())
+        } else {
+            selected.saturating_add(delta as usize).min(last)
+        });
+    }
+
+    fn toggle_alert_option(&mut self, index: usize) {
+        let Some(option) = AlertOption::ALL.get(index).copied() else {
+            return;
+        };
+        self.config.alerts.toggle(option);
+    }
 }
 
-fn run_tui(config: Config) {
+impl Drop for App {
+    fn drop(&mut self) {
+        self.status.idle();
+        self.status.flush();
+    }
+}
+
+/// Restores the terminal even when drawing or input returns an error, or a
+/// panic unwinds through the event loop.
+struct TerminalGuard;
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = execute!(std::io::stdout(), DisableMouseCapture);
+        ratatui::restore();
+    }
+}
+
+fn run_tui(config: Config) -> io::Result<()> {
+    let mut terminal = ratatui::init();
+    let _terminal_guard = TerminalGuard;
+    // OSC 11 replies arrive on stdin; resolve after raw mode starts but before
+    // crossterm's event reader has a chance to consume the response.
+    let palette = theme::resolve(config.theme);
+    execute!(std::io::stdout(), EnableMouseCapture)?;
+
     let status = StatusReporter::detect();
+    let hosted = status.is_hosted();
     status.idle();
     let mut app = App {
-        alerts_enabled: config.alerts.enabled,
         config,
+        palette,
         status,
         snapshot: None,
         selected: 0,
         expanded: false,
+        scroll_offset: 0,
+        max_scroll: 0,
+        viewport_height: 0,
+        reveal_selected: true,
         scanning: true,
-        alerting: false,
+        hosted,
+        alert_dialog: None,
+        alert_tracker: AlertTracker::default(),
         quit: false,
     };
 
@@ -157,10 +376,6 @@ fn run_tui(config: Config) {
         }
     });
 
-    let mut terminal = ratatui::init();
-    let _ = execute!(std::io::stdout(), EnableMouseCapture);
-    // Card screen positions from the last frame, for mouse hit-testing.
-    let mut hits: Vec<ui::Hit> = Vec::new();
     while !app.quit {
         while let Ok(snapshot) = snapshot_rx.try_recv() {
             app.apply(snapshot);
@@ -169,16 +384,58 @@ fn run_tui(config: Config) {
             selected: app.selected,
             expanded: app.expanded,
             scanning: app.scanning,
-            alerts_enabled: app.alerts_enabled,
+            hosted: app.hosted,
+            alerts: app.config.alerts,
+            alert_dialog: app.alert_dialog,
+            scroll_offset: app.scroll_offset,
+            reveal_selected: app.reveal_selected,
         };
-        let _ = terminal.draw(|frame| hits = ui::draw(frame, app.snapshot.as_ref(), &view));
-        if !matches!(event::poll(Duration::from_millis(100)), Ok(true)) {
+        let mut rendered = ui::RenderResult::default();
+        terminal.draw(|frame| {
+            rendered = ui::draw(frame, app.snapshot.as_ref(), &view, &app.palette);
+        })?;
+        let hits = rendered.hits;
+        app.scroll_offset = rendered.scroll_offset;
+        app.max_scroll = rendered.max_scroll;
+        app.viewport_height = rendered.viewport_height;
+        app.reveal_selected = false;
+        let scrollbar_area = rendered.scrollbar_area;
+        let alert_button = rendered.alert_button;
+        let alert_option_hits = rendered.alert_option_hits;
+        let alert_dialog_area = rendered.alert_dialog_area;
+        if !event::poll(Duration::from_millis(100))? {
             continue;
         }
-        let Ok(read) = event::read() else { break };
+        let read = event::read()?;
         match read {
             Event::Key(key) => {
                 if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+                    continue;
+                }
+                if app.alert_dialog.is_some() {
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && key.code == KeyCode::Char('c')
+                    {
+                        app.quit = true;
+                    } else {
+                        match key.code {
+                            KeyCode::Char('j') | KeyCode::Down => app.move_alert_selection(1),
+                            KeyCode::Char('k') | KeyCode::Up => app.move_alert_selection(-1),
+                            KeyCode::Home | KeyCode::Char('g') => app.alert_dialog = Some(0),
+                            KeyCode::End | KeyCode::Char('G') => {
+                                app.alert_dialog = Some(AlertOption::ALL.len() - 1)
+                            }
+                            KeyCode::Enter | KeyCode::Char(' ') => {
+                                if let Some(selected) = app.alert_dialog {
+                                    app.toggle_alert_option(selected);
+                                }
+                            }
+                            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('a') => {
+                                app.alert_dialog = None
+                            }
+                            _ => {}
+                        }
+                    }
                     continue;
                 }
                 match nav(&key) {
@@ -187,31 +444,77 @@ fn run_tui(config: Config) {
                     Some(Nav::Up) => app.select_prev(),
                     Some(Nav::Top) => app.select(0),
                     Some(Nav::Bottom) => app.select(app.provider_count().saturating_sub(1)),
-                    Some(Nav::Select) => app.expanded = !app.expanded,
-                    Some(Nav::Back) => app.expanded = false,
+                    Some(Nav::Select) => {
+                        app.expanded = !app.expanded;
+                        app.reveal_selected = true;
+                    }
+                    Some(Nav::Back) => {
+                        app.expanded = false;
+                        app.reveal_selected = true;
+                    }
                     None => match key.code {
+                        KeyCode::PageDown => {
+                            app.scroll_down(app.viewport_height.saturating_sub(1).max(1))
+                        }
+                        KeyCode::PageUp => {
+                            app.scroll_up(app.viewport_height.saturating_sub(1).max(1))
+                        }
                         KeyCode::Char('r') => {
                             app.scanning = true;
                             let _ = trigger_tx.send(());
                         }
                         KeyCode::Char('a') => {
-                            app.alerts_enabled = !app.alerts_enabled;
-                            if let Some(snapshot) = app.snapshot.take() {
-                                app.apply(snapshot);
-                            }
+                            app.open_alert_dialog();
                         }
+                        KeyCode::Char('t') => app.palette = app.palette.toggled(),
                         _ => {}
                     },
                 }
             }
+            Event::Mouse(mouse) if app.alert_dialog.is_some() => {
+                if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+                    if let Some(hit) = alert_option_hits
+                        .iter()
+                        .find(|hit| hit.contains(mouse.column, mouse.row))
+                    {
+                        app.alert_dialog = Some(hit.index);
+                        app.toggle_alert_option(hit.index);
+                    } else if alert_dialog_area.is_some_and(|area| {
+                        mouse.column < area.x
+                            || mouse.column >= area.right()
+                            || mouse.row < area.y
+                            || mouse.row >= area.bottom()
+                    }) {
+                        app.alert_dialog = None;
+                    }
+                }
+            }
             Event::Mouse(mouse) => match mouse.kind {
-                MouseEventKind::ScrollDown => app.select_next(),
-                MouseEventKind::ScrollUp => app.select_prev(),
+                MouseEventKind::ScrollDown => app.scroll_down(3),
+                MouseEventKind::ScrollUp => app.scroll_up(3),
                 // Click selects a card; a second click on it toggles details.
-                MouseEventKind::Down(MouseButton::Left) => {
-                    if let Some(hit) = hits.iter().find(|hit| hit.contains(mouse.row)) {
+                MouseEventKind::Down(MouseButton::Left)
+                | MouseEventKind::Drag(MouseButton::Left) => {
+                    if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                        && alert_button
+                            .as_ref()
+                            .is_some_and(|hit| hit.contains(mouse.column, mouse.row))
+                    {
+                        app.open_alert_dialog();
+                    } else if let Some(area) = scrollbar_area.filter(|area| {
+                        mouse.column >= area.x
+                            && mouse.column < area.right()
+                            && mouse.row >= area.y
+                            && mouse.row < area.bottom()
+                    }) {
+                        app.scroll_to_bar_row(mouse.row, area);
+                    } else if let Some(hit) = hits
+                        .iter()
+                        .find(|hit| hit.contains(mouse.column, mouse.row))
+                    {
                         if hit.index == app.selected {
                             app.expanded = !app.expanded;
+                            app.reveal_selected = true;
                         } else {
                             app.select(hit.index);
                         }
@@ -219,11 +522,97 @@ fn run_tui(config: Config) {
                 }
                 _ => {}
             },
+            Event::Resize(_, _) => app.reveal_selected = true,
             _ => {}
         }
     }
-    let _ = execute!(std::io::stdout(), DisableMouseCapture);
-    ratatui::restore();
-    app.status.idle();
-    app.status.flush();
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sources::{Provider, ProviderKind};
+
+    fn limit_snapshot(level: Level, used: f64, annotation: Option<&str>) -> Snapshot {
+        let mut metric =
+            Metric::used_percent("Weekly", used, format!("{used:.0}% · resets 2h"), level);
+        metric.annotation = annotation.map(str::to_string);
+        Snapshot {
+            providers: vec![Provider {
+                kind: ProviderKind::Claude,
+                name: "Claude Code".into(),
+                badge: String::new(),
+                present: true,
+                metrics: vec![metric],
+                detail: Vec::new(),
+                as_of: None,
+                alert: None,
+                status_fragment: None,
+                day_usd: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn close_and_reached_notifications_are_independent_edges() {
+        let options = Alerts {
+            close_to_limit: true,
+            limit_reached: true,
+            ..Alerts::default()
+        };
+        let mut tracker = AlertTracker::default();
+
+        let close = tracker.update(&limit_snapshot(Level::Warn, 82.0, None), options);
+        assert!(close
+            .notification
+            .as_deref()
+            .is_some_and(|message| message.contains("close to its limit")));
+
+        let unchanged = tracker.update(&limit_snapshot(Level::Warn, 84.0, None), options);
+        assert!(unchanged.notification.is_none());
+
+        let reached = tracker.update(
+            &limit_snapshot(Level::Alert, 100.0, Some("Limit reached")),
+            options,
+        );
+        assert!(reached
+            .notification
+            .as_deref()
+            .is_some_and(|message| message.contains("limit reached")));
+    }
+
+    #[test]
+    fn available_again_requires_a_real_recovery_transition() {
+        let mut tracker = AlertTracker::default();
+        let constrained = tracker.update(
+            &limit_snapshot(Level::Alert, 96.0, Some("Running out")),
+            Alerts::default(),
+        );
+        assert!(constrained.notification.is_none());
+
+        let options = Alerts {
+            available_again: true,
+            ..Alerts::default()
+        };
+        let recovered = tracker.update(&limit_snapshot(Level::Ok, 3.0, None), options);
+        assert!(recovered
+            .notification
+            .as_deref()
+            .is_some_and(|message| message.contains("available again")));
+
+        let still_available = tracker.update(&limit_snapshot(Level::Ok, 4.0, None), options);
+        assert!(still_available.notification.is_none());
+    }
+
+    #[test]
+    fn paced_runout_counts_as_close_even_below_eighty_percent() {
+        let metric = {
+            let mut metric =
+                Metric::used_percent("Weekly", 53.0, "53% · resets 3d".into(), Level::Alert);
+            metric.annotation = Some("Limit in 56m".into());
+            metric
+        };
+        assert_eq!(metric_limit_state(&metric), LimitState::Close);
+    }
 }

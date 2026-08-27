@@ -1,5 +1,6 @@
-//! Provider model and scan orchestration. Everything is read from local
-//! files the tools already write — no API keys, no network, no daemon.
+//! Provider model and scan orchestration. Codex and spend history come from
+//! local tool files; Claude can additionally reuse Claude Code's OAuth login
+//! for live subscription limits. No pasted API keys and no daemon.
 
 use crate::config::Config;
 use std::path::{Path, PathBuf};
@@ -9,6 +10,15 @@ pub enum Level {
     Ok,
     Warn,
     Alert,
+}
+
+/// Whether a bounded row visualizes the amount consumed or the amount left.
+/// Claude's live API reports utilization and OpenUsage presents it as used;
+/// Codex's existing cards keep their remaining-first presentation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PercentDisplay {
+    Remaining,
+    Used,
 }
 
 /// Which tool a card describes — the UI keys its accent color off this.
@@ -29,6 +39,12 @@ pub struct Metric {
     pub spark: Vec<f64>,
     pub value: String,
     pub level: Level,
+    pub percent_display: PercentDisplay,
+    /// Optional pace projection shown opposite the label (for example
+    /// `~4% spare` or `🔥 Limit in 56m`).
+    pub annotation: Option<String>,
+    /// Optional 0..=1 even-pace marker drawn over the meter.
+    pub marker: Option<f64>,
 }
 
 impl Metric {
@@ -39,7 +55,17 @@ impl Metric {
             spark: Vec::new(),
             value,
             level,
+            percent_display: PercentDisplay::Remaining,
+            annotation: None,
+            marker: None,
         }
+    }
+
+    pub fn used_percent(label: impl Into<String>, used: f64, value: String, level: Level) -> Self {
+        let mut metric = Self::new(label, value, level);
+        metric.percent = Some(used.clamp(0.0, 100.0));
+        metric.percent_display = PercentDisplay::Used;
+        metric
     }
 }
 
@@ -91,22 +117,9 @@ impl Snapshot {
         (!costs.is_empty()).then(|| costs.iter().sum())
     }
 
-    pub fn alerts(&self) -> Vec<&str> {
-        self.providers
-            .iter()
-            .filter_map(|provider| provider.alert.as_deref())
-            .collect()
-    }
-
-    /// The sidebar status line: alert text when alerting, otherwise the
-    /// compact per-provider fragments. Kept short — it renders under a
-    /// sidebar row and in a phone list.
-    pub fn status_line(&self, alerts_enabled: bool) -> String {
-        if alerts_enabled {
-            if let Some(alert) = self.alerts().first() {
-                return format!("⚠ {alert}");
-            }
-        }
+    /// Compact per-provider sidebar status. Notification event copy is
+    /// transient and is written separately when an enabled alert edge fires.
+    pub fn status_line(&self) -> String {
         let fragments: Vec<&str> = self
             .providers
             .iter()
@@ -194,9 +207,11 @@ pub fn level_for_used_percent(used: f64, alert_at: f64) -> Level {
     }
 }
 
-/// "1.2M" / "312k" / "980" token formatting.
+/// "4.3B" / "1.2M" / "312k" / "980" token formatting.
 pub fn compact_tokens(tokens: u64) -> String {
-    if tokens >= 1_000_000 {
+    if tokens >= 1_000_000_000 {
+        format!("{:.1}B", tokens as f64 / 1_000_000_000.0)
+    } else if tokens >= 1_000_000 {
         format!("{:.1}M", tokens as f64 / 1_000_000.0)
     } else if tokens >= 1_000 {
         format!("{}k", tokens / 1_000)

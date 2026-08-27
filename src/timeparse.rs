@@ -10,9 +10,7 @@ pub fn parse_epoch_secs(ts: &str) -> Option<i64> {
     if bytes.len() < 19 || bytes[4] != b'-' || bytes[7] != b'-' || bytes[10] != b'T' {
         return None;
     }
-    let num = |range: std::ops::Range<usize>| -> Option<i64> {
-        ts.get(range)?.parse::<i64>().ok()
-    };
+    let num = |range: std::ops::Range<usize>| -> Option<i64> { ts.get(range)?.parse::<i64>().ok() };
     let (y, mo, d) = (num(0..4)?, num(5..7)?, num(8..10)?);
     let (h, mi, s) = (num(11..13)?, num(14..16)?, num(17..19)?);
     if !(1..=12).contains(&mo) || !(1..=31).contains(&d) {
@@ -28,9 +26,11 @@ pub fn parse_epoch_secs(ts: &str) -> Option<i64> {
             .unwrap_or(rest.len());
         rest = &rest[end..];
     }
-    if let Some(offset) = rest.strip_prefix('+').map(|o| (o, -1)).or_else(|| {
-        rest.strip_prefix('-').map(|o| (o, 1))
-    }) {
+    if let Some(offset) = rest
+        .strip_prefix('+')
+        .map(|o| (o, -1))
+        .or_else(|| rest.strip_prefix('-').map(|o| (o, 1)))
+    {
         let (o, sign) = offset;
         if o.len() >= 5 {
             let oh: i64 = o.get(0..2)?.parse().ok()?;
@@ -84,7 +84,10 @@ mod tests {
     #[test]
     fn parses_zulu_and_offset() {
         assert_eq!(parse_epoch_secs("1970-01-01T00:00:00Z"), Some(0));
-        assert_eq!(parse_epoch_secs("2026-08-24T09:15:05.709Z"), Some(1_787_562_905));
+        assert_eq!(
+            parse_epoch_secs("2026-08-24T09:15:05.709Z"),
+            Some(1_787_562_905)
+        );
         assert_eq!(
             parse_epoch_secs("2026-08-24T11:15:05+02:00"),
             parse_epoch_secs("2026-08-24T09:15:05Z")
@@ -97,6 +100,6 @@ mod tests {
         assert_eq!(compact_duration(0), "now");
         assert_eq!(compact_duration(90), "2m");
         assert_eq!(compact_duration(4_800), "1h 20m");
-        assert_eq!(compact_duration(530_000, ), "6d 3h");
+        assert_eq!(compact_duration(530_000,), "6d 3h");
     }
 }
