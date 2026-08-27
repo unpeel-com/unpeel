@@ -65,9 +65,9 @@ wrapper, and the lower-level `DragSurface::register` API.
 Appearance comes from the kit's dark/light defaults. Set
 `UNPEEL_TUI_THEME=light` or `UNPEEL_TUI_THEME=dark` to override detection.
 Selected rows span the full list width and keep the shared two-cell content
-inset. The App title is the two-cell-inset uppercase `FILES` header used by
-the other list Apps, with a full-width separator before the filter and folder
-content.
+inset. Unpeel's Session title owns the App name, so content starts immediately
+without a repeated in-App title. One minimal bottom-left hint row leads with
+`Esc` whenever a menu or filter interaction is open.
 
 The binary self-registers a development-only App manifest under an existing
 `~/.unpeel/apps/unpeel.app.filetree/` when launched. If it is not installed on
