@@ -507,20 +507,29 @@ fn render_provider_list_row(
         return;
     }
 
-    let (summary, level) = provider_basic_data(provider);
-    let summary_width = if content.width >= 18 {
-        u16::try_from(Line::from(summary.as_str()).width())
-            .unwrap_or(u16::MAX)
-            .min(content.width.saturating_sub(10))
-    } else {
-        0
-    };
+    let list_name = display_provider_list_name(&provider.name);
+    let list_badge = display_provider_list_badge(&provider.badge);
+    let title_width = Line::from(match &list_badge {
+        Some(badge) => format!("{list_name} {badge}"),
+        None => list_name.clone(),
+    })
+    .width();
+    let reserved_title = u16::try_from(title_width)
+        .unwrap_or(u16::MAX)
+        .min(content.width / 2);
+    let summary_budget = content
+        .width
+        .saturating_sub(reserved_title)
+        .saturating_sub(1);
+    let (summary, level) = provider_basic_data(provider, summary_budget);
+    let summary_width = u16::try_from(Line::from(summary.as_str()).width())
+        .unwrap_or(u16::MAX)
+        .min(summary_budget);
     let [title_area, summary_area] = Layout::horizontal([
         Constraint::Min(0),
         Constraint::Length(summary_width.saturating_add(u16::from(summary_width > 0))),
     ])
     .areas(content);
-
     let name_style = if selected {
         Style::default().add_modifier(Modifier::BOLD)
     } else {
@@ -532,14 +541,11 @@ fn render_provider_list_row(
             })
             .add_modifier(Modifier::BOLD)
     };
-    let mut title = vec![Span::styled(
-        display_provider_name(&provider.name),
-        name_style,
-    )];
-    if !provider.badge.is_empty() {
+    let mut title = vec![Span::styled(list_name, name_style)];
+    if let Some(badge) = list_badge {
         title.push(Span::raw(" "));
         title.push(Span::styled(
-            display_badge(&provider.badge),
+            badge,
             if selected {
                 Style::default().add_modifier(Modifier::DIM)
             } else {
@@ -568,27 +574,98 @@ fn render_provider_list_row(
     }
 }
 
-fn provider_basic_data(provider: &Provider) -> (String, Level) {
+fn provider_basic_data(provider: &Provider, max_width: u16) -> (String, Level) {
     if !provider.present {
         return ("Not installed".into(), Level::Ok);
     }
-    let Some(metric) = provider.metrics.first() else {
+    let Some(first) = provider.metrics.first() else {
         return ("No recent activity".into(), Level::Ok);
     };
-    let value = match (metric.percent, metric.percent_display) {
-        (Some(used), PercentDisplay::Remaining) => {
-            format!("{:.0}% left", (100.0 - used).clamp(0.0, 100.0))
+    let bounded: Vec<&Metric> = provider
+        .metrics
+        .iter()
+        .filter(|metric| metric.percent.is_some())
+        .collect();
+    if !bounded.is_empty() {
+        let fable = bounded
+            .iter()
+            .copied()
+            .find(|metric| metric.label.eq_ignore_ascii_case("Fable"));
+        let mut focused = vec![bounded[0]];
+        if let Some(metric) = fable.or_else(|| bounded.get(1).copied()) {
+            if !std::ptr::eq(metric, focused[0]) {
+                focused.push(metric);
+            }
         }
-        (Some(used), PercentDisplay::Used) => format!("{used:.0}% used"),
-        (None, _) => split_metric_value(&metric.value).0,
-    };
-    let label = display_metric_label(&metric.label);
+        let single = [fable.unwrap_or(bounded[0])];
+        let candidates = [
+            format_quota_usage(&bounded, quota_label_verbose),
+            format_quota_usage(&bounded, quota_label_compact),
+            format_quota_usage(&focused, quota_label_compact),
+            format_quota_usage(&single, quota_label_compact),
+        ];
+        let summary = candidates
+            .into_iter()
+            .find(|candidate| Line::from(candidate.as_str()).width() <= usize::from(max_width))
+            .unwrap_or_default();
+        return (summary, metric_group_level(&bounded));
+    }
+
+    let value = split_metric_value(&first.value).0;
+    let label = display_metric_label(&first.label);
     let summary = if value.trim().is_empty() {
         label
     } else {
         format!("{label} {value}")
     };
-    (summary, metric.level)
+    (summary, first.level)
+}
+
+fn format_quota_usage(metrics: &[&Metric], label: fn(&str) -> String) -> String {
+    let values = metrics
+        .iter()
+        .filter_map(|metric| {
+            metric
+                .percent
+                .map(|used| format!("{} {used:.0}%", label(&metric.label)))
+        })
+        .collect::<Vec<_>>()
+        .join(" · ");
+    if values.is_empty() {
+        String::new()
+    } else {
+        format!("{values} used")
+    }
+}
+
+fn quota_label_verbose(label: &str) -> String {
+    match label.to_ascii_lowercase().as_str() {
+        "session" | "5h" | "5h block" => "5-hour".into(),
+        "week" | "weekly" => "7-day".into(),
+        "fable" => "Fable 7-day".into(),
+        "sonnet" => "Sonnet 7-day".into(),
+        _ => display_metric_label(label),
+    }
+}
+
+fn quota_label_compact(label: &str) -> String {
+    match label.to_ascii_lowercase().as_str() {
+        "session" | "5h" | "5h block" => "5h".into(),
+        "week" | "weekly" => "7d".into(),
+        "fable" => "Fable".into(),
+        "sonnet" => "Sonnet".into(),
+        _ => display_metric_label(label),
+    }
+}
+
+fn metric_group_level(metrics: &[&Metric]) -> Level {
+    if metrics.iter().any(|metric| metric.level == Level::Alert) {
+        Level::Alert
+    } else if metrics.iter().any(|metric| metric.level == Level::Warn) {
+        Level::Warn
+    } else {
+        Level::Ok
+    }
 }
 
 fn metric_height(metric: &Metric) -> u16 {
@@ -892,6 +969,19 @@ fn display_provider_name(name: &str) -> String {
         .unwrap_or_else(|| name.to_string())
 }
 
+fn display_provider_list_name(name: &str) -> String {
+    let display = display_provider_name(name);
+    display
+        .split_once(" · ")
+        .filter(|(_, suffix)| suffix.contains('@'))
+        .map(|(provider, _)| provider.to_string())
+        .unwrap_or(display)
+}
+
+fn display_provider_list_badge(badge: &str) -> Option<String> {
+    (!badge.is_empty() && !badge.contains('@')).then(|| display_badge(badge))
+}
+
 fn display_badge(badge: &str) -> String {
     if badge.contains('@') {
         badge.to_string()
@@ -1092,8 +1182,10 @@ fn split_metric_value(value: &str) -> (String, Option<String>) {
 
 fn display_metric_label(label: &str) -> String {
     match label.to_ascii_lowercase().as_str() {
-        "week" | "weekly" => "Weekly".into(),
-        "5h" | "5h block" => "Session".into(),
+        "week" | "weekly" => "7-day limit".into(),
+        "session" | "5h" | "5h block" => "5-hour limit".into(),
+        "fable" => "Fable 7-day limit".into(),
+        "sonnet" => "Sonnet 7-day limit".into(),
         "24h" => "Usage trend".into(),
         "burn" => "Burn rate".into(),
         _ => title_case(label),
@@ -1179,8 +1271,9 @@ mod tests {
     fn sample() -> Snapshot {
         let mut codex_week = Metric::new("week", "3% · resets 6d 18h".into(), Level::Ok);
         codex_week.percent = Some(3.0);
-        let mut block = Metric::new("5h block", "$3.24 est · resets 1h 20m".into(), Level::Ok);
-        block.percent = Some(32.0);
+        let block = Metric::used_percent("Session", 32.0, "32% · resets 1h 20m".into(), Level::Ok);
+        let weekly = Metric::used_percent("Weekly", 44.0, "44% · resets 3d 2h".into(), Level::Ok);
+        let fable = Metric::used_percent("Fable", 11.0, "11% · resets 3d 2h".into(), Level::Ok);
         let mut day = Metric::new("24h", "$8.91 est · 1.2M tok".into(), Level::Ok);
         day.spark = (0..24).map(|hour| (hour % 5) as f64).collect();
         let claude = |name: &str, badge: &str| Provider {
@@ -1190,6 +1283,8 @@ mod tests {
             present: true,
             metrics: vec![
                 block.clone(),
+                weekly.clone(),
+                fable.clone(),
                 Metric::new("burn", "$1.20/hr est".into(), Level::Ok),
                 day.clone(),
             ],
@@ -1281,17 +1376,17 @@ mod tests {
         );
         assert!(screen.contains("Codex Pro"), "provider and badge\n{screen}");
         assert!(
-            screen.contains("tommy@uxthemes.com"),
-            "account badge\n{screen}"
+            !screen.contains("tommy@uxthemes.com") && !screen.contains("work@uxthemes.com"),
+            "emails stay out of the main list\n{screen}"
         );
         assert!(screen.contains("Claude · work"), "second account\n{screen}");
         assert!(
-            screen.contains("Weekly 97% left"),
-            "basic Codex data\n{screen}"
+            screen.contains("7-day 3% used"),
+            "clear Codex quota data\n{screen}"
         );
         assert!(
-            screen.contains("Session 68% left"),
-            "basic Claude data\n{screen}"
+            screen.contains("5-hour 32% · 7-day 44% · Fable 7-day 11% used"),
+            "clear Claude quota data including Fable\n{screen}"
         );
         assert_eq!(hits.len(), 3);
         assert!(
@@ -1301,6 +1396,22 @@ mod tests {
         assert!(
             !screen.contains("Resets in"),
             "details stay collapsed\n{screen}"
+        );
+    }
+
+    #[test]
+    fn narrow_list_prioritizes_a_spelled_out_fable_reading() {
+        let (screen, _) = render(38, 12, false);
+        assert!(screen.contains("Fable 11% used"), "Fable quota\n{screen}");
+        assert!(!screen.contains('@'), "email hidden\n{screen}");
+    }
+
+    #[test]
+    fn account_email_remains_available_in_detail() {
+        let (screen, _) = render(72, 30, true);
+        assert!(
+            screen.contains("tommy@uxthemes.com"),
+            "account detail\n{screen}"
         );
     }
 
@@ -1379,8 +1490,11 @@ mod tests {
         for expected in [
             "← Back",
             "Claude Team 5x",
+            "5-hour limit",
             "39% used",
+            "7-day limit",
             "~2% spare",
+            "Fable 7-day limit",
             "99% used",
             "Limit in 56m",
             "$165.21 spent",
@@ -1577,7 +1691,7 @@ mod tests {
 
     #[test]
     fn scrollbar_thumb_is_proportional_to_visible_content() {
-        let (screen, rendered) = render_state(72, 10, 1, true, 0, false);
+        let (screen, rendered) = render_state(72, 15, 1, true, 0, false);
         let area = rendered.scrollbar_area.expect("scrollbar");
         let rows: Vec<&str> = screen.lines().collect();
         let thumb_rows = (area.y..area.bottom())

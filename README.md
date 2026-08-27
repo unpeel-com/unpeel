@@ -9,21 +9,26 @@ OAuth login; transcript history stays local.
 ```
  USAGE                                                   24h $12.15 est
 ────────────────────────────────────────────────────────────────────────
-  Codex Pro                                             Weekly 63% left
-  Claude Max 20x                                        Session 15% used
-  Claude · work work@example.com                        Session 28% used
+  Codex Pro                                              7-day 37% used
+  Claude Max 20x          5-hour 15% · 7-day 44% · Fable 7-day 85% used
+  Claude · work                     5h 28% · Fable 7-day 63% used
 
  j/k select · enter details · r refresh · a alerts · t theme · q quit
 ```
 
 The selected provider gets the same full-width gray row and two-cell label
-inset as `unpeel-tui-kit`'s Explorer. The list shows only the primary basic
-reading. Press Enter to open its borderless detail view; a pinned, full-width
-`← Back` row appears at the top and Enter, Escape, or a click returns to the
-list. Detail quotas use a purpose-built Ratatui meter, calendar-day activity
-uses the native `Sparkline` widget, and Claude pace projections keep their
-blue / amber / red semantic states, spare estimate, run-out estimate, and
-even-pace marker.
+inset as `unpeel-tui-kit`'s Explorer. The list prioritizes quota readings over
+account metadata: `5-hour` is Claude's rolling five-hour allowance, `7-day` is
+the overall weekly allowance, and `Fable 7-day` is that model's weekly
+allowance. Every percentage is the amount used. Email addresses and reset
+dates/times stay in the detail view instead of crowding the list.
+
+Press Enter to open the borderless detail view; a pinned, full-width `← Back`
+row appears at the top and Enter, Escape, or a click returns to the list.
+Detail quotas use a purpose-built Ratatui meter, calendar-day activity uses
+the native `Sparkline` widget, and Claude pace projections keep their blue /
+amber / red semantic states, spare estimate, run-out estimate, and even-pace
+marker.
 
 The shared design-system primitives come directly from
 [`unpeel-tui-kit`](https://github.com/unpeel-com/unpeel-tui-kit):
