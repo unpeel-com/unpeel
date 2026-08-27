@@ -1,6 +1,6 @@
 # unpeel-usage
 
-Local AI usage & credits at a glance — a small, fast terminal dashboard
+Local AI usage & credits at a glance — a small, fast terminal app
 built entirely from native [Ratatui](https://ratatui.rs) layouts and widgets.
 It reuses the logins and files your AI tools already keep on this machine:
 no pasted API keys and no daemon. Claude live limits use Claude Code's stored
@@ -9,51 +9,28 @@ OAuth login; transcript history stays local.
 ```
  USAGE                                                   24h $12.15 est
 ────────────────────────────────────────────────────────────────────────
-   Codex Pro                                                          ●
-
- ╭────────────────────────────────────────────────────────────────────╮
- │                                                                    │
- │ Weekly                                                             │
- │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━────────────────────────── │
- │ 63% left                                            Resets in 3d 6h │
- │                                                                    │
- │ Credits                                                       $436 │
- │                                                                    │
- ╰────────────────────────────────────────────────────────────────────╯
-
- ▎ Claude Max 20x                                                    ●
-
- ╭────────────────────────────────────────────────────────────────────╮
- │                                                                    │
- │ Session                                                            │
- │ ━━━━━━━━━━──────────────────────────────────────────────────────── │
- │ 15% used                                        Resets in 1h 14m   │
- │                                                                    │
- │ Weekly                                                  ~8% spare  │
- │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│──────────────────────────────────── │
- │ 44% used                                         Resets in 3d 21h  │
- │                                                                    │
- │ Fable                                           Limit in 1d 18h    │
- │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━─────── │
- │ 85% used                                         Resets in 3d 21h  │
- │                                                                    │
- │ Usage Trend                                                        │
- │ ▁▁▂▃▅▇▆▃▁▂▄▆█▇▅▃▂▁                                                │
- │                                                                    │
- │ Today                                   $15.00 est · 29.6M tokens  │
- │ Yesterday                               $31.13 est · 60.6M tokens  │
- │ Last 30 Days                              $3.5K est · 4.7B tokens  │
- │                                                                    │
- ╰────────────────────────────────────────────────────────────────────╯
+  Codex Pro                                             Weekly 63% left
+  Claude Max 20x                                        Session 15% used
+  Claude · work work@example.com                        Session 28% used
 
  j/k select · enter details · r refresh · a alerts · t theme · q quit
 ```
 
-Each provider gets a distinct header and an inset Ratatui `Block` with one
-cell of padding on every side. Quotas use a purpose-built Ratatui meter plus
-a separate used-or-remaining/reset row; calendar-day activity uses the native
-`Sparkline` widget. Claude's pace projection adds the same blue / amber / red
-states, spare estimate, run-out estimate, and even-pace marker as OpenUsage.
+The selected provider gets the same full-width gray row and two-cell label
+inset as `unpeel-tui-kit`'s Explorer. The list shows only the primary basic
+reading. Press Enter to open its borderless detail view; a pinned, full-width
+`← Back` row appears at the top and Enter, Escape, or a click returns to the
+list. Detail quotas use a purpose-built Ratatui meter, calendar-day activity
+uses the native `Sparkline` widget, and Claude pace projections keep their
+blue / amber / red semantic states, spare estimate, run-out estimate, and
+even-pace marker.
+
+The shared design-system primitives come directly from
+[`unpeel-tui-kit`](https://github.com/unpeel-com/unpeel-tui-kit):
+`SELECTABLE_LEFT_PADDING`, the dark and light `KitTheme` selection colors,
+and `VerticalScrollbar`. Usage retains its OSC 11 appearance detection; when
+the terminal cannot report an appearance, the selected row uses
+terminal-native reverse video instead of assuming a dark background.
 
 ## Light and dark themes
 
@@ -75,14 +52,15 @@ environment variable accepts the same three values and takes precedence over
 `~/.config/unpeel-usage/config.toml`. Press `t` in the dashboard to cycle
 adaptive, light, and dark palettes for the current session.
 
-The provider and metric hierarchy is inspired by the grouped dashboard in
+The provider detail hierarchy is inspired by the grouped dashboard in
 [OpenUsage](https://github.com/robinebers/openusage), adapted for terminal
 cells and narrow viewports.
 
-The dashboard is fully mouse-aware: click a card to select it, click it again
-for details, use the wheel to scroll by rows, or click and drag the scrollbar.
-The keyboard does everything too (`j/k`, `enter`, `PageUp/PageDown`, `r`, `a`,
-`t`, `q`). The selected provider returns to view after keyboard navigation.
+The app is fully mouse-aware: click a row to select it, click it again for
+details, click the Back row to return, use the wheel to scroll by rows, or
+click and drag the scrollbar. The keyboard does everything too (`j/k`,
+`enter`, `esc`, `PageUp/PageDown`, `r`, `a`, `t`, `q`). The selected provider
+returns to view after keyboard navigation.
 
 ## What it reads
 

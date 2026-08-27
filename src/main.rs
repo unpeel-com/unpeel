@@ -200,7 +200,7 @@ struct App {
     status: StatusReporter,
     snapshot: Option<Snapshot>,
     selected: usize,
-    expanded: bool,
+    detail_open: bool,
     scroll_offset: u16,
     max_scroll: u16,
     viewport_height: u16,
@@ -227,11 +227,11 @@ impl App {
         }
         if snapshot.providers.is_empty() {
             self.selected = 0;
-            self.expanded = false;
+            self.detail_open = false;
             self.scroll_offset = 0;
         } else if self.selected >= snapshot.providers.len() {
             self.selected = snapshot.providers.len() - 1;
-            self.expanded = false;
+            self.detail_open = false;
             self.reveal_selected = true;
         }
         self.snapshot = Some(snapshot);
@@ -247,8 +247,23 @@ impl App {
     fn select(&mut self, index: usize) {
         if index != self.selected {
             self.selected = index;
-            self.expanded = false;
+            self.detail_open = false;
         }
+        self.reveal_selected = true;
+    }
+
+    fn open_detail(&mut self) {
+        if self.provider_count() == 0 {
+            return;
+        }
+        self.detail_open = true;
+        self.scroll_offset = 0;
+        self.reveal_selected = false;
+    }
+
+    fn close_detail(&mut self) {
+        self.detail_open = false;
+        self.scroll_offset = 0;
         self.reveal_selected = true;
     }
 
@@ -348,7 +363,7 @@ fn run_tui(config: Config) -> io::Result<()> {
         status,
         snapshot: None,
         selected: 0,
-        expanded: false,
+        detail_open: false,
         scroll_offset: 0,
         max_scroll: 0,
         viewport_height: 0,
@@ -382,7 +397,7 @@ fn run_tui(config: Config) -> io::Result<()> {
         }
         let view = ui::View {
             selected: app.selected,
-            expanded: app.expanded,
+            detail_open: app.detail_open,
             scanning: app.scanning,
             hosted: app.hosted,
             alerts: app.config.alerts,
@@ -400,6 +415,7 @@ fn run_tui(config: Config) -> io::Result<()> {
         app.viewport_height = rendered.viewport_height;
         app.reveal_selected = false;
         let scrollbar_area = rendered.scrollbar_area;
+        let back_button = rendered.back_button;
         let alert_button = rendered.alert_button;
         let alert_option_hits = rendered.alert_option_hits;
         let alert_dialog_area = rendered.alert_dialog_area;
@@ -440,17 +456,25 @@ fn run_tui(config: Config) -> io::Result<()> {
                 }
                 match nav(&key) {
                     Some(Nav::Quit) => app.quit = true,
+                    Some(Nav::Down) if app.detail_open => app.scroll_down(1),
                     Some(Nav::Down) => app.select_next(),
+                    Some(Nav::Up) if app.detail_open => app.scroll_up(1),
                     Some(Nav::Up) => app.select_prev(),
+                    Some(Nav::Top) if app.detail_open => app.scroll_up(u16::MAX),
                     Some(Nav::Top) => app.select(0),
+                    Some(Nav::Bottom) if app.detail_open => app.scroll_down(u16::MAX),
                     Some(Nav::Bottom) => app.select(app.provider_count().saturating_sub(1)),
                     Some(Nav::Select) => {
-                        app.expanded = !app.expanded;
-                        app.reveal_selected = true;
+                        if app.detail_open {
+                            app.close_detail();
+                        } else {
+                            app.open_detail();
+                        }
                     }
                     Some(Nav::Back) => {
-                        app.expanded = false;
-                        app.reveal_selected = true;
+                        if app.detail_open {
+                            app.close_detail();
+                        }
                     }
                     None => match key.code {
                         KeyCode::PageDown => {
@@ -492,7 +516,7 @@ fn run_tui(config: Config) -> io::Result<()> {
             Event::Mouse(mouse) => match mouse.kind {
                 MouseEventKind::ScrollDown => app.scroll_down(3),
                 MouseEventKind::ScrollUp => app.scroll_up(3),
-                // Click selects a card; a second click on it toggles details.
+                // Click selects a row; a second click opens its detail view.
                 MouseEventKind::Down(MouseButton::Left)
                 | MouseEventKind::Drag(MouseButton::Left) => {
                     if mouse.kind == MouseEventKind::Down(MouseButton::Left)
@@ -501,6 +525,12 @@ fn run_tui(config: Config) -> io::Result<()> {
                             .is_some_and(|hit| hit.contains(mouse.column, mouse.row))
                     {
                         app.open_alert_dialog();
+                    } else if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                        && back_button
+                            .as_ref()
+                            .is_some_and(|hit| hit.contains(mouse.column, mouse.row))
+                    {
+                        app.close_detail();
                     } else if let Some(area) = scrollbar_area.filter(|area| {
                         mouse.column >= area.x
                             && mouse.column < area.right()
@@ -513,8 +543,7 @@ fn run_tui(config: Config) -> io::Result<()> {
                         .find(|hit| hit.contains(mouse.column, mouse.row))
                     {
                         if hit.index == app.selected {
-                            app.expanded = !app.expanded;
-                            app.reveal_selected = true;
+                            app.open_detail();
                         } else {
                             app.select(hit.index);
                         }

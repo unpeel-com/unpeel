@@ -1,10 +1,9 @@
-//! Ratatui dashboard rendering.
+//! Ratatui master/detail rendering.
 //!
-//! The screen is composed entirely from Ratatui layout primitives and
-//! widgets. Provider cards are real `Block`s, percentages use a purpose-built
-//! Ratatui `UsageMeter`, hourly activity is a `Sparkline`, and overflowing
-//! provider lists get a `Scrollbar`. The only terminal-specific code lives in
-//! the event loop.
+//! The default surface follows the shared Unpeel TUI list language: compact,
+//! borderless, full-width selected rows with a two-cell content inset. Enter
+//! opens one provider's detailed meters and history without changing that
+//! selected-list vocabulary.
 
 use crate::config::{AlertOption, Alerts};
 use crate::sources::{Level, Metric, PercentDisplay, Provider, ProviderKind, Snapshot};
@@ -14,15 +13,12 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph, Sparkline, Widget};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Sparkline, Widget};
 use ratatui::Frame;
-use unpeel_tui_kit::VerticalScrollbar;
+use unpeel_tui_kit::{KitTheme, VerticalScrollbar, SELECTABLE_LEFT_PADDING};
 
-const SECTION_GAP: u16 = 1;
-const HEADER_HEIGHT: u16 = 1;
-const HEADER_TO_CARD_GAP: u16 = 1;
 const METRIC_GAP: u16 = 1;
-const CELL_PADDING: u16 = 1;
+const DETAIL_TOP_GAP: u16 = 1;
 
 fn accent(palette: &ui::Palette, kind: ProviderKind) -> Color {
     match kind {
@@ -41,15 +37,15 @@ fn level_color(palette: &ui::Palette, level: Level) -> Color {
 
 pub struct View {
     pub selected: usize,
-    pub expanded: bool,
+    pub detail_open: bool,
     pub scanning: bool,
     pub hosted: bool,
     pub alerts: Alerts,
     pub alert_dialog: Option<usize>,
-    /// Requested top row in the virtual provider canvas.
+    /// Requested top row in the active list or detail viewport.
     pub scroll_offset: u16,
     /// Bring the selected provider into view after keyboard navigation,
-    /// refreshes, expansion, and resize. Mouse/page scrolling disables this
+    /// refreshes and resize. Mouse/page scrolling disables this
     /// until selection changes again.
     pub reveal_selected: bool,
 }
@@ -61,12 +57,13 @@ pub struct RenderResult {
     pub max_scroll: u16,
     pub viewport_height: u16,
     pub scrollbar_area: Option<Rect>,
+    pub back_button: Option<Hit>,
     pub alert_button: Option<Hit>,
     pub alert_option_hits: Vec<Hit>,
     pub alert_dialog_area: Option<Rect>,
 }
 
-/// One card's clickable screen rectangle, inclusive on every edge.
+/// One selectable row's clickable screen rectangle, inclusive on every edge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Hit {
     pub index: usize,
@@ -115,9 +112,15 @@ pub fn draw(
             render_empty_state(frame, body, false, palette);
             RenderResult::default()
         }
-        Some(snapshot) => render_providers(frame, body, &snapshot.providers, view, palette),
+        Some(snapshot) if view.detail_open => {
+            let selected = view
+                .selected
+                .min(snapshot.providers.len().saturating_sub(1));
+            render_provider_detail(frame, body, &snapshot.providers[selected], view, palette)
+        }
+        Some(snapshot) => render_provider_list(frame, body, &snapshot.providers, view, palette),
     };
-    result.alert_button = render_footer(frame, footer, view.hosted, palette);
+    result.alert_button = render_footer(frame, footer, view.hosted, view.detail_open, palette);
     if let Some(selected) = view.alert_dialog.filter(|_| view.hosted) {
         let (area, hits) = render_alert_dialog(frame, selected, view.alerts, palette);
         result.alert_dialog_area = Some(area);
@@ -221,12 +224,34 @@ fn render_footer(
     frame: &mut Frame,
     area: Rect,
     hosted: bool,
+    detail_open: bool,
     palette: &ui::Palette,
 ) -> Option<Hit> {
     if area.is_empty() {
         return None;
     }
-    let hints: &[(&str, &str)] = if area.width >= 68 {
+    let hints: &[(&str, &str)] = if detail_open && area.width >= 68 {
+        if hosted {
+            &[
+                ("esc/enter", "back"),
+                ("j/k", "scroll"),
+                ("r", "refresh"),
+                ("a", "alerts"),
+                ("t", "theme"),
+                ("q", "quit"),
+            ]
+        } else {
+            &[
+                ("esc/enter", "back"),
+                ("j/k", "scroll"),
+                ("r", "refresh"),
+                ("t", "theme"),
+                ("q", "quit"),
+            ]
+        }
+    } else if detail_open {
+        &[("esc", "back"), ("j/k", "scroll"), ("q", "quit")]
+    } else if area.width >= 68 {
         if hosted {
             &[
                 ("j/k", "select"),
@@ -245,8 +270,6 @@ fn render_footer(
                 ("q", "quit"),
             ]
         }
-    } else if hosted && area.width >= 36 {
-        &[("j/k", "select"), ("a", "alerts"), ("q", "quit")]
     } else {
         &[("j/k", "select"), ("enter", "details"), ("q", "quit")]
     };
@@ -357,7 +380,7 @@ fn render_alert_dialog(
     (area, hits)
 }
 
-fn render_providers(
+fn render_provider_list(
     frame: &mut Frame,
     area: Rect,
     providers: &[Provider],
@@ -369,130 +392,57 @@ fn render_providers(
     }
 
     let selected = view.selected.min(providers.len().saturating_sub(1));
-    let heights: Vec<u16> = providers
-        .iter()
-        .enumerate()
-        .map(|(index, provider)| section_height(provider, view.expanded && index == selected))
-        .collect();
-    let total_height =
-        heights
-            .iter()
-            .copied()
-            .fold(0u16, u16::saturating_add)
-            .saturating_add(SECTION_GAP.saturating_mul(
-                u16::try_from(providers.len().saturating_sub(1)).unwrap_or(u16::MAX),
-            ));
-    let scrollable = total_height > area.height;
-    let horizontal_inset = u16::from(area.width >= 4);
-    let content_area = Rect::new(
-        area.x.saturating_add(horizontal_inset),
-        area.y,
-        area.width
-            .saturating_sub(horizontal_inset.saturating_mul(2)),
-        area.height,
-    );
-    let show_scrollbar = scrollable && content_area.width > 1;
-    let sections_area = if show_scrollbar {
-        Rect::new(
-            content_area.x,
-            content_area.y,
-            content_area.width - 1,
-            content_area.height,
-        )
+    let total_height = u16::try_from(providers.len()).unwrap_or(u16::MAX);
+    let show_scrollbar = total_height > area.height && area.width > 1;
+    let rows_area = if show_scrollbar {
+        Rect::new(area.x, area.y, area.width - 1, area.height)
     } else {
-        content_area
+        area
     };
-    if sections_area.is_empty() {
+    if rows_area.is_empty() {
         return RenderResult {
             viewport_height: area.height,
             ..RenderResult::default()
         };
     }
 
-    let starts = section_starts(&heights);
-    let max_scroll = total_height.saturating_sub(sections_area.height);
+    let max_scroll = total_height.saturating_sub(rows_area.height);
     let requested = view.scroll_offset.min(max_scroll);
     let scroll_offset = if view.reveal_selected {
-        reveal_selected_offset(
-            &starts,
-            &heights,
-            selected,
-            sections_area.height,
-            requested,
-            max_scroll,
-        )
+        reveal_selected_row(selected, rows_area.height, requested, max_scroll)
     } else {
         requested
     };
 
-    // Render every provider into a virtual Ratatui canvas, then copy the
-    // requested row window into the frame. Partial cards stay continuous at
-    // both viewport edges and the scrollbar can represent real content rows.
-    let virtual_area = Rect::new(0, 0, sections_area.width, total_height.max(1));
-    let mut virtual_buffer = Buffer::empty(virtual_area);
-    for (index, provider) in providers.iter().enumerate() {
-        render_provider_section(
-            &mut virtual_buffer,
-            Rect::new(0, starts[index], sections_area.width, heights[index]),
+    let mut hits = Vec::new();
+    for row in 0..rows_area.height {
+        let index = usize::from(scroll_offset.saturating_add(row));
+        let Some(provider) = providers.get(index) else {
+            break;
+        };
+        let row_area = Rect::new(rows_area.x, rows_area.y + row, rows_area.width, 1);
+        render_provider_list_row(
+            frame.buffer_mut(),
+            row_area,
             provider,
             index == selected,
-            view.expanded && index == selected,
             palette,
         );
-    }
-    {
-        let destination = frame.buffer_mut();
-        for row in 0..sections_area.height {
-            let source_y = scroll_offset.saturating_add(row);
-            if source_y >= total_height {
-                break;
-            }
-            for column in 0..sections_area.width {
-                destination[(sections_area.x + column, sections_area.y + row)] =
-                    virtual_buffer[(column, source_y)].clone();
-            }
+        if let Some(hit) = Hit::from_rect(index, row_area) {
+            hits.push(hit);
         }
     }
 
-    let mut hits = Vec::new();
-    let viewport_end = scroll_offset.saturating_add(sections_area.height);
-    for (index, start) in starts.iter().copied().enumerate() {
-        let end = start.saturating_add(heights[index]);
-        let visible_start = start.max(scroll_offset);
-        let visible_end = end.min(viewport_end);
-        if visible_start < visible_end {
-            let section_area = Rect::new(
-                sections_area.x,
-                sections_area
-                    .y
-                    .saturating_add(visible_start.saturating_sub(scroll_offset)),
-                sections_area.width,
-                visible_end.saturating_sub(visible_start),
-            );
-            if let Some(hit) = Hit::from_rect(index, section_area) {
-                hits.push(hit);
-            }
-        }
-    }
-
-    let scrollbar_area = show_scrollbar.then(|| {
-        Rect::new(
-            content_area.right().saturating_sub(1),
-            content_area.y,
-            1,
-            content_area.height,
-        )
-    });
+    let scrollbar_area =
+        show_scrollbar.then(|| Rect::new(area.right().saturating_sub(1), area.y, 1, area.height));
     if let Some(scrollbar_area) = scrollbar_area {
-        frame.render_widget(
-            VerticalScrollbar::new(
-                usize::from(total_height),
-                usize::from(sections_area.height),
-                usize::from(scroll_offset),
-            )
-            .track_style(Style::default().fg(palette.track))
-            .thumb_style(Style::default().fg(palette.focus)),
+        render_scrollbar(
+            frame,
             scrollbar_area,
+            total_height,
+            rows_area.height,
+            scroll_offset,
+            palette,
         );
     }
 
@@ -500,84 +450,145 @@ fn render_providers(
         hits,
         scroll_offset,
         max_scroll,
-        viewport_height: sections_area.height,
+        viewport_height: rows_area.height,
         scrollbar_area,
         ..RenderResult::default()
     }
 }
 
-fn section_starts(heights: &[u16]) -> Vec<u16> {
-    let mut starts = Vec::with_capacity(heights.len());
-    let mut cursor = 0u16;
-    for height in heights {
-        starts.push(cursor);
-        cursor = cursor.saturating_add(*height).saturating_add(SECTION_GAP);
-    }
-    starts
-}
-
-fn reveal_selected_offset(
-    starts: &[u16],
-    heights: &[u16],
+fn reveal_selected_row(
     selected: usize,
     viewport_height: u16,
     current: u16,
     max_scroll: u16,
 ) -> u16 {
-    let Some((&start, &height)) = starts.get(selected).zip(heights.get(selected)) else {
-        return current.min(max_scroll);
-    };
     if viewport_height == 0 {
         return 0;
     }
-    let end = start.saturating_add(height);
-    let viewport_end = current.saturating_add(viewport_height);
-    if height > viewport_height {
-        if start < current || start >= viewport_end {
-            start.min(max_scroll)
-        } else {
-            current.min(max_scroll)
-        }
-    } else if start < current {
-        start.min(max_scroll)
-    } else if end > viewport_end {
-        end.saturating_sub(viewport_height).min(max_scroll)
+    let selected = u16::try_from(selected).unwrap_or(u16::MAX);
+    if selected < current {
+        selected.min(max_scroll)
+    } else if selected >= current.saturating_add(viewport_height) {
+        selected
+            .saturating_add(1)
+            .saturating_sub(viewport_height)
+            .min(max_scroll)
     } else {
         current.min(max_scroll)
     }
 }
 
-fn section_height(provider: &Provider, expanded: bool) -> u16 {
-    HEADER_HEIGHT
-        .saturating_add(HEADER_TO_CARD_GAP)
-        .saturating_add(card_height(provider, expanded))
-}
+fn render_provider_list_row(
+    buffer: &mut Buffer,
+    area: Rect,
+    provider: &Provider,
+    selected: bool,
+    palette: &ui::Palette,
+) {
+    if area.is_empty() {
+        return;
+    }
 
-fn card_height(provider: &Provider, expanded: bool) -> u16 {
-    let metric_rows = if !provider.present || provider.metrics.is_empty() {
-        1
+    let row_style = if selected {
+        selected_row_style(palette)
     } else {
-        provider
-            .metrics
-            .iter()
-            .map(metric_height)
-            .fold(0u16, u16::saturating_add)
-            .saturating_add(METRIC_GAP.saturating_mul(
-                u16::try_from(provider.metrics.len().saturating_sub(1)).unwrap_or(u16::MAX),
-            ))
+        Style::default()
     };
-    let detail_count = if expanded {
-        u16::try_from(provider.detail.len())
+    buffer.set_style(area, row_style);
+
+    let padding = SELECTABLE_LEFT_PADDING.min(area.width);
+    let content = Rect::new(
+        area.x.saturating_add(padding),
+        area.y,
+        area.width.saturating_sub(padding).saturating_sub(1),
+        1,
+    );
+    if content.is_empty() {
+        return;
+    }
+
+    let (summary, level) = provider_basic_data(provider);
+    let summary_width = if content.width >= 18 {
+        u16::try_from(Line::from(summary.as_str()).width())
             .unwrap_or(u16::MAX)
-            .saturating_add(u16::from(provider.as_of.is_some()))
+            .min(content.width.saturating_sub(10))
     } else {
         0
     };
-    let details = detail_count.saturating_add(u16::from(detail_count > 0));
-    metric_rows
-        .saturating_add(details)
-        .saturating_add(2)
-        .saturating_add(CELL_PADDING.saturating_mul(2))
+    let [title_area, summary_area] = Layout::horizontal([
+        Constraint::Min(0),
+        Constraint::Length(summary_width.saturating_add(u16::from(summary_width > 0))),
+    ])
+    .areas(content);
+
+    let name_style = if selected {
+        Style::default().add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .fg(if provider.alert.is_some() {
+                palette.attention
+            } else {
+                palette.primary
+            })
+            .add_modifier(Modifier::BOLD)
+    };
+    let mut title = vec![Span::styled(
+        display_provider_name(&provider.name),
+        name_style,
+    )];
+    if !provider.badge.is_empty() {
+        title.push(Span::raw(" "));
+        title.push(Span::styled(
+            display_badge(&provider.badge),
+            if selected {
+                Style::default().add_modifier(Modifier::DIM)
+            } else {
+                Style::default().fg(palette.muted)
+            },
+        ));
+    }
+    Paragraph::new(Line::from(title))
+        .style(row_style)
+        .render(title_area, buffer);
+
+    if summary_width > 0 {
+        let summary_style = if selected {
+            Style::default().add_modifier(Modifier::DIM)
+        } else if provider.alert.is_some() || level == Level::Alert {
+            Style::default().fg(palette.attention)
+        } else if level == Level::Warn {
+            Style::default().fg(palette.warning)
+        } else {
+            Style::default().fg(palette.muted)
+        };
+        Paragraph::new(summary)
+            .style(row_style.patch(summary_style))
+            .alignment(Alignment::Right)
+            .render(summary_area, buffer);
+    }
+}
+
+fn provider_basic_data(provider: &Provider) -> (String, Level) {
+    if !provider.present {
+        return ("Not installed".into(), Level::Ok);
+    }
+    let Some(metric) = provider.metrics.first() else {
+        return ("No recent activity".into(), Level::Ok);
+    };
+    let value = match (metric.percent, metric.percent_display) {
+        (Some(used), PercentDisplay::Remaining) => {
+            format!("{:.0}% left", (100.0 - used).clamp(0.0, 100.0))
+        }
+        (Some(used), PercentDisplay::Used) => format!("{used:.0}% used"),
+        (None, _) => split_metric_value(&metric.value).0,
+    };
+    let label = display_metric_label(&metric.label);
+    let summary = if value.trim().is_empty() {
+        label
+    } else {
+        format!("{label} {value}")
+    };
+    (summary, metric.level)
 }
 
 fn metric_height(metric: &Metric) -> u16 {
@@ -598,137 +609,159 @@ fn chart_is_inline(metric: &Metric) -> bool {
     metric.label.eq_ignore_ascii_case("Usage Trend")
 }
 
-fn render_provider_section(
-    buffer: &mut Buffer,
+fn render_provider_detail(
+    frame: &mut Frame,
     area: Rect,
     provider: &Provider,
-    selected: bool,
-    expanded: bool,
+    view: &View,
     palette: &ui::Palette,
-) {
+) -> RenderResult {
     if area.is_empty() {
-        return;
+        return RenderResult::default();
     }
 
-    let header = Rect::new(area.x, area.y, area.width, area.height.min(HEADER_HEIGHT));
-    render_provider_header(buffer, header, provider, selected, palette);
+    let back_area = Rect::new(area.x, area.y, area.width, 1);
+    let back_style = selected_row_style(palette);
+    frame.buffer_mut().set_style(back_area, back_style);
+    let padding = SELECTABLE_LEFT_PADDING.min(back_area.width);
+    frame.render_widget(
+        Paragraph::new("← Back").style(back_style.add_modifier(Modifier::BOLD)),
+        Rect::new(
+            back_area.x.saturating_add(padding),
+            back_area.y,
+            back_area.width.saturating_sub(padding),
+            1,
+        ),
+    );
 
-    let card_y = area
-        .y
-        .saturating_add(HEADER_HEIGHT)
-        .saturating_add(HEADER_TO_CARD_GAP);
-    if card_y >= area.bottom() {
-        return;
-    }
-    let card = Rect::new(area.x, card_y, area.width, area.bottom() - card_y);
-    render_provider_card(buffer, card, provider, selected, expanded, palette);
-}
-
-fn render_provider_header(
-    buffer: &mut Buffer,
-    area: Rect,
-    provider: &Provider,
-    selected: bool,
-    palette: &ui::Palette,
-) {
-    if area.is_empty() {
-        return;
-    }
-
-    let accent = accent(palette, provider.kind);
-    let name_color = if provider.alert.is_some() {
-        palette.attention
+    let viewport_y = area.y.saturating_add(1).saturating_add(DETAIL_TOP_GAP);
+    let viewport_height = area.bottom().saturating_sub(viewport_y);
+    let horizontal_padding = if area.width >= 5 {
+        SELECTABLE_LEFT_PADDING
+    } else if area.width >= 3 {
+        1
     } else {
-        palette.primary
+        0
     };
-    let name_style = Style::default().fg(name_color).add_modifier(if selected {
-        Modifier::BOLD
-    } else {
-        Modifier::empty()
+    let content_area = Rect::new(
+        area.x.saturating_add(horizontal_padding),
+        viewport_y,
+        area.width
+            .saturating_sub(horizontal_padding.saturating_mul(2)),
+        viewport_height,
+    );
+    let total_height = detail_content_height(provider);
+    let max_scroll = total_height.saturating_sub(content_area.height);
+    let scroll_offset = view.scroll_offset.min(max_scroll);
+
+    if !content_area.is_empty() {
+        let virtual_area = Rect::new(0, 0, content_area.width, total_height.max(1));
+        let mut virtual_buffer = Buffer::empty(virtual_area);
+        render_detail_content(&mut virtual_buffer, virtual_area, provider, palette);
+        let destination = frame.buffer_mut();
+        for row in 0..content_area.height {
+            let source_y = scroll_offset.saturating_add(row);
+            if source_y >= total_height {
+                break;
+            }
+            for column in 0..content_area.width {
+                destination[(content_area.x + column, content_area.y + row)] =
+                    virtual_buffer[(column, source_y)].clone();
+            }
+        }
+    }
+
+    let show_scrollbar = total_height > content_area.height && area.width > 1;
+    let scrollbar_area = show_scrollbar.then(|| {
+        Rect::new(
+            area.right().saturating_sub(1),
+            viewport_y,
+            1,
+            viewport_height,
+        )
     });
-    let marker = if selected { "▎ " } else { "  " };
-    let mut title = vec![
-        Span::styled(marker, Style::default().fg(palette.focus)),
-        Span::styled(display_provider_name(&provider.name), name_style),
-    ];
-    if !provider.badge.is_empty() {
-        title.push(Span::raw(" "));
-        title.push(Span::styled(
-            display_badge(&provider.badge),
-            Style::default().fg(palette.muted),
-        ));
+    if let Some(scrollbar_area) = scrollbar_area {
+        render_scrollbar(
+            frame,
+            scrollbar_area,
+            total_height,
+            content_area.height,
+            scroll_offset,
+            palette,
+        );
     }
-    let symbol = if provider.alert.is_some() {
-        "⚠"
-    } else {
-        "●"
-    };
-    let symbol_color = if provider.alert.is_some() {
-        palette.attention
-    } else if provider.present && !provider.metrics.is_empty() {
-        accent
-    } else {
-        palette.track
-    };
-    let [title_area, symbol_area] = Layout::horizontal([
-        Constraint::Min(0),
-        Constraint::Length(u16::from(area.width >= 2).saturating_mul(2)),
-    ])
-    .areas(area);
-    Paragraph::new(Line::from(title)).render(title_area, buffer);
-    Paragraph::new(Span::styled(symbol, Style::default().fg(symbol_color)))
-        .alignment(Alignment::Right)
-        .render(symbol_area, buffer);
+
+    RenderResult {
+        scroll_offset,
+        max_scroll,
+        viewport_height: content_area.height,
+        scrollbar_area,
+        back_button: Hit::from_rect(view.selected, back_area),
+        ..RenderResult::default()
+    }
 }
 
-fn render_provider_card(
+fn detail_content_height(provider: &Provider) -> u16 {
+    let mut height = 1u16;
+    height = height.saturating_add(u16::from(provider.alert.is_some()));
+    height = height.saturating_add(METRIC_GAP);
+    if !provider.present || provider.metrics.is_empty() {
+        return height.saturating_add(1);
+    }
+    let metric_rows = provider
+        .metrics
+        .iter()
+        .map(metric_height)
+        .fold(0u16, u16::saturating_add)
+        .saturating_add(METRIC_GAP.saturating_mul(
+            u16::try_from(provider.metrics.len().saturating_sub(1)).unwrap_or(u16::MAX),
+        ));
+    height = height.saturating_add(metric_rows);
+    let detail_rows = u16::try_from(provider.detail.len())
+        .unwrap_or(u16::MAX)
+        .saturating_add(u16::from(provider.as_of.is_some()));
+    height.saturating_add(if detail_rows > 0 {
+        METRIC_GAP.saturating_add(detail_rows)
+    } else {
+        0
+    })
+}
+
+fn render_detail_content(
     buffer: &mut Buffer,
     area: Rect,
     provider: &Provider,
-    selected: bool,
-    expanded: bool,
     palette: &ui::Palette,
 ) {
     if area.is_empty() {
         return;
     }
 
-    let border_color = if provider.alert.is_some() {
-        palette.attention
-    } else if selected {
-        palette.focus
-    } else {
-        palette.surface_edge
-    };
-    let block = Block::new()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(border_color))
-        .padding(Padding::uniform(CELL_PADDING));
-
-    let inner = block.inner(area);
-    block.render(area, buffer);
-    if inner.is_empty() {
-        return;
+    render_detail_header(buffer, row_at(area, area.y), provider, palette);
+    let mut y = area.y.saturating_add(1);
+    if let Some(alert) = &provider.alert {
+        Paragraph::new(format!("⚠ {alert}"))
+            .style(Style::default().fg(palette.attention))
+            .render(row_at(area, y), buffer);
+        y = y.saturating_add(1);
     }
-
-    let mut y = inner.y;
+    y = y.saturating_add(METRIC_GAP);
     if !provider.present {
-        render_muted_row(buffer, row_at(inner, y), "not installed", palette);
+        render_muted_row(buffer, row_at(area, y), "not installed", palette);
         return;
     }
     if provider.metrics.is_empty() {
-        render_muted_row(buffer, row_at(inner, y), "no recent activity", palette);
+        render_muted_row(buffer, row_at(area, y), "no recent activity", palette);
         return;
     }
     for (index, metric) in provider.metrics.iter().enumerate() {
-        if y >= inner.bottom() {
+        if y >= area.bottom() {
             return;
         }
-        let height = metric_height(metric).min(inner.bottom().saturating_sub(y));
+        let height = metric_height(metric).min(area.bottom().saturating_sub(y));
         render_metric(
             buffer,
-            Rect::new(inner.x, y, inner.width, height),
+            Rect::new(area.x, y, area.width, height),
             metric,
             palette,
         );
@@ -737,31 +770,120 @@ fn render_provider_card(
             y = y.saturating_add(METRIC_GAP);
         }
     }
-    if expanded {
-        let has_details = !provider.detail.is_empty() || provider.as_of.is_some();
-        if has_details {
-            y = y.saturating_add(METRIC_GAP);
+    let has_details = !provider.detail.is_empty() || provider.as_of.is_some();
+    if has_details {
+        y = y.saturating_add(METRIC_GAP);
+    }
+    for (key, value) in &provider.detail {
+        if y >= area.bottom() {
+            return;
         }
-        for (key, value) in &provider.detail {
-            if y >= inner.bottom() {
-                return;
-            }
-            render_key_value(buffer, row_at(inner, y), key, value, palette);
-            y = y.saturating_add(1);
-        }
-        if let Some(as_of) = provider.as_of {
-            if y < inner.bottom() {
-                let age = compact_duration(now_epoch_secs() - as_of);
-                render_key_value(
-                    buffer,
-                    row_at(inner, y),
-                    "updated",
-                    &format!("{age} ago"),
-                    palette,
-                );
-            }
+        render_key_value(buffer, row_at(area, y), key, value, palette);
+        y = y.saturating_add(1);
+    }
+    if let Some(as_of) = provider.as_of {
+        if y < area.bottom() {
+            let age = compact_duration(now_epoch_secs() - as_of);
+            render_key_value(
+                buffer,
+                row_at(area, y),
+                "updated",
+                &format!("{age} ago"),
+                palette,
+            );
         }
     }
+}
+
+fn render_detail_header(
+    buffer: &mut Buffer,
+    area: Rect,
+    provider: &Provider,
+    palette: &ui::Palette,
+) {
+    if area.is_empty() {
+        return;
+    }
+    let mut title = vec![Span::styled(
+        display_provider_name(&provider.name),
+        Style::default()
+            .fg(if provider.alert.is_some() {
+                palette.attention
+            } else {
+                palette.primary
+            })
+            .add_modifier(Modifier::BOLD),
+    )];
+    if !provider.badge.is_empty() {
+        title.push(Span::raw(" "));
+        title.push(Span::styled(
+            display_badge(&provider.badge),
+            Style::default().fg(palette.muted),
+        ));
+    }
+    let [title_area, status_area] = Layout::horizontal([
+        Constraint::Min(0),
+        Constraint::Length(u16::from(area.width >= 2).saturating_mul(2)),
+    ])
+    .areas(area);
+    Paragraph::new(Line::from(title)).render(title_area, buffer);
+    let status_color = if provider.alert.is_some() {
+        palette.attention
+    } else if provider.present && !provider.metrics.is_empty() {
+        accent(palette, provider.kind)
+    } else {
+        palette.track
+    };
+    Paragraph::new(Span::styled("●", Style::default().fg(status_color)))
+        .alignment(Alignment::Right)
+        .render(status_area, buffer);
+}
+
+fn selected_row_style(palette: &ui::Palette) -> Style {
+    match palette.mode {
+        ui::ThemeMode::Dark => KitTheme::dark().selected_row,
+        ui::ThemeMode::Light => KitTheme::light().selected_row,
+        // Detection-free mode deliberately follows the terminal defaults.
+        ui::ThemeMode::Adaptive => Style::default().add_modifier(Modifier::REVERSED),
+    }
+}
+
+fn scrollbar_styles(palette: &ui::Palette) -> (Style, Style) {
+    match palette.mode {
+        ui::ThemeMode::Dark => {
+            let kit = KitTheme::dark();
+            (kit.scrollbar_track, kit.scrollbar_thumb)
+        }
+        ui::ThemeMode::Light => {
+            let kit = KitTheme::light();
+            (kit.scrollbar_track, kit.scrollbar_thumb)
+        }
+        ui::ThemeMode::Adaptive => (
+            Style::default().fg(palette.track),
+            Style::default().fg(palette.focus),
+        ),
+    }
+}
+
+fn render_scrollbar(
+    frame: &mut Frame,
+    area: Rect,
+    content_rows: u16,
+    viewport_rows: u16,
+    position: u16,
+    palette: &ui::Palette,
+) {
+    let (track, thumb) = scrollbar_styles(palette);
+    frame.render_widget(
+        VerticalScrollbar::new(
+            usize::from(content_rows),
+            usize::from(viewport_rows),
+            usize::from(position),
+        )
+        .track_style(track)
+        .thumb_style(thumb),
+        area,
+    );
 }
 
 fn display_provider_name(name: &str) -> String {
@@ -1101,7 +1223,7 @@ mod tests {
         width: u16,
         height: u16,
         selected: usize,
-        expanded: bool,
+        detail_open: bool,
         scroll_offset: u16,
         reveal_selected: bool,
     ) -> (String, RenderResult) {
@@ -1109,7 +1231,7 @@ mod tests {
         let snapshot = sample();
         let view = View {
             selected,
-            expanded,
+            detail_open,
             scanning: false,
             hosted: false,
             alerts: Alerts::default(),
@@ -1135,52 +1257,55 @@ mod tests {
         (screen, rendered)
     }
 
-    fn render_with(width: u16, height: u16, selected: usize, expanded: bool) -> (String, Vec<Hit>) {
-        let (screen, rendered) = render_state(width, height, selected, expanded, 0, true);
+    fn render_with(
+        width: u16,
+        height: u16,
+        selected: usize,
+        detail_open: bool,
+    ) -> (String, Vec<Hit>) {
+        let (screen, rendered) = render_state(width, height, selected, detail_open, 0, true);
         (screen, rendered.hits)
     }
 
-    fn render(width: u16, height: u16, expanded: bool) -> (String, Vec<Hit>) {
-        render_with(width, height, 1, expanded)
+    fn render(width: u16, height: u16, detail_open: bool) -> (String, Vec<Hit>) {
+        render_with(width, height, 1, detail_open)
     }
 
     #[test]
-    fn wide_layout_matches_openusage_information_hierarchy() {
-        let (screen, _) = render(72, 48, true);
+    fn default_view_is_a_compact_explorer_style_list() {
+        let (screen, hits) = render(72, 12, false);
         assert!(screen.contains("USAGE"), "uppercase brand\n{screen}");
         assert!(
             screen.contains("24h $17.82 est"),
             "header 24h total\n{screen}"
         );
+        assert!(screen.contains("Codex Pro"), "provider and badge\n{screen}");
         assert!(
             screen.contains("tommy@uxthemes.com"),
             "account badge\n{screen}"
         );
         assert!(screen.contains("Claude · work"), "second account\n{screen}");
-        assert!(screen.contains("Weekly"), "quota title\n{screen}");
-        assert!(screen.contains("97% left"), "remaining quota\n{screen}");
         assert!(
-            screen.contains("Resets in 6d 18h"),
-            "reset context\n{screen}"
+            screen.contains("Weekly 97% left"),
+            "basic Codex data\n{screen}"
         );
-        assert!(screen.contains("Session"), "session title\n{screen}");
-        assert!(screen.contains("68% left"), "budget remaining\n{screen}");
-        assert!(screen.contains("$1.20/hr est"), "burn rate\n{screen}");
         assert!(
-            ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█']
-                .iter()
-                .any(|glyph| screen.contains(*glyph)),
-            "sparkline or gauge glyphs\n{screen}"
+            screen.contains("Session 68% left"),
+            "basic Claude data\n{screen}"
         );
-        assert!(screen.contains("sonnet-4-6"), "expanded detail\n{screen}");
+        assert_eq!(hits.len(), 3);
         assert!(
-            screen.contains('╭') && screen.contains('╯'),
-            "card blocks\n{screen}"
+            !screen.contains('╭') && !screen.contains('╯'),
+            "borderless\n{screen}"
+        );
+        assert!(
+            !screen.contains("Resets in"),
+            "details stay collapsed\n{screen}"
         );
     }
 
     #[test]
-    fn claude_card_matches_the_openusage_expanded_hierarchy() {
+    fn claude_detail_keeps_the_full_usage_hierarchy() {
         let mut session =
             Metric::used_percent("Session", 39.0, "39% · resets 2h 24m".into(), Level::Ok);
         session.marker = None;
@@ -1229,7 +1354,7 @@ mod tests {
                     Some(&snapshot),
                     &View {
                         selected: 0,
-                        expanded: false,
+                        detail_open: true,
                         scanning: false,
                         hosted: false,
                         alerts: Alerts::default(),
@@ -1252,6 +1377,7 @@ mod tests {
             .join("\n");
 
         for expected in [
+            "← Back",
             "Claude Team 5x",
             "39% used",
             "~2% spare",
@@ -1265,6 +1391,10 @@ mod tests {
         ] {
             assert!(screen.contains(expected), "missing {expected:?}\n{screen}");
         }
+        assert!(
+            !screen.contains('╭') && !screen.contains('╯'),
+            "borderless\n{screen}"
+        );
     }
 
     #[test]
@@ -1291,15 +1421,15 @@ mod tests {
     }
 
     #[test]
-    fn cards_inherit_the_terminal_background_in_every_palette() {
-        for palette in [ui::Palette::ADAPTIVE, ui::Palette::LIGHT, ui::Palette::DARK] {
-            let width = 72;
-            let height = 48;
+    fn selected_rows_use_the_shared_light_and_dark_kit_backgrounds() {
+        for palette in [ui::Palette::LIGHT, ui::Palette::DARK] {
+            let width = 40;
+            let height = 8;
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             let snapshot = sample();
             let view = View {
                 selected: 0,
-                expanded: false,
+                detail_open: false,
                 scanning: false,
                 hosted: false,
                 alerts: Alerts::default(),
@@ -1313,29 +1443,38 @@ mod tests {
                 })
                 .unwrap();
             let buffer = terminal.backend().buffer();
-            let weekly = (0..height)
-                .flat_map(|y| (0..width).map(move |x| (x, y)))
-                .find(|&(x, y)| buffer[(x, y)].symbol() == "W")
-                .expect("Weekly label");
-            let card_corner = (0..height)
-                .flat_map(|y| (0..width).map(move |x| (x, y)))
-                .find(|&(x, y)| buffer[(x, y)].symbol() == "╭")
-                .expect("selected card corner");
-
-            assert_eq!(buffer[weekly].fg, palette.primary);
-            assert_eq!(buffer[weekly].bg, Color::Reset);
-            assert_eq!(buffer[card_corner].fg, palette.focus);
-            assert_eq!(buffer[card_corner].bg, Color::Reset);
-            assert_eq!(buffer[(0, 1)].fg, palette.track);
+            let expected = selected_row_style(&palette);
+            let expected_background = expected.bg.expect("kit selection background");
+            assert!(
+                (0..width).all(|x| buffer[(x, 2)].bg == expected_background),
+                "selection should paint the complete row"
+            );
+            assert_eq!(buffer[(0, 3)].bg, Color::Reset, "unselected row");
+            assert_eq!(buffer[(0, 2)].symbol(), " ");
+            assert_eq!(buffer[(1, 2)].symbol(), " ");
+            assert_eq!(buffer[(2, 2)].symbol(), "C", "two-cell label inset");
         }
     }
 
     #[test]
-    fn provider_headers_have_no_drag_handle() {
-        let (screen, _) = render(72, 48, false);
+    fn adaptive_selection_uses_terminal_native_reverse_video() {
+        assert!(selected_row_style(&ui::Palette::ADAPTIVE)
+            .add_modifier
+            .contains(Modifier::REVERSED));
+    }
+
+    #[test]
+    fn provider_rows_have_no_drag_handle_or_selection_marker() {
+        let (screen, _) = render(72, 12, false);
         assert!(!screen.contains('⠿'), "drag handle\n{screen}");
-        assert!(screen.contains("Codex Pro"), "provider header\n{screen}");
-        assert!(screen.contains("▎ Claude"), "selection marker\n{screen}");
+        assert!(
+            screen.contains("  Codex Pro"),
+            "two-cell row inset\n{screen}"
+        );
+        assert!(
+            !screen.contains('▎'),
+            "selection uses a row background\n{screen}"
+        );
     }
 
     #[test]
@@ -1361,8 +1500,8 @@ mod tests {
     }
 
     #[test]
-    fn hit_regions_cover_each_visible_card() {
-        let (screen, hits) = render(72, 48, false);
+    fn hit_regions_cover_each_visible_row_edge_to_edge() {
+        let (screen, hits) = render(72, 12, false);
         assert_eq!(hits.len(), 3);
         let rows: Vec<&str> = screen.lines().collect();
         for (hit, title) in hits.iter().zip(["Codex", "Claude", "Claude · work"]) {
@@ -1371,25 +1510,27 @@ mod tests {
                 "hit top row should hold {title:?}: {:?}",
                 rows[hit.top as usize]
             );
-            assert!(hit.bottom >= hit.top);
-            assert!(hit.right >= hit.left);
+            assert_eq!(hit.bottom, hit.top);
+            assert_eq!(hit.left, 0);
+            assert_eq!(hit.right, 71);
             assert!(hit.contains(hit.left, hit.top));
         }
         for pair in hits.windows(2) {
-            assert!(pair[1].top > pair[0].bottom);
+            assert_eq!(pair[1].top, pair[0].bottom + 1);
         }
-        assert!(hits.last().unwrap().bottom < 47);
+        assert!(hits.last().unwrap().bottom < 11);
     }
 
     #[test]
-    fn short_viewport_scrolls_selected_card_into_view() {
-        let (screen, hits) = render_with(72, 8, 2, false);
-        assert_eq!(hits.first().map(|hit| hit.index), Some(2));
-        assert!(screen.contains("Claude · work"), "selected card\n{screen}");
+    fn short_viewport_scrolls_selected_row_into_view() {
+        let (screen, hits) = render_with(72, 5, 2, false);
+        assert_eq!(hits.first().map(|hit| hit.index), Some(1));
+        assert_eq!(hits.last().map(|hit| hit.index), Some(2));
+        assert!(screen.contains("Claude · work"), "selected row\n{screen}");
         assert!(screen.contains('┃'), "scrollbar thumb\n{screen}");
         for hit in &hits {
             assert!(
-                hit.bottom < 7,
+                hit.bottom < 4,
                 "hit reaches footer: {}..{}",
                 hit.top,
                 hit.bottom
@@ -1399,7 +1540,7 @@ mod tests {
 
     #[test]
     fn scrollbar_reaches_the_exact_top_and_bottom_rows() {
-        let (top_screen, top) = render_state(72, 8, 0, false, 0, false);
+        let (top_screen, top) = render_state(72, 5, 0, false, 0, false);
         let area = top.scrollbar_area.expect("top scrollbar");
         let top_rows: Vec<&str> = top_screen.lines().collect();
         assert_eq!(
@@ -1408,7 +1549,7 @@ mod tests {
             "thumb should start at the first track row\n{top_screen}"
         );
 
-        let (bottom_screen, bottom) = render_state(72, 8, 2, false, u16::MAX, false);
+        let (bottom_screen, bottom) = render_state(72, 5, 2, false, u16::MAX, false);
         let area = bottom.scrollbar_area.expect("bottom scrollbar");
         let bottom_rows: Vec<&str> = bottom_screen.lines().collect();
         assert_eq!(bottom.scroll_offset, bottom.max_scroll);
@@ -1422,39 +1563,34 @@ mod tests {
     }
 
     #[test]
-    fn row_scrolling_keeps_the_last_card_flush_with_the_viewport() {
-        let (screen, rendered) = render_state(72, 8, 2, false, u16::MAX, false);
+    fn row_scrolling_keeps_the_last_item_flush_with_the_viewport() {
+        let (screen, rendered) = render_state(72, 5, 2, false, u16::MAX, false);
         let rows: Vec<&str> = screen.lines().collect();
         assert_eq!(rendered.scroll_offset, rendered.max_scroll);
         assert_eq!(rendered.hits.last().map(|hit| hit.index), Some(2));
         assert!(
-            rows[6].contains('╰') && rows[6].contains('╯'),
-            "card bottom\n{screen}"
+            rows[3].contains("Claude · work"),
+            "last row should touch the bottom of the list viewport\n{screen}"
         );
-        assert!(
-            (2..=6).all(|row| rows[row].trim().len() > 1),
-            "viewport should not end in blank rows\n{screen}"
-        );
+        assert!(rows[2].contains("Claude"), "preceding row\n{screen}");
     }
 
     #[test]
     fn scrollbar_thumb_is_proportional_to_visible_content() {
-        let (screen, rendered) = render_state(72, 24, 0, false, 0, false);
+        let (screen, rendered) = render_state(72, 10, 1, true, 0, false);
         let area = rendered.scrollbar_area.expect("scrollbar");
         let rows: Vec<&str> = screen.lines().collect();
         let thumb_rows = (area.y..area.bottom())
             .filter(|row| rows[*row as usize].chars().nth(area.x as usize) == Some('┃'))
             .count();
-        // Body is 21 of 41 virtual rows, so the thumb should occupy roughly
-        // half of the 21-row track rather than a one-cell provider marker.
         assert!(
-            (10..=12).contains(&thumb_rows),
+            thumb_rows > 1 && thumb_rows < area.height as usize,
             "thumb={thumb_rows}\n{screen}"
         );
     }
 
     #[test]
-    fn clicks_must_be_inside_both_card_axes() {
+    fn clicks_must_be_inside_both_row_axes() {
         let (_, hits) = render(72, 24, false);
         let first = hits[0];
         assert!(first.contains(first.left, first.top));
@@ -1463,36 +1599,34 @@ mod tests {
     }
 
     #[test]
-    fn cards_have_one_cell_padding_on_every_side() {
-        let (screen, hits) = render(72, 48, false);
+    fn list_rows_use_the_shared_two_cell_left_inset() {
+        let (screen, hits) = render(72, 12, false);
         let rows: Vec<&str> = screen.lines().collect();
         let codex = hits.iter().find(|hit| hit.index == 0).unwrap();
-
-        let card_top = codex.top as usize + HEADER_HEIGHT as usize + HEADER_TO_CARD_GAP as usize;
-        let top_padding = rows[card_top + 1];
-        let first_metric = rows[card_top + 2];
-        let bottom_padding = rows[codex.bottom as usize - 1];
-        let border = first_metric.find('│').expect("card border");
-        assert!(!top_padding.contains("Weekly"), "top padding\n{screen}");
-        assert_eq!(
-            first_metric.chars().nth(border + 1),
-            Some(' '),
-            "left padding\n{screen}"
-        );
-        assert!(first_metric.contains("Weekly"), "content row\n{screen}");
-        assert!(
-            !bottom_padding.contains("Credits"),
-            "bottom padding\n{screen}"
-        );
+        let row = rows[codex.top as usize];
+        assert_eq!(&row[..2], "  ", "two-cell inset\n{screen}");
+        assert!(row[2..].starts_with("Codex Pro"), "content row\n{screen}");
+        assert_eq!(codex.bottom, codex.top, "one terminal row per item");
     }
 
     #[test]
     fn selection_reveal_uses_the_smallest_required_scroll() {
-        let heights = [4, 5, 5];
-        let starts = section_starts(&heights);
-        assert_eq!(reveal_selected_offset(&starts, &heights, 2, 17, 0, 0), 0);
-        assert_eq!(reveal_selected_offset(&starts, &heights, 2, 11, 0, 5), 5);
-        assert_eq!(reveal_selected_offset(&starts, &heights, 2, 5, 0, 11), 11);
+        assert_eq!(reveal_selected_row(2, 17, 0, 0), 0);
+        assert_eq!(reveal_selected_row(2, 2, 0, 5), 1);
+        assert_eq!(reveal_selected_row(5, 2, 0, 4), 4);
+        assert_eq!(reveal_selected_row(1, 2, 4, 4), 1);
+    }
+
+    #[test]
+    fn detail_has_a_pinned_full_width_back_row() {
+        let (screen, rendered) = render_state(72, 10, 1, true, u16::MAX, false);
+        let back = rendered.back_button.expect("back hit");
+        assert_eq!(back.left, 0);
+        assert_eq!(back.right, 71);
+        assert_eq!(back.top, 2);
+        assert_eq!(back.bottom, 2);
+        assert!(screen.lines().nth(2).unwrap().contains("  ← Back"));
+        assert!(rendered.hits.is_empty(), "detail has no provider-row hits");
     }
 
     #[test]
@@ -1513,7 +1647,7 @@ mod tests {
                     Some(&snapshot),
                     &View {
                         selected: 0,
-                        expanded: false,
+                        detail_open: false,
                         scanning: false,
                         hosted: true,
                         alerts,
