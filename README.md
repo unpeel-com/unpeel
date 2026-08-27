@@ -15,7 +15,7 @@ OAuth login; transcript history stays local.
 ```
 
 The selected provider gets the same full-width gray row and two-cell label
-inset as `unpeel-tui-kit`'s Explorer. The list prioritizes quota readings over
+inset as `unpeel-app-kit`'s Explorer. The list prioritizes quota readings over
 account metadata: `5-hour` is Claude's rolling five-hour allowance, `7-day` is
 the overall weekly allowance, and `Fable 7-day` is that model's weekly
 allowance. Every percentage is the amount used. Email addresses and reset
@@ -32,7 +32,7 @@ amber / red semantic states, spare estimate, run-out estimate, and even-pace
 marker.
 
 The shared design-system primitives come directly from
-[`unpeel-tui-kit`](https://github.com/unpeel-com/unpeel-tui-kit):
+[`unpeel-app-kit`](https://github.com/unpeel-com/unpeel-app-kit):
 `SELECTABLE_LEFT_PADDING`, the dark and light `KitTheme` selection colors,
 and `VerticalScrollbar`. Usage retains its OSC 11 appearance detection; when
 the terminal cannot report an appearance, the selected row uses

@@ -15,7 +15,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Sparkline, Widget};
 use ratatui::Frame;
-use unpeel_tui_kit::{KitTheme, VerticalScrollbar, SELECTABLE_LEFT_PADDING};
+use unpeel_app_kit::{KitTheme, VerticalScrollbar, SELECTABLE_LEFT_PADDING};
 
 const METRIC_GAP: u16 = 1;
 const DETAIL_TOP_GAP: u16 = 1;

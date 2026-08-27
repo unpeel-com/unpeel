@@ -12,7 +12,7 @@ serde_json = "1"
 libc = "0.2"
 sha2 = "0.10"
 toml = "0.8"
-unpeel-tui-kit = { path = "../unpeel-tui-kit" }
+unpeel-app-kit = { path = "../unpeel-app-kit" }
 ureq = "3"
 
 [profile.release]
