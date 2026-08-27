@@ -10,16 +10,17 @@ use crossterm::execute;
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Position, Rect};
-use ratatui::style::Style;
-use ratatui::widgets::Paragraph;
+use ratatui::style::{Modifier, Style};
+use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::{Frame, Terminal};
 use unpeel_tui_kit::{
     AgentBridge, ColorScheme, DragSurface, Explorer, ExplorerEvent, ExplorerInput, ExplorerTheme,
-    KitTheme, MenuItem, MenuTheme, PopupMenu, clipboard_sequence,
+    KitTheme, MenuItem, MenuTheme, PopupMenu, SELECTABLE_LEFT_PADDING, clipboard_sequence,
 };
 
 use crate::unpeel::ContextReporter;
 
+const HEADER_ROWS: u16 = 2;
 const FOOTER_ROWS: u16 = 2;
 
 pub fn run(mut explorer: Explorer) -> io::Result<()> {
@@ -413,12 +414,21 @@ fn render_frame(
     theme: KitTheme,
 ) {
     let area = frame.area();
-    let footer_rows = if area.height >= 4 { FOOTER_ROWS } else { 0 };
+    let header_rows = HEADER_ROWS.min(area.height);
+    let footer_rows = if area.height >= HEADER_ROWS.saturating_add(4) {
+        FOOTER_ROWS
+    } else {
+        0
+    };
+    let header_area = Rect::new(area.x, area.y, area.width, header_rows);
+    render_header(frame, header_area, theme);
     let explorer_area = Rect::new(
         area.x,
-        area.y,
+        area.y.saturating_add(header_rows),
         area.width,
-        area.height.saturating_sub(footer_rows),
+        area.height
+            .saturating_sub(header_rows)
+            .saturating_sub(footer_rows),
     );
     frame.render_widget(explorer.widget(drags), explorer_area);
 
@@ -473,6 +483,28 @@ fn render_frame(
         drags.begin_frame();
         menu.render(frame);
     }
+}
+
+fn render_header(frame: &mut Frame<'_>, area: Rect, theme: KitTheme) {
+    if area.is_empty() {
+        return;
+    }
+    frame.render_widget(
+        Block::new()
+            .borders(Borders::BOTTOM)
+            .border_style(Style::new().fg(theme.scrollbar_track.fg.unwrap_or(theme.subtle))),
+        area,
+    );
+    let padding = SELECTABLE_LEFT_PADDING.min(area.width);
+    frame.render_widget(
+        Paragraph::new("FILES").style(Style::new().fg(theme.text).add_modifier(Modifier::BOLD)),
+        Rect::new(
+            area.x.saturating_add(padding),
+            area.y,
+            area.width.saturating_sub(padding),
+            1,
+        ),
+    );
 }
 
 #[cfg(test)]
@@ -542,11 +574,16 @@ mod tests {
 
         assert_eq!(drags.regions().len(), 4);
         assert_eq!(drags.regions()[0].path, explorer.cwd());
-        assert_eq!(drags.regions()[0].area.y, 1);
+        assert_eq!(drags.regions()[0].area.y, 3);
         assert!(drags.regions()[2].path.ends_with("folder"));
+        let header: String = (0..50)
+            .map(|column| terminal.backend().buffer()[(column, 0)].symbol())
+            .collect();
+        assert!(header.starts_with("  FILES"));
+        assert_eq!(terminal.backend().buffer()[(0, 1)].symbol(), "─");
         assert_eq!(terminal.backend().buffer()[(49, 0)].bg, Color::Reset);
         assert_eq!(
-            terminal.backend().buffer()[(49, 2)].bg,
+            terminal.backend().buffer()[(49, 4)].bg,
             theme.selected_row.bg.unwrap()
         );
         assert_eq!(terminal.backend().buffer()[(49, 9)].bg, Color::Reset);
