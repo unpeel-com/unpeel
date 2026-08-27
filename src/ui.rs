@@ -17,7 +17,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 use ratatui::{Frame, Terminal};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
-use unpeel_tui_kit::{ColorScheme, KitTheme, SELECTABLE_LEFT_PADDING, VerticalScrollbar};
+use unpeel_app_kit::{ColorScheme, KitTheme, SELECTABLE_LEFT_PADDING, VerticalScrollbar};
 
 use crate::app::{App, Screen};
 use crate::git::{ChangedFile, DiffDocument};

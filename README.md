@@ -12,7 +12,7 @@ Enter to open its unified diff.
   ↑↓ select · Enter diff
 ```
 
-The UI follows the shared `../unpeel-tui-kit` design conventions used by the
+The UI follows the shared `../unpeel-app-kit` design conventions used by the
 Explorer and Usage Apps:
 
 - borderless, transparent ordinary surfaces
