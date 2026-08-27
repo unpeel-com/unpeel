@@ -573,11 +573,12 @@ fn render_provider_detail(
     }
 
     let back_area = Rect::new(area.x, area.y, area.width, 1);
-    let back_style = selected_row_style(palette);
-    frame.buffer_mut().set_style(back_area, back_style);
+    let back_style = Style::default()
+        .fg(palette.primary)
+        .add_modifier(Modifier::BOLD);
     let padding = SELECTABLE_LEFT_PADDING.min(back_area.width);
     frame.render_widget(
-        Paragraph::new("← Back").style(back_style.add_modifier(Modifier::BOLD)),
+        Paragraph::new("← Back").style(back_style),
         Rect::new(
             back_area.x.saturating_add(padding),
             back_area.y,
@@ -1196,7 +1197,7 @@ mod tests {
         detail_open: bool,
         scroll_offset: u16,
         reveal_selected: bool,
-    ) -> (String, RenderResult) {
+    ) -> (String, RenderResult, Buffer) {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let snapshot = sample();
         let view = View {
@@ -1224,7 +1225,7 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        (screen, rendered)
+        (screen, rendered, buffer)
     }
 
     fn render_with(
@@ -1233,7 +1234,7 @@ mod tests {
         selected: usize,
         detail_open: bool,
     ) -> (String, Vec<Hit>) {
-        let (screen, rendered) = render_state(width, height, selected, detail_open, 0, true);
+        let (screen, rendered, _) = render_state(width, height, selected, detail_open, 0, true);
         (screen, rendered.hits)
     }
 
@@ -1531,7 +1532,7 @@ mod tests {
 
     #[test]
     fn scrollbar_reaches_the_exact_top_and_bottom_rows() {
-        let (top_screen, top) = render_state(72, 3, 0, false, 0, false);
+        let (top_screen, top, _) = render_state(72, 3, 0, false, 0, false);
         let area = top.scrollbar_area.expect("top scrollbar");
         let top_rows: Vec<&str> = top_screen.lines().collect();
         assert_eq!(
@@ -1540,7 +1541,7 @@ mod tests {
             "thumb should start at the first track row\n{top_screen}"
         );
 
-        let (bottom_screen, bottom) = render_state(72, 3, 2, false, u16::MAX, false);
+        let (bottom_screen, bottom, _) = render_state(72, 3, 2, false, u16::MAX, false);
         let area = bottom.scrollbar_area.expect("bottom scrollbar");
         let bottom_rows: Vec<&str> = bottom_screen.lines().collect();
         assert_eq!(bottom.scroll_offset, bottom.max_scroll);
@@ -1555,7 +1556,7 @@ mod tests {
 
     #[test]
     fn row_scrolling_keeps_the_last_item_flush_with_the_viewport() {
-        let (screen, rendered) = render_state(72, 3, 2, false, u16::MAX, false);
+        let (screen, rendered, _) = render_state(72, 3, 2, false, u16::MAX, false);
         let rows: Vec<&str> = screen.lines().collect();
         assert_eq!(rendered.scroll_offset, rendered.max_scroll);
         assert_eq!(rendered.hits.last().map(|hit| hit.index), Some(2));
@@ -1568,7 +1569,7 @@ mod tests {
 
     #[test]
     fn scrollbar_thumb_is_proportional_to_visible_content() {
-        let (screen, rendered) = render_state(72, 15, 1, true, 0, false);
+        let (screen, rendered, _) = render_state(72, 15, 1, true, 0, false);
         let area = rendered.scrollbar_area.expect("scrollbar");
         let rows: Vec<&str> = screen.lines().collect();
         let thumb_rows = (area.y..area.bottom())
@@ -1609,14 +1610,18 @@ mod tests {
     }
 
     #[test]
-    fn detail_has_a_pinned_full_width_back_row() {
-        let (screen, rendered) = render_state(72, 10, 1, true, u16::MAX, false);
+    fn detail_has_a_transparent_back_action_with_a_full_width_hit_target() {
+        let (screen, rendered, buffer) = render_state(72, 10, 1, true, u16::MAX, false);
         let back = rendered.back_button.expect("back hit");
         assert_eq!(back.left, 0);
         assert_eq!(back.right, 71);
         assert_eq!(back.top, 0);
         assert_eq!(back.bottom, 0);
         assert!(screen.lines().next().unwrap().contains("  ← Back"));
+        assert!(
+            (0..72).all(|x| buffer[(x, 0)].bg == Color::Reset),
+            "Back should not paint a row background"
+        );
         assert!(rendered.hits.is_empty(), "detail has no provider-row hits");
     }
 
@@ -1686,7 +1691,7 @@ mod tests {
 
     #[test]
     fn alert_controls_are_absent_outside_unpeel() {
-        let (screen, rendered) = render_state(72, 24, 0, false, 0, true);
+        let (screen, rendered, _) = render_state(72, 24, 0, false, 0, true);
         assert!(rendered.alert_button.is_none());
         assert!(rendered.alert_option_hits.is_empty());
         assert!(!screen.contains("alerts off"));

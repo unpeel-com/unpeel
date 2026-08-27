@@ -24,8 +24,9 @@ Unpeel's Session title owns the App name, so there is no repeated in-App title.
 The minimal bottom-left hint changes to `Esc back` while details are open and
 to `Esc close` while a dialog is open.
 
-Press Enter to open the borderless detail view; a pinned, full-width `← Back`
-row appears at the top and Enter, Escape, or a click returns to the list.
+Press Enter to open the borderless detail view; a pinned, transparent `← Back`
+action appears at the top and Enter, Escape, or its full-width click target
+returns to the list.
 Detail quotas use a purpose-built Ratatui meter, calendar-day activity uses
 the native `Sparkline` widget, and Claude pace projections keep their blue /
 amber / red semantic states, spare estimate, run-out estimate, and even-pace
