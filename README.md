@@ -7,8 +7,8 @@ Enter to open its unified diff.
 ```text
   DIFFS                                                   3 changed
 ────────────────────────────────────────────────────────────────────
-  M  src/ui.rs                                           unstaged
-  A  src/git.rs                                             staged
+  M  ui.rs                                               unstaged
+  A  git.rs                                                 staged
   ?  notes.txt                                           untracked
 ```
 
@@ -20,6 +20,9 @@ Explorer and Usage Apps:
 - full-width gray selected rows, with dark/light defaults
 - the shared capless proportional scrollbar
 - a pinned full-width gray Back row in detail views
+
+The default list shows only each basename to stay scannable in narrow panes.
+Opening a diff reveals its full repository-relative path.
 
 This repository is intentionally separate from the core Unpeel client. It is
 a standalone terminal App, not built-in diff or source-editor chrome.

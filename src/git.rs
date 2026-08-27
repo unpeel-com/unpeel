@@ -36,6 +36,22 @@ impl ChangedFile {
     }
 
     #[must_use]
+    pub fn list_name(&self) -> String {
+        let current = file_name(&self.path);
+        self.previous_path.as_ref().map_or_else(
+            || current.clone(),
+            |previous| {
+                let previous = file_name(previous);
+                if previous == current {
+                    current.clone()
+                } else {
+                    format!("{previous} → {current}")
+                }
+            },
+        )
+    }
+
+    #[must_use]
     pub fn status_symbol(&self) -> char {
         if self.is_conflicted() {
             'U'
@@ -293,6 +309,13 @@ impl Repository {
 
 fn decode_path(bytes: &[u8]) -> PathBuf {
     PathBuf::from(String::from_utf8_lossy(bytes).into_owned())
+}
+
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| path.display().to_string())
 }
 
 fn join_patches(staged: String, unstaged: String) -> String {

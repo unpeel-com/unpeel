@@ -499,7 +499,11 @@ fn render_file_row(
     let show_state = content.width >= state_width.saturating_add(14);
     let [label_area, state_area] = Layout::horizontal([
         Constraint::Min(0),
-        Constraint::Length(if show_state { state_width } else { 0 }),
+        Constraint::Length(if show_state {
+            state_width.saturating_add(1)
+        } else {
+            0
+        }),
     ])
     .areas(content);
     let status_style = Style::new().fg(status_color(file.status_symbol(), theme.scheme));
@@ -509,7 +513,7 @@ fn render_file_row(
         Line::from(vec![
             Span::styled(file.status_symbol().to_string(), status_style),
             Span::raw("  "),
-            Span::styled(file.display_path(), row_style),
+            Span::styled(file.list_name(), row_style),
         ]),
     );
     if show_state {
@@ -667,7 +671,11 @@ fn render_detail_meta(buffer: &mut Buffer, area: Rect, document: &DiffDocument, 
     let show_summary = content.width >= summary_width.saturating_add(12);
     let [path_area, summary_area] = Layout::horizontal([
         Constraint::Min(0),
-        Constraint::Length(if show_summary { summary_width } else { 0 }),
+        Constraint::Length(if show_summary {
+            summary_width.saturating_add(1)
+        } else {
+            0
+        }),
     ])
     .areas(content);
     frame_line(
@@ -845,7 +853,8 @@ mod tests {
 
         let buffer = terminal.backend().buffer();
         assert!(buffer_line(buffer, 0).starts_with("  DIFFS"));
-        assert!(buffer_line(buffer, 2).starts_with("  M  src/ui.rs"));
+        assert!(buffer_line(buffer, 2).starts_with("  M  ui.rs"));
+        assert!(!buffer_line(buffer, 2).contains("src/ui.rs"));
         assert_eq!(buffer[(47, 2)].bg, theme.selected_row.bg.unwrap());
         assert_eq!(list_result.hits[0].area.width, 48);
     }
