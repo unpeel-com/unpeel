@@ -482,10 +482,10 @@ fn render_diff_detail(
     }
 
     let back_area = Rect::new(area.x, area.y, area.width, 1);
-    frame.buffer_mut().set_style(back_area, theme.selected_row);
+    let back_style = Style::new().fg(theme.text).add_modifier(Modifier::BOLD);
     let back_padding = SELECTABLE_LEFT_PADDING.min(back_area.width);
     frame.render_widget(
-        Paragraph::new("← Back").style(theme.selected_row.add_modifier(Modifier::BOLD)),
+        Paragraph::new("← Back").style(back_style),
         Rect::new(
             back_area.x.saturating_add(back_padding),
             back_area.y,
@@ -795,7 +795,7 @@ mod tests {
     }
 
     #[test]
-    fn detail_has_a_full_width_back_row_and_colored_patch_lines() {
+    fn detail_has_a_transparent_back_action_and_colored_patch_lines() {
         let theme = KitTheme::light();
         let document = DiffDocument {
             file: ChangedFile::fixture("src/ui.rs", ' ', 'M'),
@@ -818,10 +818,13 @@ mod tests {
         let buffer = terminal.backend().buffer();
 
         assert!(buffer_line(buffer, 0).starts_with("  ← Back"));
-        assert_eq!(buffer[(43, 0)].bg, theme.selected_row.bg.unwrap());
+        assert!(
+            (0..44).all(|x| buffer[(x, 0)].bg == Color::Reset),
+            "Back should not paint a row background"
+        );
         assert_eq!(buffer[(2, 6)].fg, Color::Red);
         assert_eq!(buffer[(2, 7)].fg, Color::Green);
-        assert!(result.back_button.is_some());
+        assert_eq!(result.back_button.unwrap().area.width, 44);
     }
 
     #[test]

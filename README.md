@@ -19,7 +19,7 @@ Explorer and Usage Apps:
 - two-cell row-label and footer inset
 - full-width gray selected rows, with dark/light defaults
 - the shared capless proportional scrollbar
-- a pinned full-width gray Back row in detail views
+- a pinned transparent Back action with a full-width click target in detail views
 
 Unpeel's Session title owns the App name, so the content has no repeated
 in-App title. The minimal bottom-left hint changes to `Esc back` whenever a
