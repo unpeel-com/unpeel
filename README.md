@@ -8,22 +8,20 @@ Enter to open its unified diff.
   M  ui.rs                                               unstaged
   A  git.rs                                                 staged
   ?  notes.txt                                           untracked
-
-  ↑↓ select · Enter diff
 ```
 
 The UI follows the shared `../unpeel-app-kit` design conventions used by the
 Explorer and Usage Apps:
 
 - borderless, transparent ordinary surfaces
-- two-cell row-label and footer inset
+- two-cell row-label and muted absolute-path footer inset
 - full-width gray selected rows, with dark/light defaults
 - the shared capless proportional scrollbar
 - a pinned transparent Back action with a full-width click target in detail views
 
 Unpeel's Session title owns the App name, so the content has no repeated
-in-App title. The minimal bottom-left hint changes to `Esc back` whenever a
-diff is open.
+in-App title. The bottom row contains only the selected or open file's muted
+absolute path; it has no shortcut help.
 
 The default list shows only each basename to stay scannable in narrow panes.
 Opening a diff reveals its full repository-relative path.

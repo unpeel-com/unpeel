@@ -18,7 +18,8 @@ use ratatui::widgets::{Paragraph, Widget};
 use ratatui::{Frame, Terminal};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use unpeel_app_kit::{
-    ColorScheme, DoubleClickTracker, KitTheme, SELECTABLE_LEFT_PADDING, VerticalScrollbar,
+    ColorScheme, DoubleClickTracker, KeyboardEnhancementGuard, KitTheme, SELECTABLE_LEFT_PADDING,
+    VerticalScrollbar,
 };
 
 use crate::app::{App, Screen};
@@ -32,6 +33,7 @@ const DETAIL_META_ROWS: u16 = 1;
 pub fn run(mut app: App) -> io::Result<()> {
     let theme = KitTheme::detected();
     let mut terminal = TerminalGuard::enter()?;
+    let _keyboard = KeyboardEnhancementGuard::enter()?;
     let mut reporter = ContextReporter::detect();
     let mut rendered = RenderResult::default();
     let mut clicks = DoubleClickTracker::new();
@@ -326,11 +328,13 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App, theme: KitTheme) 
     }
     let (text, color) = app.notice.as_ref().map_or_else(
         || {
-            if app.is_detail() {
-                ("Esc back · ↑↓ scroll · ←→ pan".to_owned(), theme.muted)
-            } else {
-                ("↑↓ select · Enter diff".to_owned(), theme.muted)
-            }
+            (
+                app.selected_absolute_path()
+                    .unwrap_or_else(|| app.root().to_path_buf())
+                    .display()
+                    .to_string(),
+                theme.muted,
+            )
         },
         |notice| {
             (
