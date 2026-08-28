@@ -1,6 +1,5 @@
 mod install;
 mod ui;
-mod unpeel;
 
 use std::ffi::{OsStr, OsString};
 use std::io;
@@ -18,7 +17,6 @@ Options:
   -e, --ext EXT       Show EXT files and folders containing them; repeatable
                       and comma-separated values are accepted
       --version       Print the App version
-      --register      Register the App with an existing Unpeel installation
   -h, --help          Print this help
 
 Examples:
@@ -44,10 +42,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("unpeel-filetree {}", env!("CARGO_PKG_VERSION"));
             return Ok(());
         }
-        Some(argument) if argument == OsStr::new("--register") => {
-            install::ensure_installed();
-            return Ok(());
-        }
         _ => {}
     }
     let options = match parse_args(std::env::args_os().skip(1))
@@ -59,14 +53,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         ParsedArgs::Run(options) => options,
     };
-    install::ensure_installed();
+    let follow_agent_context = options.root.is_none();
     let root = options.root.unwrap_or(std::env::current_dir()?);
     let mut explorer = Explorer::scoped(root)?;
     if !options.extensions.is_empty() {
         explorer.set_prune_unmatched_directories(true)?;
         explorer.set_file_extensions(options.extensions)?;
     }
-    ui::run(explorer)?;
+    ui::run(explorer, follow_agent_context)?;
     Ok(())
 }
 

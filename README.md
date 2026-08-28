@@ -25,7 +25,6 @@ mkdir -p ~/Dev && cd ~/Dev
 git clone https://github.com/unpeel-com/unpeel-app-kit.git
 git clone https://github.com/unpeel-com/unpeel-app-filetree.git
 cargo install --locked --path unpeel-app-filetree
-unpeel-filetree --register
 ```
 
 Once the release artifact is published, the checksum-verified binary installer
@@ -35,8 +34,8 @@ will be:
 curl -fsSL https://unpeel.com/install/filetree/install.sh | sh
 ```
 
-Both methods register the versioned App manifest under
-`~/.unpeel/apps/unpeel.app.filetree/`.
+Unpeel detects the installed `unpeel-filetree` CLI directly from `PATH`; no
+registration command or `~/.unpeel/apps` write is needed.
 
 ## Run
 
@@ -45,6 +44,11 @@ unpeel-filetree ~/Dev
 unpeel-filetree --ext md ~/Notes
 unpeel-filetree --ext md,mdx .
 ```
+
+With no explicit path, a hosted Files pane follows its neighboring/main
+agent's project checkout. If that agent moves into a Git worktree, Files
+rebinds its scoped root there; when the agent returns to the main checkout,
+Files follows back. Supplying a path pins the Explorer to that root.
 
 `-e` / `--ext` is repeatable and accepts a leading dot or comma-separated
 values. When present, the Explorer lists only files with those extensions and
@@ -117,7 +121,11 @@ without a repeated in-App title. The bottom row contains only the muted,
 project-relative current-folder path (`.` at the launch root); that path is not
 repeated below the filter, and there is no shortcut help.
 
-The binary self-registers a development-only App manifest under an existing
-`~/.unpeel/apps/unpeel.app.filetree/` when launched. If it is not installed on
-`PATH`, that manifest points to the exact development binary that registered
-it.
+For development inside Unpeel, build once and prepend the debug output folder
+to `PATH` before launching. The Host uses the same central CLI catalog as an
+installed build; running the App never writes registration state:
+
+```sh
+cargo build
+PATH="$PWD/target/debug:$PATH" unpeel-filetree .
+```

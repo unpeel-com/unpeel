@@ -1,6 +1,6 @@
 use std::io::{self, Stdout, Write};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{
     self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
@@ -14,25 +14,25 @@ use ratatui::style::Style;
 use ratatui::widgets::Paragraph;
 use ratatui::{Frame, Terminal};
 use unpeel_app_kit::{
-    AgentBridge, ColorScheme, DoubleClickTracker, DragSurface, EditorBridge, Explorer,
+    AgentBridge, AppReporter, ColorScheme, DoubleClickTracker, DragSurface, EditorBridge, Explorer,
     ExplorerEvent, ExplorerInput, ExplorerTheme, KeyboardEnhancementGuard, KitTheme, MenuItem,
-    MenuTheme, PopupMenu, clipboard_sequence, display_path_from_root,
+    MenuTheme, PopupMenu, ThemeMonitor, clipboard_sequence, display_path_from_root,
 };
-
-use crate::unpeel::ContextReporter;
 
 const FOOTER_ROWS: u16 = 1;
 
-pub fn run(mut explorer: Explorer) -> io::Result<()> {
-    let theme = KitTheme::detected();
-    explorer.set_theme(explorer_theme(theme.scheme));
+pub fn run(mut explorer: Explorer, follow_agent_context: bool) -> io::Result<()> {
+    let mut theme_monitor = ThemeMonitor::detected();
+    let mut theme = theme_monitor.theme();
+    explorer.set_theme(explorer_theme(theme));
     explorer.set_show_path(false);
     let mut drags = DragSurface::detect();
     let mut terminal = TerminalGuard::enter()?;
     let _keyboard = KeyboardEnhancementGuard::enter()?;
-    let mut reporter = ContextReporter::detect();
+    let mut reporter = AppReporter::detect(crate::install::APP_ID);
     let agent = AgentBridge::new();
     agent.refresh();
+    let mut last_agent_context_refresh = Instant::now();
     let mut menu = None;
     let mut clicks = DoubleClickTracker::new();
     let mut status = None;
@@ -40,7 +40,16 @@ pub fn run(mut explorer: Explorer) -> io::Result<()> {
 
     loop {
         if needs_draw {
-            reporter.publish(explorer.cwd(), explorer.selected());
+            let selected = explorer.selected();
+            reporter.set_context(&serde_json::json!({
+                "cwd": explorer.cwd(),
+                "selected_path": selected.map(|entry| entry.path()),
+                "selected_kind": selected.map(|entry| if entry.is_directory() {
+                    "directory"
+                } else {
+                    "file"
+                }),
+            }));
             terminal.draw(
                 &mut explorer,
                 &mut drags,
@@ -52,6 +61,24 @@ pub fn run(mut explorer: Explorer) -> io::Result<()> {
         }
         if !event::poll(Duration::from_millis(250))? {
             drags.heartbeat()?;
+            if theme_monitor.refresh() {
+                theme = theme_monitor.theme();
+                explorer.set_theme(explorer_theme(theme));
+                needs_draw = true;
+            }
+            if follow_agent_context
+                && last_agent_context_refresh.elapsed() >= Duration::from_secs(1)
+            {
+                last_agent_context_refresh = Instant::now();
+                if let Some(context) = agent.project_context()
+                    && context.cwd.is_dir()
+                    && explorer.set_navigation_root(&context.cwd).unwrap_or(false)
+                {
+                    status = None;
+                    needs_draw = true;
+                }
+                agent.refresh();
+            }
             continue;
         }
         match event::read()? {
@@ -225,8 +252,8 @@ fn explorer_click_at(
     Some(activate)
 }
 
-fn explorer_theme(scheme: ColorScheme) -> ExplorerTheme {
-    ExplorerTheme::for_color_scheme(scheme)
+fn explorer_theme(theme: KitTheme) -> ExplorerTheme {
+    ExplorerTheme::for_theme(theme)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -690,7 +717,7 @@ mod tests {
         let theme = KitTheme::dark();
         let mut explorer = Explorer::scoped(directory.path())
             .unwrap()
-            .with_theme(explorer_theme(theme.scheme));
+            .with_theme(explorer_theme(theme));
         explorer.set_show_path(false);
         let mut terminal = Terminal::new(TestBackend::new(50, 12)).unwrap();
         let mut drags = DragSurface::disabled();
@@ -747,7 +774,7 @@ mod tests {
         let theme = KitTheme::light();
         let mut explorer = Explorer::scoped(directory.path())
             .unwrap()
-            .with_theme(explorer_theme(theme.scheme));
+            .with_theme(explorer_theme(theme));
         let path = directory.path().join("file.txt");
         let mut menu = context_menu(path, true, Position::new(4, 4), theme.scheme);
         let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
