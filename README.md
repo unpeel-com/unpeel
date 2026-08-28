@@ -10,8 +10,6 @@ OAuth login; transcript history stays local.
   Codex Pro                                              7-day 37% used
   Claude Max 20x          5-hour 15% · 7-day 44% · Fable 7-day 85% used
   Claude · work                     5h 28% · Fable 7-day 63% used
-
-  ↑↓ select · Enter details
 ```
 
 The selected provider gets the same full-width gray row and two-cell label
@@ -20,9 +18,8 @@ account metadata: `5-hour` is Claude's rolling five-hour allowance, `7-day` is
 the overall weekly allowance, and `Fable 7-day` is that model's weekly
 allowance. Every percentage is the amount used. Email addresses and reset
 dates/times stay in the detail view instead of crowding the list.
-Unpeel's Session title owns the App name, so there is no repeated in-App title.
-The minimal bottom-left hint changes to `Esc back` while details are open and
-to `Esc close` while a dialog is open.
+Unpeel's Session title owns the App name, so there is no repeated in-App title
+or bottom shortcut-help row.
 
 Press Enter to open the borderless detail view; a pinned, transparent `← Back`
 action appears at the top and Enter, Escape, or its full-width click target
@@ -120,10 +117,9 @@ dirs = ["~/claude-accounts/personal"]
 
 ## Alerts
 
-Alerts are an Unpeel App feature: the control is shown only when
-`unpeel-usage` is running in an Unpeel-hosted session. Press `a` or click
-**alerts** in the footer to open the Ratatui dialog. Its independent options
-are all off by default:
+Alerts are an Unpeel App feature available only when `unpeel-usage` is running
+in an Unpeel-hosted session. Press `a` to open the Ratatui dialog. Its
+independent options are all off by default:
 
 - **Close to a limit** — 80% used or pacing that projects an early run-out
 - **Limit reached** — a bounded quota reaches 100%

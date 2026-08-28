@@ -1,9 +1,8 @@
 //! Shared look & feel: light and dark semantic palettes, terminal theme
-//! detection, and the small key/hint idioms. Plain Ratatui — no SDK.
+//! detection, and the shared navigation vocabulary. Plain Ratatui — no SDK.
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::style::{Color, Style};
-use ratatui::text::{Line, Span};
+use ratatui::style::Color;
 use serde::Deserialize;
 
 /// User preference from `config.toml`. Auto queries the terminal at startup.
@@ -284,25 +283,6 @@ pub fn spinner_frame() -> &'static str {
         .map(|duration| duration.as_millis())
         .unwrap_or(0);
     SPINNER_FRAMES[(millis / 100) as usize % SPINNER_FRAMES.len()]
-}
-
-/// Minimal two-cell-inset footer hint idiom shared by list Apps.
-pub fn hint_line(palette: &Palette, hints: &[(&str, &str)]) -> Line<'static> {
-    let mut spans = vec![Span::raw("  ")];
-    for (index, (key, label)) in hints.iter().enumerate() {
-        if index > 0 {
-            spans.push(Span::styled(" · ", Style::default().fg(palette.muted)));
-        }
-        spans.push(Span::styled(
-            key.to_string(),
-            Style::default().fg(palette.header),
-        ));
-        spans.push(Span::styled(
-            format!(" {label}"),
-            Style::default().fg(palette.muted),
-        ));
-    }
-    Line::from(spans)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

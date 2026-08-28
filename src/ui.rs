@@ -58,7 +58,6 @@ pub struct RenderResult {
     pub viewport_height: u16,
     pub scrollbar_area: Option<Rect>,
     pub back_button: Option<Hit>,
-    pub alert_button: Option<Hit>,
     pub alert_option_hits: Vec<Hit>,
     pub alert_dialog_area: Option<Rect>,
 }
@@ -95,8 +94,7 @@ pub fn draw(
     view: &View,
     palette: &ui::Palette,
 ) -> RenderResult {
-    let [body, footer] =
-        Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
+    let body = frame.area();
 
     let mut result = match snapshot {
         None => {
@@ -115,7 +113,6 @@ pub fn draw(
         }
         Some(snapshot) => render_provider_list(frame, body, &snapshot.providers, view, palette),
     };
-    result.alert_button = render_footer(frame, footer, view.detail_open, palette);
     if let Some(selected) = view.alert_dialog.filter(|_| view.hosted) {
         let (area, hits) = render_alert_dialog(frame, selected, view.alerts, palette);
         result.alert_dialog_area = Some(area);
@@ -145,24 +142,6 @@ fn render_empty_state(frame: &mut Frame, area: Rect, scanning: bool, palette: &u
             .alignment(Alignment::Center),
         row,
     );
-}
-
-fn render_footer(
-    frame: &mut Frame,
-    area: Rect,
-    detail_open: bool,
-    palette: &ui::Palette,
-) -> Option<Hit> {
-    if area.is_empty() {
-        return None;
-    }
-    let hints: &[(&str, &str)] = if detail_open {
-        &[("Esc", "back"), ("↑↓", "scroll")]
-    } else {
-        &[("↑↓", "select"), ("Enter", "details")]
-    };
-    frame.render_widget(Paragraph::new(ui::hint_line(palette, hints)), area);
-    None
 }
 
 fn centered_dialog(area: Rect) -> Rect {
@@ -243,15 +222,6 @@ fn render_alert_dialog(
         }
     }
 
-    if inner.height >= 1 {
-        frame.render_widget(
-            Paragraph::new(ui::hint_line(
-                palette,
-                &[("Esc", "close"), ("↑↓", "select"), ("Space", "toggle")],
-            )),
-            row_at(inner, inner.bottom().saturating_sub(1)),
-        );
-    }
     (area, hits)
 }
 
@@ -1515,7 +1485,7 @@ mod tests {
 
     #[test]
     fn short_viewport_scrolls_selected_row_into_view() {
-        let (screen, hits) = render_with(72, 3, 2, false);
+        let (screen, hits) = render_with(72, 2, 2, false);
         assert_eq!(hits.first().map(|hit| hit.index), Some(1));
         assert_eq!(hits.last().map(|hit| hit.index), Some(2));
         assert!(screen.contains("Claude · work"), "selected row\n{screen}");
@@ -1523,7 +1493,7 @@ mod tests {
         for hit in &hits {
             assert!(
                 hit.bottom < 2,
-                "hit reaches footer: {}..{}",
+                "hit leaves the viewport: {}..{}",
                 hit.top,
                 hit.bottom
             );
@@ -1532,7 +1502,7 @@ mod tests {
 
     #[test]
     fn scrollbar_reaches_the_exact_top_and_bottom_rows() {
-        let (top_screen, top, _) = render_state(72, 3, 0, false, 0, false);
+        let (top_screen, top, _) = render_state(72, 2, 0, false, 0, false);
         let area = top.scrollbar_area.expect("top scrollbar");
         let top_rows: Vec<&str> = top_screen.lines().collect();
         assert_eq!(
@@ -1541,7 +1511,7 @@ mod tests {
             "thumb should start at the first track row\n{top_screen}"
         );
 
-        let (bottom_screen, bottom, _) = render_state(72, 3, 2, false, u16::MAX, false);
+        let (bottom_screen, bottom, _) = render_state(72, 2, 2, false, u16::MAX, false);
         let area = bottom.scrollbar_area.expect("bottom scrollbar");
         let bottom_rows: Vec<&str> = bottom_screen.lines().collect();
         assert_eq!(bottom.scroll_offset, bottom.max_scroll);
@@ -1556,7 +1526,7 @@ mod tests {
 
     #[test]
     fn row_scrolling_keeps_the_last_item_flush_with_the_viewport() {
-        let (screen, rendered, _) = render_state(72, 3, 2, false, u16::MAX, false);
+        let (screen, rendered, _) = render_state(72, 2, 2, false, u16::MAX, false);
         let rows: Vec<&str> = screen.lines().collect();
         assert_eq!(rendered.scroll_offset, rendered.max_scroll);
         assert_eq!(rendered.hits.last().map(|hit| hit.index), Some(2));
@@ -1626,7 +1596,7 @@ mod tests {
     }
 
     #[test]
-    fn hosted_alerts_open_as_a_ratatui_dialog_with_contextual_escape_hint() {
+    fn hosted_alerts_open_as_a_ratatui_dialog() {
         let width = 72;
         let height = 24;
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -1671,15 +1641,10 @@ mod tests {
             "Limit reached",
             "Available again",
             "[x] Available again",
-            "Esc close",
-            "Space toggle",
         ] {
             assert!(screen.contains(expected), "missing {expected:?}\n{screen}");
         }
-        assert!(
-            rendered.alert_button.is_none(),
-            "minimal footer has no action hit"
-        );
+        assert!(!screen.contains("Esc close"), "dialog has no shortcut help");
         assert_eq!(rendered.alert_option_hits.len(), 3);
         let selected = rendered
             .alert_option_hits
@@ -1692,7 +1657,6 @@ mod tests {
     #[test]
     fn alert_controls_are_absent_outside_unpeel() {
         let (screen, rendered, _) = render_state(72, 24, 0, false, 0, true);
-        assert!(rendered.alert_button.is_none());
         assert!(rendered.alert_option_hits.is_empty());
         assert!(!screen.contains("alerts off"));
         assert!(!screen.contains("a alerts"));

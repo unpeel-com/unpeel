@@ -30,6 +30,7 @@ use std::collections::HashMap;
 use std::io;
 use std::sync::mpsc;
 use std::time::Duration;
+use unpeel_app_kit::KeyboardEnhancementGuard;
 
 fn main() {
     let config = Config::load();
@@ -349,6 +350,7 @@ impl Drop for TerminalGuard {
 fn run_tui(config: Config) -> io::Result<()> {
     let mut terminal = ratatui::init();
     let _terminal_guard = TerminalGuard;
+    let _keyboard = KeyboardEnhancementGuard::enter()?;
     // OSC 11 replies arrive on stdin; resolve after raw mode starts but before
     // crossterm's event reader has a chance to consume the response.
     let palette = theme::resolve(config.theme);
@@ -416,7 +418,6 @@ fn run_tui(config: Config) -> io::Result<()> {
         app.reveal_selected = false;
         let scrollbar_area = rendered.scrollbar_area;
         let back_button = rendered.back_button;
-        let alert_button = rendered.alert_button;
         let alert_option_hits = rendered.alert_option_hits;
         let alert_dialog_area = rendered.alert_dialog_area;
         if !event::poll(Duration::from_millis(100))? {
@@ -520,12 +521,6 @@ fn run_tui(config: Config) -> io::Result<()> {
                 MouseEventKind::Down(MouseButton::Left)
                 | MouseEventKind::Drag(MouseButton::Left) => {
                     if mouse.kind == MouseEventKind::Down(MouseButton::Left)
-                        && alert_button
-                            .as_ref()
-                            .is_some_and(|hit| hit.contains(mouse.column, mouse.row))
-                    {
-                        app.open_alert_dialog();
-                    } else if mouse.kind == MouseEventKind::Down(MouseButton::Left)
                         && back_button
                             .as_ref()
                             .is_some_and(|hit| hit.contains(mouse.column, mouse.row))
