@@ -21,11 +21,12 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use unpeel_app_kit::{
     AgentBridge, ColorScheme, DoubleClickTracker, DragSurface, EditorBridge,
     KeyboardEnhancementGuard, KitTheme, MenuItem, MenuTheme, PopupMenu, SELECTABLE_LEFT_PADDING,
-    VerticalScrollbar, clipboard_sequence, display_path_from_root,
+    ThemeMonitor, VerticalScrollbar, clipboard_sequence, display_path_from_root,
 };
 
 use crate::app::{App, Screen};
 use crate::git::{ChangedFile, DiffDocument};
+use crate::highlight::{DocumentColors, Highlighter};
 use crate::unpeel::ContextReporter;
 
 const FOOTER_ROWS: u16 = 1;
@@ -33,25 +34,29 @@ const DETAIL_GAP_ROWS: u16 = 1;
 const DETAIL_META_ROWS: u16 = 1;
 const AUTO_SYNC_INTERVAL: Duration = Duration::from_millis(1000);
 
-pub fn run(mut app: App) -> io::Result<()> {
-    let theme = KitTheme::detected();
+pub fn run(mut app: App, follow_agent_context: bool) -> io::Result<()> {
+    let mut theme_monitor = ThemeMonitor::detected();
+    let mut theme = theme_monitor.theme();
     let mut terminal = TerminalGuard::enter()?;
     let mut drags = DragSurface::detect();
     let _keyboard = KeyboardEnhancementGuard::enter()?;
     let mut reporter = ContextReporter::detect();
     let agent = AgentBridge::new();
     agent.refresh();
+    let mut last_agent_context_refresh = Instant::now();
     let mut rendered = RenderResult::default();
     let mut clicks = DoubleClickTracker::new();
     let mut menu: Option<ContextMenu> = None;
     let mut selecting = false;
     let mut needs_draw = true;
     let mut last_sync = Instant::now();
+    let mut highlights = HighlightCache::default();
 
     loop {
         if needs_draw {
             reporter.publish(&app);
-            rendered = terminal.draw(&app, &mut drags, menu.as_mut(), theme)?;
+            let colors = highlights.resolve(&app, theme.scheme);
+            rendered = terminal.draw(&app, &mut drags, menu.as_mut(), colors, theme)?;
             app.apply_render_metrics(
                 rendered.scroll_offset,
                 rendered.max_scroll,
@@ -63,6 +68,25 @@ pub fn run(mut app: App) -> io::Result<()> {
 
         if !event::poll(Duration::from_millis(250))? {
             drags.heartbeat()?;
+            if theme_monitor.refresh() {
+                theme = theme_monitor.theme();
+                needs_draw = true;
+            }
+            if follow_agent_context
+                && last_agent_context_refresh.elapsed() >= Duration::from_secs(1)
+            {
+                last_agent_context_refresh = Instant::now();
+                if let Some(context) = agent.project_context()
+                    && context.cwd.is_dir()
+                {
+                    match app.follow_path(&context.cwd) {
+                        Ok(true) => needs_draw = true,
+                        Ok(false) => {}
+                        Err(error) => app.fail(error),
+                    }
+                }
+                agent.refresh();
+            }
             // Quietly follow the working tree while the user is not
             // mid-interaction; transient Git errors are retried next tick.
             if menu.is_none() && !selecting && last_sync.elapsed() >= AUTO_SYNC_INTERVAL {
@@ -598,12 +622,13 @@ impl TerminalGuard {
         app: &App,
         drags: &mut DragSurface,
         menu: Option<&mut ContextMenu>,
+        colors: Option<&DocumentColors>,
         theme: KitTheme,
     ) -> io::Result<RenderResult> {
         let mut result = RenderResult::default();
         drags.begin_frame();
         self.terminal.draw(|frame| {
-            result = render_frame(frame, app, drags, menu, theme);
+            result = render_frame(frame, app, drags, menu, colors, theme);
         })?;
         drags.commit()?;
         Ok(result)
@@ -660,6 +685,39 @@ struct RenderResult {
     max_horizontal_scroll: usize,
 }
 
+/// Syntax colors for the open diff, recomputed only when the document or the
+/// terminal color scheme changes. The syntect grammar set loads lazily on
+/// the first diff so the file list stays instant to open.
+#[derive(Default)]
+struct HighlightCache {
+    highlighter: Option<Highlighter>,
+    key: Option<(u64, ColorScheme)>,
+    colors: Option<DocumentColors>,
+}
+
+impl HighlightCache {
+    fn resolve(&mut self, app: &App, scheme: ColorScheme) -> Option<&DocumentColors> {
+        let Screen::Diff(document) = &app.screen else {
+            return None;
+        };
+        let key = (document_fingerprint(document), scheme);
+        if self.key != Some(key) {
+            let highlighter = self.highlighter.get_or_insert_with(Highlighter::new);
+            self.colors = highlighter.document_colors(document, scheme);
+            self.key = Some(key);
+        }
+        self.colors.as_ref()
+    }
+}
+
+fn document_fingerprint(document: &DiffDocument) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::hash::DefaultHasher::new();
+    document.file.path().hash(&mut hasher);
+    document.lines.hash(&mut hasher);
+    hasher.finish()
+}
+
 #[derive(Clone, Copy, Debug)]
 struct FileListView<'a> {
     root: &'a Path,
@@ -674,6 +732,7 @@ fn render_frame(
     app: &App,
     drags: &mut DragSurface,
     menu: Option<&mut ContextMenu>,
+    colors: Option<&DocumentColors>,
     theme: KitTheme,
 ) -> RenderResult {
     let [body, footer] =
@@ -697,9 +756,12 @@ fn render_frame(
             frame,
             body,
             document,
-            app.selection_range(),
-            app.detail_scroll,
-            app.horizontal_scroll,
+            DiffDetailView {
+                selection: app.selection_range(),
+                requested_scroll: app.detail_scroll,
+                horizontal_scroll: app.horizontal_scroll,
+                colors,
+            },
             theme,
         ),
     };
@@ -893,15 +955,27 @@ fn render_file_row(
     }
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct DiffDetailView<'a> {
+    selection: Option<(usize, usize)>,
+    requested_scroll: usize,
+    horizontal_scroll: usize,
+    colors: Option<&'a DocumentColors>,
+}
+
 fn render_diff_detail(
     frame: &mut Frame<'_>,
     area: Rect,
     document: &DiffDocument,
-    selection: Option<(usize, usize)>,
-    requested_scroll: usize,
-    horizontal_scroll: usize,
+    view: DiffDetailView<'_>,
     theme: KitTheme,
 ) -> RenderResult {
+    let DiffDetailView {
+        selection,
+        requested_scroll,
+        horizontal_scroll,
+        colors,
+    } = view;
     if area.is_empty() {
         return RenderResult::default();
     }
@@ -997,12 +1071,34 @@ fn render_diff_detail(
                         .set_style(row_area, Style::new().bg(background));
                     style = style.bg(background);
                 }
-                let expanded = expand_tabs(line);
-                let visible = visible_cells(&expanded, horizontal_scroll, content_area.width);
-                frame.render_widget(
-                    Paragraph::new(visible).style(style),
-                    Rect::new(content_area.x, content_area.y + row, content_area.width, 1),
-                );
+                let row_rect =
+                    Rect::new(content_area.x, content_area.y + row, content_area.width, 1);
+                let syntax = colors
+                    .and_then(|lines| lines.get(index))
+                    .and_then(Option::as_ref);
+                if let Some(spans) = syntax {
+                    let mut styled = Vec::with_capacity(spans.len() + 1);
+                    styled.push((style, line.chars().take(1).collect::<String>()));
+                    for (color, text) in spans {
+                        let mut span_style = Style::new().fg(*color);
+                        if let Some(background) = row_background {
+                            span_style = span_style.bg(background);
+                        }
+                        styled.push((span_style, text.clone()));
+                    }
+                    frame.render_widget(
+                        Paragraph::new(Line::from(visible_spans(
+                            &styled,
+                            horizontal_scroll,
+                            content_area.width,
+                        ))),
+                        row_rect,
+                    );
+                } else {
+                    let expanded = expand_tabs(line);
+                    let visible = visible_cells(&expanded, horizontal_scroll, content_area.width);
+                    frame.render_widget(Paragraph::new(visible).style(style), row_rect);
+                }
                 diff_hits.push(RowHit {
                     index,
                     area: row_area,
@@ -1191,6 +1287,49 @@ fn expand_tabs(line: &str) -> String {
     expanded
 }
 
+/// Span-aware sibling of [`visible_cells`]: expands tabs, skips `offset`
+/// display columns, and clips to `width`, preserving each fragment's style.
+fn visible_spans(spans: &[(Style, String)], offset: usize, width: u16) -> Vec<Span<'static>> {
+    let width = usize::from(width);
+    let mut result = Vec::new();
+    if width == 0 {
+        return result;
+    }
+    let mut column = 0usize;
+    let mut taken = 0usize;
+    'spans: for (style, text) in spans {
+        let mut visible = String::new();
+        for character in text.chars() {
+            let expanded = if character == '\t' {
+                " ".repeat(4 - (column % 4))
+            } else {
+                character.to_string()
+            };
+            for cell in expanded.chars() {
+                let cell_width = cell.width().unwrap_or(0);
+                let next = column.saturating_add(cell_width);
+                if next <= offset || column < offset {
+                    column = next;
+                    continue;
+                }
+                if taken.saturating_add(cell_width) > width {
+                    if !visible.is_empty() {
+                        result.push(Span::styled(visible, *style));
+                    }
+                    break 'spans;
+                }
+                visible.push(cell);
+                column = next;
+                taken = taken.saturating_add(cell_width);
+            }
+        }
+        if !visible.is_empty() {
+            result.push(Span::styled(visible, *style));
+        }
+    }
+    result
+}
+
 fn visible_cells(line: &str, offset: usize, width: u16) -> String {
     let width = usize::from(width);
     if width == 0 {
@@ -1344,7 +1483,13 @@ mod tests {
         let mut result = RenderResult::default();
         terminal
             .draw(|frame| {
-                result = render_diff_detail(frame, frame.area(), &document, None, 0, 0, theme);
+                result = render_diff_detail(
+                    frame,
+                    frame.area(),
+                    &document,
+                    DiffDetailView::default(),
+                    theme,
+                );
             })
             .unwrap();
         let buffer = terminal.backend().buffer();
@@ -1381,8 +1526,16 @@ mod tests {
         let mut result = RenderResult::default();
         terminal
             .draw(|frame| {
-                result =
-                    render_diff_detail(frame, frame.area(), &document, Some((2, 3)), 0, 0, theme);
+                result = render_diff_detail(
+                    frame,
+                    frame.area(),
+                    &document,
+                    DiffDetailView {
+                        selection: Some((2, 3)),
+                        ..DiffDetailView::default()
+                    },
+                    theme,
+                );
             })
             .unwrap();
         let buffer = terminal.backend().buffer();
@@ -1540,9 +1693,78 @@ mod tests {
                     theme,
                     &mut drags,
                 );
-                let _ =
-                    render_diff_detail(frame, frame.area(), &document, Some((0, 0)), 0, 0, theme);
+                let _ = render_diff_detail(
+                    frame,
+                    frame.area(),
+                    &document,
+                    DiffDetailView {
+                        selection: Some((0, 0)),
+                        ..DiffDetailView::default()
+                    },
+                    theme,
+                );
             })
             .unwrap();
+    }
+
+    #[test]
+    fn syntax_spans_render_over_the_row_tints() {
+        let theme = KitTheme::dark();
+        let document = document();
+        let highlighter = Highlighter::new();
+        let colors = highlighter
+            .document_colors(&document, theme.scheme)
+            .unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(44, 12)).unwrap();
+        terminal
+            .draw(|frame| {
+                let _ = render_diff_detail(
+                    frame,
+                    frame.area(),
+                    &document,
+                    DiffDetailView {
+                        colors: Some(&colors),
+                        ..DiffDetailView::default()
+                    },
+                    theme,
+                );
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+
+        // Row 7 is "+new": tinted background with syntect foregrounds.
+        let added = diff_row_background("+new", theme.scheme).unwrap();
+        assert_eq!(buffer[(2, 7)].bg, added);
+        assert_eq!(buffer[(2, 7)].symbol(), "+");
+        let code_cell = &buffer[(3, 7)];
+        assert_eq!(code_cell.bg, added);
+        assert!(
+            matches!(code_cell.fg, Color::Rgb(..)),
+            "code should use syntect RGB foregrounds, got {:?}",
+            code_cell.fg
+        );
+    }
+
+    #[test]
+    fn span_clipping_expands_tabs_and_honors_offset_and_width() {
+        let bold = Style::new().add_modifier(Modifier::BOLD);
+        let plain = Style::new();
+        let spans = vec![(plain, "+\tab".to_owned()), (bold, "cdef".to_owned())];
+
+        let full = visible_spans(&spans, 0, 12);
+        let text = full
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert_eq!(text, "+   abcdef");
+        assert_eq!(full.last().unwrap().style, bold);
+
+        let clipped = visible_spans(&spans, 2, 3);
+        let text = clipped
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert_eq!(text, "  a");
+        assert!(visible_spans(&spans, 0, 0).is_empty());
     }
 }

@@ -53,6 +53,29 @@ impl App {
         })
     }
 
+    /// Follow a neighboring/main agent into another checkout (including a
+    /// worktree), or back to the main checkout. Explicit-path launches leave
+    /// this unused and remain pinned to their requested repository.
+    pub fn follow_path(&mut self, path: impl AsRef<Path>) -> io::Result<bool> {
+        let repository = Repository::discover(path)?;
+        if repository.root() == self.repository.root() {
+            return Ok(false);
+        }
+        self.files = repository.changed_files()?;
+        self.repository = repository;
+        self.selected = 0;
+        self.screen = Screen::Files;
+        self.list_scroll = 0;
+        self.detail_scroll = 0;
+        self.horizontal_scroll = 0;
+        self.reveal_selected = true;
+        self.max_scroll = 0;
+        self.max_horizontal_scroll = 0;
+        self.notice = None;
+        self.selection = None;
+        Ok(true)
+    }
+
     #[must_use]
     pub fn is_detail(&self) -> bool {
         matches!(self.screen, Screen::Diff(_))

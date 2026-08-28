@@ -19,6 +19,8 @@ Explorer and Usage Apps:
 - the shared capless proportional scrollbar
 - a pinned transparent Back action with a full-width click target in detail views
 - transparent diff surface with green/red row tints behind added and removed lines
+- syntect syntax colors on diff code lines (by file type; dark/light themes),
+  falling back to plain text for unknown types or very large diffs
 - changed-file rows are native path drag sources, matching the Explorer App
 - right-click context menus with preferred-editor opening and adjacent-agent handoff
 

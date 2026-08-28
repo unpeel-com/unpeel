@@ -1,5 +1,6 @@
 mod app;
 mod git;
+mod highlight;
 mod install;
 mod ui;
 mod unpeel;
@@ -27,11 +28,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     install::ensure_installed();
-    let start = std::env::args_os()
-        .nth(1)
-        .map(PathBuf::from)
-        .unwrap_or(std::env::current_dir()?);
+    let explicit_path = std::env::args_os().nth(1).map(PathBuf::from);
+    let follow_agent_context = explicit_path.is_none();
+    let start = explicit_path.unwrap_or(std::env::current_dir()?);
     let repository = Repository::discover(start)?;
-    ui::run(App::new(repository)?)?;
+    ui::run(App::new(repository)?, follow_agent_context)?;
     Ok(())
 }
