@@ -5,7 +5,7 @@ use std::ffi::{OsStr, OsString};
 use std::io;
 use std::path::PathBuf;
 
-use unpeel_app_kit::Explorer;
+use unpeel_app_kit::{AppContext, Explorer};
 
 const HELP: &str = "\
 unpeel-filetree — borderless project file explorer
@@ -54,13 +54,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ParsedArgs::Run(options) => options,
     };
     let follow_agent_context = options.root.is_none();
-    let root = options.root.unwrap_or(std::env::current_dir()?);
+    let app_context = AppContext::detect();
+    let root = match options
+        .root
+        .or_else(|| app_context.current_root().map(PathBuf::from))
+    {
+        Some(root) => root,
+        None => std::env::current_dir()?,
+    };
     let mut explorer = Explorer::scoped(root)?;
     if !options.extensions.is_empty() {
         explorer.set_prune_unmatched_directories(true)?;
         explorer.set_file_extensions(options.extensions)?;
     }
-    ui::run(explorer, follow_agent_context)?;
+    ui::run(explorer, follow_agent_context, app_context)?;
     Ok(())
 }
 

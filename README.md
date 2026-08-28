@@ -45,10 +45,13 @@ unpeel-filetree --ext md ~/Notes
 unpeel-filetree --ext md,mdx .
 ```
 
-With no explicit path, a hosted Files pane follows its neighboring/main
-agent's project checkout. If that agent moves into a Git worktree, Files
-rebinds its scoped root there; when the agent returns to the main checkout,
-Files follows back. Supplying a path pins the Explorer to that root.
+With no explicit path, App Kit's `AppContext` gives a hosted Files pane its
+Host-owned project or active worktree immediately. It then follows its
+neighboring/main agent's checkout: if that agent moves into a Git worktree,
+Files rebinds its scoped root there; when the agent returns to the main
+checkout, Files follows back. A standalone run falls back to its process
+working directory. Supplying a path always wins and pins the Explorer to that
+root.
 
 `-e` / `--ext` is repeatable and accepts a leading dot or comma-separated
 values. When present, the Explorer lists only files with those extensions and

@@ -14,14 +14,19 @@ use ratatui::style::Style;
 use ratatui::widgets::Paragraph;
 use ratatui::{Frame, Terminal};
 use unpeel_app_kit::{
-    AgentBridge, AppReporter, ColorScheme, DoubleClickTracker, DragSurface, EditorBridge, Explorer,
-    ExplorerEvent, ExplorerInput, ExplorerTheme, KeyboardEnhancementGuard, KitTheme, MenuItem,
-    MenuTheme, PopupMenu, ThemeMonitor, clipboard_sequence, display_path_from_root,
+    AgentBridge, AppContext, AppReporter, ColorScheme, DoubleClickTracker, DragSurface,
+    EditorBridge, Explorer, ExplorerEvent, ExplorerInput, ExplorerTheme, KeyboardEnhancementGuard,
+    KitTheme, MenuItem, MenuTheme, PopupMenu, ThemeMonitor, clipboard_sequence,
+    display_path_from_root,
 };
 
 const FOOTER_ROWS: u16 = 1;
 
-pub fn run(mut explorer: Explorer, follow_agent_context: bool) -> io::Result<()> {
+pub fn run(
+    mut explorer: Explorer,
+    follow_agent_context: bool,
+    mut app_context: AppContext,
+) -> io::Result<()> {
     let mut theme_monitor = ThemeMonitor::detected();
     let mut theme = theme_monitor.theme();
     explorer.set_theme(explorer_theme(theme));
@@ -70,9 +75,19 @@ pub fn run(mut explorer: Explorer, follow_agent_context: bool) -> io::Result<()>
                 && last_agent_context_refresh.elapsed() >= Duration::from_secs(1)
             {
                 last_agent_context_refresh = Instant::now();
-                if let Some(context) = agent.project_context()
-                    && context.cwd.is_dir()
-                    && explorer.set_navigation_root(&context.cwd).unwrap_or(false)
+                let app_context_changed = app_context.refresh();
+                let next_root = agent
+                    .project_context()
+                    .filter(|context| context.cwd.is_dir())
+                    .map(|context| context.cwd)
+                    .or_else(|| {
+                        app_context_changed
+                            .then(|| app_context.current_root().map(PathBuf::from))
+                            .flatten()
+                    });
+                if let Some(root) = next_root
+                    && root.is_dir()
+                    && explorer.set_navigation_root(&root).unwrap_or(false)
                 {
                     status = None;
                     needs_draw = true;
