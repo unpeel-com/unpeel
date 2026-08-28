@@ -1,7 +1,8 @@
 //! Borderless changed-file list and unified-diff detail surface.
 
-use std::io::{self, Stdout};
-use std::time::Duration;
+use std::io::{self, Stdout, Write as _};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
@@ -18,8 +19,8 @@ use ratatui::widgets::{Paragraph, Widget};
 use ratatui::{Frame, Terminal};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use unpeel_app_kit::{
-    ColorScheme, DoubleClickTracker, KeyboardEnhancementGuard, KitTheme, SELECTABLE_LEFT_PADDING,
-    VerticalScrollbar,
+    AgentBridge, ColorScheme, DoubleClickTracker, DragSurface, KeyboardEnhancementGuard, KitTheme,
+    MenuItem, MenuTheme, PopupMenu, SELECTABLE_LEFT_PADDING, VerticalScrollbar, clipboard_sequence,
 };
 
 use crate::app::{App, Screen};
@@ -29,20 +30,27 @@ use crate::unpeel::ContextReporter;
 const FOOTER_ROWS: u16 = 1;
 const DETAIL_GAP_ROWS: u16 = 1;
 const DETAIL_META_ROWS: u16 = 1;
+const AUTO_SYNC_INTERVAL: Duration = Duration::from_millis(1000);
 
 pub fn run(mut app: App) -> io::Result<()> {
     let theme = KitTheme::detected();
     let mut terminal = TerminalGuard::enter()?;
+    let mut drags = DragSurface::detect();
     let _keyboard = KeyboardEnhancementGuard::enter()?;
     let mut reporter = ContextReporter::detect();
+    let agent = AgentBridge::new();
+    agent.refresh();
     let mut rendered = RenderResult::default();
     let mut clicks = DoubleClickTracker::new();
+    let mut menu: Option<ContextMenu> = None;
+    let mut selecting = false;
     let mut needs_draw = true;
+    let mut last_sync = Instant::now();
 
     loop {
         if needs_draw {
             reporter.publish(&app);
-            rendered = terminal.draw(&app, theme)?;
+            rendered = terminal.draw(&app, &mut drags, menu.as_mut(), theme)?;
             app.apply_render_metrics(
                 rendered.scroll_offset,
                 rendered.max_scroll,
@@ -53,14 +61,56 @@ pub fn run(mut app: App) -> io::Result<()> {
         }
 
         if !event::poll(Duration::from_millis(250))? {
+            drags.heartbeat()?;
+            // Quietly follow the working tree while the user is not
+            // mid-interaction; transient Git errors are retried next tick.
+            if menu.is_none() && !selecting && last_sync.elapsed() >= AUTO_SYNC_INTERVAL {
+                last_sync = Instant::now();
+                if app.sync().unwrap_or(false) {
+                    needs_draw = true;
+                }
+            }
             continue;
         }
         match event::read()? {
             Event::Key(key) if key.kind != KeyEventKind::Release => {
                 clicks.reset();
-                let Some(action) = action_for_key(key, app.is_detail()) else {
+                if is_force_quit(key) {
+                    break;
+                }
+                if menu.is_some() {
+                    match key.code {
+                        KeyCode::Esc => {
+                            menu = None;
+                            needs_draw = true;
+                        }
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            menu.as_mut().expect("menu is open").move_selection(-1);
+                            needs_draw = true;
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            menu.as_mut().expect("menu is open").move_selection(1);
+                            needs_draw = true;
+                        }
+                        KeyCode::Enter | KeyCode::Char(' ') => {
+                            let open_menu = menu.take().expect("menu is open");
+                            activate_menu(open_menu, &mut app, &agent);
+                            needs_draw = true;
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+                let Some(action) =
+                    action_for_key(key, app.is_detail(), app.selection_range().is_some())
+                else {
                     continue;
                 };
+                if action == InputAction::SendToAgent {
+                    send_selection(&mut app, &agent);
+                    needs_draw = true;
+                    continue;
+                }
                 if handle_action(&mut app, action) {
                     break;
                 }
@@ -70,15 +120,34 @@ pub fn run(mut app: App) -> io::Result<()> {
                 let position = Position::new(mouse.column, mouse.row);
                 match mouse.kind {
                     MouseEventKind::Down(MouseButton::Left) => {
-                        if app.is_detail() {
+                        if let Some(mut open_menu) = menu.take() {
+                            clicks.reset();
+                            if open_menu
+                                .item_at(position)
+                                .is_some_and(MenuItem::is_enabled)
+                            {
+                                open_menu.select_at(position);
+                                activate_menu(open_menu, &mut app, &agent);
+                            }
+                            needs_draw = true;
+                        } else if app.is_detail() {
                             clicks.reset();
                             if rendered
                                 .back_button
                                 .is_some_and(|hit| hit.contains(position))
                             {
                                 app.back();
-                                needs_draw = true;
+                            } else if let Some(index) = diff_line_at(&rendered, position) {
+                                if mouse.modifiers.contains(KeyModifiers::SHIFT) {
+                                    app.extend_selection(index);
+                                } else {
+                                    app.begin_selection(index);
+                                }
+                                selecting = true;
+                            } else {
+                                app.clear_selection();
                             }
+                            needs_draw = true;
                         } else if let Some((index, activate)) =
                             list_click_at(&rendered, position, &mut clicks)
                         {
@@ -89,15 +158,86 @@ pub fn run(mut app: App) -> io::Result<()> {
                             needs_draw = true;
                         }
                     }
+                    MouseEventKind::Down(MouseButton::Right) => {
+                        clicks.reset();
+                        selecting = false;
+                        if app.is_detail() {
+                            if let Some(index) = diff_line_at(&rendered, position) {
+                                let covered = app
+                                    .selection_range()
+                                    .is_some_and(|(start, end)| index >= start && index <= end);
+                                if !covered {
+                                    app.begin_selection(index);
+                                }
+                                agent.refresh();
+                                menu = Some(diff_menu(
+                                    agent.label().is_some(),
+                                    position,
+                                    theme.scheme,
+                                ));
+                                needs_draw = true;
+                            } else if menu.take().is_some() {
+                                needs_draw = true;
+                            }
+                        } else if let Some(hit) = rendered
+                            .hits
+                            .iter()
+                            .copied()
+                            .find(|hit| hit.contains(position))
+                        {
+                            app.select(hit.index);
+                            if let (Some(file), Some(absolute)) =
+                                (app.selected_file(), app.selected_absolute_path())
+                            {
+                                let relative = control_safe(file.path().to_string_lossy().as_ref());
+                                agent.refresh();
+                                menu = Some(list_menu(
+                                    relative,
+                                    absolute,
+                                    agent.label().is_some(),
+                                    position,
+                                    theme.scheme,
+                                ));
+                            }
+                            needs_draw = true;
+                        } else if menu.take().is_some() {
+                            needs_draw = true;
+                        }
+                    }
+                    MouseEventKind::Drag(MouseButton::Left) => {
+                        if selecting && let Some(index) = diff_line_near(&rendered, position) {
+                            app.extend_selection(index);
+                            needs_draw = true;
+                        }
+                    }
+                    MouseEventKind::Up(MouseButton::Left) => {
+                        selecting = false;
+                    }
                     MouseEventKind::ScrollUp => {
                         clicks.reset();
-                        app.scroll_vertical(-3);
+                        if let Some(open_menu) = menu.as_mut() {
+                            open_menu.move_selection(-1);
+                        } else {
+                            app.scroll_vertical(-3);
+                        }
                         needs_draw = true;
                     }
                     MouseEventKind::ScrollDown => {
                         clicks.reset();
-                        app.scroll_vertical(3);
+                        if let Some(open_menu) = menu.as_mut() {
+                            open_menu.move_selection(1);
+                        } else {
+                            app.scroll_vertical(3);
+                        }
                         needs_draw = true;
+                    }
+                    MouseEventKind::Moved => {
+                        if menu
+                            .as_mut()
+                            .is_some_and(|open_menu| open_menu.hover_at(position))
+                        {
+                            needs_draw = true;
+                        }
                     }
                     _ => {}
                 }
@@ -130,6 +270,32 @@ fn list_click_at(
     Some((hit.index, clicks.click(hit.index)))
 }
 
+fn diff_line_at(rendered: &RenderResult, position: Position) -> Option<usize> {
+    rendered
+        .diff_hits
+        .iter()
+        .find(|hit| hit.contains(position))
+        .map(|hit| hit.index)
+}
+
+/// Row lookup for drag extension: clamps to the first or last visible diff
+/// row so dragging past the surface edges keeps growing the selection.
+fn diff_line_near(rendered: &RenderResult, position: Position) -> Option<usize> {
+    let first = rendered.diff_hits.first()?;
+    let last = rendered.diff_hits.last()?;
+    if position.y <= first.area.y {
+        return Some(first.index);
+    }
+    if position.y >= last.area.y {
+        return Some(last.index);
+    }
+    rendered
+        .diff_hits
+        .iter()
+        .find(|hit| hit.area.y == position.y)
+        .map(|hit| hit.index)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum InputAction {
     Quit,
@@ -144,17 +310,26 @@ enum InputAction {
     PanLeft,
     PanRight,
     Refresh,
+    SendToAgent,
+    ClearSelection,
 }
 
-fn action_for_key(key: KeyEvent, detail: bool) -> Option<InputAction> {
+fn is_force_quit(key: KeyEvent) -> bool {
+    key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)
+}
+
+fn action_for_key(key: KeyEvent, detail: bool, has_selection: bool) -> Option<InputAction> {
     let control = key.modifiers.contains(KeyModifiers::CONTROL);
-    if control && key.code == KeyCode::Char('c') {
+    if is_force_quit(key) {
         return Some(InputAction::Quit);
     }
     match key.code {
         KeyCode::Char('q') if !control => Some(InputAction::Quit),
+        KeyCode::Enter if detail && has_selection => Some(InputAction::SendToAgent),
+        KeyCode::Char('s') if detail && has_selection => Some(InputAction::SendToAgent),
         KeyCode::Enter if detail => Some(InputAction::Back),
         KeyCode::Enter => Some(InputAction::Activate),
+        KeyCode::Esc if detail && has_selection => Some(InputAction::ClearSelection),
         KeyCode::Esc if detail => Some(InputAction::Back),
         KeyCode::Esc => None,
         KeyCode::Down | KeyCode::Char('j') => Some(InputAction::Down),
@@ -200,8 +375,167 @@ fn handle_action(app: &mut App, action: InputAction) -> bool {
                 app.fail(error);
             }
         }
+        InputAction::SendToAgent => {}
+        InputAction::ClearSelection => {
+            app.clear_selection();
+        }
     }
     false
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ContextAction {
+    SendSelection,
+    CopySelection,
+    /// Bare repo-relative path pasted into the agent input.
+    SendPath(String),
+    CopyPath(PathBuf),
+}
+
+type ContextMenu = PopupMenu<ContextAction>;
+
+fn diff_menu(can_send: bool, anchor: Position, scheme: ColorScheme) -> ContextMenu {
+    let mut items = Vec::with_capacity(2);
+    if can_send {
+        items.push(MenuItem::new("Send to agent", ContextAction::SendSelection));
+    }
+    items.push(MenuItem::new("Copy lines", ContextAction::CopySelection));
+    PopupMenu::new(anchor, items).with_theme(MenuTheme::for_color_scheme(scheme))
+}
+
+fn list_menu(
+    relative: String,
+    absolute: PathBuf,
+    can_send: bool,
+    anchor: Position,
+    scheme: ColorScheme,
+) -> ContextMenu {
+    let mut items = Vec::with_capacity(2);
+    if can_send {
+        items.push(MenuItem::new(
+            "Send to agent",
+            ContextAction::SendPath(relative),
+        ));
+    }
+    items.push(MenuItem::new(
+        "Copy path",
+        ContextAction::CopyPath(absolute),
+    ));
+    PopupMenu::new(anchor, items).with_theme(MenuTheme::for_color_scheme(scheme))
+}
+
+fn activate_menu(menu: ContextMenu, app: &mut App, agent: &AgentBridge) {
+    let Some(action) = menu.selected_value().cloned() else {
+        return;
+    };
+    match action {
+        ContextAction::SendSelection => send_selection(app, agent),
+        ContextAction::CopySelection => {
+            match app.selected_diff_lines().map(|lines| lines.join("\n")) {
+                Some(text) => match copy_text(&text) {
+                    Ok(()) => app.notify("Diff lines copied"),
+                    Err(error) => app.fail(format!("Copy failed: {error}")),
+                },
+                None => app.fail("No diff lines selected"),
+            }
+        }
+        ContextAction::SendPath(path) => match agent.send_text(&path) {
+            Ok(label) => app.notify(format!("Sent path to {label}")),
+            Err(error) => match copy_text(&path) {
+                Ok(()) => app.fail(format!("{error}; path copied instead")),
+                Err(copy_error) => app.fail(format!("{error}; copy failed: {copy_error}")),
+            },
+        },
+        ContextAction::CopyPath(path) => match copy_text(path.to_string_lossy().as_ref()) {
+            Ok(()) => app.notify("Path copied"),
+            Err(error) => app.fail(format!("Copy failed: {error}")),
+        },
+    }
+}
+
+/// Paste a compact file-and-line reference for the selection into the
+/// nearby agent's input, so the user writes their comment in the agent chat.
+fn send_selection(app: &mut App, agent: &AgentBridge) {
+    let reference = match (&app.screen, app.selection_range()) {
+        (Screen::Diff(document), Some(range)) => Some(selection_reference(document, range)),
+        _ => None,
+    };
+    let Some(reference) = reference else {
+        app.fail("No diff lines selected");
+        return;
+    };
+    match agent.send_text(&reference) {
+        Ok(label) => {
+            app.clear_selection();
+            app.notify(format!("Sent to {label}"));
+        }
+        Err(error) => match copy_text(&reference) {
+            Ok(()) => app.fail(format!("{error}; reference copied instead")),
+            Err(copy_error) => app.fail(format!("{error}; copy failed: {copy_error}")),
+        },
+    }
+}
+
+/// A bare repo-relative `path:line` (or `path:start-end`) token, control-safe
+/// so an odd filename byte cannot become terminal input in the agent's pane.
+fn selection_reference(document: &DiffDocument, range: (usize, usize)) -> String {
+    let path = control_safe(document.file.path().to_string_lossy().as_ref());
+    match new_file_line_span(&document.lines, range) {
+        Some((first, last)) if first == last => format!("{path}:{first}"),
+        Some((first, last)) => format!("{path}:{first}-{last}"),
+        None => path,
+    }
+}
+
+fn control_safe(text: &str) -> String {
+    text.chars()
+        .filter(|character| !character.is_control())
+        .collect()
+}
+
+/// Maps selected diff rows to the file line numbers they touch, using the
+/// `+c,d` side of hunk headers. Removed lines anchor at the position the
+/// deletion leaves behind. Selections outside any hunk return `None`.
+fn new_file_line_span(lines: &[String], (start, end): (usize, usize)) -> Option<(usize, usize)> {
+    let mut new_line: Option<usize> = None;
+    let mut span: Option<(usize, usize)> = None;
+    for (index, line) in lines.iter().enumerate().take(end.saturating_add(1)) {
+        if line.starts_with("@@") {
+            new_line = hunk_new_start(line);
+            continue;
+        }
+        let Some(current) = new_line else {
+            continue;
+        };
+        if line.starts_with('\\') {
+            continue;
+        }
+        let advances = !line.starts_with('-');
+        if index >= start {
+            let anchor = current.max(1);
+            span = Some(span.map_or((anchor, anchor), |(first, last)| {
+                (first.min(anchor), last.max(anchor))
+            }));
+        }
+        if advances {
+            new_line = Some(current + 1);
+        }
+    }
+    span
+}
+
+fn hunk_new_start(header: &str) -> Option<usize> {
+    let plus = header
+        .split(' ')
+        .find(|part| part.starts_with('+') && part.len() > 1)?;
+    plus[1..].split(',').next()?.parse().ok()
+}
+
+fn copy_text(text: &str) -> io::Result<()> {
+    let sequence = clipboard_sequence(text);
+    let mut stdout = io::stdout();
+    stdout.write_all(sequence.as_bytes())?;
+    stdout.flush()
 }
 
 struct TerminalGuard {
@@ -237,11 +571,19 @@ impl TerminalGuard {
         Ok(Self { terminal })
     }
 
-    fn draw(&mut self, app: &App, theme: KitTheme) -> io::Result<RenderResult> {
+    fn draw(
+        &mut self,
+        app: &App,
+        drags: &mut DragSurface,
+        menu: Option<&mut ContextMenu>,
+        theme: KitTheme,
+    ) -> io::Result<RenderResult> {
         let mut result = RenderResult::default();
+        drags.begin_frame();
         self.terminal.draw(|frame| {
-            result = render_frame(frame, app, theme);
+            result = render_frame(frame, app, drags, menu, theme);
         })?;
+        drags.commit()?;
         Ok(result)
     }
 }
@@ -288,6 +630,7 @@ impl RowHit {
 #[derive(Debug, Default)]
 struct RenderResult {
     hits: Vec<RowHit>,
+    diff_hits: Vec<RowHit>,
     back_button: Option<RectHit>,
     scroll_offset: usize,
     max_scroll: usize,
@@ -295,7 +638,22 @@ struct RenderResult {
     max_horizontal_scroll: usize,
 }
 
-fn render_frame(frame: &mut Frame<'_>, app: &App, theme: KitTheme) -> RenderResult {
+#[derive(Clone, Copy, Debug)]
+struct FileListView<'a> {
+    root: &'a Path,
+    files: &'a [ChangedFile],
+    selected: usize,
+    requested_scroll: usize,
+    reveal_selected: bool,
+}
+
+fn render_frame(
+    frame: &mut Frame<'_>,
+    app: &App,
+    drags: &mut DragSurface,
+    menu: Option<&mut ContextMenu>,
+    theme: KitTheme,
+) -> RenderResult {
     let [body, footer] =
         Layout::vertical([Constraint::Min(0), Constraint::Length(FOOTER_ROWS)]).areas(frame.area());
 
@@ -303,22 +661,32 @@ fn render_frame(frame: &mut Frame<'_>, app: &App, theme: KitTheme) -> RenderResu
         Screen::Files => render_file_list(
             frame,
             body,
-            &app.files,
-            app.selected,
-            app.list_scroll,
-            app.reveal_selected,
+            FileListView {
+                root: app.root(),
+                files: &app.files,
+                selected: app.selected,
+                requested_scroll: app.list_scroll,
+                reveal_selected: app.reveal_selected,
+            },
             theme,
+            drags,
         ),
         Screen::Diff(document) => render_diff_detail(
             frame,
             body,
             document,
+            app.selection_range(),
             app.detail_scroll,
             app.horizontal_scroll,
             theme,
         ),
     };
     render_footer(frame, footer, app, theme);
+    if let Some(menu) = menu {
+        // Do not let the native host begin a path drag through an open menu.
+        drags.begin_frame();
+        menu.render(frame);
+    }
     result
 }
 
@@ -326,27 +694,33 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App, theme: KitTheme) 
     if area.is_empty() {
         return;
     }
-    let (text, color) = app.notice.as_ref().map_or_else(
-        || {
-            (
-                app.selected_absolute_path()
-                    .unwrap_or_else(|| app.root().to_path_buf())
-                    .display()
-                    .to_string(),
-                theme.muted,
-            )
-        },
-        |notice| {
-            (
-                notice.text.clone(),
-                if notice.error {
-                    theme.danger
-                } else {
-                    theme.muted
-                },
-            )
-        },
-    );
+    let (text, color) = if let Some(notice) = &app.notice {
+        (
+            notice.text.clone(),
+            if notice.error {
+                theme.danger
+            } else {
+                theme.muted
+            },
+        )
+    } else if let Some((start, end)) = app.selection_range().filter(|_| app.is_detail()) {
+        let count = end - start + 1;
+        (
+            format!(
+                "{count} diff line{} selected · Enter to send to agent · Esc to clear",
+                if count == 1 { "" } else { "s" }
+            ),
+            theme.muted,
+        )
+    } else {
+        (
+            app.selected_absolute_path()
+                .unwrap_or_else(|| app.root().to_path_buf())
+                .display()
+                .to_string(),
+            theme.muted,
+        )
+    };
     let padding = SELECTABLE_LEFT_PADDING.min(area.width);
     frame.render_widget(
         Paragraph::new(text).style(Style::new().fg(color)),
@@ -362,16 +736,14 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App, theme: KitTheme) 
 fn render_file_list(
     frame: &mut Frame<'_>,
     area: Rect,
-    files: &[ChangedFile],
-    selected: usize,
-    requested_scroll: usize,
-    reveal_selected: bool,
+    view: FileListView<'_>,
     theme: KitTheme,
+    drags: &mut DragSurface,
 ) -> RenderResult {
     if area.is_empty() {
         return RenderResult::default();
     }
-    if files.is_empty() {
+    if view.files.is_empty() {
         let row = Rect::new(
             area.x,
             area.y.saturating_add(area.height.saturating_sub(1) / 2),
@@ -390,7 +762,7 @@ fn render_file_list(
         };
     }
 
-    let total_rows = files.len();
+    let total_rows = view.files.len();
     let show_scrollbar = total_rows > usize::from(area.height) && area.width > 1;
     let rows_area = if show_scrollbar {
         Rect::new(area.x, area.y, area.width - 1, area.height)
@@ -399,9 +771,9 @@ fn render_file_list(
     };
     let viewport_rows = usize::from(rows_area.height);
     let max_scroll = total_rows.saturating_sub(viewport_rows);
-    let selected = selected.min(files.len() - 1);
-    let requested_scroll = requested_scroll.min(max_scroll);
-    let scroll_offset = if reveal_selected {
+    let selected = view.selected.min(view.files.len() - 1);
+    let requested_scroll = view.requested_scroll.min(max_scroll);
+    let scroll_offset = if view.reveal_selected {
         reveal_selected_row(selected, viewport_rows, requested_scroll, max_scroll)
     } else {
         requested_scroll
@@ -410,11 +782,12 @@ fn render_file_list(
     let mut hits = Vec::new();
     for row in 0..rows_area.height {
         let index = scroll_offset.saturating_add(usize::from(row));
-        let Some(file) = files.get(index) else {
+        let Some(file) = view.files.get(index) else {
             break;
         };
         let row_area = Rect::new(rows_area.x, rows_area.y + row, rows_area.width, 1);
         render_file_row(frame.buffer_mut(), row_area, file, index == selected, theme);
+        drags.register(row_area, view.root.join(file.path()));
         hits.push(RowHit {
             index,
             area: row_area,
@@ -505,6 +878,7 @@ fn render_diff_detail(
     frame: &mut Frame<'_>,
     area: Rect,
     document: &DiffDocument,
+    selection: Option<(usize, usize)>,
     requested_scroll: usize,
     horizontal_scroll: usize,
     theme: KitTheme,
@@ -576,6 +950,8 @@ fn render_diff_detail(
     let max_horizontal_scroll = longest_line.saturating_sub(usize::from(content_area.width));
     let horizontal_scroll = horizontal_scroll.min(max_horizontal_scroll);
 
+    let rows_width = diff_outer.width.saturating_sub(scrollbar_width);
+    let mut diff_hits = Vec::new();
     if !content_area.is_empty() {
         if document.lines.is_empty() {
             frame.render_widget(
@@ -588,12 +964,30 @@ fn render_diff_detail(
                 let Some(line) = document.lines.get(index) else {
                     break;
                 };
+                let row_area = Rect::new(diff_outer.x, content_area.y + row, rows_width, 1);
+                let selected = selection.is_some_and(|(start, end)| index >= start && index <= end);
+                let mut style = diff_line_style(line, theme);
+                let row_background = if selected {
+                    theme.selected_row.bg
+                } else {
+                    diff_row_background(line, theme.scheme)
+                };
+                if let Some(background) = row_background {
+                    frame
+                        .buffer_mut()
+                        .set_style(row_area, Style::new().bg(background));
+                    style = style.bg(background);
+                }
                 let expanded = expand_tabs(line);
                 let visible = visible_cells(&expanded, horizontal_scroll, content_area.width);
                 frame.render_widget(
-                    Paragraph::new(visible).style(diff_line_style(line, theme)),
+                    Paragraph::new(visible).style(style),
                     Rect::new(content_area.x, content_area.y + row, content_area.width, 1),
                 );
+                diff_hits.push(RowHit {
+                    index,
+                    area: row_area,
+                });
             }
         }
     }
@@ -613,6 +1007,7 @@ fn render_diff_detail(
     }
 
     RenderResult {
+        diff_hits,
         back_button: RectHit::from_rect(back_area),
         scroll_offset,
         max_scroll,
@@ -719,13 +1114,31 @@ fn status_color(status: char, scheme: ColorScheme) -> Color {
     }
 }
 
+/// Full-row tint behind added and removed patch lines, GitHub-style: the
+/// background carries the change kind, so those lines keep the plain text
+/// foreground from [`diff_line_style`].
+fn diff_row_background(line: &str, scheme: ColorScheme) -> Option<Color> {
+    if line.starts_with("+++") || line.starts_with("---") {
+        return None;
+    }
+    if line.starts_with('+') {
+        Some(match scheme {
+            ColorScheme::Dark => Color::Rgb(18, 44, 24),
+            ColorScheme::Light => Color::Rgb(224, 245, 228),
+        })
+    } else if line.starts_with('-') {
+        Some(match scheme {
+            ColorScheme::Dark => Color::Rgb(58, 26, 26),
+            ColorScheme::Light => Color::Rgb(255, 233, 231),
+        })
+    } else {
+        None
+    }
+}
+
 fn diff_line_style(line: &str, theme: KitTheme) -> Style {
     if line.starts_with("+++") || line.starts_with("---") {
         Style::new().fg(theme.muted).add_modifier(Modifier::BOLD)
-    } else if line.starts_with('+') {
-        Style::new().fg(status_color('A', theme.scheme))
-    } else if line.starts_with('-') {
-        Style::new().fg(status_color('D', theme.scheme))
     } else if line.starts_with("@@") {
         Style::new().fg(theme.accent).add_modifier(Modifier::BOLD)
     } else if line.starts_with("diff --git") {
@@ -800,11 +1213,46 @@ mod tests {
             .collect::<String>()
     }
 
+    fn document() -> DiffDocument {
+        DiffDocument {
+            file: ChangedFile::fixture("src/ui.rs", ' ', 'M'),
+            lines: vec![
+                "diff --git a/src/ui.rs b/src/ui.rs".into(),
+                "@@ -1 +1 @@".into(),
+                "-old".into(),
+                "+new".into(),
+            ],
+            additions: 1,
+            deletions: 1,
+        }
+    }
+
     #[test]
     fn escape_is_back_in_detail_and_does_not_exit_the_list() {
         let escape = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
-        assert_eq!(action_for_key(escape, true), Some(InputAction::Back));
-        assert_eq!(action_for_key(escape, false), None);
+        assert_eq!(action_for_key(escape, true, false), Some(InputAction::Back));
+        assert_eq!(action_for_key(escape, false, false), None);
+    }
+
+    #[test]
+    fn selection_keys_send_and_clear_instead_of_leaving() {
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        let escape = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        let send = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE);
+        assert_eq!(
+            action_for_key(enter, true, true),
+            Some(InputAction::SendToAgent)
+        );
+        assert_eq!(action_for_key(enter, true, false), Some(InputAction::Back));
+        assert_eq!(
+            action_for_key(escape, true, true),
+            Some(InputAction::ClearSelection)
+        );
+        assert_eq!(
+            action_for_key(send, true, true),
+            Some(InputAction::SendToAgent)
+        );
+        assert_eq!(action_for_key(send, true, false), None);
     }
 
     #[test]
@@ -839,9 +1287,23 @@ mod tests {
         let files = vec![ChangedFile::fixture("src/ui.rs", ' ', 'M')];
         let mut terminal = Terminal::new(TestBackend::new(48, 8)).unwrap();
         let mut list_result = RenderResult::default();
+        let mut drags = DragSurface::disabled();
+        drags.begin_frame();
         terminal
             .draw(|frame| {
-                list_result = render_file_list(frame, frame.area(), &files, 0, 0, true, theme);
+                list_result = render_file_list(
+                    frame,
+                    frame.area(),
+                    FileListView {
+                        root: Path::new("/repo"),
+                        files: &files,
+                        selected: 0,
+                        requested_scroll: 0,
+                        reveal_selected: true,
+                    },
+                    theme,
+                    &mut drags,
+                );
             })
             .unwrap();
 
@@ -850,27 +1312,20 @@ mod tests {
         assert!(!buffer_line(buffer, 0).contains("src/ui.rs"));
         assert_eq!(buffer[(47, 0)].bg, theme.selected_row.bg.unwrap());
         assert_eq!(list_result.hits[0].area.width, 48);
+        assert_eq!(drags.regions().len(), 1);
+        assert_eq!(drags.regions()[0].area, Rect::new(0, 0, 48, 1));
+        assert_eq!(drags.regions()[0].path, Path::new("/repo/src/ui.rs"));
     }
 
     #[test]
-    fn detail_has_a_transparent_back_action_and_colored_patch_lines() {
+    fn detail_is_transparent_except_for_changed_line_tints() {
         let theme = KitTheme::light();
-        let document = DiffDocument {
-            file: ChangedFile::fixture("src/ui.rs", ' ', 'M'),
-            lines: vec![
-                "diff --git a/src/ui.rs b/src/ui.rs".into(),
-                "@@ -1 +1 @@".into(),
-                "-old".into(),
-                "+new".into(),
-            ],
-            additions: 1,
-            deletions: 1,
-        };
+        let document = document();
         let mut terminal = Terminal::new(TestBackend::new(44, 12)).unwrap();
         let mut result = RenderResult::default();
         terminal
             .draw(|frame| {
-                result = render_diff_detail(frame, frame.area(), &document, 0, 0, theme);
+                result = render_diff_detail(frame, frame.area(), &document, None, 0, 0, theme);
             })
             .unwrap();
         let buffer = terminal.backend().buffer();
@@ -880,9 +1335,138 @@ mod tests {
             (0..44).all(|x| buffer[(x, 0)].bg == Color::Reset),
             "Back should not paint a row background"
         );
-        assert_eq!(buffer[(2, 6)].fg, Color::Red);
-        assert_eq!(buffer[(2, 7)].fg, Color::Green);
+        assert_eq!(buffer[(2, 6)].fg, theme.text);
+        assert_eq!(buffer[(2, 7)].fg, theme.text);
+        assert!(
+            (0..44).all(|x| [4, 5, 8, 11]
+                .iter()
+                .all(|y| buffer[(x, *y)].bg == Color::Reset)),
+            "unchanged diff rows should stay transparent"
+        );
+        let removed = diff_row_background("-old", theme.scheme).unwrap();
+        let added = diff_row_background("+new", theme.scheme).unwrap();
+        assert!(
+            (0..44).all(|x| buffer[(x, 6)].bg == removed && buffer[(x, 7)].bg == added),
+            "changed rows should carry full-width green/red tints"
+        );
+        assert_eq!(diff_row_background("+++ b/src/ui.rs", theme.scheme), None);
+        assert_eq!(diff_row_background(" context", theme.scheme), None);
         assert_eq!(result.back_button.unwrap().area.width, 44);
+    }
+
+    #[test]
+    fn selected_diff_lines_highlight_and_report_hit_rows() {
+        let theme = KitTheme::dark();
+        let document = document();
+        let mut terminal = Terminal::new(TestBackend::new(44, 12)).unwrap();
+        let mut result = RenderResult::default();
+        terminal
+            .draw(|frame| {
+                result =
+                    render_diff_detail(frame, frame.area(), &document, Some((2, 3)), 0, 0, theme);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let highlight = theme.selected_row.bg.unwrap();
+
+        // Diff rows start below back (0), gap (1), meta (2), and gap (3).
+        assert_eq!(result.diff_hits.len(), 4);
+        assert_eq!(result.diff_hits[0].index, 0);
+        assert_eq!(result.diff_hits[0].area, Rect::new(0, 4, 44, 1));
+        assert_eq!(buffer[(0, 4)].bg, Color::Reset);
+        // Selection overrides the added/removed row tints.
+        assert_eq!(buffer[(0, 6)].bg, highlight);
+        assert_eq!(buffer[(43, 7)].bg, highlight);
+        assert_eq!(buffer[(2, 6)].fg, theme.text);
+    }
+
+    #[test]
+    fn drag_lookup_clamps_to_the_visible_diff_rows() {
+        let rendered = RenderResult {
+            diff_hits: vec![
+                RowHit {
+                    index: 5,
+                    area: Rect::new(0, 4, 40, 1),
+                },
+                RowHit {
+                    index: 6,
+                    area: Rect::new(0, 5, 40, 1),
+                },
+            ],
+            ..RenderResult::default()
+        };
+        assert_eq!(diff_line_near(&rendered, Position::new(3, 0)), Some(5));
+        assert_eq!(diff_line_near(&rendered, Position::new(39, 5)), Some(6));
+        assert_eq!(diff_line_near(&rendered, Position::new(0, 11)), Some(6));
+        assert_eq!(diff_line_at(&rendered, Position::new(0, 11)), None);
+    }
+
+    #[test]
+    fn selection_references_carry_the_relative_path_and_file_line_numbers() {
+        let document = document();
+        // "-old" and "+new" both anchor at line 1 of the new file.
+        assert_eq!(selection_reference(&document, (2, 3)), "src/ui.rs:1");
+        // A selection covering only headers falls back to the bare path.
+        assert_eq!(selection_reference(&document, (0, 0)), "src/ui.rs");
+    }
+
+    #[test]
+    fn diff_rows_map_to_new_file_line_spans_per_hunk() {
+        let lines: Vec<String> = [
+            "diff --git a/x b/x",
+            "@@ -10,3 +12,4 @@ fn demo()",
+            " context",   // line 12
+            "-removed",   // anchors at 13
+            "+added",     // line 13
+            "+added-two", // line 14
+            " context",   // line 15
+            "@@ -30,2 +33,2 @@",
+            " context", // line 33
+            "\\ No newline at end of file",
+            " context", // line 34
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+
+        assert_eq!(new_file_line_span(&lines, (2, 2)), Some((12, 12)));
+        assert_eq!(new_file_line_span(&lines, (3, 5)), Some((13, 14)));
+        assert_eq!(new_file_line_span(&lines, (2, 6)), Some((12, 15)));
+        assert_eq!(new_file_line_span(&lines, (8, 10)), Some((33, 34)));
+        assert_eq!(new_file_line_span(&lines, (0, 0)), None);
+        assert_eq!(hunk_new_start("@@ -10,3 +12,4 @@ fn demo()"), Some(12));
+        assert_eq!(hunk_new_start("@@ -1 +1 @@"), Some(1));
+    }
+
+    #[test]
+    fn context_menus_offer_agent_handoff_only_when_a_peer_exists() {
+        let scheme = ColorScheme::Dark;
+        let anchor = Position::new(4, 4);
+        let with_agent = diff_menu(true, anchor, scheme);
+        assert_eq!(with_agent.items().len(), 2);
+        assert_eq!(with_agent.items()[0].label(), "Send to agent");
+        assert_eq!(with_agent.items()[0].value(), &ContextAction::SendSelection);
+
+        let without_agent = diff_menu(false, anchor, scheme);
+        assert_eq!(without_agent.items().len(), 1);
+        assert_eq!(without_agent.items()[0].label(), "Copy lines");
+
+        let list = list_menu(
+            "a.rs".to_owned(),
+            PathBuf::from("/repo/a.rs"),
+            true,
+            anchor,
+            scheme,
+        );
+        assert_eq!(list.items().len(), 2);
+        assert_eq!(
+            list.items()[0].value(),
+            &ContextAction::SendPath("a.rs".to_owned())
+        );
+        assert_eq!(
+            list.items()[1].value(),
+            &ContextAction::CopyPath(PathBuf::from("/repo/a.rs"))
+        );
     }
 
     #[test]
@@ -911,10 +1495,24 @@ mod tests {
             deletions: 0,
         };
         let mut terminal = Terminal::new(TestBackend::new(1, 1)).unwrap();
+        let mut drags = DragSurface::disabled();
         terminal
             .draw(|frame| {
-                let _ = render_file_list(frame, frame.area(), &files, 0, 0, true, theme);
-                let _ = render_diff_detail(frame, frame.area(), &document, 0, 0, theme);
+                let _ = render_file_list(
+                    frame,
+                    frame.area(),
+                    FileListView {
+                        root: Path::new("/repo"),
+                        files: &files,
+                        selected: 0,
+                        requested_scroll: 0,
+                        reveal_selected: true,
+                    },
+                    theme,
+                    &mut drags,
+                );
+                let _ =
+                    render_diff_detail(frame, frame.area(), &document, Some((0, 0)), 0, 0, theme);
             })
             .unwrap();
     }

@@ -9,6 +9,7 @@ const APP_TOML: &str = r##"# Installed by unpeel-diffs; this is a standalone App
 manifest_version = 1
 id = "unpeel.app.diffs"
 name = "Diffs"
+version = "@APP_VERSION@"
 command = "@LAUNCH_COMMAND@"
 description = "Standalone borderless Git working-tree viewer with a changed-file list and diff detail"
 
@@ -54,7 +55,9 @@ pub fn ensure_installed() {
     let Some(home) = unpeel_home().filter(|home| home.is_dir()) else {
         return;
     };
-    let manifest = APP_TOML.replace("@LAUNCH_COMMAND@", &toml_escaped(&launch_command()));
+    let manifest = APP_TOML
+        .replace("@APP_VERSION@", env!("CARGO_PKG_VERSION"))
+        .replace("@LAUNCH_COMMAND@", &toml_escaped(&launch_command()));
     let directory = home.join("apps").join(APP_ID);
     if std::fs::create_dir_all(&directory).is_err() {
         return;
@@ -76,6 +79,7 @@ mod tests {
     #[test]
     fn manifest_describes_a_standalone_terminal_app() {
         assert!(APP_TOML.contains("id = \"unpeel.app.diffs\""));
+        assert!(APP_TOML.contains("version = \"@APP_VERSION@\""));
         assert!(APP_TOML.contains("standalone App"));
         assert!(APP_TOML.contains("command_aliases = [\"unpeel-diffs\"]"));
     }

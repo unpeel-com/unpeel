@@ -34,6 +34,9 @@ impl ContextReporter {
             "changed_files": app.files.len(),
             "selected_path": app.selected_absolute_path(),
             "selected_status": app.selected_file().map(|file| file.state_label()),
+            "selected_diff_lines": app
+                .selection_range()
+                .map(|(start, end)| json!([start + 1, end + 1])),
         });
         let serialized = context.to_string();
         if self.last_context.as_deref() == Some(serialized.as_str()) {
