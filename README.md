@@ -16,6 +16,24 @@ logins; Codex, Claude, Grok, and Muse history stays local.
   Total usage                                          12.7M tokens
 ```
 
+## Install
+
+```sh
+curl -fsSL https://unpeel.com/install/usage/install.sh | sh
+```
+
+The checksum-verified installer registers the versioned App manifest under
+`~/.unpeel/apps/unpeel.app.usage/`. To build and install from source, keep App
+Kit beside the App repository:
+
+```sh
+mkdir -p ~/Dev && cd ~/Dev
+git clone https://github.com/unpeel-com/unpeel-app-kit.git
+git clone https://github.com/unpeel-com/unpeel-app-usage.git
+cargo install --locked --path unpeel-app-usage
+unpeel-usage --register
+```
+
 The selected provider gets the same full-width gray row and two-cell label
 inset as `unpeel-app-kit`'s Explorer. The list prioritizes quota readings over
 account metadata: `5-hour` is Claude's rolling five-hour allowance, `7-day` is
@@ -201,17 +219,6 @@ additional launch variants are deduplicated, while all detected Claude
 accounts remain grouped there. Without an Unpeel folder or a readable presets
 array, the standalone order is Codex, Claude, Grok, then Muse. The synthesized
 Current project and Total usage rows stay last in either mode.
-
-## Install
-
-```sh
-curl -fsSL https://unpeel.com/install/usage/install.sh | sh
-```
-
-The installer verifies the archive checksum and registers the versioned App
-manifest immediately under `~/.unpeel/apps/unpeel.app.usage/`.
-
-Or build from source: `cargo build --release`.
 
 ## Commands
 
