@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
-    KeyModifiers, MouseButton, MouseEventKind,
+    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
 use crossterm::execute;
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
@@ -83,7 +83,9 @@ pub fn run(mut explorer: Explorer) -> io::Result<()> {
                     }
                     continue;
                 }
-                let Some(action) = action_for_key(key, explorer.filter_focused()) else {
+                let Some(action) =
+                    action_for_key(key, explorer.filter_focused(), explorer.selected_index())
+                else {
                     continue;
                 };
                 match action {
@@ -106,6 +108,7 @@ pub fn run(mut explorer: Explorer) -> io::Result<()> {
                             .entry_at(position)
                             .map(|entry| entry.path().to_path_buf())
                         {
+                            explorer.set_filter_focused(false);
                             explorer.select_at(position);
                             agent.refresh();
                             menu = Some(context_menu(
@@ -130,12 +133,31 @@ pub fn run(mut explorer: Explorer) -> io::Result<()> {
                                 status = Some(activate_menu(open_menu, &agent));
                             }
                             needs_draw = true;
+                        } else if explorer.filter_area().contains(position) {
+                            clicks.reset();
+                            explorer.filter_mouse_down(
+                                position,
+                                mouse.modifiers.contains(KeyModifiers::SHIFT),
+                            );
+                            status = None;
+                            needs_draw = true;
                         } else if let Some(activate) =
                             explorer_click_at(&mut explorer, position, &mut clicks)
                         {
                             if activate {
                                 status = handle_explorer(&mut explorer, ExplorerInput::Open);
                             }
+                            needs_draw = true;
+                        }
+                    }
+                    MouseEventKind::Drag(MouseButton::Left) => {
+                        if explorer.filter_dragging() {
+                            explorer.filter_mouse_drag(position);
+                            needs_draw = true;
+                        }
+                    }
+                    MouseEventKind::Up(MouseButton::Left) => {
+                        if explorer.filter_mouse_up() {
                             needs_draw = true;
                         }
                     }
@@ -170,6 +192,11 @@ pub fn run(mut explorer: Explorer) -> io::Result<()> {
                     _ => {}
                 }
             }
+            Event::Paste(text) if menu.is_none() => {
+                clicks.reset();
+                status = status_for_event(explorer.insert_filter_text(text), &explorer);
+                needs_draw = true;
+            }
             Event::Resize(_, _) => {
                 clicks.reset();
                 needs_draw = true;
@@ -192,6 +219,7 @@ fn explorer_click_at(
         clicks.reset();
         return None;
     };
+    explorer.set_filter_focused(false);
     let activate = clicks.click(path);
     explorer.select_at(position);
     Some(activate)
@@ -236,9 +264,20 @@ fn is_force_quit(key: KeyEvent) -> bool {
     key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)
 }
 
-fn action_for_key(key: KeyEvent, filter_focused: bool) -> Option<AppAction> {
+fn action_for_key(key: KeyEvent, filter_focused: bool, selected_index: usize) -> Option<AppAction> {
     let control = key.modifiers.contains(KeyModifiers::CONTROL);
     let alternate = key.modifiers.contains(KeyModifiers::ALT);
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    let command = key
+        .modifiers
+        .intersects(KeyModifiers::SUPER | KeyModifiers::META);
+    let non_text_modifier = key.modifiers.intersects(
+        KeyModifiers::CONTROL
+            | KeyModifiers::ALT
+            | KeyModifiers::SUPER
+            | KeyModifiers::HYPER
+            | KeyModifiers::META,
+    );
     if is_force_quit(key) {
         return Some(AppAction::Quit);
     }
@@ -247,17 +286,40 @@ fn action_for_key(key: KeyEvent, filter_focused: bool) -> Option<AppAction> {
             KeyCode::Esc => Some(AppAction::Explorer(ExplorerInput::Parent)),
             KeyCode::Tab => Some(AppAction::Explorer(ExplorerInput::BlurFilter)),
             KeyCode::Up => Some(AppAction::Explorer(ExplorerInput::Up)),
-            KeyCode::Down => Some(AppAction::Explorer(ExplorerInput::Down)),
-            KeyCode::Home => Some(AppAction::Explorer(ExplorerInput::First)),
-            KeyCode::End => Some(AppAction::Explorer(ExplorerInput::Last)),
+            KeyCode::Down => Some(AppAction::Explorer(ExplorerInput::BlurFilter)),
+            KeyCode::Left if command => Some(AppAction::Explorer(ExplorerInput::FilterHome {
+                extend: shift,
+            })),
+            KeyCode::Right if command => Some(AppAction::Explorer(ExplorerInput::FilterEnd {
+                extend: shift,
+            })),
+            KeyCode::Left => Some(AppAction::Explorer(ExplorerInput::FilterLeft {
+                extend: shift,
+                word: control || alternate,
+            })),
+            KeyCode::Right => Some(AppAction::Explorer(ExplorerInput::FilterRight {
+                extend: shift,
+                word: control || alternate,
+            })),
+            KeyCode::Home => Some(AppAction::Explorer(ExplorerInput::FilterHome {
+                extend: shift,
+            })),
+            KeyCode::End => Some(AppAction::Explorer(ExplorerInput::FilterEnd {
+                extend: shift,
+            })),
             KeyCode::PageUp => Some(AppAction::Explorer(ExplorerInput::PageUp)),
             KeyCode::PageDown => Some(AppAction::Explorer(ExplorerInput::PageDown)),
             KeyCode::Enter => Some(AppAction::Explorer(ExplorerInput::Open)),
-            KeyCode::Backspace | KeyCode::Char('h') if control => {
+            KeyCode::Backspace => Some(AppAction::Explorer(ExplorerInput::FilterBackspace)),
+            KeyCode::Char('h') if control => {
                 Some(AppAction::Explorer(ExplorerInput::FilterBackspace))
             }
+            KeyCode::Delete => Some(AppAction::Explorer(ExplorerInput::FilterDelete)),
+            KeyCode::Char('a') if control || command => {
+                Some(AppAction::Explorer(ExplorerInput::FilterSelectAll))
+            }
             KeyCode::Char('u') if control => Some(AppAction::Explorer(ExplorerInput::ClearFilter)),
-            KeyCode::Char(character) if !control && !alternate => Some(AppAction::Explorer(
+            KeyCode::Char(character) if !non_text_modifier => Some(AppAction::Explorer(
                 ExplorerInput::FilterCharacter(character),
             )),
             _ => None,
@@ -266,21 +328,22 @@ fn action_for_key(key: KeyEvent, filter_focused: bool) -> Option<AppAction> {
     match key.code {
         KeyCode::Char('h') if control => Some(AppAction::Explorer(ExplorerInput::ToggleHidden)),
         KeyCode::Char('f') if control => Some(AppAction::Explorer(ExplorerInput::FocusFilter)),
-        KeyCode::Char('/') => Some(AppAction::Explorer(ExplorerInput::FocusFilter)),
-        KeyCode::Char('q') => Some(AppAction::Quit),
-        KeyCode::Up | KeyCode::Char('k') => Some(AppAction::Explorer(ExplorerInput::Up)),
-        KeyCode::Down | KeyCode::Char('j') => Some(AppAction::Explorer(ExplorerInput::Down)),
-        KeyCode::Home | KeyCode::Char('g') => Some(AppAction::Explorer(ExplorerInput::First)),
-        KeyCode::End | KeyCode::Char('G') => Some(AppAction::Explorer(ExplorerInput::Last)),
+        KeyCode::Char('r') if control => Some(AppAction::Explorer(ExplorerInput::Refresh)),
+        KeyCode::Tab | KeyCode::Char('/') => Some(AppAction::Explorer(ExplorerInput::FocusFilter)),
+        KeyCode::Up if selected_index == 0 => Some(AppAction::Explorer(ExplorerInput::FocusFilter)),
+        KeyCode::Up => Some(AppAction::Explorer(ExplorerInput::Up)),
+        KeyCode::Down => Some(AppAction::Explorer(ExplorerInput::Down)),
+        KeyCode::Home => Some(AppAction::Explorer(ExplorerInput::First)),
+        KeyCode::End => Some(AppAction::Explorer(ExplorerInput::Last)),
         KeyCode::PageUp => Some(AppAction::Explorer(ExplorerInput::PageUp)),
         KeyCode::PageDown => Some(AppAction::Explorer(ExplorerInput::PageDown)),
-        KeyCode::Esc | KeyCode::Left | KeyCode::Backspace | KeyCode::Char('h') => {
+        KeyCode::Esc | KeyCode::Left | KeyCode::Backspace => {
             Some(AppAction::Explorer(ExplorerInput::Parent))
         }
-        KeyCode::Right | KeyCode::Enter | KeyCode::Char('l' | ' ') => {
-            Some(AppAction::Explorer(ExplorerInput::Open))
-        }
-        KeyCode::Char('r') => Some(AppAction::Explorer(ExplorerInput::Refresh)),
+        KeyCode::Right | KeyCode::Enter => Some(AppAction::Explorer(ExplorerInput::Open)),
+        KeyCode::Char(character) if !non_text_modifier => Some(AppAction::Explorer(
+            ExplorerInput::FilterCharacter(character),
+        )),
         _ => None,
     }
 }
@@ -379,8 +442,13 @@ impl TerminalGuard {
             let _ = terminal::disable_raw_mode();
             return Err(error);
         }
-        if let Err(error) = execute!(stdout, EnableMouseCapture) {
-            let _ = execute!(stdout, LeaveAlternateScreen);
+        if let Err(error) = execute!(stdout, EnableMouseCapture, EnableBracketedPaste) {
+            let _ = execute!(
+                stdout,
+                DisableBracketedPaste,
+                DisableMouseCapture,
+                LeaveAlternateScreen
+            );
             let _ = terminal::disable_raw_mode();
             return Err(error);
         }
@@ -388,15 +456,23 @@ impl TerminalGuard {
         let mut terminal = match Terminal::new(backend) {
             Ok(terminal) => terminal,
             Err(error) => {
-                let _ = execute!(io::stdout(), DisableMouseCapture);
-                let _ = execute!(io::stdout(), LeaveAlternateScreen);
+                let _ = execute!(
+                    io::stdout(),
+                    DisableBracketedPaste,
+                    DisableMouseCapture,
+                    LeaveAlternateScreen
+                );
                 let _ = terminal::disable_raw_mode();
                 return Err(error);
             }
         };
         if let Err(error) = terminal.hide_cursor() {
-            let _ = execute!(terminal.backend_mut(), DisableMouseCapture);
-            let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+            let _ = execute!(
+                terminal.backend_mut(),
+                DisableBracketedPaste,
+                DisableMouseCapture,
+                LeaveAlternateScreen
+            );
             let _ = terminal::disable_raw_mode();
             return Err(error);
         }
@@ -421,8 +497,12 @@ impl TerminalGuard {
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = self.terminal.show_cursor();
-        let _ = execute!(self.terminal.backend_mut(), DisableMouseCapture);
-        let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
+        let _ = execute!(
+            self.terminal.backend_mut(),
+            DisableBracketedPaste,
+            DisableMouseCapture,
+            LeaveAlternateScreen
+        );
         let _ = terminal::disable_raw_mode();
     }
 }
@@ -436,6 +516,7 @@ fn render_frame(
     theme: KitTheme,
 ) {
     let area = frame.area();
+    let menu_open = menu.is_some();
     let footer_rows = if area.height >= 2 { FOOTER_ROWS } else { 0 };
     let explorer_area = Rect::new(
         area.x,
@@ -478,6 +559,10 @@ fn render_frame(
         drags.begin_frame();
         menu.render(frame);
     }
+
+    if !menu_open && let Some(position) = explorer.filter_cursor_position() {
+        frame.set_cursor_position(position);
+    }
 }
 
 #[cfg(test)]
@@ -492,39 +577,101 @@ mod tests {
     #[test]
     fn keys_map_to_backend_neutral_explorer_actions() {
         assert_eq!(
-            action_for_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE), false),
+            action_for_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE), false, 1),
             Some(AppAction::Explorer(ExplorerInput::Open))
         );
         assert_eq!(
-            action_for_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE), false),
+            action_for_key(
+                KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+                false,
+                1
+            ),
             Some(AppAction::Explorer(ExplorerInput::Parent))
         );
         assert_eq!(
             action_for_key(
                 KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL),
-                false
+                false,
+                1
             ),
             Some(AppAction::Explorer(ExplorerInput::ToggleHidden))
         );
         assert_eq!(
-            action_for_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE), false),
+            action_for_key(
+                KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
+                false,
+                1
+            ),
             Some(AppAction::Explorer(ExplorerInput::PageDown))
         );
         assert_eq!(
-            action_for_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), false),
+            action_for_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), false, 1),
             Some(AppAction::Explorer(ExplorerInput::Parent))
         );
         assert_eq!(
-            action_for_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), true),
+            action_for_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), true, 1),
             Some(AppAction::Explorer(ExplorerInput::Parent))
         );
         assert_eq!(
-            action_for_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE), true),
+            action_for_key(
+                KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+                true,
+                1
+            ),
             Some(AppAction::Explorer(ExplorerInput::FilterCharacter('q')))
         );
         assert_eq!(
-            action_for_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE), false),
-            Some(AppAction::Quit)
+            action_for_key(
+                KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+                false,
+                1
+            ),
+            Some(AppAction::Explorer(ExplorerInput::FilterCharacter('q')))
+        );
+        assert_eq!(
+            action_for_key(
+                KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+                true,
+                1
+            ),
+            Some(AppAction::Explorer(ExplorerInput::FilterBackspace))
+        );
+        assert_eq!(
+            action_for_key(
+                KeyEvent::new(KeyCode::Left, KeyModifiers::ALT | KeyModifiers::SHIFT),
+                true,
+                1
+            ),
+            Some(AppAction::Explorer(ExplorerInput::FilterLeft {
+                extend: true,
+                word: true,
+            }))
+        );
+        assert_eq!(
+            action_for_key(
+                KeyEvent::new(KeyCode::Char('a'), KeyModifiers::SUPER),
+                true,
+                1
+            ),
+            Some(AppAction::Explorer(ExplorerInput::FilterSelectAll))
+        );
+        assert_eq!(
+            action_for_key(KeyEvent::new(KeyCode::Home, KeyModifiers::SHIFT), true, 1),
+            Some(AppAction::Explorer(ExplorerInput::FilterHome {
+                extend: true,
+            }))
+        );
+        assert_eq!(
+            action_for_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE), false, 0),
+            Some(AppAction::Explorer(ExplorerInput::FocusFilter))
+        );
+        assert_eq!(
+            action_for_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE), false, 2),
+            Some(AppAction::Explorer(ExplorerInput::Up))
+        );
+        assert_eq!(
+            action_for_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), true, 0),
+            Some(AppAction::Explorer(ExplorerInput::BlurFilter))
         );
     }
 
@@ -534,7 +681,7 @@ mod tests {
         std::fs::create_dir(directory.path().join("folder")).unwrap();
         std::fs::write(directory.path().join("file.txt"), "hello").unwrap();
         let theme = KitTheme::dark();
-        let mut explorer = Explorer::new(directory.path())
+        let mut explorer = Explorer::scoped(directory.path())
             .unwrap()
             .with_theme(explorer_theme(theme.scheme));
         explorer.set_show_path(false);
@@ -546,14 +693,14 @@ mod tests {
             .draw(|frame| render_frame(frame, &mut explorer, &mut drags, None, None, theme))
             .unwrap();
 
-        assert_eq!(drags.regions().len(), 4);
+        assert_eq!(drags.regions().len(), 3);
         let cwd_drag = drags
             .regions()
             .iter()
             .find(|region| region.path == explorer.cwd())
             .expect("current-folder footer drag");
         assert_eq!(cwd_drag.area.y, 11);
-        assert!(drags.regions()[1].path.ends_with("folder"));
+        assert!(drags.regions()[0].path.ends_with("folder"));
         assert_eq!(terminal.backend().buffer()[(49, 0)].bg, Color::Reset);
         assert_eq!(
             terminal.backend().buffer()[(49, 1)].bg,
@@ -585,7 +732,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("file.txt"), "hello").unwrap();
         let theme = KitTheme::light();
-        let mut explorer = Explorer::new(directory.path())
+        let mut explorer = Explorer::scoped(directory.path())
             .unwrap()
             .with_theme(explorer_theme(theme.scheme));
         let path = directory.path().join("file.txt");
@@ -615,11 +762,11 @@ mod tests {
         );
         assert_eq!(
             terminal.backend().buffer()[(items_area.x, items_area.y)].symbol(),
-            " "
+            "S"
         );
         assert_eq!(
             terminal.backend().buffer()[(items_area.x + 1, items_area.y)].symbol(),
-            " "
+            "e"
         );
     }
 
@@ -642,7 +789,7 @@ mod tests {
         let folder = directory.path().join("folder");
         std::fs::create_dir(&folder).unwrap();
         let folder = std::fs::canonicalize(folder).unwrap();
-        let mut explorer = Explorer::new(directory.path()).unwrap();
+        let mut explorer = Explorer::scoped(directory.path()).unwrap();
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         let mut drags = DragSurface::disabled();
         terminal

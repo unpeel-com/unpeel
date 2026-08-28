@@ -10,6 +10,7 @@ const APP_TOML: &str = r##"# Installed by unpeel-filetree; this is a development
 manifest_version = 1
 id = "unpeel.app.filetree"
 name = "Explorer Lab"
+version = "@APP_VERSION@"
 command = "@LAUNCH_COMMAND@"
 description = "Development-only borderless explorer for dragging Host-local file and folder paths into another Unpeel terminal"
 
@@ -55,7 +56,9 @@ pub fn ensure_installed() {
     let Some(home) = unpeel_home().filter(|home| home.is_dir()) else {
         return;
     };
-    let manifest = APP_TOML.replace("@LAUNCH_COMMAND@", &toml_escaped(&launch_command()));
+    let manifest = APP_TOML
+        .replace("@APP_VERSION@", env!("CARGO_PKG_VERSION"))
+        .replace("@LAUNCH_COMMAND@", &toml_escaped(&launch_command()));
     let directory = home.join("apps").join(APP_ID);
     if std::fs::create_dir_all(&directory).is_err() {
         return;
@@ -77,6 +80,7 @@ mod tests {
     #[test]
     fn manifest_is_explicitly_a_development_path_drag_harness() {
         assert!(APP_TOML.contains("id = \"unpeel.app.filetree\""));
+        assert!(APP_TOML.contains("version = \"@APP_VERSION@\""));
         assert!(APP_TOML.contains("development harness"));
         assert!(APP_TOML.contains("inode/directory"));
         assert!(APP_TOML.contains("command_aliases = [\"unpeel-filetree\"]"));
