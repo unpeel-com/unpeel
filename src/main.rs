@@ -29,9 +29,10 @@ use ratatui::crossterm::execute;
 use sources::{Level, Metric, Snapshot};
 use std::collections::HashMap;
 use std::io;
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Duration;
-use unpeel_app_kit::{AppReporter, KeyboardEnhancementGuard, ThemeMonitor};
+use unpeel_app_kit::{AppContext, AppReporter, KeyboardEnhancementGuard, ThemeMonitor};
 
 fn main() {
     let config = Config::load();
@@ -58,7 +59,9 @@ fn main() {
 
 /// One-shot plain-text snapshot for scripts, status bars, and smoke tests.
 fn report(config: &Config) {
-    let snapshot = Snapshot::scan(config);
+    let context = AppContext::detect();
+    let project = current_project_root(&context);
+    let snapshot = Snapshot::scan(config, project.as_deref());
     for provider in &snapshot.providers {
         if !provider.present {
             println!("{}: not installed", provider.name);
@@ -72,6 +75,15 @@ fn report(config: &Config) {
             println!("{}: {} {}", provider.name, metric.label, metric.value);
         }
     }
+}
+
+/// The Host owns project/worktree identity for hosted Apps. A normal shell
+/// has no Host context, so its working directory remains the CLI fallback.
+fn current_project_root(context: &AppContext) -> Option<PathBuf> {
+    context
+        .current_root()
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -388,17 +400,22 @@ fn run_tui(config: Config) -> io::Result<()> {
     let (trigger_tx, trigger_rx) = mpsc::channel::<()>();
     let scan_config = app.config.clone();
     let refresh = Duration::from_secs(app.config.refresh_secs.max(5));
-    std::thread::spawn(move || loop {
-        if scan_tx.send(ScanEvent::Started).is_err() {
-            return;
-        }
-        let snapshot = Snapshot::scan(&scan_config);
-        if scan_tx.send(ScanEvent::Finished(snapshot)).is_err() {
-            return;
-        }
-        match trigger_rx.recv_timeout(refresh) {
-            Ok(()) | Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => return,
+    std::thread::spawn(move || {
+        let mut app_context = AppContext::detect();
+        loop {
+            if scan_tx.send(ScanEvent::Started).is_err() {
+                return;
+            }
+            app_context.refresh();
+            let project = current_project_root(&app_context);
+            let snapshot = Snapshot::scan(&scan_config, project.as_deref());
+            if scan_tx.send(ScanEvent::Finished(snapshot)).is_err() {
+                return;
+            }
+            match trigger_rx.recv_timeout(refresh) {
+                Ok(()) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            }
         }
     });
 

@@ -4,7 +4,6 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::Color;
 use serde::Deserialize;
-use unpeel_app_kit::hosted_accent;
 
 /// User preference from `config.toml`. Auto queries the terminal at startup.
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
@@ -136,12 +135,6 @@ impl Palette {
         self.apply_hosted_accent(accent);
         self
     }
-}
-
-/// Resolve the configured palette. `UNPEEL_USAGE_THEME=auto|light|dark` is a
-/// convenient per-launch override and takes precedence over `config.toml`.
-pub fn resolve(configured: ThemePreference) -> Palette {
-    resolve_with_hosted_accent(configured, hosted_accent())
 }
 
 pub fn resolve_with_hosted_accent(configured: ThemePreference, accent: Option<Color>) -> Palette {

@@ -52,9 +52,11 @@ amber / red semantic states, spare estimate, run-out estimate, and even-pace
 marker.
 
 The **Current project** row attributes local history to the Git project from
-which each agent session was launched. It follows the project where
-`unpeel-usage` itself was launched and opens to the same exact monthly table.
-Worktrees are folded into their main repository.
+which each agent session was launched. In Unpeel, every background refresh
+resolves the App's Host-owned `AppContext::current_root()`, so the row follows
+the Session's project/worktree even when the App process directory differs.
+A standalone run uses its process working directory. Worktrees are folded
+into their main repository, and the row opens to the same exact monthly table.
 
 The final **Total usage** row adds the local token histories from all four
 providers. Open it to see this month's Usage by project first, followed by a

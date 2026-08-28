@@ -125,7 +125,7 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
-    pub fn scan(config: &Config) -> Self {
+    pub fn scan(config: &Config, current_project: Option<&Path>) -> Self {
         let mut providers = Vec::new();
         for kind in provider_order() {
             match kind {
@@ -138,7 +138,9 @@ impl Snapshot {
         }
         if !providers.is_empty() {
             let now = crate::timeparse::now_epoch_secs();
-            if let Some(current) = current_project_provider(&providers, now) {
+            if let Some(current) = current_project
+                .and_then(|project| current_project_provider(&providers, project, now))
+            {
                 providers.push(current);
             }
             providers.push(total_provider(&providers, now));
@@ -382,8 +384,8 @@ fn summary_metric(monthly_tokens: &[MonthUsage]) -> Metric {
     )
 }
 
-fn current_project_provider(providers: &[Provider], now: i64) -> Option<Provider> {
-    let project = normalize_project_path(&std::env::current_dir().ok()?);
+fn current_project_provider(providers: &[Provider], project: &Path, now: i64) -> Option<Provider> {
+    let project = normalize_project_path(project);
     let mut totals = std::collections::BTreeMap::<(i32, u8), u64>::new();
     for usage in providers
         .iter()
@@ -617,6 +619,36 @@ mod tests {
         assert_eq!(rows[0].path, std::fs::canonicalize(&root).unwrap());
         assert_eq!(rows[0].monthly_tokens[0].tokens, 200);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn current_project_summary_uses_the_supplied_host_context() {
+        let now = crate::timeparse::now_epoch_secs();
+        let project = PathBuf::from("/opt/host-owned-project");
+        let month = aggregate_monthly_tokens([(now, 345)]);
+        let provider = Provider {
+            kind: ProviderKind::Codex,
+            name: "Codex".into(),
+            badge: String::new(),
+            present: true,
+            metrics: Vec::new(),
+            detail: Vec::new(),
+            as_of: Some(now),
+            alert: None,
+            status_fragment: None,
+            day_usd: None,
+            monthly_tokens: month.clone(),
+            project_usage: vec![ProjectUsage {
+                path: project.clone(),
+                monthly_tokens: month,
+            }],
+        };
+
+        let current = current_project_provider(&[provider], &project, now).unwrap();
+
+        assert_eq!(current.badge, "host-owned-project");
+        assert_eq!(current.monthly_tokens[0].tokens, 345);
+        assert_eq!(current.detail[0].1, project.display().to_string());
     }
 
     #[test]
