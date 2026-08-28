@@ -14,17 +14,18 @@ The UI follows the shared `../unpeel-app-kit` design conventions used by the
 Explorer and Usage Apps:
 
 - borderless, transparent ordinary surfaces
-- two-cell row-label and muted absolute-path footer inset
+- two-cell row-label and muted project-relative footer inset
 - full-width gray selected rows, with dark/light defaults
 - the shared capless proportional scrollbar
 - a pinned transparent Back action with a full-width click target in detail views
 - transparent diff surface with green/red row tints behind added and removed lines
 - changed-file rows are native path drag sources, matching the Explorer App
-- right-click context menus with adjacent-agent handoff, like the Explorer App
+- right-click context menus with preferred-editor opening and adjacent-agent handoff
 
 Unpeel's Session title owns the App name, so the content has no repeated
 in-App title. The bottom row contains only the selected or open file's muted
-absolute path; it has no shortcut help.
+repository-relative path (`.` when no file is selected); it has no shortcut
+help.
 
 The default list shows only each basename to stay scannable in narrow panes.
 Opening a diff reveals its full repository-relative path.
@@ -34,17 +35,32 @@ a standalone terminal App, not built-in diff or source-editor chrome.
 
 ## Install
 
+The hosted binary route is ready for the App release channel but its artifact
+has not been published yet. For now, install from source with App Kit checked
+out beside this repository:
+
+```sh
+mkdir -p ~/Dev && cd ~/Dev
+git clone https://github.com/unpeel-com/unpeel-app-kit.git
+git clone https://github.com/unpeel-com/unpeel-app-diffs.git
+cargo install --locked --path unpeel-app-diffs
+unpeel-diffs --register
+```
+
+Once the release artifact is published, the checksum-verified binary installer
+will be:
+
 ```sh
 curl -fsSL https://unpeel.com/install/diffs/install.sh | sh
 ```
 
-The checksum-verified installer registers the versioned App manifest
-immediately under `~/.unpeel/apps/unpeel.app.diffs/`.
+Both methods register the versioned App manifest under
+`~/.unpeel/apps/unpeel.app.diffs/`.
 
 ## Run
 
 ```sh
-cargo run --release -- ~/Dev/my-repository
+unpeel-diffs ~/Dev/my-repository
 ```
 
 With no path, it discovers the Git repository containing the current folder.
@@ -65,8 +81,9 @@ Keyboard controls:
 - `q` or `Ctrl-C`: quit
 
 One mouse click selects a full row; double-clicking that same row opens its
-diff. Dragging a changed-file row into an agent terminal drops its absolute
-file path using the same App Kit primitive as Filetree. The Back action
+diff. Dragging a changed-file row into an agent terminal drops a concise path
+(project-relative first, then `~/…`, then absolute) using the same App Kit
+primitive as Filetree. The Back action
 activates with one click, and the wheel scrolls the current list or diff.
 
 ## Selecting diff lines and sending them to an agent
@@ -81,8 +98,10 @@ repo-relative path with the file lines the hunks map the selection to, such
 as `src/ui.rs:120-134` — into the agent's input without submitting, so the
 comment and the final prompt are written in the agent chat. Without an
 agent, the reference is copied to the clipboard instead.
-In the file list, right-clicking a row offers the same **Send to agent**
-(bare repo-relative path) / **Copy path** pair as the Explorer App.
+In the file list, right-clicking a row offers **Open in editor**, **Send to
+agent** (bare repo-relative path), and **Copy path**. The diff-line menu also
+offers **Open in editor** for the current file. The shared editor action uses
+Unpeel's configured editor when hosted and the platform opener when standalone.
 
 Set `UNPEEL_TUI_THEME=light` or `UNPEEL_TUI_THEME=dark` to override theme
 detection. When launched inside Unpeel, the binary best-effort registers a

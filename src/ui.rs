@@ -19,8 +19,9 @@ use ratatui::widgets::{Paragraph, Widget};
 use ratatui::{Frame, Terminal};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use unpeel_app_kit::{
-    AgentBridge, ColorScheme, DoubleClickTracker, DragSurface, KeyboardEnhancementGuard, KitTheme,
-    MenuItem, MenuTheme, PopupMenu, SELECTABLE_LEFT_PADDING, VerticalScrollbar, clipboard_sequence,
+    AgentBridge, ColorScheme, DoubleClickTracker, DragSurface, EditorBridge,
+    KeyboardEnhancementGuard, KitTheme, MenuItem, MenuTheme, PopupMenu, SELECTABLE_LEFT_PADDING,
+    VerticalScrollbar, clipboard_sequence, display_path_from_root,
 };
 
 use crate::app::{App, Screen};
@@ -171,6 +172,7 @@ pub fn run(mut app: App) -> io::Result<()> {
                                 }
                                 agent.refresh();
                                 menu = Some(diff_menu(
+                                    app.selected_absolute_path(),
                                     agent.label().is_some(),
                                     position,
                                     theme.scheme,
@@ -385,6 +387,7 @@ fn handle_action(app: &mut App, action: InputAction) -> bool {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ContextAction {
+    OpenInEditor(PathBuf),
     SendSelection,
     CopySelection,
     /// Bare repo-relative path pasted into the agent input.
@@ -394,8 +397,19 @@ enum ContextAction {
 
 type ContextMenu = PopupMenu<ContextAction>;
 
-fn diff_menu(can_send: bool, anchor: Position, scheme: ColorScheme) -> ContextMenu {
-    let mut items = Vec::with_capacity(2);
+fn diff_menu(
+    absolute: Option<PathBuf>,
+    can_send: bool,
+    anchor: Position,
+    scheme: ColorScheme,
+) -> ContextMenu {
+    let mut items = Vec::with_capacity(3);
+    if let Some(path) = absolute {
+        items.push(MenuItem::new(
+            "Open in editor",
+            ContextAction::OpenInEditor(path),
+        ));
+    }
     if can_send {
         items.push(MenuItem::new("Send to agent", ContextAction::SendSelection));
     }
@@ -410,7 +424,11 @@ fn list_menu(
     anchor: Position,
     scheme: ColorScheme,
 ) -> ContextMenu {
-    let mut items = Vec::with_capacity(2);
+    let mut items = Vec::with_capacity(3);
+    items.push(MenuItem::new(
+        "Open in editor",
+        ContextAction::OpenInEditor(absolute.clone()),
+    ));
     if can_send {
         items.push(MenuItem::new(
             "Send to agent",
@@ -429,6 +447,10 @@ fn activate_menu(menu: ContextMenu, app: &mut App, agent: &AgentBridge) {
         return;
     };
     match action {
+        ContextAction::OpenInEditor(path) => match EditorBridge::open(&path) {
+            Ok(()) => app.notify("Opened in editor"),
+            Err(error) => app.fail(format!("Open failed: {error}")),
+        },
         ContextAction::SendSelection => send_selection(app, agent),
         ContextAction::CopySelection => {
             match app.selected_diff_lines().map(|lines| lines.join("\n")) {
@@ -713,13 +735,10 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App, theme: KitTheme) 
             theme.muted,
         )
     } else {
-        (
-            app.selected_absolute_path()
-                .unwrap_or_else(|| app.root().to_path_buf())
-                .display()
-                .to_string(),
-            theme.muted,
-        )
+        let path = app
+            .selected_absolute_path()
+            .unwrap_or_else(|| app.root().to_path_buf());
+        (display_path_from_root(path, app.root()), theme.muted)
     };
     let padding = SELECTABLE_LEFT_PADDING.min(area.width);
     frame.render_widget(
@@ -1442,12 +1461,18 @@ mod tests {
     fn context_menus_offer_agent_handoff_only_when_a_peer_exists() {
         let scheme = ColorScheme::Dark;
         let anchor = Position::new(4, 4);
-        let with_agent = diff_menu(true, anchor, scheme);
-        assert_eq!(with_agent.items().len(), 2);
-        assert_eq!(with_agent.items()[0].label(), "Send to agent");
-        assert_eq!(with_agent.items()[0].value(), &ContextAction::SendSelection);
+        let detail_path = PathBuf::from("/repo/a.rs");
+        let with_agent = diff_menu(Some(detail_path.clone()), true, anchor, scheme);
+        assert_eq!(with_agent.items().len(), 3);
+        assert_eq!(with_agent.items()[0].label(), "Open in editor");
+        assert_eq!(
+            with_agent.items()[0].value(),
+            &ContextAction::OpenInEditor(detail_path)
+        );
+        assert_eq!(with_agent.items()[1].label(), "Send to agent");
+        assert_eq!(with_agent.items()[1].value(), &ContextAction::SendSelection);
 
-        let without_agent = diff_menu(false, anchor, scheme);
+        let without_agent = diff_menu(None, false, anchor, scheme);
         assert_eq!(without_agent.items().len(), 1);
         assert_eq!(without_agent.items()[0].label(), "Copy lines");
 
@@ -1458,13 +1483,17 @@ mod tests {
             anchor,
             scheme,
         );
-        assert_eq!(list.items().len(), 2);
+        assert_eq!(list.items().len(), 3);
         assert_eq!(
             list.items()[0].value(),
-            &ContextAction::SendPath("a.rs".to_owned())
+            &ContextAction::OpenInEditor(PathBuf::from("/repo/a.rs"))
         );
         assert_eq!(
             list.items()[1].value(),
+            &ContextAction::SendPath("a.rs".to_owned())
+        );
+        assert_eq!(
+            list.items()[2].value(),
             &ContextAction::CopyPath(PathBuf::from("/repo/a.rs"))
         );
     }
