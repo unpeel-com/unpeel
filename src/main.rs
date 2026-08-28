@@ -18,10 +18,8 @@ mod sources;
 mod theme;
 mod timeparse;
 mod ui;
-mod unpeel;
 
 use crate::theme::{nav, Nav};
-use crate::unpeel::StatusReporter;
 use config::{AlertOption, Alerts, Config};
 use ratatui::crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
@@ -33,12 +31,10 @@ use std::collections::HashMap;
 use std::io;
 use std::sync::mpsc;
 use std::time::Duration;
-use unpeel_app_kit::KeyboardEnhancementGuard;
+use unpeel_app_kit::{AppReporter, KeyboardEnhancementGuard, ThemeMonitor};
 
 fn main() {
     let config = Config::load();
-    install::ensure_installed();
-
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
         Some("report") => {
@@ -47,11 +43,8 @@ fn main() {
         Some("--version") | Some("-V") => {
             println!("unpeel-usage {}", env!("CARGO_PKG_VERSION"));
         }
-        Some("--register") => {}
         Some(other) => {
-            eprintln!(
-                "unknown argument '{other}'. Usage: unpeel-usage [report|--version|--register]"
-            );
+            eprintln!("unknown argument '{other}'. Usage: unpeel-usage [report|--version]");
             std::process::exit(2);
         }
         None => {
@@ -204,7 +197,7 @@ impl AlertTracker {
 struct App {
     config: Config,
     palette: theme::Palette,
-    status: StatusReporter,
+    status: AppReporter,
     snapshot: Option<Snapshot>,
     selected: usize,
     detail_open: bool,
@@ -364,10 +357,11 @@ fn run_tui(config: Config) -> io::Result<()> {
     let _keyboard = KeyboardEnhancementGuard::enter()?;
     // OSC 11 replies arrive on stdin; resolve after raw mode starts but before
     // crossterm's event reader has a chance to consume the response.
-    let palette = theme::resolve(config.theme);
+    let mut theme_monitor = ThemeMonitor::detected();
+    let palette = theme::resolve_with_hosted_accent(config.theme, theme_monitor.hosted_accent());
     execute!(std::io::stdout(), EnableMouseCapture)?;
 
-    let status = StatusReporter::detect();
+    let status = AppReporter::detect(install::APP_ID);
     let hosted = status.is_hosted();
     status.idle();
     let mut app = App {
@@ -439,6 +433,10 @@ fn run_tui(config: Config) -> io::Result<()> {
         let alert_option_hits = rendered.alert_option_hits;
         let alert_dialog_area = rendered.alert_dialog_area;
         if !event::poll(Duration::from_millis(100))? {
+            if theme_monitor.refresh() {
+                app.palette
+                    .apply_hosted_accent(theme_monitor.hosted_accent());
+            }
             continue;
         }
         let read = event::read()?;
@@ -510,7 +508,12 @@ fn run_tui(config: Config) -> io::Result<()> {
                         KeyCode::Char('a') => {
                             app.open_alert_dialog();
                         }
-                        KeyCode::Char('t') => app.palette = app.palette.toggled(),
+                        KeyCode::Char('t') => {
+                            app.palette = app
+                                .palette
+                                .toggled()
+                                .with_hosted_accent(theme_monitor.hosted_accent());
+                        }
                         _ => {}
                     },
                 }

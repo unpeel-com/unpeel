@@ -4,6 +4,7 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::Color;
 use serde::Deserialize;
+use unpeel_app_kit::hosted_accent;
 
 /// User preference from `config.toml`. Auto queries the terminal at startup.
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
@@ -123,11 +124,27 @@ impl Palette {
             ThemeMode::Dark => Self::ADAPTIVE,
         }
     }
+
+    pub fn apply_hosted_accent(&mut self, accent: Option<Color>) {
+        let defaults = Self::for_mode(self.mode);
+        self.focus = accent.unwrap_or(defaults.focus);
+        self.meter_blue = accent.unwrap_or(defaults.meter_blue);
+    }
+
+    #[must_use]
+    pub fn with_hosted_accent(mut self, accent: Option<Color>) -> Self {
+        self.apply_hosted_accent(accent);
+        self
+    }
 }
 
 /// Resolve the configured palette. `UNPEEL_USAGE_THEME=auto|light|dark` is a
 /// convenient per-launch override and takes precedence over `config.toml`.
 pub fn resolve(configured: ThemePreference) -> Palette {
+    resolve_with_hosted_accent(configured, hosted_accent())
+}
+
+pub fn resolve_with_hosted_accent(configured: ThemePreference, accent: Option<Color>) -> Palette {
     let preference = std::env::var("UNPEEL_USAGE_THEME")
         .ok()
         .and_then(|value| ThemePreference::parse(&value))
@@ -137,7 +154,9 @@ pub fn resolve(configured: ThemePreference) -> Palette {
         ThemePreference::Dark => ThemeMode::Dark,
         ThemePreference::Auto => detect_terminal_mode().unwrap_or(ThemeMode::Adaptive),
     };
-    Palette::for_mode(mode)
+    // Provider dots remain provider-branded. The Host color owns the App's
+    // generic focus/current-project identity and normal usage meter.
+    Palette::for_mode(mode).with_hosted_accent(accent)
 }
 
 fn detect_terminal_mode() -> Option<ThemeMode> {
@@ -370,5 +389,16 @@ mod tests {
         assert_eq!(Palette::ADAPTIVE.toggled(), Palette::LIGHT);
         assert_eq!(Palette::LIGHT.toggled(), Palette::DARK);
         assert_eq!(Palette::DARK.toggled(), Palette::ADAPTIVE);
+    }
+
+    #[test]
+    fn hosted_accent_recolors_generic_usage_surfaces_only() {
+        let accent = Color::Rgb(78, 195, 201);
+        let palette = Palette::DARK.with_hosted_accent(Some(accent));
+        assert_eq!(palette.focus, accent);
+        assert_eq!(palette.meter_blue, accent);
+        assert_eq!(palette.claude_accent, Palette::DARK.claude_accent);
+        assert_eq!(palette.codex_accent, Palette::DARK.codex_accent);
+        assert_eq!(Palette::LIGHT.with_hosted_accent(None), Palette::LIGHT);
     }
 }

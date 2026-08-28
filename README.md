@@ -22,16 +22,15 @@ logins; Codex, Claude, Grok, and Muse history stays local.
 curl -fsSL https://unpeel.com/install/usage/install.sh | sh
 ```
 
-The checksum-verified installer registers the versioned App manifest under
-`~/.unpeel/apps/unpeel.app.usage/`. To build and install from source, keep App
-Kit beside the App repository:
+The checksum-verified installer places `unpeel-usage` on `PATH`, where Unpeel
+detects it automatically. No registration command or `~/.unpeel/apps` write
+is needed. To build and install from source, keep App Kit beside the App repo:
 
 ```sh
 mkdir -p ~/Dev && cd ~/Dev
 git clone https://github.com/unpeel-com/unpeel-app-kit.git
 git clone https://github.com/unpeel-com/unpeel-app-usage.git
 cargo install --locked --path unpeel-app-usage
-unpeel-usage --register
 ```
 
 The selected provider gets the same full-width gray row and two-cell label
@@ -204,13 +203,11 @@ The same config section retains `codex_used_percent`, `credits_low_usd`, and
 ## Unpeel
 
 `unpeel-usage` is a standalone tool first. When Unpeel is installed it also
-registers itself as an Unpeel App (one manifest under
-`~/.unpeel/apps/unpeel.app.usage/`): the session row takes the app's name
-and amber tint — even when you just type `unpeel-usage` into any Unpeel
-terminal — and the sidebar shows a live status line like
-`Codex 3% · Claude $3.24 · Grok 14% · Muse $1.20`. The whole integration is `src/unpeel.rs` and
-`src/install.rs`: plain files and one tiny local HTTP contract, freely
-copyable into any app. There is no SDK.
+detects the `unpeel-usage` CLI directly from `PATH`: the session row takes the
+App's name and live project/workspace accent, and the sidebar shows a status
+line like `Codex 3% · Claude $3.24 · Grok 14% · Muse $1.20`. App Kit's shared
+`AppReporter` owns the small plain-file plus loopback-HTTP integration; the
+App itself remains standalone-safe.
 
 When an Unpeel home exists (`$UNPEEL_HOME`, or `~/.unpeel`), its
 `app-state.json` presets select and order the dashboard providers. Codex,
@@ -235,13 +232,14 @@ cargo run -- report    # one-shot text output (no TTY needed)
 cargo test
 ```
 
-Running any build once self-installs the App manifest into
-`~/.unpeel/apps/unpeel.app.usage/` with that binary's absolute path as the
-launch command — so after `cargo run`, typing
-`target/debug/unpeel-usage` (or launching its seeded preset) inside Unpeel
-shows the branded row, status line, and alerts against your dev build. The
-manifest rewrites on every run, so release and debug builds simply take
-over from each other.
+To use a development build inside Unpeel, put its output directory on `PATH`;
+the Host then discovers it through the same central CLI catalog as an
+installed build, without a registration write:
+
+```sh
+cargo build
+PATH="$PWD/target/debug:$PATH" unpeel-usage
+```
 
 Config lives at `~/.config/unpeel-usage/config.toml`; delete it to restore
 defaults. Data is re-scanned every `refresh_secs` (and on `r`), and the
