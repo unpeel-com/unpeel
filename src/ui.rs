@@ -19,9 +19,10 @@ use ratatui::widgets::{Paragraph, Widget};
 use ratatui::{Frame, Terminal};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use unpeel_app_kit::{
-    AgentBridge, AppReporter, ColorScheme, DoubleClickTracker, DragSurface, EditorBridge,
-    KeyboardEnhancementGuard, KitTheme, MenuItem, MenuTheme, PopupMenu, SELECTABLE_LEFT_PADDING,
-    ThemeMonitor, VerticalScrollbar, clipboard_sequence, display_path_from_root,
+    AgentBridge, AppContext, AppReporter, ColorScheme, DoubleClickTracker, DragSurface,
+    EditorBridge, KeyboardEnhancementGuard, KitTheme, MenuItem, MenuTheme, PopupMenu,
+    SELECTABLE_LEFT_PADDING, ThemeMonitor, VerticalScrollbar, clipboard_sequence,
+    display_path_from_root,
 };
 
 use crate::app::{App, Screen};
@@ -33,7 +34,11 @@ const DETAIL_GAP_ROWS: u16 = 1;
 const DETAIL_META_ROWS: u16 = 1;
 const AUTO_SYNC_INTERVAL: Duration = Duration::from_millis(1000);
 
-pub fn run(mut app: App, follow_agent_context: bool) -> io::Result<()> {
+pub fn run(
+    mut app: App,
+    follow_agent_context: bool,
+    mut app_context: AppContext,
+) -> io::Result<()> {
     let mut theme_monitor = ThemeMonitor::detected();
     let mut theme = theme_monitor.theme();
     let mut terminal = TerminalGuard::enter()?;
@@ -84,10 +89,18 @@ pub fn run(mut app: App, follow_agent_context: bool) -> io::Result<()> {
                 && last_agent_context_refresh.elapsed() >= Duration::from_secs(1)
             {
                 last_agent_context_refresh = Instant::now();
-                if let Some(context) = agent.project_context()
-                    && context.cwd.is_dir()
-                {
-                    match app.follow_path(&context.cwd) {
+                let app_context_changed = app_context.refresh();
+                let next_root = agent
+                    .project_context()
+                    .filter(|context| context.cwd.is_dir())
+                    .map(|context| context.cwd)
+                    .or_else(|| {
+                        app_context_changed
+                            .then(|| app_context.current_root().map(PathBuf::from))
+                            .flatten()
+                    });
+                if let Some(root) = next_root.filter(|root| root.is_dir()) {
+                    match app.follow_path(&root) {
                         Ok(true) => needs_draw = true,
                         Ok(false) => {}
                         Err(error) => app.fail(error),

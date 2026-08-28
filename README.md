@@ -64,10 +64,12 @@ registration command or `~/.unpeel/apps` write is needed.
 unpeel-diffs ~/Dev/my-repository
 ```
 
-With no path, it discovers the Git repository containing the current folder.
-In a hosted pane that unpinned launch follows the neighboring/main agent's
+With no path, a hosted pane first discovers Git from App Kit's Host-owned
+`AppContext::current_root()` and then follows the neighboring/main agent's
 actual checkout: it switches into that agent's worktree and back to the main
-checkout automatically. Passing a path keeps Diffs pinned to that repository.
+checkout automatically. A standalone run discovers from its process working
+directory. Passing a path always wins and keeps Diffs pinned to that
+repository.
 The viewer combines staged and unstaged tracked changes against `HEAD` and
 shows untracked files as additions. While idle it quietly follows the
 working tree (about once a second), so the list and the open diff update as
