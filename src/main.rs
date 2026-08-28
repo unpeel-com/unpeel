@@ -1,16 +1,19 @@
 //! unpeel-usage — local AI usage & credits at a glance.
 //!
 //! Standalone-first: a complete terminal dashboard in any shell, reading
-//! only the files your AI tools already write (`~/.codex`, `~/.claude`).
+//! only the files your AI tools already write (`~/.codex`, `~/.claude`,
+//! `~/.grok`, `~/.local/share/muse`).
 //! Inside Unpeel it registers as an App: branded sidebar row, live status
 //! line, and opt-in informational alerts that reach Recent, desktop, and phone
-//! without changing the session lifecycle. Claude can reuse Claude
-//! Code's stored OAuth login for live limits; history remains local.
+//! without changing the session lifecycle. Claude and Grok can reuse their
+//! CLI logins for live limits; history remains local.
 
 mod claude;
 mod codex;
 mod config;
+mod grok;
 mod install;
+mod muse;
 mod sources;
 mod theme;
 mod timeparse;
@@ -44,8 +47,11 @@ fn main() {
         Some("--version") | Some("-V") => {
             println!("unpeel-usage {}", env!("CARGO_PKG_VERSION"));
         }
+        Some("--register") => {}
         Some(other) => {
-            eprintln!("unknown argument '{other}'. Usage: unpeel-usage [report]");
+            eprintln!(
+                "unknown argument '{other}'. Usage: unpeel-usage [report|--version|--register]"
+            );
             std::process::exit(2);
         }
         None => {
@@ -211,6 +217,11 @@ struct App {
     alert_dialog: Option<usize>,
     alert_tracker: AlertTracker,
     quit: bool,
+}
+
+enum ScanEvent {
+    Started,
+    Finished(Snapshot),
 }
 
 impl App {
@@ -379,12 +390,16 @@ fn run_tui(config: Config) -> io::Result<()> {
 
     // Scans run off the UI thread so a large transcript sweep never blocks
     // a frame; the trigger channel doubles as the refresh timer.
-    let (snapshot_tx, snapshot_rx) = mpsc::channel::<Snapshot>();
+    let (scan_tx, scan_rx) = mpsc::channel::<ScanEvent>();
     let (trigger_tx, trigger_rx) = mpsc::channel::<()>();
     let scan_config = app.config.clone();
     let refresh = Duration::from_secs(app.config.refresh_secs.max(5));
     std::thread::spawn(move || loop {
-        if snapshot_tx.send(Snapshot::scan(&scan_config)).is_err() {
+        if scan_tx.send(ScanEvent::Started).is_err() {
+            return;
+        }
+        let snapshot = Snapshot::scan(&scan_config);
+        if scan_tx.send(ScanEvent::Finished(snapshot)).is_err() {
             return;
         }
         match trigger_rx.recv_timeout(refresh) {
@@ -394,8 +409,11 @@ fn run_tui(config: Config) -> io::Result<()> {
     });
 
     while !app.quit {
-        while let Ok(snapshot) = snapshot_rx.try_recv() {
-            app.apply(snapshot);
+        while let Ok(event) = scan_rx.try_recv() {
+            match event {
+                ScanEvent::Started => app.scanning = true,
+                ScanEvent::Finished(snapshot) => app.apply(snapshot),
+            }
         }
         let view = ui::View {
             selected: app.selected,
@@ -485,8 +503,9 @@ fn run_tui(config: Config) -> io::Result<()> {
                             app.scroll_up(app.viewport_height.saturating_sub(1).max(1))
                         }
                         KeyCode::Char('r') => {
-                            app.scanning = true;
-                            let _ = trigger_tx.send(());
+                            if trigger_tx.send(()).is_ok() {
+                                app.scanning = true;
+                            }
                         }
                         KeyCode::Char('a') => {
                             app.open_alert_dialog();
@@ -574,6 +593,8 @@ mod tests {
                 alert: None,
                 status_fragment: None,
                 day_usd: None,
+                monthly_tokens: Vec::new(),
+                project_usage: Vec::new(),
             }],
         }
     }

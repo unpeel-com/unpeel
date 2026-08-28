@@ -15,6 +15,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Sparkline, Widget};
 use ratatui::Frame;
+use std::path::Path;
 use unpeel_app_kit::{KitTheme, VerticalScrollbar, SELECTABLE_LEFT_PADDING};
 
 const METRIC_GAP: u16 = 1;
@@ -24,6 +25,9 @@ fn accent(palette: &ui::Palette, kind: ProviderKind) -> Color {
     match kind {
         ProviderKind::Codex => palette.codex_accent,
         ProviderKind::Claude => palette.claude_accent,
+        ProviderKind::Grok => palette.grok_accent,
+        ProviderKind::Muse => palette.muse_accent,
+        ProviderKind::CurrentProject | ProviderKind::Total => palette.focus,
     }
 }
 
@@ -94,7 +98,8 @@ pub fn draw(
     view: &View,
     palette: &ui::Palette,
 ) -> RenderResult {
-    let body = frame.area();
+    let [body, footer] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
 
     let mut result = match snapshot {
         None => {
@@ -113,6 +118,7 @@ pub fn draw(
         }
         Some(snapshot) => render_provider_list(frame, body, &snapshot.providers, view, palette),
     };
+    render_footer(frame, footer, view, palette);
     if let Some(selected) = view.alert_dialog.filter(|_| view.hosted) {
         let (area, hits) = render_alert_dialog(frame, selected, view.alerts, palette);
         result.alert_dialog_area = Some(area);
@@ -126,9 +132,9 @@ fn render_empty_state(frame: &mut Frame, area: Rect, scanning: bool, palette: &u
         return;
     }
     let message = if scanning {
-        format!("{} scanning local usage…", ui::spinner_frame())
+        "scanning local usage…"
     } else {
-        "no local usage data".into()
+        "no local usage data"
     };
     let row = Rect::new(
         area.x,
@@ -142,6 +148,32 @@ fn render_empty_state(frame: &mut Frame, area: Rect, scanning: bool, palette: &u
             .alignment(Alignment::Center),
         row,
     );
+}
+
+fn render_footer(frame: &mut Frame, area: Rect, view: &View, palette: &ui::Palette) {
+    if area.is_empty() {
+        return;
+    }
+    let mut spans = vec![Span::raw("  ")];
+    if view.hosted {
+        spans.push(Span::styled("a", Style::default().fg(palette.primary)));
+        spans.push(Span::styled(" alert  ", Style::default().fg(palette.muted)));
+    }
+    spans.push(Span::styled("r", Style::default().fg(palette.primary)));
+    if view.scanning {
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(
+            ui::spinner_frame(),
+            Style::default().fg(palette.focus),
+        ));
+        spans.push(Span::styled(
+            " refreshing…",
+            Style::default().fg(palette.muted),
+        ));
+    } else {
+        spans.push(Span::styled(" refresh", Style::default().fg(palette.muted)));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn centered_dialog(area: Rect) -> Rect {
@@ -456,6 +488,28 @@ fn provider_basic_data(provider: &Provider, max_width: u16) -> (String, Level) {
         return (summary, metric_group_level(&bounded));
     }
 
+    // A provider can have a real local history while its first live quota is
+    // unavailable (for example Grok before `grok login`). Keep the list useful
+    // by falling back to the newest backed calendar period, while the detail
+    // view still shows the honest "No data" quota row.
+    let first = if metric_has_list_value(first) {
+        first
+    } else {
+        ["Today", "Yesterday", "Last 30 Days"]
+            .into_iter()
+            .find_map(|label| {
+                provider.metrics.iter().find(|metric| {
+                    metric.label.eq_ignore_ascii_case(label) && metric_has_list_value(metric)
+                })
+            })
+            .or_else(|| {
+                provider
+                    .metrics
+                    .iter()
+                    .find(|metric| metric_has_list_value(metric))
+            })
+            .unwrap_or(first)
+    };
     let value = split_metric_value(&first.value).0;
     let label = display_metric_label(&first.label);
     let summary = if value.trim().is_empty() {
@@ -464,6 +518,11 @@ fn provider_basic_data(provider: &Provider, max_width: u16) -> (String, Level) {
         format!("{label} {value}")
     };
     (summary, first.level)
+}
+
+fn metric_has_list_value(metric: &Metric) -> bool {
+    let value = metric.value.trim();
+    !value.is_empty() && !value.eq_ignore_ascii_case("no data")
 }
 
 fn format_quota_usage(metrics: &[&Metric], label: fn(&str) -> String) -> String {
@@ -625,6 +684,34 @@ fn render_provider_detail(
 }
 
 fn detail_content_height(provider: &Provider) -> u16 {
+    if matches!(
+        provider.kind,
+        ProviderKind::CurrentProject | ProviderKind::Total
+    ) {
+        let project_rows = if provider.kind == ProviderKind::Total {
+            u16::try_from(current_project_rows(provider).len().max(1)).unwrap_or(u16::MAX)
+        } else {
+            0
+        };
+        let mut height = 1u16.saturating_add(METRIC_GAP);
+        if provider.kind == ProviderKind::Total {
+            height = height
+                .saturating_add(1)
+                .saturating_add(project_rows)
+                .saturating_add(METRIC_GAP);
+        }
+        height = height
+            .saturating_add(1)
+            .saturating_add(u16::try_from(provider.monthly_tokens.len()).unwrap_or(u16::MAX));
+        let metadata_rows = u16::try_from(provider.detail.len())
+            .unwrap_or(u16::MAX)
+            .saturating_add(u16::from(provider.as_of.is_some()));
+        return height.saturating_add(if metadata_rows > 0 {
+            METRIC_GAP.saturating_add(metadata_rows)
+        } else {
+            0
+        });
+    }
     let mut height = 1u16;
     height = height.saturating_add(u16::from(provider.alert.is_some()));
     height = height.saturating_add(METRIC_GAP);
@@ -662,6 +749,13 @@ fn render_detail_content(
 
     render_detail_header(buffer, row_at(area, area.y), provider, palette);
     let mut y = area.y.saturating_add(1);
+    if matches!(
+        provider.kind,
+        ProviderKind::CurrentProject | ProviderKind::Total
+    ) {
+        render_usage_summary(buffer, area, provider, palette, y);
+        return;
+    }
     if let Some(alert) = &provider.alert {
         Paragraph::new(format!("⚠ {alert}"))
             .style(Style::default().fg(palette.attention))
@@ -716,6 +810,198 @@ fn render_detail_content(
             );
         }
     }
+}
+
+fn render_usage_summary(
+    buffer: &mut Buffer,
+    area: Rect,
+    provider: &Provider,
+    palette: &ui::Palette,
+    mut y: u16,
+) {
+    y = y.saturating_add(METRIC_GAP);
+    if y >= area.bottom() {
+        return;
+    }
+    if provider.kind == ProviderKind::Total {
+        render_split_row(
+            buffer,
+            row_at(area, y),
+            "Project",
+            "This month",
+            Style::default()
+                .fg(palette.muted)
+                .add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(palette.muted)
+                .add_modifier(Modifier::BOLD),
+        );
+        y = y.saturating_add(1);
+        let rows = current_project_rows(provider);
+        if rows.is_empty() {
+            render_muted_row(buffer, row_at(area, y), "No project data", palette);
+            y = y.saturating_add(1);
+        } else {
+            for (path, tokens) in rows {
+                if y >= area.bottom() {
+                    return;
+                }
+                render_split_row(
+                    buffer,
+                    row_at(area, y),
+                    &project_label(path),
+                    &format_exact_tokens(tokens),
+                    Style::default().fg(palette.primary),
+                    Style::default().fg(palette.header),
+                );
+                y = y.saturating_add(1);
+            }
+        }
+        y = y.saturating_add(METRIC_GAP);
+        if y >= area.bottom() {
+            return;
+        }
+    }
+    render_split_row(
+        buffer,
+        row_at(area, y),
+        "Month",
+        "Tokens",
+        Style::default()
+            .fg(palette.muted)
+            .add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(palette.muted)
+            .add_modifier(Modifier::BOLD),
+    );
+    y = y.saturating_add(1);
+    for (index, usage) in provider.monthly_tokens.iter().enumerate() {
+        if y >= area.bottom() {
+            return;
+        }
+        let current = index == 0;
+        let label = month_label(usage.month, usage.year, current);
+        let value = if usage.tokens == 0 {
+            "—".into()
+        } else {
+            format_exact_tokens(usage.tokens)
+        };
+        let label_style = if current {
+            Style::default()
+                .fg(palette.primary)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(palette.primary)
+        };
+        let value_style = if current {
+            Style::default()
+                .fg(palette.header)
+                .add_modifier(Modifier::BOLD)
+        } else if usage.tokens == 0 {
+            Style::default().fg(palette.muted)
+        } else {
+            Style::default().fg(palette.header)
+        };
+        render_split_row(
+            buffer,
+            row_at(area, y),
+            &label,
+            &value,
+            label_style,
+            value_style,
+        );
+        y = y.saturating_add(1);
+    }
+    let has_metadata = !provider.detail.is_empty() || provider.as_of.is_some();
+    if has_metadata {
+        y = y.saturating_add(METRIC_GAP);
+    }
+    for (key, value) in &provider.detail {
+        if y >= area.bottom() {
+            return;
+        }
+        render_key_value(buffer, row_at(area, y), key, value, palette);
+        y = y.saturating_add(1);
+    }
+    if let Some(as_of) = provider.as_of {
+        if y < area.bottom() {
+            let age = compact_duration(now_epoch_secs() - as_of);
+            render_key_value(
+                buffer,
+                row_at(area, y),
+                "updated",
+                &format!("{age} ago"),
+                palette,
+            );
+        }
+    }
+}
+
+fn current_project_rows(provider: &Provider) -> Vec<(&Path, u64)> {
+    let Some(current) = provider.monthly_tokens.first() else {
+        return Vec::new();
+    };
+    let mut rows: Vec<(&Path, u64)> = provider
+        .project_usage
+        .iter()
+        .filter_map(|project| {
+            let tokens = project
+                .monthly_tokens
+                .iter()
+                .find(|usage| usage.year == current.year && usage.month == current.month)?
+                .tokens;
+            (tokens > 0).then_some((project.path.as_path(), tokens))
+        })
+        .collect();
+    rows.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(right.0)));
+    rows
+}
+
+fn project_label(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| path.to_str().unwrap_or("project"))
+        .to_string()
+}
+
+fn month_label(month: u8, year: i32, current: bool) -> String {
+    const MONTHS: [&str; 12] = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ];
+    let name = month
+        .checked_sub(1)
+        .and_then(|index| MONTHS.get(usize::from(index)))
+        .copied()
+        .unwrap_or("Unknown");
+    if current {
+        format!("{name} {year} · current")
+    } else {
+        format!("{name} {year}")
+    }
+}
+
+fn format_exact_tokens(tokens: u64) -> String {
+    let digits = tokens.to_string();
+    let mut output = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, character) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            output.push(',');
+        }
+        output.push(character);
+    }
+    output
 }
 
 fn render_detail_header(
@@ -1139,6 +1425,8 @@ mod tests {
             alert: None,
             status_fragment: None,
             day_usd: Some(8.91),
+            monthly_tokens: Vec::new(),
+            project_usage: Vec::new(),
         };
         Snapshot {
             providers: vec![
@@ -1153,6 +1441,8 @@ mod tests {
                     alert: None,
                     status_fragment: None,
                     day_usd: None,
+                    monthly_tokens: Vec::new(),
+                    project_usage: Vec::new(),
                 },
                 claude("Claude Code", "tommy@uxthemes.com"),
                 claude("Claude Code · work", "work@uxthemes.com"),
@@ -1212,6 +1502,200 @@ mod tests {
         render_with(width, height, 1, detail_open)
     }
 
+    fn render_footer_state(hosted: bool, scanning: bool) -> (String, Buffer) {
+        let width = 48;
+        let height = 6;
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        let snapshot = sample();
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    Some(&snapshot),
+                    &View {
+                        selected: 0,
+                        detail_open: false,
+                        scanning,
+                        hosted,
+                        alerts: Alerts::default(),
+                        alert_dialog: None,
+                        scroll_offset: 0,
+                        reveal_selected: true,
+                    },
+                    &ui::Palette::DARK,
+                );
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let row = (0..width)
+            .map(|x| buffer[(x, height - 1)].symbol().to_string())
+            .collect::<String>();
+        (row, buffer)
+    }
+
+    #[test]
+    fn total_usage_opens_as_an_exact_monthly_token_table() {
+        let snapshot = Snapshot {
+            providers: vec![Provider {
+                kind: ProviderKind::Total,
+                name: "Total usage".into(),
+                badge: String::new(),
+                present: true,
+                metrics: vec![Metric::new("This month", "1.2M tokens".into(), Level::Ok)],
+                detail: Vec::new(),
+                as_of: None,
+                alert: None,
+                status_fragment: None,
+                day_usd: None,
+                monthly_tokens: vec![
+                    crate::sources::MonthUsage {
+                        year: 2026,
+                        month: 8,
+                        tokens: 1_234_567,
+                    },
+                    crate::sources::MonthUsage {
+                        year: 2026,
+                        month: 7,
+                        tokens: 0,
+                    },
+                ],
+                project_usage: vec![crate::sources::ProjectUsage {
+                    path: "/work/unpeel".into(),
+                    monthly_tokens: vec![crate::sources::MonthUsage {
+                        year: 2026,
+                        month: 8,
+                        tokens: 1_000_000,
+                    }],
+                }],
+            }],
+        };
+        let mut terminal = Terminal::new(TestBackend::new(60, 12)).unwrap();
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    Some(&snapshot),
+                    &View {
+                        selected: 0,
+                        detail_open: true,
+                        scanning: false,
+                        hosted: false,
+                        alerts: Alerts::default(),
+                        alert_dialog: None,
+                        scroll_offset: 0,
+                        reveal_selected: true,
+                    },
+                    &ui::Palette::DARK,
+                );
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let screen = (0..12)
+            .map(|y| {
+                (0..60)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        for expected in [
+            "← Back",
+            "Total usage",
+            "Project",
+            "This month",
+            "unpeel",
+            "1,000,000",
+            "Month",
+            "Tokens",
+            "August 2026 · current",
+            "1,234,567",
+            "July 2026",
+            "—",
+        ] {
+            assert!(screen.contains(expected), "missing {expected:?}\n{screen}");
+        }
+    }
+
+    #[test]
+    fn current_project_uses_the_same_monthly_detail_without_a_project_table() {
+        let snapshot = Snapshot {
+            providers: vec![Provider {
+                kind: ProviderKind::CurrentProject,
+                name: "Current project".into(),
+                badge: "unpeel".into(),
+                present: true,
+                metrics: vec![Metric::new("This month", "42k tokens".into(), Level::Ok)],
+                detail: vec![("path".into(), "/work/unpeel".into())],
+                as_of: None,
+                alert: None,
+                status_fragment: None,
+                day_usd: None,
+                monthly_tokens: vec![crate::sources::MonthUsage {
+                    year: 2026,
+                    month: 8,
+                    tokens: 42_000,
+                }],
+                project_usage: Vec::new(),
+            }],
+        };
+        let mut terminal = Terminal::new(TestBackend::new(60, 10)).unwrap();
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    Some(&snapshot),
+                    &View {
+                        selected: 0,
+                        detail_open: true,
+                        scanning: false,
+                        hosted: false,
+                        alerts: Alerts::default(),
+                        alert_dialog: None,
+                        scroll_offset: 0,
+                        reveal_selected: true,
+                    },
+                    &ui::Palette::DARK,
+                );
+            })
+            .unwrap();
+        let screen = (0..10)
+            .map(|y| {
+                (0..60)
+                    .map(|x| terminal.backend().buffer()[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(screen.contains("Current project Unpeel"), "{screen}");
+        assert!(screen.contains("August 2026 · current"), "{screen}");
+        assert!(screen.contains("42,000"), "{screen}");
+        assert!(
+            !screen.contains("Project               This month"),
+            "{screen}"
+        );
+    }
+
+    #[test]
+    fn footer_shows_actions_and_replaces_refresh_with_a_spinner_while_scanning() {
+        let (idle, buffer) = render_footer_state(true, false);
+        assert!(
+            idle.starts_with("  a alert  r refresh"),
+            "idle footer\n{idle}"
+        );
+        assert_eq!(buffer[(2, 5)].fg, ui::Palette::DARK.primary);
+        assert_eq!(buffer[(4, 5)].fg, ui::Palette::DARK.muted);
+        assert_eq!(buffer[(11, 5)].fg, ui::Palette::DARK.primary);
+        assert_eq!(buffer[(13, 5)].fg, ui::Palette::DARK.muted);
+
+        let (scanning, _) = render_footer_state(true, true);
+        assert!(
+            scanning.starts_with("  a alert  r "),
+            "scan footer\n{scanning}"
+        );
+        assert!(scanning.contains(" refreshing…"), "scan footer\n{scanning}");
+        assert!(!scanning.contains("r refresh"), "scan footer\n{scanning}");
+    }
+
     #[test]
     fn default_view_is_a_compact_explorer_style_list() {
         let (screen, hits) = render(72, 12, false);
@@ -1244,6 +1728,34 @@ mod tests {
         assert!(
             !screen.contains("Resets in"),
             "details stay collapsed\n{screen}"
+        );
+    }
+
+    #[test]
+    fn list_uses_local_history_when_the_live_quota_has_no_data() {
+        let provider = Provider {
+            kind: ProviderKind::Grok,
+            name: "Grok".into(),
+            badge: String::new(),
+            present: true,
+            metrics: vec![
+                Metric::new("Weekly", "No data".into(), Level::Ok),
+                Metric::new("Today", "No data".into(), Level::Ok),
+                Metric::new("Yesterday", "No data".into(), Level::Ok),
+                Metric::new("Last 30 Days", "$84.02 · 398.7M tokens".into(), Level::Ok),
+            ],
+            detail: Vec::new(),
+            as_of: None,
+            alert: None,
+            status_fragment: None,
+            day_usd: None,
+            monthly_tokens: Vec::new(),
+            project_usage: Vec::new(),
+        };
+
+        assert_eq!(
+            provider_basic_data(&provider, 40),
+            ("Last 30 Days $84.02".into(), Level::Ok)
         );
     }
 
@@ -1301,6 +1813,8 @@ mod tests {
                 alert: None,
                 status_fragment: None,
                 day_usd: Some(220.46),
+                monthly_tokens: Vec::new(),
+                project_usage: Vec::new(),
             }],
         };
         let width = 84;
@@ -1485,7 +1999,7 @@ mod tests {
 
     #[test]
     fn short_viewport_scrolls_selected_row_into_view() {
-        let (screen, hits) = render_with(72, 2, 2, false);
+        let (screen, hits) = render_with(72, 3, 2, false);
         assert_eq!(hits.first().map(|hit| hit.index), Some(1));
         assert_eq!(hits.last().map(|hit| hit.index), Some(2));
         assert!(screen.contains("Claude · work"), "selected row\n{screen}");
@@ -1526,7 +2040,7 @@ mod tests {
 
     #[test]
     fn row_scrolling_keeps_the_last_item_flush_with_the_viewport() {
-        let (screen, rendered, _) = render_state(72, 2, 2, false, u16::MAX, false);
+        let (screen, rendered, _) = render_state(72, 3, 2, false, u16::MAX, false);
         let rows: Vec<&str> = screen.lines().collect();
         assert_eq!(rendered.scroll_offset, rendered.max_scroll);
         assert_eq!(rendered.hits.last().map(|hit| hit.index), Some(2));
@@ -1660,6 +2174,8 @@ mod tests {
         assert!(rendered.alert_option_hits.is_empty());
         assert!(!screen.contains("alerts off"));
         assert!(!screen.contains("a alerts"));
+        assert!(!screen.contains("a alert"));
+        assert!(screen.contains("r refresh"));
     }
 
     #[test]

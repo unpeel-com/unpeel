@@ -14,6 +14,7 @@ pub struct Config {
     pub theme: ThemePreference,
     pub alerts: Alerts,
     pub claude: Claude,
+    pub grok: Grok,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -35,6 +36,20 @@ impl Default for Claude {
             live_usage: true,
             dirs: Vec::new(),
         }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct Grok {
+    /// Fetch the weekly shared pool, Extra Usage status, and plan using the
+    /// existing Grok CLI login. Session history remains local when disabled.
+    pub live_usage: bool,
+}
+
+impl Default for Grok {
+    fn default() -> Self {
+        Self { live_usage: true }
     }
 }
 
@@ -110,6 +125,7 @@ impl Default for Config {
             theme: ThemePreference::Auto,
             alerts: Alerts::default(),
             claude: Claude::default(),
+            grok: Grok::default(),
         }
     }
 }
@@ -130,8 +146,8 @@ impl Default for Alerts {
 const DEFAULT_FILE: &str = "\
 # unpeel-usage configuration. Delete this file to restore defaults.
 
-# Seconds between background rescans. Claude live responses are independently
-# cached for five minutes to respect the provider endpoint.
+# Seconds between background rescans. Claude and Grok live responses are
+# independently cached for five minutes to respect provider endpoints.
 refresh_secs = 30
 
 # Color palette: \"auto\" asks the terminal, with \"light\" and \"dark\" available
@@ -160,6 +176,11 @@ live_usage = true
 # detected automatically; list additional config dirs here, e.g.
 # dirs = [\"~/claude-accounts/work\"]
 dirs = []
+
+[grok]
+# Read the weekly shared pool and Extra Usage status through the Grok CLI's
+# existing login. Local session history is still shown when this is false.
+live_usage = true
 ";
 
 fn config_path() -> Option<PathBuf> {

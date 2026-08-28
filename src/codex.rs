@@ -6,17 +6,21 @@
 
 use crate::config::Config;
 use crate::sources::{
-    compact_tokens, compact_usd, level_for_used_percent, read_tail, Level, Metric, Provider,
-    ProviderKind,
+    aggregate_monthly_tokens, aggregate_project_usage, compact_tokens, compact_usd,
+    level_for_used_percent, normalize_project_path, read_tail, Level, Metric, MonthUsage,
+    ProjectUsage, Provider, ProviderKind,
 };
 use crate::timeparse::{compact_duration, now_epoch_secs, parse_epoch_secs};
 use serde_json::Value;
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 const TAIL_BYTES: u64 = 512 * 1024;
 const NEWEST_FILES_TO_TRY: usize = 6;
 /// A snapshot this old is shown but visibly dated.
 const STALE_AFTER_SECS: i64 = 6 * 3_600;
+const MONTH_HISTORY_SECS: i64 = 400 * 24 * 3_600;
 
 fn sessions_root() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from)?;
@@ -27,6 +31,25 @@ struct RateSnapshot {
     line: Value,
     taken_at: Option<i64>,
     total_tokens: Option<u64>,
+}
+
+#[derive(Clone)]
+struct CachedRolloutUsage {
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+    usage: Option<RolloutUsage>,
+}
+
+#[derive(Clone)]
+struct RolloutUsage {
+    at: i64,
+    tokens: u64,
+    project: Option<PathBuf>,
+}
+
+fn rollout_cache() -> &'static Mutex<HashMap<PathBuf, CachedRolloutUsage>> {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, CachedRolloutUsage>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// Newest rollout files first, without walking years of history: take the
@@ -110,6 +133,140 @@ fn latest_snapshot(root: &PathBuf) -> Option<RateSnapshot> {
     None
 }
 
+/// One final cumulative token count per rollout. Codex writes many snapshots
+/// during a session, so summing every `token_count` event would multiply the
+/// same tokens; the last count in each rollout is the session total.
+fn monthly_history(root: &Path, now: i64) -> (Vec<MonthUsage>, Vec<ProjectUsage>) {
+    fn collect(dir: &std::path::Path, cutoff: std::time::SystemTime, files: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_dir() {
+                collect(&path, cutoff, files);
+            } else if kind.is_file()
+                && path
+                    .extension()
+                    .is_some_and(|extension| extension == "jsonl")
+                && entry
+                    .metadata()
+                    .and_then(|metadata| metadata.modified())
+                    .is_ok_and(|modified| modified >= cutoff)
+            {
+                files.push(path);
+            }
+        }
+    }
+
+    let cutoff = std::time::UNIX_EPOCH
+        + std::time::Duration::from_secs(now.saturating_sub(MONTH_HISTORY_SECS).max(0) as u64);
+    let mut files = Vec::new();
+    collect(root, cutoff, &mut files);
+    let visible = files
+        .iter()
+        .cloned()
+        .collect::<std::collections::HashSet<_>>();
+    rollout_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .retain(|path, _| visible.contains(path));
+    let entries: Vec<RolloutUsage> = files
+        .iter()
+        .filter_map(|path| cached_final_usage(path))
+        .collect();
+    (
+        aggregate_monthly_tokens(entries.iter().map(|entry| (entry.at, entry.tokens))),
+        aggregate_project_usage(
+            entries
+                .iter()
+                .map(|entry| (entry.at, entry.tokens, entry.project.clone())),
+        ),
+    )
+}
+
+fn cached_final_usage(path: &std::path::Path) -> Option<RolloutUsage> {
+    let metadata = std::fs::metadata(path).ok()?;
+    let len = metadata.len();
+    let modified = metadata.modified().ok();
+    {
+        let cache = rollout_cache()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(cached) = cache.get(path) {
+            if cached.len == len && cached.modified == modified {
+                return cached.usage.clone();
+            }
+        }
+    }
+    let tail = read_tail(path, TAIL_BYTES)?;
+    let mut usage = None;
+    for line in tail.lines().filter(|line| line.contains("\"token_count\"")) {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let payload = value.get("payload").unwrap_or(&value);
+        let Some(tokens) = payload
+            .pointer("/info/total_token_usage/total_tokens")
+            .and_then(Value::as_u64)
+        else {
+            continue;
+        };
+        let at = value
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .and_then(parse_epoch_secs)
+            .or_else(|| {
+                modified?
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .ok()
+                    .map(|duration| duration.as_secs() as i64)
+            })?;
+        usage = Some(RolloutUsage {
+            at,
+            tokens,
+            project: None,
+        });
+    }
+    if let Some(usage) = usage.as_mut() {
+        usage.project = rollout_project(path);
+    }
+    rollout_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(
+            path.to_path_buf(),
+            CachedRolloutUsage {
+                len,
+                modified,
+                usage: usage.clone(),
+            },
+        );
+    usage
+}
+
+fn rollout_project(path: &Path) -> Option<PathBuf> {
+    use std::io::Read as _;
+
+    let file = std::fs::File::open(path).ok()?;
+    let mut head = String::new();
+    file.take(256 * 1024).read_to_string(&mut head).ok()?;
+    for line in head.lines() {
+        if !line.contains("\"session_meta\"") || !line.contains("\"cwd\"") {
+            continue;
+        }
+        let value = serde_json::from_str::<Value>(line).ok()?;
+        let cwd = value.pointer("/payload/cwd").and_then(Value::as_str)?;
+        if !cwd.trim().is_empty() {
+            return Some(normalize_project_path(Path::new(cwd)));
+        }
+    }
+    None
+}
+
 /// A window's label from its length: Codex uses 300 (5h) and 10080 (week).
 fn window_label(minutes: Option<u64>) -> String {
     match minutes {
@@ -132,15 +289,18 @@ pub fn scan(config: &Config) -> Provider {
         alert: None,
         status_fragment: None,
         day_usd: None,
+        monthly_tokens: Vec::new(),
+        project_usage: Vec::new(),
     };
     let Some(root) = sessions_root().filter(|root| root.is_dir()) else {
         return provider;
     };
     provider.present = true;
+    let now = now_epoch_secs();
+    (provider.monthly_tokens, provider.project_usage) = monthly_history(&root, now);
     let Some(snapshot) = latest_snapshot(&root) else {
         return provider;
     };
-    let now = now_epoch_secs();
     let limits = &snapshot.line["rate_limits"];
     provider.as_of = snapshot.taken_at;
     if let Some(plan) = limits.get("plan_type").and_then(Value::as_str) {

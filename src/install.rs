@@ -13,8 +13,9 @@ const APP_TOML: &str = r##"# Installed by unpeel-usage; safe to delete (it reins
 manifest_version = 1
 id = "unpeel.app.usage"
 name = "Usage"
+version = "@APP_VERSION@"
 command = "@LAUNCH_COMMAND@"
-description = "Local AI usage and credits at a glance: Codex and Claude limits, spend, and opt-in limit and recovery alerts"
+description = "Codex, Claude, Grok, and Muse usage with monthly token totals and alerts"
 
 # Runtime detection: Unpeel recognizes a hand-typed `unpeel-usage` in any
 # hosted terminal and brands the session row with the display tint below.
@@ -47,12 +48,14 @@ pub fn ensure_installed() {
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
-    let manifest = APP_TOML.replace(
-        "@LAUNCH_COMMAND@",
-        &exe.to_string_lossy()
-            .replace('\\', "\\\\")
-            .replace('"', "\\\""),
-    );
+    let manifest = APP_TOML
+        .replace("@APP_VERSION@", env!("CARGO_PKG_VERSION"))
+        .replace(
+            "@LAUNCH_COMMAND@",
+            &exe.to_string_lossy()
+                .replace('\\', "\\\\")
+                .replace('"', "\\\""),
+        );
     let dir = home.join("apps").join(APP_ID);
     if std::fs::create_dir_all(&dir).is_err() {
         return;

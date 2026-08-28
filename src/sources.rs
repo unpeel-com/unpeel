@@ -1,6 +1,7 @@
-//! Provider model and scan orchestration. Codex and spend history come from
-//! local tool files; Claude can additionally reuse Claude Code's OAuth login
-//! for live subscription limits. No pasted API keys and no daemon.
+//! Provider model and scan orchestration. Codex, Claude, Grok, and Muse
+//! history comes from local tool files; Claude and Grok can additionally
+//! reuse their CLI logins for live subscription limits. No pasted API keys
+//! and no daemon.
 
 use crate::config::Config;
 use std::path::{Path, PathBuf};
@@ -26,6 +27,29 @@ pub enum PercentDisplay {
 pub enum ProviderKind {
     Codex,
     Claude,
+    Grok,
+    Muse,
+    /// Aggregate row scoped to the project from which the App was launched.
+    CurrentProject,
+    /// Aggregate row synthesized after all configured providers are scanned.
+    Total,
+}
+
+/// One local calendar month's token count. Providers expose these raw rows so
+/// the final Total usage card can aggregate them without parsing display text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MonthUsage {
+    pub year: i32,
+    pub month: u8,
+    pub tokens: u64,
+}
+
+/// One project's machine-local token history. Paths are normalized to the
+/// nearest Git root when it still exists, otherwise kept as recorded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectUsage {
+    pub path: PathBuf,
+    pub monthly_tokens: Vec<MonthUsage>,
 }
 
 /// One gauge/value row inside a provider card.
@@ -87,6 +111,12 @@ pub struct Provider {
     pub status_fragment: Option<String>,
     /// Estimated spend over the trailing 24h, when the source can price it.
     pub day_usd: Option<f64>,
+    /// Machine-local token history, grouped by local calendar month.
+    pub monthly_tokens: Vec<MonthUsage>,
+    /// The same history attributed to project roots when a provider records
+    /// a working directory. Entries without trustworthy project evidence are
+    /// still included in `monthly_tokens`, but not guessed into this list.
+    pub project_usage: Vec<ProjectUsage>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -101,7 +131,17 @@ impl Snapshot {
             match kind {
                 ProviderKind::Codex => providers.push(crate::codex::scan(config)),
                 ProviderKind::Claude => providers.extend(crate::claude::scan_all(config)),
+                ProviderKind::Grok => providers.push(crate::grok::scan(config)),
+                ProviderKind::Muse => providers.push(crate::muse::scan()),
+                ProviderKind::CurrentProject | ProviderKind::Total => {}
             }
+        }
+        if !providers.is_empty() {
+            let now = crate::timeparse::now_epoch_secs();
+            if let Some(current) = current_project_provider(&providers, now) {
+                providers.push(current);
+            }
+            providers.push(total_provider(&providers, now));
         }
         Self { providers }
     }
@@ -129,7 +169,14 @@ fn provider_order() -> Vec<ProviderKind> {
     unpeel_home()
         .as_deref()
         .and_then(unpeel_preset_provider_order)
-        .unwrap_or_else(|| vec![ProviderKind::Codex, ProviderKind::Claude])
+        .unwrap_or_else(|| {
+            vec![
+                ProviderKind::Codex,
+                ProviderKind::Claude,
+                ProviderKind::Grok,
+                ProviderKind::Muse,
+            ]
+        })
 }
 
 fn unpeel_home() -> Option<PathBuf> {
@@ -182,8 +229,279 @@ fn provider_kind_for_command(command: &str) -> Option<ProviderKind> {
     match executable {
         "codex" => Some(ProviderKind::Codex),
         "claude" => Some(ProviderKind::Claude),
+        "grok" => Some(ProviderKind::Grok),
+        "muse" => Some(ProviderKind::Muse),
         _ => None,
     }
+}
+
+/// Aggregate timestamped entries into sorted local calendar-month rows.
+pub fn aggregate_monthly_tokens<I>(entries: I) -> Vec<MonthUsage>
+where
+    I: IntoIterator<Item = (i64, u64)>,
+{
+    let mut totals = std::collections::BTreeMap::<(i32, u8), u64>::new();
+    for (at, tokens) in entries {
+        if tokens == 0 {
+            continue;
+        }
+        let Some(key) = local_year_month(at) else {
+            continue;
+        };
+        let total = totals.entry(key).or_default();
+        *total = total.saturating_add(tokens);
+    }
+    totals
+        .into_iter()
+        .map(|((year, month), tokens)| MonthUsage {
+            year,
+            month,
+            tokens,
+        })
+        .collect()
+}
+
+/// Aggregate timestamped token entries by their recorded project. The caller
+/// supplies `None` when the source has no trustworthy working-directory
+/// evidence; those tokens remain part of provider totals but stay unattributed.
+pub fn aggregate_project_usage<I>(entries: I) -> Vec<ProjectUsage>
+where
+    I: IntoIterator<Item = (i64, u64, Option<PathBuf>)>,
+{
+    let mut projects =
+        std::collections::BTreeMap::<PathBuf, std::collections::BTreeMap<(i32, u8), u64>>::new();
+    for (at, tokens, path) in entries {
+        if tokens == 0 {
+            continue;
+        }
+        let (Some(path), Some(month)) = (path, local_year_month(at)) else {
+            continue;
+        };
+        let total = projects
+            .entry(normalize_project_path(&path))
+            .or_default()
+            .entry(month)
+            .or_default();
+        *total = total.saturating_add(tokens);
+    }
+    projects
+        .into_iter()
+        .map(|(path, months)| ProjectUsage {
+            path,
+            monthly_tokens: months
+                .into_iter()
+                .map(|((year, month), tokens)| MonthUsage {
+                    year,
+                    month,
+                    tokens,
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+/// Reduce a directory to the nearest enclosing Git project without invoking
+/// Git for every session log. Worktree `.git` files and normal `.git`
+/// directories are both accepted.
+pub fn normalize_project_path(path: &Path) -> PathBuf {
+    let normalized = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    for candidate in normalized.ancestors() {
+        let marker = candidate.join(".git");
+        if marker.is_file() {
+            if let Ok(pointer) = std::fs::read_to_string(&marker) {
+                if let Some(git_dir) = pointer.trim().strip_prefix("gitdir: ") {
+                    let git_dir = PathBuf::from(git_dir);
+                    let git_dir = if git_dir.is_absolute() {
+                        git_dir
+                    } else {
+                        candidate.join(git_dir)
+                    };
+                    if git_dir
+                        .parent()
+                        .and_then(Path::file_name)
+                        .is_some_and(|name| name == "worktrees")
+                    {
+                        if let Some(main_root) = git_dir
+                            .parent()
+                            .and_then(Path::parent)
+                            .and_then(Path::parent)
+                        {
+                            return std::fs::canonicalize(main_root)
+                                .unwrap_or_else(|_| main_root.to_path_buf());
+                        }
+                    }
+                }
+            }
+        }
+        if marker.exists() {
+            return candidate.to_path_buf();
+        }
+    }
+    normalized
+}
+
+/// Build the fixed newest-first month window used by the Total usage table.
+fn month_window(now: i64, count: usize) -> Vec<(i32, u8)> {
+    let Some((mut year, mut month)) = local_year_month(now) else {
+        return Vec::new();
+    };
+    let mut months = Vec::with_capacity(count);
+    for _ in 0..count {
+        months.push((year, month));
+        if month == 1 {
+            year -= 1;
+            month = 12;
+        } else {
+            month -= 1;
+        }
+    }
+    months
+}
+
+fn filled_months(totals: &std::collections::BTreeMap<(i32, u8), u64>, now: i64) -> Vec<MonthUsage> {
+    month_window(now, 12)
+        .into_iter()
+        .map(|(year, month)| MonthUsage {
+            year,
+            month,
+            tokens: totals.get(&(year, month)).copied().unwrap_or(0),
+        })
+        .collect()
+}
+
+fn summary_metric(monthly_tokens: &[MonthUsage]) -> Metric {
+    let current = monthly_tokens.first().map_or(0, |usage| usage.tokens);
+    Metric::new(
+        "This month",
+        if current == 0 {
+            "No data".into()
+        } else {
+            format!("{} tokens", compact_tokens(current))
+        },
+        Level::Ok,
+    )
+}
+
+fn current_project_provider(providers: &[Provider], now: i64) -> Option<Provider> {
+    let project = normalize_project_path(&std::env::current_dir().ok()?);
+    let mut totals = std::collections::BTreeMap::<(i32, u8), u64>::new();
+    for usage in providers
+        .iter()
+        .flat_map(|provider| provider.project_usage.iter())
+        .filter(|usage| usage.path == project)
+        .flat_map(|usage| usage.monthly_tokens.iter())
+    {
+        let total = totals.entry((usage.year, usage.month)).or_default();
+        *total = total.saturating_add(usage.tokens);
+    }
+    let monthly_tokens = filled_months(&totals, now);
+    let badge = project
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("project")
+        .to_string();
+    Some(Provider {
+        kind: ProviderKind::CurrentProject,
+        name: "Current project".into(),
+        badge,
+        present: true,
+        metrics: vec![summary_metric(&monthly_tokens)],
+        detail: vec![("path".into(), project.display().to_string())],
+        as_of: providers.iter().filter_map(|provider| provider.as_of).max(),
+        alert: None,
+        status_fragment: None,
+        day_usd: None,
+        monthly_tokens,
+        project_usage: Vec::new(),
+    })
+}
+
+fn total_provider(providers: &[Provider], now: i64) -> Provider {
+    let mut totals = std::collections::BTreeMap::<(i32, u8), u64>::new();
+    for usage in providers
+        .iter()
+        .filter(|provider| provider.kind != ProviderKind::CurrentProject)
+        .flat_map(|provider| provider.monthly_tokens.iter())
+    {
+        let total = totals.entry((usage.year, usage.month)).or_default();
+        *total = total.saturating_add(usage.tokens);
+    }
+    let monthly_tokens = filled_months(&totals, now);
+    let mut project_totals =
+        std::collections::BTreeMap::<PathBuf, std::collections::BTreeMap<(i32, u8), u64>>::new();
+    for project in providers
+        .iter()
+        .filter(|provider| provider.kind != ProviderKind::CurrentProject)
+        .flat_map(|provider| provider.project_usage.iter())
+    {
+        for usage in &project.monthly_tokens {
+            let total = project_totals
+                .entry(project.path.clone())
+                .or_default()
+                .entry((usage.year, usage.month))
+                .or_default();
+            *total = total.saturating_add(usage.tokens);
+        }
+    }
+    let project_usage = project_totals
+        .into_iter()
+        .map(|(path, months)| ProjectUsage {
+            path,
+            monthly_tokens: months
+                .into_iter()
+                .map(|((year, month), tokens)| MonthUsage {
+                    year,
+                    month,
+                    tokens,
+                })
+                .collect(),
+        })
+        .collect();
+    Provider {
+        kind: ProviderKind::Total,
+        name: "Total usage".into(),
+        badge: String::new(),
+        present: true,
+        metrics: vec![summary_metric(&monthly_tokens)],
+        detail: vec![(
+            "meaning".into(),
+            "processed tokens, including cached context".into(),
+        )],
+        as_of: providers.iter().filter_map(|provider| provider.as_of).max(),
+        alert: None,
+        status_fragment: None,
+        day_usd: None,
+        monthly_tokens,
+        project_usage,
+    }
+}
+
+#[cfg(unix)]
+fn local_year_month(epoch: i64) -> Option<(i32, u8)> {
+    let timestamp = epoch as libc::time_t;
+    let mut local: libc::tm = unsafe { std::mem::zeroed() };
+    if unsafe { libc::localtime_r(&timestamp, &mut local) }.is_null() {
+        return None;
+    }
+    let year = local.tm_year.checked_add(1_900)?;
+    let month = u8::try_from(local.tm_mon.checked_add(1)?).ok()?;
+    Some((year, month))
+}
+
+#[cfg(not(unix))]
+fn local_year_month(epoch: i64) -> Option<(i32, u8)> {
+    let days = epoch.div_euclid(86_400);
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    year += i64::from(month <= 2);
+    Some((i32::try_from(year).ok()?, u8::try_from(month).ok()?))
 }
 
 pub fn level_for_used_percent(used: f64, alert_at: f64) -> Level {
@@ -248,6 +566,7 @@ mod tests {
             "presets": [
                 {"command": "/opt/tools/claude --dangerously-skip-permissions"},
                 {"command": "grok --always-approve"},
+                {"command": "muse"},
                 {"command": "codex --yolo", "enabled": true},
                 {"command": "claude"},
                 {"command": "codex", "enabled": false}
@@ -256,8 +575,78 @@ mod tests {
 
         assert_eq!(
             provider_order_from_app_state(raw),
-            Some(vec![ProviderKind::Claude, ProviderKind::Codex])
+            Some(vec![
+                ProviderKind::Claude,
+                ProviderKind::Grok,
+                ProviderKind::Muse,
+                ProviderKind::Codex,
+            ])
         );
+    }
+
+    #[test]
+    fn monthly_aggregation_saturates_and_groups_the_local_calendar_month() {
+        let now = crate::timeparse::now_epoch_secs();
+        let rows = aggregate_monthly_tokens([(now, 120), (now, 80)]);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].tokens, 200);
+    }
+
+    #[test]
+    fn project_aggregation_uses_the_git_root_and_keeps_unattributed_tokens_out() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock after Unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "unpeel-usage-project-{}-{nonce}",
+            std::process::id()
+        ));
+        let nested = root.join("nested/folder");
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::create_dir_all(&nested).unwrap();
+        let now = crate::timeparse::now_epoch_secs();
+
+        let rows = aggregate_project_usage([
+            (now, 120, Some(nested)),
+            (now, 80, Some(root.clone())),
+            (now, 999, None),
+        ]);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].path, std::fs::canonicalize(&root).unwrap());
+        assert_eq!(rows[0].monthly_tokens[0].tokens, 200);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn total_provider_does_not_count_the_current_project_summary_twice() {
+        let now = crate::timeparse::now_epoch_secs();
+        let month = aggregate_monthly_tokens([(now, 120)]);
+        let provider = |kind| Provider {
+            kind,
+            name: "test".into(),
+            badge: String::new(),
+            present: true,
+            metrics: Vec::new(),
+            detail: Vec::new(),
+            as_of: None,
+            alert: None,
+            status_fragment: None,
+            day_usd: None,
+            monthly_tokens: month.clone(),
+            project_usage: Vec::new(),
+        };
+
+        let total = total_provider(
+            &[
+                provider(ProviderKind::Codex),
+                provider(ProviderKind::CurrentProject),
+            ],
+            now,
+        );
+
+        assert_eq!(total.monthly_tokens[0].tokens, 120);
     }
 
     #[test]

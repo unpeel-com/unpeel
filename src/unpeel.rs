@@ -133,7 +133,7 @@ impl StatusReporter {
         post_json(host, &format!("/notify/{}", host.session_id), &body);
     }
 
-    /// Short, single-line sidebar status ("Codex 3% · Claude $2.10").
+    /// Short, single-line sidebar status ("Codex 3% · Claude $2.10 · Grok 14%").
     /// Rapid-fire and identical writes coalesce; the latest text wins.
     pub fn set_status(&mut self, text: &str) {
         if self.host.is_none() {

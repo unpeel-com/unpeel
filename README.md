@@ -3,13 +3,17 @@
 Local AI usage & credits at a glance — a small, fast terminal app
 built entirely from native [Ratatui](https://ratatui.rs) layouts and widgets.
 It reuses the logins and files your AI tools already keep on this machine:
-no pasted API keys and no daemon. Claude live limits use Claude Code's stored
-OAuth login; transcript history stays local.
+no pasted API keys and no daemon. Claude and Grok live limits reuse their CLI
+logins; Codex, Claude, Grok, and Muse history stays local.
 
 ```
   Codex Pro                                              7-day 37% used
   Claude Max 20x          5-hour 15% · 7-day 44% · Fable 7-day 85% used
   Claude · work                     5h 28% · Fable 7-day 63% used
+  Grok SuperGrok Heavy                                  7-day 22% used
+  Muse Spark 1.2                                $1.24 est · 4.8M tokens
+  Current project                                      2.1M tokens
+  Total usage                                          12.7M tokens
 ```
 
 The selected provider gets the same full-width gray row and two-cell label
@@ -18,8 +22,9 @@ account metadata: `5-hour` is Claude's rolling five-hour allowance, `7-day` is
 the overall weekly allowance, and `Fable 7-day` is that model's weekly
 allowance. Every percentage is the amount used. Email addresses and reset
 dates/times stay in the detail view instead of crowding the list.
-Unpeel's Session title owns the App name, so there is no repeated in-App title
-or bottom shortcut-help row.
+Unpeel's Session title owns the App name, so there is no repeated in-App title.
+The only footer copy is the compact `a alert  r refresh` action row (with a
+spinner replacing `refresh` while a scan is active).
 
 Press Enter to open the borderless detail view; a pinned, transparent `← Back`
 action appears at the top and Enter, Escape, or its full-width click target
@@ -28,6 +33,18 @@ Detail quotas use a purpose-built Ratatui meter, calendar-day activity uses
 the native `Sparkline` widget, and Claude pace projections keep their blue /
 amber / red semantic states, spare estimate, run-out estimate, and even-pace
 marker.
+
+The **Current project** row attributes local history to the Git project from
+which each agent session was launched. It follows the project where
+`unpeel-usage` itself was launched and opens to the same exact monthly table.
+Worktrees are folded into their main repository.
+
+The final **Total usage** row adds the local token histories from all four
+providers. Open it to see this month's Usage by project first, followed by a
+newest-first Month / Tokens table for the current month and the previous 11
+months. These are processed tokens, including cached context—not an API bill
+or a subscription charge. History or working-directory metadata absent from
+local logs cannot be reconstructed.
 
 The shared design-system primitives come directly from
 [`unpeel-app-kit`](https://github.com/unpeel-com/unpeel-app-kit):
@@ -70,7 +87,8 @@ returns to view after keyboard navigation.
 
 - **Codex CLI** — the rollout logs under `~/.codex/sessions/` record a rate-limit
   snapshot with every turn: real window utilization, reset times, and (on
-  credit plans) the actual credits balance. No estimation.
+  credit plans) the actual credits balance. No estimation. Session metadata
+  supplies its working directory for project attribution.
 - **Claude Code live limits** — the existing Claude Code OAuth credential is
   read from the macOS Keychain first, then `.credentials.json` as a fallback.
   The app requests Claude's usage endpoint for the real Session, Weekly,
@@ -78,11 +96,40 @@ returns to view after keyboard navigation.
   are cached for five minutes because the endpoint rate-limits aggressively.
 - **Claude Code local history** — transcripts under `~/.claude/projects/`
   produce the Usage Trend and estimated Today, Yesterday, and Last 30 Days
-  spend/token rows. Logs and calculated history never leave the machine.
+  spend/token rows. Their recorded working directory supplies project
+  attribution. Logs and calculated history never leave the machine.
+- **Grok live limits** — `~/.grok/auth.json` supplies the Grok CLI access and
+  refresh tokens. The app makes the same credits-format billing request as the
+  CLI for the weekly shared pool and Extra Usage cap status, plus the settings
+  request for the plan name. Rotated credentials are atomically written back
+  without dropping other accounts or unknown fields.
+- **Grok local history** — completed turns under
+  `~/.grok/sessions/**/updates.jsonl` (or `$GROK_HOME/sessions`) produce the
+  Usage Trend and Today / Yesterday / Last 30 Days rows. Grok's recorded turn
+  cost is preferred and reasoning tokens are not counted twice. Coordinator
+  totals exclude their subagent ledgers, copied event IDs are deduplicated, and
+  unchanged logs are served from an in-process incremental cache. Each
+  session's summary supplies its working directory for project attribution.
+- **Muse local history** — provider-attributed model calls in
+  `~/.local/share/muse/sessions/**/session.jsonl` supply token totals and
+  estimated spend using Muse's locally recorded model catalog prices. Usage
+  IDs are deduplicated across coordinator and subagent event logs so mirrored
+  attribution records are counted once. Muse authentication never leaves its
+  own CLI. Workspace metadata supplies project attribution.
 
 Set `live_usage = false` under `[claude]` for a fully offline, transcript-only
 Claude card. When live auth or the network is unavailable, the card keeps its
 local history and falls back to a clearly labeled estimated Session spend row.
+
+Grok has the equivalent opt-out:
+
+```toml
+[grok]
+live_usage = false
+```
+
+This disables only the network-backed Weekly / Extra Usage / plan lookup. Grok
+session history remains local and available.
 
 ## Multiple Claude accounts
 
@@ -143,22 +190,26 @@ registers itself as an Unpeel App (one manifest under
 `~/.unpeel/apps/unpeel.app.usage/`): the session row takes the app's name
 and amber tint — even when you just type `unpeel-usage` into any Unpeel
 terminal — and the sidebar shows a live status line like
-`Codex 3% · Claude $3.24`. The whole integration is `src/unpeel.rs` and
+`Codex 3% · Claude $3.24 · Grok 14% · Muse $1.20`. The whole integration is `src/unpeel.rs` and
 `src/install.rs`: plain files and one tiny local HTTP contract, freely
 copyable into any app. There is no SDK.
 
 When an Unpeel home exists (`$UNPEEL_HOME`, or `~/.unpeel`), its
-`app-state.json` presets select and order the dashboard providers. Codex and
-Claude are included at their first matching preset position; additional launch
-variants are deduplicated, while all detected Claude accounts remain grouped
-there. Without an Unpeel folder or a readable presets array, the standalone
-Codex-then-Claude order is unchanged.
+`app-state.json` presets select and order the dashboard providers. Codex,
+Claude, Grok, and Muse are included at their first matching preset position;
+additional launch variants are deduplicated, while all detected Claude
+accounts remain grouped there. Without an Unpeel folder or a readable presets
+array, the standalone order is Codex, Claude, Grok, then Muse. The synthesized
+Current project and Total usage rows stay last in either mode.
 
 ## Install
 
 ```sh
 curl -fsSL https://unpeel.com/install/usage/install.sh | sh
 ```
+
+The installer verifies the archive checksum and registers the versioned App
+manifest immediately under `~/.unpeel/apps/unpeel.app.usage/`.
 
 Or build from source: `cargo build --release`.
 
@@ -167,6 +218,7 @@ Or build from source: `cargo build --release`.
 - `unpeel-usage` — the dashboard
 - `unpeel-usage report` — one-shot plain-text snapshot for scripts and
   status bars (intentionally non-TUI so it remains pipe-friendly)
+- `unpeel-usage --version` — print the installed App version
 
 ## Development
 
@@ -186,4 +238,8 @@ over from each other.
 
 Config lives at `~/.config/unpeel-usage/config.toml`; delete it to restore
 defaults. Data is re-scanned every `refresh_secs` (and on `r`), and the
-sidebar status line updates on every scan.
+sidebar status line updates on every scan. The bottom row keeps `a alert` and
+`r refresh` visible inside Unpeel, using the stronger foreground only for the
+shortcut letters. While either a manual or scheduled scan is actually
+running, `r refresh` becomes `r` plus an animated spinner and `refreshing…`
+status.

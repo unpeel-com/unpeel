@@ -13,7 +13,8 @@
 
 use crate::config::Config;
 use crate::sources::{
-    compact_tokens, compact_usd, read_tail, Level, Metric, Provider, ProviderKind,
+    aggregate_monthly_tokens, aggregate_project_usage, compact_tokens, compact_usd, read_tail,
+    Level, Metric, Provider, ProviderKind,
 };
 use crate::timeparse::{compact_duration, now_epoch_secs, parse_epoch_secs};
 use serde::{Deserialize, Serialize};
@@ -27,6 +28,7 @@ use std::time::Duration;
 const DAY_SECS: i64 = 24 * 3_600;
 /// Calendar history needs a little slack for time-zone and DST boundaries.
 const LOOKBACK_SECS: i64 = 32 * DAY_SECS;
+const MONTH_HISTORY_SECS: i64 = 400 * DAY_SECS;
 const BLOCK_SECS: i64 = 5 * 3_600;
 const WEEK_SECS: i64 = 7 * DAY_SECS;
 const TAIL_BYTES: u64 = 8 * 1024 * 1024;
@@ -771,11 +773,26 @@ fn quota_metric(quota: &LiveQuota, now: i64) -> Metric {
     metric
 }
 
+#[derive(Clone)]
 struct Entry {
+    id: Option<String>,
     at: i64,
     model: String,
     cost: f64,
     tokens: u64,
+    project: Option<PathBuf>,
+}
+
+#[derive(Clone)]
+struct CachedTranscript {
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+    entries: Vec<Entry>,
+}
+
+fn transcript_cache() -> &'static Mutex<HashMap<PathBuf, CachedTranscript>> {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, CachedTranscript>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// Public API prices per million tokens (input, output). Cache reads bill at
@@ -809,11 +826,9 @@ fn message_cost(model: &str, usage: &Value) -> (f64, u64) {
 
 fn recent_entries(root: &PathBuf, now: i64) -> Vec<Entry> {
     let cutoff = std::time::SystemTime::UNIX_EPOCH
-        + std::time::Duration::from_secs((now - LOOKBACK_SECS).max(0) as u64);
+        + std::time::Duration::from_secs((now - MONTH_HISTORY_SECS).max(0) as u64);
     let mut entries = Vec::new();
-    // A message can appear in several transcript files when a conversation
-    // continues across sessions; the message id dedupes it.
-    let mut seen_ids: HashSet<String> = HashSet::new();
+    let mut visible = HashSet::new();
     let Ok(projects) = std::fs::read_dir(root) else {
         return entries;
     };
@@ -834,59 +849,111 @@ fn recent_entries(root: &PathBuf, now: i64) -> Vec<Entry> {
             if !fresh {
                 continue;
             }
-            let Some(tail) = read_tail(&path, TAIL_BYTES) else {
-                continue;
-            };
-            for line in tail.lines() {
-                if !line.contains("\"usage\"") {
-                    continue;
-                }
-                let Ok(value) = serde_json::from_str::<Value>(line) else {
-                    continue;
-                };
-                if value.get("type").and_then(Value::as_str) != Some("assistant") {
-                    continue;
-                }
-                let Some(at) = value
-                    .get("timestamp")
-                    .and_then(Value::as_str)
-                    .and_then(parse_epoch_secs)
-                else {
-                    continue;
-                };
-                if at < now - LOOKBACK_SECS {
-                    continue;
-                }
-                let message = &value["message"];
-                let Some(usage) = message.get("usage") else {
-                    continue;
-                };
-                if let Some(id) = message.get("id").and_then(Value::as_str) {
-                    if !seen_ids.insert(id.to_string()) {
-                        continue;
-                    }
-                }
-                let model = message
-                    .get("model")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown")
-                    .to_string();
-                let (estimated_cost, tokens) = message_cost(&model, usage);
-                let cost = value
-                    .get("costUSD")
-                    .and_then(Value::as_f64)
-                    .filter(|cost| cost.is_finite() && *cost >= 0.0)
-                    .unwrap_or(estimated_cost);
-                entries.push(Entry {
-                    at,
-                    model,
-                    cost,
-                    tokens,
-                });
+            visible.insert(path.clone());
+            entries.extend(cached_transcript_entries(&path, now));
+        }
+    }
+    transcript_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .retain(|path, _| visible.contains(path));
+    // A message can appear in several transcript files when a conversation
+    // continues across sessions; the message id dedupes it.
+    let mut seen_ids: HashSet<String> = HashSet::new();
+    entries.retain(|entry| {
+        entry
+            .id
+            .as_ref()
+            .is_none_or(|id| seen_ids.insert(id.clone()))
+    });
+    entries.sort_by_key(|entry| entry.at);
+    entries
+}
+
+fn cached_transcript_entries(path: &Path, now: i64) -> Vec<Entry> {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return Vec::new();
+    };
+    let len = metadata.len();
+    let modified = metadata.modified().ok();
+    {
+        let cache = transcript_cache()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(cached) = cache.get(path) {
+            if cached.len == len && cached.modified == modified {
+                return cached.entries.clone();
             }
         }
     }
-    entries.sort_by_key(|entry| entry.at);
+    let Some(tail) = read_tail(path, TAIL_BYTES) else {
+        return Vec::new();
+    };
+    let entries = parse_transcript_tail(&tail, now);
+    transcript_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(
+            path.to_path_buf(),
+            CachedTranscript {
+                len,
+                modified,
+                entries: entries.clone(),
+            },
+        );
+    entries
+}
+
+fn parse_transcript_tail(tail: &str, now: i64) -> Vec<Entry> {
+    let mut entries = Vec::new();
+    for line in tail.lines().filter(|line| line.contains("\"usage\"")) {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if value.get("type").and_then(Value::as_str) != Some("assistant") {
+            continue;
+        }
+        let Some(at) = value
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .and_then(parse_epoch_secs)
+        else {
+            continue;
+        };
+        if at < now - MONTH_HISTORY_SECS {
+            continue;
+        }
+        let message = &value["message"];
+        let Some(usage) = message.get("usage") else {
+            continue;
+        };
+        let model = message
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        let (estimated_cost, tokens) = message_cost(&model, usage);
+        let cost = value
+            .get("costUSD")
+            .and_then(Value::as_f64)
+            .filter(|cost| cost.is_finite() && *cost >= 0.0)
+            .unwrap_or(estimated_cost);
+        entries.push(Entry {
+            id: message
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            at,
+            model,
+            cost,
+            tokens,
+            project: value
+                .get("cwd")
+                .and_then(Value::as_str)
+                .filter(|cwd| !cwd.trim().is_empty())
+                .map(PathBuf::from),
+        });
+    }
     entries
 }
 
@@ -999,6 +1066,8 @@ pub fn scan_all(config: &Config) -> Vec<Provider> {
             alert: None,
             status_fragment: None,
             day_usd: None,
+            monthly_tokens: Vec::new(),
+            project_usage: Vec::new(),
         }];
     }
     let now = now_epoch_secs();
@@ -1079,6 +1148,8 @@ fn scan_account(
         alert: None,
         status_fragment: None,
         day_usd: None,
+        monthly_tokens: Vec::new(),
+        project_usage: Vec::new(),
     };
     if live.plan.is_some() {
         if let Some(email) = &email {
@@ -1090,6 +1161,13 @@ fn scan_account(
     }
 
     let entries = recent_entries(&account.dir.join("projects"), now);
+    provider.monthly_tokens =
+        aggregate_monthly_tokens(entries.iter().map(|entry| (entry.at, entry.tokens)));
+    provider.project_usage = aggregate_project_usage(
+        entries
+            .iter()
+            .map(|entry| (entry.at, entry.tokens, entry.project.clone())),
+    );
     if let Some(latest) = entries.last().map(|entry| entry.at) {
         provider.as_of = Some(provider.as_of.map_or(latest, |live| live.max(latest)));
     }
@@ -1334,6 +1412,8 @@ fn saved_account_provider(saved: SavedAccount, now: i64) -> Provider {
         alert: None,
         status_fragment,
         day_usd: None,
+        monthly_tokens: Vec::new(),
+        project_usage: Vec::new(),
     }
 }
 
@@ -1490,28 +1570,36 @@ mod tests {
     fn aggregates_calendar_buckets_oldest_first() {
         let entries = vec![
             Entry {
+                id: None,
                 at: 50,
                 model: "old".into(),
                 cost: 8.0,
                 tokens: 80,
+                project: None,
             },
             Entry {
+                id: None,
                 at: 150,
                 model: "sonnet".into(),
                 cost: 1.25,
                 tokens: 10,
+                project: None,
             },
             Entry {
+                id: None,
                 at: 250,
                 model: "opus".into(),
                 cost: 2.5,
                 tokens: 20,
+                project: None,
             },
             Entry {
+                id: None,
                 at: 350,
                 model: "haiku".into(),
                 cost: 3.75,
                 tokens: 30,
+                project: None,
             },
         ];
         let totals = aggregate_days(&entries, &[100, 200, 300]);
