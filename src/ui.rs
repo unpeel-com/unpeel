@@ -15,7 +15,8 @@ use ratatui::widgets::Paragraph;
 use ratatui::{Frame, Terminal};
 use unpeel_app_kit::{
     AgentBridge, ColorScheme, DoubleClickTracker, DragSurface, Explorer, ExplorerEvent,
-    ExplorerInput, ExplorerTheme, KitTheme, MenuItem, MenuTheme, PopupMenu, clipboard_sequence,
+    ExplorerInput, ExplorerTheme, KeyboardEnhancementGuard, KitTheme, MenuItem, MenuTheme,
+    PopupMenu, clipboard_sequence,
 };
 
 use crate::unpeel::ContextReporter;
@@ -25,8 +26,10 @@ const FOOTER_ROWS: u16 = 1;
 pub fn run(mut explorer: Explorer) -> io::Result<()> {
     let theme = KitTheme::detected();
     explorer.set_theme(explorer_theme(theme.scheme));
+    explorer.set_show_path(false);
     let mut drags = DragSurface::detect();
     let mut terminal = TerminalGuard::enter()?;
+    let _keyboard = KeyboardEnhancementGuard::enter()?;
     let mut reporter = ContextReporter::detect();
     let agent = AgentBridge::new();
     agent.refresh();
@@ -443,15 +446,15 @@ fn render_frame(
     frame.render_widget(explorer.widget(drags), explorer_area);
 
     if footer_rows > 0 {
-        let help = if menu.is_some() {
-            "Esc close · ↑↓ select · Enter choose"
-        } else if explorer.filter_focused() {
-            "Esc back · ↑↓ select · Enter open"
-        } else {
-            "↑↓ select · Enter open · / filter"
-        };
+        let footer_area = Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1);
         let (message, style) = status.map_or_else(
-            || (help.to_owned(), Style::new().fg(theme.muted)),
+            || {
+                drags.register(footer_area, explorer.cwd());
+                (
+                    explorer.cwd().display().to_string(),
+                    Style::new().fg(theme.muted),
+                )
+            },
             |status| {
                 (
                     status.message.clone(),
@@ -465,7 +468,7 @@ fn render_frame(
         );
         frame.render_widget(
             Paragraph::new(format!("  {message}")).style(style),
-            Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1),
+            footer_area,
         );
     }
 
@@ -534,6 +537,7 @@ mod tests {
         let mut explorer = Explorer::new(directory.path())
             .unwrap()
             .with_theme(explorer_theme(theme.scheme));
+        explorer.set_show_path(false);
         let mut terminal = Terminal::new(TestBackend::new(50, 12)).unwrap();
         let mut drags = DragSurface::disabled();
 
@@ -543,15 +547,37 @@ mod tests {
             .unwrap();
 
         assert_eq!(drags.regions().len(), 4);
-        assert_eq!(drags.regions()[0].path, explorer.cwd());
-        assert_eq!(drags.regions()[0].area.y, 1);
-        assert!(drags.regions()[2].path.ends_with("folder"));
+        let cwd_drag = drags
+            .regions()
+            .iter()
+            .find(|region| region.path == explorer.cwd())
+            .expect("current-folder footer drag");
+        assert_eq!(cwd_drag.area.y, 11);
+        assert!(drags.regions()[1].path.ends_with("folder"));
         assert_eq!(terminal.backend().buffer()[(49, 0)].bg, Color::Reset);
         assert_eq!(
-            terminal.backend().buffer()[(49, 2)].bg,
+            terminal.backend().buffer()[(49, 1)].bg,
             theme.selected_row.bg.unwrap()
         );
         assert_eq!(terminal.backend().buffer()[(49, 9)].bg, Color::Reset);
+        let footer = (0..50)
+            .map(|x| terminal.backend().buffer()[(x, 11)].symbol())
+            .collect::<String>();
+        let path_prefix = explorer.cwd().display().to_string();
+        let path_prefix = path_prefix.chars().take(20).collect::<String>();
+        assert!(footer.contains(&path_prefix), "muted folder path\n{footer}");
+        assert!(!footer.contains("Enter open"), "no shortcut help\n{footer}");
+        assert_eq!(terminal.backend().buffer()[(2, 11)].fg, theme.muted);
+        let filter_row = (0..50)
+            .map(|x| terminal.backend().buffer()[(x, 0)].symbol())
+            .collect::<String>();
+        let first_item_row = (0..50)
+            .map(|x| terminal.backend().buffer()[(x, 1)].symbol())
+            .collect::<String>();
+        assert!(
+            !filter_row.contains(&path_prefix) && !first_item_row.contains(&path_prefix),
+            "folder path should only appear in the footer\n{filter_row}\n{first_item_row}"
+        );
     }
 
     #[test]

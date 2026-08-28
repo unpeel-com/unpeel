@@ -57,18 +57,19 @@ The destination should receive the absolute path, shell-quoted when needed,
 as bracketed paste. No Enter is sent. Files and folders use the same path-only
 operation; nothing is moved or copied by Unpeel.
 
-The current-folder header and every visible row are drag sources. The shared
-component publishes absolute Host-local paths through `DragSurface`, so the
-same transferable item can be consumed by terminals now and by other Unpeel
-Apps later. The kit also exposes `DraggablePath`, the generic `DragSource<W>`
-wrapper, and the lower-level `DragSurface::register` API.
+The current-folder path at the bottom and every visible row are drag sources.
+The shared component publishes absolute Host-local paths through `DragSurface`,
+so the same transferable item can be consumed by terminals now and by other
+Unpeel Apps later. The kit also exposes `DraggablePath`, the generic
+`DragSource<W>` wrapper, and the lower-level `DragSurface::register` API.
 
 Appearance comes from the kit's dark/light defaults. Set
 `UNPEEL_TUI_THEME=light` or `UNPEEL_TUI_THEME=dark` to override detection.
 Selected rows span the full list width and keep the shared two-cell content
 inset. Unpeel's Session title owns the App name, so content starts immediately
-without a repeated in-App title. One minimal bottom-left hint row leads with
-`Esc` whenever a menu or filter interaction is open.
+without a repeated in-App title. The bottom row contains only the muted,
+absolute current-folder path; that path is not repeated below the filter, and
+there is no shortcut help.
 
 The binary self-registers a development-only App manifest under an existing
 `~/.unpeel/apps/unpeel.app.filetree/` when launched. If it is not installed on
