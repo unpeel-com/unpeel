@@ -3,7 +3,6 @@ mod git;
 mod highlight;
 mod install;
 mod ui;
-mod unpeel;
 
 use std::path::PathBuf;
 
@@ -20,14 +19,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("unpeel-diffs {}", env!("CARGO_PKG_VERSION"));
             return Ok(());
         }
-        Some(argument) if argument == "--register" => {
-            install::ensure_installed();
-            return Ok(());
-        }
         _ => {}
     }
 
-    install::ensure_installed();
     let explicit_path = std::env::args_os().nth(1).map(PathBuf::from);
     let follow_agent_context = explicit_path.is_none();
     let start = explicit_path.unwrap_or(std::env::current_dir()?);

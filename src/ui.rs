@@ -19,7 +19,7 @@ use ratatui::widgets::{Paragraph, Widget};
 use ratatui::{Frame, Terminal};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use unpeel_app_kit::{
-    AgentBridge, ColorScheme, DoubleClickTracker, DragSurface, EditorBridge,
+    AgentBridge, AppReporter, ColorScheme, DoubleClickTracker, DragSurface, EditorBridge,
     KeyboardEnhancementGuard, KitTheme, MenuItem, MenuTheme, PopupMenu, SELECTABLE_LEFT_PADDING,
     ThemeMonitor, VerticalScrollbar, clipboard_sequence, display_path_from_root,
 };
@@ -27,7 +27,6 @@ use unpeel_app_kit::{
 use crate::app::{App, Screen};
 use crate::git::{ChangedFile, DiffDocument};
 use crate::highlight::{DocumentColors, Highlighter};
-use crate::unpeel::ContextReporter;
 
 const FOOTER_ROWS: u16 = 1;
 const DETAIL_GAP_ROWS: u16 = 1;
@@ -40,7 +39,7 @@ pub fn run(mut app: App, follow_agent_context: bool) -> io::Result<()> {
     let mut terminal = TerminalGuard::enter()?;
     let mut drags = DragSurface::detect();
     let _keyboard = KeyboardEnhancementGuard::enter()?;
-    let mut reporter = ContextReporter::detect();
+    let mut reporter = AppReporter::detect(crate::install::APP_ID);
     let agent = AgentBridge::new();
     agent.refresh();
     let mut last_agent_context_refresh = Instant::now();
@@ -54,7 +53,16 @@ pub fn run(mut app: App, follow_agent_context: bool) -> io::Result<()> {
 
     loop {
         if needs_draw {
-            reporter.publish(&app);
+            reporter.set_context(&serde_json::json!({
+                "root": app.root(),
+                "view": if app.is_detail() { "diff" } else { "files" },
+                "changed_files": app.files.len(),
+                "selected_path": app.selected_absolute_path(),
+                "selected_status": app.selected_file().map(|file| file.state_label()),
+                "selected_diff_lines": app
+                    .selection_range()
+                    .map(|(start, end)| [start + 1, end + 1]),
+            }));
             let colors = highlights.resolve(&app, theme.scheme);
             rendered = terminal.draw(&app, &mut drags, menu.as_mut(), colors, theme)?;
             app.apply_render_metrics(

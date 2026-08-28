@@ -46,7 +46,6 @@ mkdir -p ~/Dev && cd ~/Dev
 git clone https://github.com/unpeel-com/unpeel-app-kit.git
 git clone https://github.com/unpeel-com/unpeel-app-diffs.git
 cargo install --locked --path unpeel-app-diffs
-unpeel-diffs --register
 ```
 
 Once the release artifact is published, the checksum-verified binary installer
@@ -56,8 +55,8 @@ will be:
 curl -fsSL https://unpeel.com/install/diffs/install.sh | sh
 ```
 
-Both methods register the versioned App manifest under
-`~/.unpeel/apps/unpeel.app.diffs/`.
+Unpeel detects the installed `unpeel-diffs` CLI directly from `PATH`; no
+registration command or `~/.unpeel/apps` write is needed.
 
 ## Run
 
@@ -66,6 +65,9 @@ unpeel-diffs ~/Dev/my-repository
 ```
 
 With no path, it discovers the Git repository containing the current folder.
+In a hosted pane that unpinned launch follows the neighboring/main agent's
+actual checkout: it switches into that agent's worktree and back to the main
+checkout automatically. Passing a path keeps Diffs pinned to that repository.
 The viewer combines staged and unstaged tracked changes against `HEAD` and
 shows untracked files as additions. While idle it quietly follows the
 working tree (about once a second), so the list and the open diff update as
@@ -106,6 +108,6 @@ offers **Open in editor** for the current file. The shared editor action uses
 Unpeel's configured editor when hosted and the platform opener when standalone.
 
 Set `UNPEEL_TUI_THEME=light` or `UNPEEL_TUI_THEME=dark` to override theme
-detection. When launched inside Unpeel, the binary best-effort registers a
-local `unpeel.app.diffs` manifest and publishes the selected file as App
-context; all Git inspection remains local and read-only.
+detection. When launched inside Unpeel, the Host detects the CLI from `PATH`
+and App Kit's shared `AppReporter` publishes the selected file as
+agent-readable context; all Git inspection remains local and read-only.
