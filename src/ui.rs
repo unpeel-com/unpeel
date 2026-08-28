@@ -14,9 +14,9 @@ use ratatui::style::Style;
 use ratatui::widgets::Paragraph;
 use ratatui::{Frame, Terminal};
 use unpeel_app_kit::{
-    AgentBridge, ColorScheme, DoubleClickTracker, DragSurface, Explorer, ExplorerEvent,
-    ExplorerInput, ExplorerTheme, KeyboardEnhancementGuard, KitTheme, MenuItem, MenuTheme,
-    PopupMenu, clipboard_sequence,
+    AgentBridge, ColorScheme, DoubleClickTracker, DragSurface, EditorBridge, Explorer,
+    ExplorerEvent, ExplorerInput, ExplorerTheme, KeyboardEnhancementGuard, KitTheme, MenuItem,
+    MenuTheme, PopupMenu, clipboard_sequence, display_path_from_root,
 };
 
 use crate::unpeel::ContextReporter;
@@ -237,6 +237,7 @@ enum AppAction {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ContextAction {
+    OpenInEditor(PathBuf),
     SendToAgent(PathBuf),
     CopyPath(PathBuf),
 }
@@ -249,7 +250,11 @@ fn context_menu(
     anchor: Position,
     scheme: ColorScheme,
 ) -> ContextMenu {
-    let mut items = Vec::with_capacity(2);
+    let mut items = Vec::with_capacity(3);
+    items.push(MenuItem::new(
+        "Open in editor",
+        ContextAction::OpenInEditor(path.clone()),
+    ));
     if can_send {
         items.push(MenuItem::new(
             "Send to agent",
@@ -353,6 +358,10 @@ fn activate_menu(menu: ContextMenu, agent: &AgentBridge) -> Status {
         return Status::error("No menu action selected");
     };
     match action {
+        ContextAction::OpenInEditor(path) => match EditorBridge::open(&path) {
+            Ok(()) => Status::message("Opened in editor"),
+            Err(error) => Status::error(format!("Open failed: {error}")),
+        },
         ContextAction::SendToAgent(path) => match agent.send_path(&path) {
             Ok(label) => Status::message(format!("Sent path to {label}")),
             Err(error) => match copy_path(&path) {
@@ -398,10 +407,7 @@ impl Status {
 
 fn status_for_event(event: ExplorerEvent, explorer: &Explorer) -> Option<Status> {
     match event {
-        ExplorerEvent::FileActivated(path) => Some(Status::message(format!(
-            "Drag {} into another pane",
-            path.display()
-        ))),
+        ExplorerEvent::FileActivated(_) => None,
         ExplorerEvent::Refreshed => Some(Status::message(if explorer.show_hidden() {
             "Hidden files shown"
         } else {
@@ -531,8 +537,9 @@ fn render_frame(
         let (message, style) = status.map_or_else(
             || {
                 drags.register(footer_area, explorer.cwd());
+                let root = explorer.navigation_root().unwrap_or_else(|| explorer.cwd());
                 (
-                    explorer.cwd().display().to_string(),
+                    display_path_from_root(explorer.cwd(), root),
                     Style::new().fg(theme.muted),
                 )
             },
@@ -710,9 +717,14 @@ mod tests {
         let footer = (0..50)
             .map(|x| terminal.backend().buffer()[(x, 11)].symbol())
             .collect::<String>();
-        let path_prefix = explorer.cwd().display().to_string();
-        let path_prefix = path_prefix.chars().take(20).collect::<String>();
-        assert!(footer.contains(&path_prefix), "muted folder path\n{footer}");
+        assert!(
+            footer.contains("  ."),
+            "project-root-relative folder path\n{footer}"
+        );
+        assert!(
+            !footer.contains(directory.path().to_string_lossy().as_ref()),
+            "footer must not expose the absolute project path\n{footer}"
+        );
         assert!(!footer.contains("Enter open"), "no shortcut help\n{footer}");
         assert_eq!(terminal.backend().buffer()[(2, 11)].fg, theme.muted);
         let filter_row = (0..50)
@@ -722,7 +734,8 @@ mod tests {
             .map(|x| terminal.backend().buffer()[(x, 1)].symbol())
             .collect::<String>();
         assert!(
-            !filter_row.contains(&path_prefix) && !first_item_row.contains(&path_prefix),
+            !filter_row.contains(directory.path().to_string_lossy().as_ref())
+                && !first_item_row.contains(directory.path().to_string_lossy().as_ref()),
             "folder path should only appear in the footer\n{filter_row}\n{first_item_row}"
         );
     }
@@ -754,7 +767,7 @@ mod tests {
             .unwrap();
 
         assert!(drags.regions().is_empty());
-        assert_eq!(menu.items().len(), 2);
+        assert_eq!(menu.items().len(), 3);
         let items_area = menu.items_area();
         assert_eq!(
             terminal.backend().buffer()[(items_area.right() - 1, items_area.y)].bg,
@@ -762,25 +775,19 @@ mod tests {
         );
         assert_eq!(
             terminal.backend().buffer()[(items_area.x, items_area.y)].symbol(),
-            "S"
+            "O"
         );
         assert_eq!(
             terminal.backend().buffer()[(items_area.x + 1, items_area.y)].symbol(),
-            "e"
+            "p"
         );
     }
 
     #[test]
-    fn activated_files_are_described_as_drag_sources() {
+    fn activating_a_file_keeps_the_path_footer_unchanged() {
         let path = PathBuf::from("/tmp/file with spaces.txt");
         let explorer = Explorer::new(std::env::temp_dir()).unwrap();
-        let status =
-            status_for_event(ExplorerEvent::FileActivated(path.clone()), &explorer).unwrap();
-        assert_eq!(
-            status.message,
-            format!("Drag {} into another pane", path.display())
-        );
-        assert!(!status.error);
+        assert!(status_for_event(ExplorerEvent::FileActivated(path), &explorer).is_none());
     }
 
     #[test]

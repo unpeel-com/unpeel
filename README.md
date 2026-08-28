@@ -16,18 +16,33 @@ the product.
 
 ## Install
 
+The hosted binary route is ready for the App release channel but its artifact
+has not been published yet. For now, install from source with App Kit checked
+out beside this repository:
+
+```sh
+mkdir -p ~/Dev && cd ~/Dev
+git clone https://github.com/unpeel-com/unpeel-app-kit.git
+git clone https://github.com/unpeel-com/unpeel-app-filetree.git
+cargo install --locked --path unpeel-app-filetree
+unpeel-filetree --register
+```
+
+Once the release artifact is published, the checksum-verified binary installer
+will be:
+
 ```sh
 curl -fsSL https://unpeel.com/install/filetree/install.sh | sh
 ```
 
-The checksum-verified installer registers the versioned App manifest
-immediately under `~/.unpeel/apps/unpeel.app.filetree/`.
+Both methods register the versioned App manifest under
+`~/.unpeel/apps/unpeel.app.filetree/`.
 
 ## Run
 
 ```sh
-cargo run --release -- ~/Dev
-cargo run --release -- --ext md ~/Notes
+unpeel-filetree ~/Dev
+unpeel-filetree --ext md ~/Notes
 unpeel-filetree --ext md,mdx .
 ```
 
@@ -60,9 +75,11 @@ One click selects a file or folder. Double-click a folder (including `../`) to
 enter it, or a file to activate it. In the filter, click to place the native
 text cursor, drag to select text, Shift-click to extend a selection, and
 double-click to select a word. Right-click for the shared gray
-`PopupMenu`: it offers **Send to agent** when a same-group Unpeel agent is
-available, and **Copy path**. Sending pastes a safe absolute path reference
-into the agent's input without pressing Enter.
+`PopupMenu`: it offers **Open in editor**, **Send to agent** when a same-group
+Unpeel agent is available, and **Copy path**. The shared editor action follows
+Unpeel's configured editor when hosted and the platform opener when standalone.
+Sending pastes a safe absolute path reference into the agent's input without
+pressing Enter.
 
 The App enables mouse reporting in ordinary terminals as well as hosted panes.
 Inside Unpeel, the native terminal wrapper intercepts a mapped left-button
@@ -79,9 +96,10 @@ beneath the menu.
 4. In the other pane, start Claude Code or leave a shell prompt open.
 5. Drag an Explorer row into the other terminal.
 
-The destination should receive the absolute path, shell-quoted when needed,
-as bracketed paste. No Enter is sent. Files and folders use the same path-only
-operation; nothing is moved or copied by Unpeel.
+The destination should receive a shell-quoted path as bracketed paste: relative
+to the destination Session's project when possible, `~/…` elsewhere below the
+home folder, and absolute only outside both roots. No Enter is sent. Files and
+folders use the same path-only operation; nothing is moved or copied by Unpeel.
 
 The launch path (or current working directory when no path is passed) is
 canonicalized as the Explorer's hard root. The current-folder path at the
@@ -96,8 +114,8 @@ Appearance comes from the kit's dark/light defaults. Set
 Selected rows span the full list width and keep the shared two-cell content
 inset. Unpeel's Session title owns the App name, so content starts immediately
 without a repeated in-App title. The bottom row contains only the muted,
-absolute current-folder path; that path is not repeated below the filter, and
-there is no shortcut help.
+project-relative current-folder path (`.` at the launch root); that path is not
+repeated below the filter, and there is no shortcut help.
 
 The binary self-registers a development-only App manifest under an existing
 `~/.unpeel/apps/unpeel.app.filetree/` when launched. If it is not installed on
