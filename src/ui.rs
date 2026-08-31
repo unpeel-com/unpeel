@@ -16,10 +16,165 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Sparkline, Widget};
 use ratatui::Frame;
 use std::path::Path;
-use unpeel_app_kit::{KitTheme, VerticalScrollbar, SELECTABLE_LEFT_PADDING};
+use unpeel_app_kit::{
+    KitTheme, List, ListItem, Page, SelectableRow, VerticalScrollbar, SELECTABLE_LEFT_PADDING,
+};
 
 const METRIC_GAP: u16 = 1;
 const DETAIL_TOP_GAP: u16 = 1;
+
+pub const SEMANTIC_ROOT_ID: &str = "usage-page";
+pub const OPEN_PROVIDER_ACTION: &str = "open-provider";
+pub const CLOSE_PROVIDER_ACTION: &str = "close-provider";
+pub const REFRESH_ACTION: &str = "refresh-usage";
+
+pub fn provider_node_id(index: usize) -> String {
+    format!("provider-{index}")
+}
+
+pub fn provider_index_from_node_id(node_id: &str) -> Option<usize> {
+    node_id.strip_prefix("provider-")?.parse().ok()
+}
+
+/// Closed App Kit projection of the same master/detail model as the Ratatui
+/// dashboard. Rich meters remain terminal-native; native and web render the
+/// provider catalog, values, details, history, back navigation, and refresh.
+pub fn semantic_page(snapshot: Option<&Snapshot>, view: &View) -> Page {
+    let Some(snapshot) = snapshot else {
+        return Page::new(
+            "Usage",
+            List::new("usage-providers", Vec::new()).empty_message("Scanning local usage…"),
+        );
+    };
+    if view.detail_open && !snapshot.providers.is_empty() {
+        let index = view.selected.min(snapshot.providers.len() - 1);
+        return semantic_provider_detail(&snapshot.providers[index], index, view.scanning);
+    }
+
+    let mut items = snapshot
+        .providers
+        .iter()
+        .enumerate()
+        .map(|(index, provider)| {
+            let (summary, _) = provider_basic_data(provider, 96);
+            let detail =
+                display_provider_list_badge(&provider.badge).or_else(|| provider.alert.clone());
+            let mut item = ListItem::new(
+                provider_node_id(index),
+                display_provider_list_name(&provider.name),
+            )
+            .activate_action(OPEN_PROVIDER_ACTION);
+            if let Some(detail) = detail.filter(|detail| !detail.is_empty()) {
+                item = item.detail(detail);
+            }
+            if !summary.is_empty() {
+                item = item.value(summary);
+            }
+            item
+        })
+        .collect::<Vec<_>>();
+    items.push(
+        ListItem::new(
+            "refresh-usage",
+            if view.scanning {
+                "Refreshing…"
+            } else {
+                "Refresh"
+            },
+        )
+        .detail("Rescan local provider history and live limits")
+        .activate_action(REFRESH_ACTION),
+    );
+    Page::new(
+        "Usage",
+        List::new("usage-providers", items).empty_message("No local usage data"),
+    )
+}
+
+fn semantic_provider_detail(provider: &Provider, index: usize, scanning: bool) -> Page {
+    let prefix = provider_node_id(index);
+    let mut items = Vec::new();
+    if let Some(alert) = &provider.alert {
+        items.push(ListItem::new(format!("{prefix}-alert"), "Alert").value(alert.clone()));
+    }
+    if !provider.present {
+        items.push(ListItem::new(format!("{prefix}-status"), "Status").value("Not installed"));
+    } else if provider.metrics.is_empty()
+        && provider.monthly_tokens.is_empty()
+        && provider.project_usage.is_empty()
+    {
+        items.push(ListItem::new(format!("{prefix}-status"), "Status").value("No recent activity"));
+    }
+    for (metric_index, metric) in provider.metrics.iter().enumerate() {
+        let mut item = ListItem::new(
+            format!("{prefix}-metric-{metric_index}"),
+            display_metric_label(&metric.label),
+        )
+        .value(metric.value.clone());
+        if let Some(annotation) = &metric.annotation {
+            item = item.detail(annotation.clone());
+        }
+        items.push(item);
+    }
+    if provider.kind == ProviderKind::Total {
+        for (project_index, (path, tokens)) in
+            current_project_rows(provider).into_iter().enumerate()
+        {
+            items.push(
+                ListItem::new(
+                    format!("{prefix}-project-{project_index}"),
+                    project_label(path),
+                )
+                .detail("Current month")
+                .value(format_exact_tokens(tokens)),
+            );
+        }
+    }
+    for (month_index, usage) in provider.monthly_tokens.iter().enumerate() {
+        items.push(
+            ListItem::new(
+                format!("{prefix}-month-{month_index}"),
+                month_label(usage.month, usage.year, month_index == 0),
+            )
+            .value(if usage.tokens == 0 {
+                "—".to_string()
+            } else {
+                format_exact_tokens(usage.tokens)
+            }),
+        );
+    }
+    for (detail_index, (key, value)) in provider.detail.iter().enumerate() {
+        items.push(
+            ListItem::new(format!("{prefix}-detail-{detail_index}"), title_case(key))
+                .value(value.clone()),
+        );
+    }
+    if let Some(as_of) = provider.as_of {
+        items.push(
+            ListItem::new(format!("{prefix}-updated"), "Updated").value(format!(
+                "{} ago",
+                compact_duration(now_epoch_secs() - as_of)
+            )),
+        );
+    }
+    items.push(
+        ListItem::new(
+            format!("{prefix}-refresh"),
+            if scanning { "Refreshing…" } else { "Refresh" },
+        )
+        .activate_action(REFRESH_ACTION),
+    );
+    let title = if provider.badge.is_empty() {
+        display_provider_name(&provider.name)
+    } else {
+        format!(
+            "{} · {}",
+            display_provider_name(&provider.name),
+            display_badge(&provider.badge)
+        )
+    };
+    Page::new(title, List::new("usage-detail", items)).back_action(CLOSE_PROVIDER_ACTION)
+}
 
 fn accent(palette: &ui::Palette, kind: ProviderKind) -> Color {
     match kind {
@@ -371,15 +526,7 @@ fn render_provider_list_row(
     } else {
         Style::default()
     };
-    buffer.set_style(area, row_style);
-
-    let padding = SELECTABLE_LEFT_PADDING.min(area.width);
-    let content = Rect::new(
-        area.x.saturating_add(padding),
-        area.y,
-        area.width.saturating_sub(padding).saturating_sub(1),
-        1,
-    );
+    let content = SelectableRow::new(selected, row_style).paint(area, buffer);
     if content.is_empty() {
         return;
     }
@@ -1486,6 +1633,44 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         (screen, rendered, buffer)
+    }
+
+    #[test]
+    fn semantic_page_preserves_provider_master_detail_and_actions() {
+        let snapshot = sample();
+        let mut view = View {
+            selected: 0,
+            detail_open: false,
+            scanning: false,
+            hosted: false,
+            alerts: Alerts::default(),
+            alert_dialog: None,
+            scroll_offset: 0,
+            reveal_selected: true,
+        };
+        let catalog = semantic_page(Some(&snapshot), &view);
+        catalog.validate().unwrap();
+        assert_eq!(
+            catalog.list().items[0].activate.as_deref(),
+            Some(OPEN_PROVIDER_ACTION)
+        );
+        assert!(catalog.list().items[0].value.is_some());
+        assert_eq!(provider_index_from_node_id("provider-2"), Some(2));
+
+        view.detail_open = true;
+        let detail = semantic_page(Some(&snapshot), &view);
+        detail.validate().unwrap();
+        assert_eq!(detail.back.as_deref(), Some(CLOSE_PROVIDER_ACTION));
+        assert!(detail
+            .list()
+            .items
+            .iter()
+            .any(|item| item.label == "7-day limit"));
+        assert!(detail
+            .list()
+            .items
+            .iter()
+            .any(|item| item.activate.as_deref() == Some(REFRESH_ACTION)));
     }
 
     fn render_with(

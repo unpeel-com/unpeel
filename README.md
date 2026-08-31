@@ -1,7 +1,8 @@
 # unpeel-usage
 
-Local AI usage & credits at a glance — a small, fast terminal app
-built entirely from native [Ratatui](https://ratatui.rs) layouts and widgets.
+Local AI usage & credits at a glance — a small, fast standalone terminal app
+built from native [Ratatui](https://ratatui.rs) layouts and widgets, with an
+optional App Kit semantic projection for hosted native and web views.
 It reuses the logins and files your AI tools already keep on this machine:
 no pasted API keys and no daemon. Claude and Grok live limits reuse their CLI
 logins; Codex, Claude, Grok, and Muse history stays local.
@@ -33,8 +34,9 @@ git clone https://github.com/unpeel-com/unpeel-app-usage.git
 cargo install --locked --path unpeel-app-usage
 ```
 
-The selected provider gets the same full-width gray row and two-cell label
-inset as `unpeel-app-kit`'s Explorer. The list prioritizes quota readings over
+The selected provider uses `unpeel-app-kit`'s shared `SelectableRow`: one
+full-width adaptive gray row with an exact two-cell content inset. The list
+prioritizes quota readings over
 account metadata: `5-hour` is Claude's rolling five-hour allowance, `7-day` is
 the overall weekly allowance, and `Fable 7-day` is that model's weekly
 allowance. Every percentage is the amount used. Email addresses and reset
@@ -50,6 +52,15 @@ Detail quotas use a purpose-built Ratatui meter, calendar-day activity uses
 the native `Sparkline` widget, and Claude pace projections keep their blue /
 amber / red semantic states, spare estimate, run-out estimate, and even-pace
 marker.
+
+When a Host injects an App Kit UI endpoint, the same process additionally
+publishes a closed `Page` → `List` → `ListItem` projection. SwiftUI and web
+renderers get the provider catalog with secondary status, trailing summaries,
+row activation, a native detail page, Back, and Refresh. Those actions return
+to the Ratatui process, which remains the sole model owner and acknowledges
+each revision. Rich quota meters and sparklines stay in the complete terminal
+view; the semantic view preserves the useful data and actions rather than
+trying to serialize arbitrary terminal widgets.
 
 The **Current project** row attributes local history to the Git project from
 which each agent session was launched. In Unpeel, every background refresh
@@ -67,8 +78,8 @@ local logs cannot be reconstructed.
 
 The shared design-system primitives come directly from
 [`unpeel-app-kit`](https://github.com/unpeel-com/unpeel-app-kit):
-`SELECTABLE_LEFT_PADDING`, the dark and light `KitTheme` selection colors,
-and `VerticalScrollbar`. Usage retains its OSC 11 appearance detection; when
+`SelectableRow`, the dark and light `KitTheme` selection colors, and
+`VerticalScrollbar`. Usage retains its OSC 11 appearance detection; when
 the terminal cannot report an appearance, the selected row uses
 terminal-native reverse video instead of assuming a dark background.
 
@@ -210,6 +221,13 @@ App's name and live project/workspace accent, and the sidebar shows a status
 line like `Codex 3% · Claude $3.24 · Grok 14% · Muse $1.20`. App Kit's shared
 `AppReporter` owns the small plain-file plus loopback-HTTP integration; the
 App itself remains standalone-safe.
+
+The optional App Kit UI bridge is also standalone-safe: with no injected
+socket it opens nothing and the normal TUI is unchanged. When hosted, renderer
+visibility only suspends terminal drawing—not scans, refresh timers, state, or
+semantic actions. A scoped human or agent participant with interaction grants
+can open providers, return to the catalog, and refresh through the same Page
+actions without receiving command or admin authority.
 
 When an Unpeel home exists (`$UNPEEL_HOME`, or `~/.unpeel`), its
 `app-state.json` presets select and order the dashboard providers. Codex,

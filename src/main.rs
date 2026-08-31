@@ -32,7 +32,12 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Duration;
-use unpeel_app_kit::{AppContext, AppReporter, KeyboardEnhancementGuard, ThemeMonitor};
+use unpeel_app_kit::{
+    AppContext, AppMetadata, AppReporter, KeyboardEnhancementGuard, ThemeMonitor, UiBridge,
+    UiBridgeEvent, UiDeltaOperation, UiEventKind, UiEventOutcome, UiEventValue, UiNode,
+};
+
+const UI_VIEW_ID: &str = "main";
 
 fn main() {
     let config = Config::load();
@@ -230,6 +235,136 @@ enum ScanEvent {
 }
 
 impl App {
+    fn view(&self) -> ui::View {
+        ui::View {
+            selected: self.selected,
+            detail_open: self.detail_open,
+            scanning: self.scanning,
+            hosted: self.hosted,
+            alerts: self.config.alerts,
+            alert_dialog: self.alert_dialog,
+            scroll_offset: self.scroll_offset,
+            reveal_selected: self.reveal_selected,
+        }
+    }
+
+    fn semantic_node(&self) -> UiNode {
+        UiNode::page(
+            ui::SEMANTIC_ROOT_ID,
+            ui::semantic_page(self.snapshot.as_ref(), &self.view()),
+        )
+    }
+
+    fn publish_semantic_projection(
+        &self,
+        bridge: &mut UiBridge,
+        revision: &mut u64,
+        published: &mut UiNode,
+    ) -> io::Result<()> {
+        let next = self.semantic_node();
+        if next == *published {
+            return Ok(());
+        }
+        let next_revision = revision
+            .checked_add(1)
+            .ok_or_else(|| io::Error::other("Usage UI revision space is exhausted"))?;
+        bridge
+            .publish_delta(
+                UI_VIEW_ID,
+                *revision,
+                next_revision,
+                vec![UiDeltaOperation::ReplaceRoot { root: next.clone() }],
+            )
+            .map_err(ui_bridge_error)?;
+        *revision = next_revision;
+        *published = next;
+        Ok(())
+    }
+
+    fn drain_bridge(
+        &mut self,
+        bridge: &mut UiBridge,
+        trigger: &mpsc::Sender<()>,
+        revision: &mut u64,
+        published: &mut UiNode,
+    ) -> io::Result<()> {
+        while let Some(message) = bridge.poll().map_err(ui_bridge_error)? {
+            match message {
+                UiBridgeEvent::Action { event, .. } => {
+                    let result = if event.base_revision != *revision {
+                        Err(format!(
+                            "Usage changed from revision {} to {}; retry the action",
+                            event.base_revision, revision
+                        ))
+                    } else {
+                        self.apply_semantic_action(
+                            event.action.node_id.as_str(),
+                            event.action.action.as_str(),
+                            event.action.kind,
+                            &event.action.value,
+                            trigger,
+                        )
+                    };
+                    let outcome = match result {
+                        Ok(()) => {
+                            self.publish_semantic_projection(bridge, revision, published)?;
+                            UiEventOutcome::Applied
+                        }
+                        Err(message) => UiEventOutcome::Rejected(message),
+                    };
+                    bridge
+                        .acknowledge(&event, outcome, *revision)
+                        .map_err(ui_bridge_error)?;
+                }
+                UiBridgeEvent::Attached { .. }
+                | UiBridgeEvent::Detached { .. }
+                | UiBridgeEvent::Lifecycle { .. } => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn apply_semantic_action(
+        &mut self,
+        node_id: &str,
+        action: &str,
+        kind: UiEventKind,
+        value: &UiEventValue,
+        trigger: &mpsc::Sender<()>,
+    ) -> Result<(), String> {
+        if *value != UiEventValue::None {
+            return Err("Usage navigation actions do not accept a value".to_string());
+        }
+        let page = ui::semantic_page(self.snapshot.as_ref(), &self.view());
+        if !semantic_action_is_declared(&page, node_id, action, kind) {
+            return Err("Action is not declared by the current Usage Page".to_string());
+        }
+        match (action, kind) {
+            (ui::OPEN_PROVIDER_ACTION, UiEventKind::Activate) => {
+                let index = ui::provider_index_from_node_id(node_id)
+                    .ok_or_else(|| "Provider action has an invalid target".to_string())?;
+                if index >= self.provider_count() {
+                    return Err("Provider no longer exists".to_string());
+                }
+                self.select(index);
+                self.open_detail();
+                Ok(())
+            }
+            (ui::CLOSE_PROVIDER_ACTION, UiEventKind::Cancel) if node_id == ui::SEMANTIC_ROOT_ID => {
+                self.close_detail();
+                Ok(())
+            }
+            (ui::REFRESH_ACTION, UiEventKind::Activate) => {
+                trigger
+                    .send(())
+                    .map_err(|_| "Usage scanner is no longer available".to_string())?;
+                self.scanning = true;
+                Ok(())
+            }
+            _ => Err("Action is not declared by the Usage Page".to_string()),
+        }
+    }
+
     /// Fold a fresh scan in: update the sidebar status line and emit a
     /// first-class informational alert when an opted-in edge fires.
     /// Every call is a silent no-op outside Unpeel.
@@ -393,6 +528,17 @@ fn run_tui(config: Config) -> io::Result<()> {
         alert_tracker: AlertTracker::default(),
         quit: false,
     };
+    let mut bridge = UiBridge::detect(
+        AppMetadata::new(install::APP_ID, "Unpeel Usage", env!("CARGO_PKG_VERSION")).description(
+            "Standalone Ratatui usage dashboard with an optional native/web projection",
+        ),
+    )
+    .map_err(ui_bridge_error)?;
+    let mut ui_revision = 1u64;
+    let mut published = app.semantic_node();
+    bridge
+        .publish(UI_VIEW_ID, ui_revision, published.clone())
+        .map_err(ui_bridge_error)?;
 
     // Scans run off the UI thread so a large transcript sweep never blocks
     // a frame; the trigger channel doubles as the refresh timer.
@@ -426,25 +572,23 @@ fn run_tui(config: Config) -> io::Result<()> {
                 ScanEvent::Finished(snapshot) => app.apply(snapshot),
             }
         }
-        let view = ui::View {
-            selected: app.selected,
-            detail_open: app.detail_open,
-            scanning: app.scanning,
-            hosted: app.hosted,
-            alerts: app.config.alerts,
-            alert_dialog: app.alert_dialog,
-            scroll_offset: app.scroll_offset,
-            reveal_selected: app.reveal_selected,
-        };
+        app.drain_bridge(&mut bridge, &trigger_tx, &mut ui_revision, &mut published)?;
+        app.publish_semantic_projection(&mut bridge, &mut ui_revision, &mut published)?;
+        let view = app.view();
         let mut rendered = ui::RenderResult::default();
-        terminal.draw(|frame| {
-            rendered = ui::draw(frame, app.snapshot.as_ref(), &view, &app.palette);
-        })?;
+        let rendered_terminal = bridge.should_render_terminal();
+        if rendered_terminal {
+            terminal.draw(|frame| {
+                rendered = ui::draw(frame, app.snapshot.as_ref(), &view, &app.palette);
+            })?;
+        }
         let hits = rendered.hits;
-        app.scroll_offset = rendered.scroll_offset;
-        app.max_scroll = rendered.max_scroll;
-        app.viewport_height = rendered.viewport_height;
-        app.reveal_selected = false;
+        if rendered_terminal {
+            app.scroll_offset = rendered.scroll_offset;
+            app.max_scroll = rendered.max_scroll;
+            app.viewport_height = rendered.viewport_height;
+            app.reveal_selected = false;
+        }
         let scrollbar_area = rendered.scrollbar_area;
         let back_button = rendered.back_button;
         let alert_option_hits = rendered.alert_option_hits;
@@ -588,14 +732,37 @@ fn run_tui(config: Config) -> io::Result<()> {
             Event::Resize(_, _) => app.reveal_selected = true,
             _ => {}
         }
+        app.publish_semantic_projection(&mut bridge, &mut ui_revision, &mut published)?;
     }
     Ok(())
+}
+
+fn ui_bridge_error(error: unpeel_app_kit::UiBridgeError) -> io::Error {
+    io::Error::other(error.to_string())
+}
+
+fn semantic_action_is_declared(
+    page: &unpeel_app_kit::Page,
+    node_id: &str,
+    action: &str,
+    kind: UiEventKind,
+) -> bool {
+    (node_id == ui::SEMANTIC_ROOT_ID
+        && kind == UiEventKind::Cancel
+        && page.back.as_deref() == Some(action))
+        || (kind == UiEventKind::Activate
+            && page
+                .list()
+                .items
+                .iter()
+                .any(|item| item.id == node_id && item.activate.as_deref() == Some(action)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::sources::{Provider, ProviderKind};
+    use unpeel_app_kit::{List, ListItem, Page};
 
     fn limit_snapshot(level: Level, used: f64, annotation: Option<&str>) -> Snapshot {
         let mut metric =
@@ -679,5 +846,34 @@ mod tests {
             metric
         };
         assert_eq!(metric_limit_state(&metric), LimitState::Close);
+    }
+
+    #[test]
+    fn semantic_actions_must_be_declared_on_the_current_page_and_node() {
+        let page = Page::new(
+            "Usage",
+            List::new(
+                "providers",
+                vec![ListItem::new("provider-0", "Codex").activate_action(ui::OPEN_PROVIDER_ACTION)],
+            ),
+        );
+        assert!(semantic_action_is_declared(
+            &page,
+            "provider-0",
+            ui::OPEN_PROVIDER_ACTION,
+            UiEventKind::Activate,
+        ));
+        assert!(!semantic_action_is_declared(
+            &page,
+            "forged-node",
+            ui::OPEN_PROVIDER_ACTION,
+            UiEventKind::Activate,
+        ));
+        assert!(!semantic_action_is_declared(
+            &page,
+            "refresh-usage",
+            ui::REFRESH_ACTION,
+            UiEventKind::Activate,
+        ));
     }
 }
