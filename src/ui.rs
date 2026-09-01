@@ -16,14 +16,18 @@ use ratatui::{Frame, Terminal};
 use unpeel_app_kit::{
     AgentBridge, AppContext, AppMetadata, AppReporter, ColorScheme, DoubleClickTracker,
     DragSurface, EditorBridge, Explorer, ExplorerEvent, ExplorerInput, ExplorerTheme,
-    KeyboardEnhancementGuard, KitTheme, MenuItem, MenuTheme, PopupMenu, ThemeMonitor, UiBridge,
-    UiBridgeEvent, UiEventOutcome, UiNode, clipboard_sequence, display_path_from_root,
-    tree_delta_operations,
+    KeyboardEnhancementGuard, KitTheme, MenuItem, MenuTheme, PopupMenu, SemanticMenu,
+    SemanticMenuAnchor, SemanticMenuItem, SemanticMenuPresentation, ThemeMonitor, UiBridge,
+    UiBridgeEvent, UiEventKind, UiEventOutcome, UiEventValue, UiNode, clipboard_sequence,
+    display_path_from_root, tree_delta_operations,
 };
 
 const FOOTER_ROWS: u16 = 1;
 const UI_VIEW_ID: &str = "main";
 const UI_TREE_ID: &str = "file-tree";
+const OPEN_IN_EDITOR_ACTION: &str = "open-in-editor";
+const SEND_TO_AGENT_ACTION: &str = "send-to-agent";
+const COPY_PATH_ACTION: &str = "copy-path";
 
 pub fn run(
     mut explorer: Explorer,
@@ -55,7 +59,7 @@ pub fn run(
     )
     .map_err(ui_bridge_error)?;
     let mut ui_revision = 1u64;
-    let mut published = UiNode::tree(UI_TREE_ID, explorer.semantic_tree("Files"));
+    let mut published = semantic_node(&mut explorer, agent.label().is_some());
     bridge
         .publish(UI_VIEW_ID, ui_revision, published.clone())
         .map_err(ui_bridge_error)?;
@@ -63,13 +67,20 @@ pub fn run(
     loop {
         drain_bridge(
             &mut explorer,
+            &agent,
             &mut bridge,
             &mut ui_revision,
             &mut published,
             &mut status,
             &mut needs_draw,
         )?;
-        publish_projection(&mut explorer, &mut bridge, &mut ui_revision, &mut published)?;
+        publish_projection(
+            &mut explorer,
+            agent.label().is_some(),
+            &mut bridge,
+            &mut ui_revision,
+            &mut published,
+        )?;
         if needs_draw {
             let selected = explorer.selected();
             reporter.set_context(&serde_json::json!({
@@ -272,11 +283,12 @@ pub fn run(
 
 fn publish_projection(
     explorer: &mut Explorer,
+    can_send: bool,
     bridge: &mut UiBridge,
     revision: &mut u64,
     published: &mut UiNode,
 ) -> io::Result<()> {
-    let next = UiNode::tree(UI_TREE_ID, explorer.semantic_tree("Files"));
+    let next = semantic_node(explorer, can_send);
     if next == *published {
         return Ok(());
     }
@@ -296,8 +308,41 @@ fn publish_projection(
     Ok(())
 }
 
+fn semantic_node(explorer: &mut Explorer, can_send: bool) -> UiNode {
+    UiNode::tree(
+        UI_TREE_ID,
+        explorer
+            .semantic_tree("Files")
+            .context_menu(semantic_context_menu(can_send)),
+    )
+}
+
+fn semantic_context_menu(can_send: bool) -> SemanticMenu {
+    let mut items = vec![SemanticMenuItem::new(
+        "open-in-editor",
+        "Open in editor",
+        OPEN_IN_EDITOR_ACTION,
+    )];
+    if can_send {
+        items.push(SemanticMenuItem::new(
+            "send-to-agent",
+            "Send to agent",
+            SEND_TO_AGENT_ACTION,
+        ));
+    }
+    items.push(SemanticMenuItem::new(
+        "copy-path",
+        "Copy path",
+        COPY_PATH_ACTION,
+    ));
+    SemanticMenu::new("File actions", items)
+        .presentation(SemanticMenuPresentation::Context)
+        .anchor(SemanticMenuAnchor::Pointer)
+}
+
 fn drain_bridge(
     explorer: &mut Explorer,
+    agent: &AgentBridge,
     bridge: &mut UiBridge,
     revision: &mut u64,
     published: &mut UiNode,
@@ -316,23 +361,77 @@ fn drain_bridge(
                 continue;
             }
         };
-        let outcome = match explorer.handle_ui_event(*revision, UI_TREE_ID, &event) {
-            Ok(Some(explorer_event)) => {
-                *status = status_for_event(explorer_event, explorer);
-                *needs_draw = true;
-                UiEventOutcome::Applied
+        let semantic_menu_action = matches!(
+            event.action.action.as_str(),
+            OPEN_IN_EDITOR_ACTION | SEND_TO_AGENT_ACTION | COPY_PATH_ACTION
+        );
+        let outcome = if semantic_menu_action {
+            if event.base_revision != *revision {
+                UiEventOutcome::Rejected(format!(
+                    "File Tree changed from revision {} to {}; retry the action",
+                    event.base_revision, revision
+                ))
+            } else {
+                match semantic_context_action(explorer, agent.label().is_some(), &event.action) {
+                    Ok(action) => {
+                        *status = Some(activate_context_action(action, agent));
+                        *needs_draw = true;
+                        UiEventOutcome::Applied
+                    }
+                    Err(message) => UiEventOutcome::Rejected(message),
+                }
             }
-            Ok(None) => UiEventOutcome::Rejected(
-                "Action targets a different File Tree component".to_string(),
-            ),
-            Err(message) => UiEventOutcome::Rejected(message),
+        } else {
+            match explorer.handle_ui_event(*revision, UI_TREE_ID, &event) {
+                Ok(Some(explorer_event)) => {
+                    *status = status_for_event(explorer_event, explorer);
+                    *needs_draw = true;
+                    UiEventOutcome::Applied
+                }
+                Ok(None) => UiEventOutcome::Rejected(
+                    "Action targets a different File Tree component".to_string(),
+                ),
+                Err(message) => UiEventOutcome::Rejected(message),
+            }
         };
-        publish_projection(explorer, bridge, revision, published)?;
+        publish_projection(
+            explorer,
+            agent.label().is_some(),
+            bridge,
+            revision,
+            published,
+        )?;
         bridge
             .acknowledge(&event, outcome, *revision)
             .map_err(ui_bridge_error)?;
     }
     Ok(())
+}
+
+fn semantic_context_action(
+    explorer: &mut Explorer,
+    can_send: bool,
+    action: &unpeel_app_kit::UiAction,
+) -> Result<ContextAction, String> {
+    if action.kind != UiEventKind::Activate {
+        return Err("File Tree menu actions must activate".to_owned());
+    }
+    let UiEventValue::Text(target) = &action.value else {
+        return Err("File Tree menu actions require an opaque Tree target".to_owned());
+    };
+    let build: fn(PathBuf) -> ContextAction =
+        match (action.node_id.as_str(), action.action.as_str()) {
+            ("open-in-editor", OPEN_IN_EDITOR_ACTION) => ContextAction::OpenInEditor,
+            ("send-to-agent", SEND_TO_AGENT_ACTION) if can_send => ContextAction::SendToAgent,
+            ("copy-path", COPY_PATH_ACTION) => ContextAction::CopyPath,
+            _ => return Err("Action is not declared by the current File Tree menu".to_owned()),
+        };
+    explorer.select_semantic_item(target)?;
+    let path = explorer
+        .selected()
+        .map(|entry| entry.path().to_path_buf())
+        .ok_or_else(|| "File Tree target is no longer present".to_owned())?;
+    Ok(build(path))
 }
 
 fn ui_bridge_error(error: unpeel_app_kit::UiBridgeError) -> io::Error {
@@ -399,6 +498,10 @@ fn activate_menu(menu: ContextMenu, agent: &AgentBridge) -> Status {
     let Some(action) = menu.selected_value().cloned() else {
         return Status::error("No menu action selected");
     };
+    activate_context_action(action, agent)
+}
+
+fn activate_context_action(action: ContextAction, agent: &AgentBridge) -> Status {
     match action {
         ContextAction::OpenInEditor(path) => match EditorBridge::open(&path) {
             Ok(()) => Status::message("Opened in editor"),
@@ -768,13 +871,14 @@ mod tests {
         std::fs::write(directory.path().join("note.md"), "hello").unwrap();
         let mut explorer = Explorer::scoped(directory.path()).unwrap();
 
-        let node = UiNode::tree(UI_TREE_ID, explorer.semantic_tree("Files"));
+        let node = semantic_node(&mut explorer, false);
         let unpeel_app_kit::UiComponent::Tree(tree) = node.element else {
             panic!("File Tree must publish the Tree component");
         };
         assert_eq!(tree.label, "Files");
         assert!(tree.filter.is_some());
         assert_eq!(tree.items.len(), 2);
+        assert_eq!(tree.context_menu.as_ref().unwrap().items.len(), 2);
         assert!(tree.items.iter().all(|item| item.id.starts_with("entry-")));
         assert!(
             !serde_json::to_string(&tree)
@@ -782,6 +886,31 @@ mod tests {
                 .contains(directory.path().to_string_lossy().as_ref()),
             "semantic entry ids and labels must never expose the absolute root"
         );
+    }
+
+    #[test]
+    fn semantic_context_menu_resolves_opaque_targets_inside_the_explorer() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("note.md");
+        std::fs::write(&path, "hello").unwrap();
+        let mut explorer = Explorer::scoped(directory.path()).unwrap();
+        let node = semantic_node(&mut explorer, true);
+        let unpeel_app_kit::UiComponent::Tree(tree) = node.element else {
+            panic!("File Tree must publish the Tree component");
+        };
+        let target = tree.items[0].id.clone();
+        let action = unpeel_app_kit::UiAction::new(
+            "open-in-editor",
+            OPEN_IN_EDITOR_ACTION,
+            UiEventKind::Activate,
+            UiEventValue::Text(target),
+        );
+
+        assert_eq!(
+            semantic_context_action(&mut explorer, true, &action).unwrap(),
+            ContextAction::OpenInEditor(path.canonicalize().unwrap())
+        );
+        assert_eq!(explorer.selected().unwrap().name(), "note.md");
     }
 
     #[test]
