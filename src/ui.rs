@@ -14,11 +14,11 @@ use ratatui::layout::{Position, Rect};
 use ratatui::{Frame, Terminal};
 use unpeel_app_kit::{
     AgentBridge, AppContext, AppMetadata, AppReporter, DoubleClickTracker, DragSurface,
-    EditorBridge, Explorer, ExplorerEvent, ExplorerInput, ExplorerTheme, KeyboardEnhancementGuard,
-    KitTheme, MenuTheme, PopupMenu, SemanticMenu, SemanticMenuAnchor, SemanticMenuItem,
-    SemanticMenuPresentation, ThemeMonitor, TreeState, TreeTheme, UiBridge, UiBridgeEvent,
-    UiComponent, UiEventKind, UiEventOutcome, UiEventValue, UiNode, clipboard_sequence,
-    tree_delta_operations,
+    EditorBridge, Explorer, ExplorerEvent, ExplorerInput, ExplorerTheme, FooterAction,
+    KeyboardEnhancementGuard, KitTheme, MenuTheme, PopupMenu, SemanticMenu, SemanticMenuAnchor,
+    SemanticMenuItem, SemanticMenuPresentation, ThemeMonitor, TreeState, TreeTheme, UiAction,
+    UiBridge, UiBridgeEvent, UiComponent, UiEventKind, UiEventOutcome, UiEventValue, UiNode,
+    clipboard_sequence, tree_delta_operations,
 };
 
 const UI_VIEW_ID: &str = "main";
@@ -26,6 +26,8 @@ const UI_TREE_ID: &str = "file-tree";
 const OPEN_IN_EDITOR_ACTION: &str = "open-in-editor";
 const SEND_TO_AGENT_ACTION: &str = "send-to-agent";
 const COPY_PATH_ACTION: &str = "copy-path";
+const REFRESH_TREE_ACTION: &str = "refresh-tree";
+const TOGGLE_HIDDEN_ACTION: &str = "toggle-hidden";
 
 pub fn run(
     mut explorer: Explorer,
@@ -165,6 +167,11 @@ pub fn run(
                     }
                     continue;
                 }
+                if let Some(action) = published.footer_action_for_key(&key).cloned() {
+                    status = apply_footer_action(&mut explorer, &action);
+                    needs_draw = true;
+                    continue;
+                }
                 let Some(input) = explorer.input_for_key(&key) else {
                     continue;
                 };
@@ -208,6 +215,15 @@ pub fn run(
                                 open_menu.select_at(position);
                                 status = Some(activate_menu(open_menu, &agent));
                             }
+                            needs_draw = true;
+                        } else if let Some(action) = match &published.element {
+                            UiComponent::Tree(tree) => {
+                                tree_state.footer_action_at(tree, position).cloned()
+                            }
+                            _ => None,
+                        } {
+                            clicks.reset();
+                            status = apply_footer_action(&mut explorer, &action);
                             needs_draw = true;
                         } else if explorer.filter_area().contains(position) {
                             clicks.reset();
@@ -314,7 +330,21 @@ fn publish_projection(
 fn semantic_node(explorer: &mut Explorer, can_send: bool, status: Option<&Status>) -> UiNode {
     let mut tree = explorer
         .semantic_tree("Files")
-        .context_menu(semantic_context_menu(can_send));
+        .context_menu(semantic_context_menu(can_send))
+        .footer_actions([
+            FooterAction::new("refresh-files", "refresh", REFRESH_TREE_ACTION)
+                .accelerator("ctrl+r"),
+            FooterAction::new(
+                "toggle-hidden-files",
+                if explorer.show_hidden() {
+                    "hide hidden"
+                } else {
+                    "show hidden"
+                },
+                TOGGLE_HIDDEN_ACTION,
+            )
+            .accelerator("ctrl+h"),
+        ]);
     if let Some(status) = status {
         tree.location = format!(
             "{} · {}{}",
@@ -370,11 +400,31 @@ fn drain_bridge(
                 continue;
             }
         };
+        let footer_action = matches!(
+            event.action.action.as_str(),
+            REFRESH_TREE_ACTION | TOGGLE_HIDDEN_ACTION
+        );
         let semantic_menu_action = matches!(
             event.action.action.as_str(),
             OPEN_IN_EDITOR_ACTION | SEND_TO_AGENT_ACTION | COPY_PATH_ACTION
         );
-        let outcome = if semantic_menu_action {
+        let outcome = if footer_action {
+            if event.base_revision != *revision {
+                UiEventOutcome::Rejected(format!(
+                    "File Tree changed from revision {} to {}; retry the action",
+                    event.base_revision, revision
+                ))
+            } else {
+                match apply_footer_ui_action(explorer, &event.action) {
+                    Ok(event) => {
+                        *status = status_for_event(event, explorer);
+                        *needs_draw = true;
+                        UiEventOutcome::Applied
+                    }
+                    Err(message) => UiEventOutcome::Rejected(message),
+                }
+            }
+        } else if semantic_menu_action {
             if event.base_revision != *revision {
                 UiEventOutcome::Rejected(format!(
                     "File Tree changed from revision {} to {}; retry the action",
@@ -416,6 +466,43 @@ fn drain_bridge(
             .map_err(ui_bridge_error)?;
     }
     Ok(())
+}
+
+fn apply_footer_action(explorer: &mut Explorer, action: &FooterAction) -> Option<Status> {
+    let action = UiAction::new(
+        action.id.clone(),
+        action.action.clone(),
+        UiEventKind::Activate,
+        UiEventValue::None,
+    );
+    match apply_footer_ui_action(explorer, &action) {
+        Ok(event) => status_for_event(event, explorer),
+        Err(message) => Some(Status::error(message)),
+    }
+}
+
+fn apply_footer_ui_action(
+    explorer: &mut Explorer,
+    action: &UiAction,
+) -> Result<ExplorerEvent, String> {
+    let input = match (
+        action.node_id.as_str(),
+        action.action.as_str(),
+        action.kind,
+        &action.value,
+    ) {
+        ("refresh-files", REFRESH_TREE_ACTION, UiEventKind::Activate, UiEventValue::None) => {
+            ExplorerInput::Refresh
+        }
+        (
+            "toggle-hidden-files",
+            TOGGLE_HIDDEN_ACTION,
+            UiEventKind::Activate,
+            UiEventValue::None,
+        ) => ExplorerInput::ToggleHidden,
+        _ => return Err("Action is not declared by the current File Tree footer".to_owned()),
+    };
+    explorer.handle(input).map_err(|error| error.to_string())
 }
 
 fn semantic_context_action(
@@ -899,6 +986,17 @@ mod tests {
         assert!(tree.filter.is_some());
         assert_eq!(tree.items.len(), 2);
         assert_eq!(tree.context_menu.as_ref().unwrap().items.len(), 2);
+        assert_eq!(
+            tree.footer
+                .actions
+                .iter()
+                .map(|action| (action.id.as_str(), action.accelerator.as_deref()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("refresh-files", Some("ctrl+r")),
+                ("toggle-hidden-files", Some("ctrl+h")),
+            ]
+        );
         assert!(tree.items.iter().all(|item| item.id.starts_with("entry-")));
         assert!(
             !serde_json::to_string(&tree)
