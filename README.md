@@ -4,6 +4,12 @@ A small, standalone Ratatui App for reviewing the current Git working tree.
 The default screen is a compact list of changed files; select one and press
 Enter to open its unified diff.
 
+It remains a complete plain-terminal app with no Unpeel process present. When
+the Host injects an App Kit UI socket, the same binary additionally publishes
+its `Page`/`List` tree so SwiftUI, web, and scoped agent participants share the
+terminal-owned selection and can open or close diffs. Renderer-only selection
+changes travel as compact list deltas; the Ratatui view remains the fallback.
+
 ```text
   M  ui.rs                                               unstaged
   A  git.rs                                                 staged

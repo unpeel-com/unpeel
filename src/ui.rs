@@ -19,10 +19,12 @@ use ratatui::widgets::{Paragraph, Widget};
 use ratatui::{Frame, Terminal};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use unpeel_app_kit::{
-    AgentBridge, AppContext, AppReporter, ColorScheme, DoubleClickTracker, DragSurface,
-    EditorBridge, KeyboardEnhancementGuard, KitTheme, MenuItem, MenuTheme, PopupMenu,
-    SELECTABLE_LEFT_PADDING, ThemeMonitor, VerticalScrollbar, clipboard_sequence,
-    display_path_from_root,
+    AgentBridge, AppContext, AppMetadata, AppReporter, ColorScheme, DoubleClickTracker,
+    DragSurface, EditorBridge, KeyboardEnhancementGuard, KitTheme, List, ListItem, ListItemSlot,
+    ListItemTone, ListKeymap, ListNavigationAction, ListState, MenuItem, MenuTheme, Page,
+    PageBodySlot, PageTheme, PopupMenu, SELECTABLE_LEFT_PADDING, StatusSymbol, ThemeMonitor,
+    UiBridge, UiBridgeEvent, UiComponent, UiDeltaOperation, UiEventKind, UiEventOutcome,
+    UiEventValue, UiNode, VerticalScrollbar, clipboard_sequence, display_path_from_root,
 };
 
 use crate::app::{App, Screen};
@@ -33,6 +35,13 @@ const FOOTER_ROWS: u16 = 1;
 const DETAIL_GAP_ROWS: u16 = 1;
 const DETAIL_META_ROWS: u16 = 1;
 const AUTO_SYNC_INTERVAL: Duration = Duration::from_millis(1000);
+const UI_VIEW_ID: &str = "main";
+const SEMANTIC_ROOT_ID: &str = "diffs-page";
+const FILE_LIST_ID: &str = "diff-files";
+const SELECT_FILE_ACTION: &str = "select-file";
+const OPEN_FILE_ACTION: &str = "open-file";
+const CLOSE_DIFF_ACTION: &str = "close-diff";
+const MAX_SEMANTIC_DIFF_LINES: usize = 20_000;
 
 pub fn run(
     mut app: App,
@@ -45,6 +54,20 @@ pub fn run(
     let mut drags = DragSurface::detect();
     let _keyboard = KeyboardEnhancementGuard::enter()?;
     let mut reporter = AppReporter::detect(crate::install::APP_ID);
+    let mut bridge = UiBridge::detect(
+        AppMetadata::new(
+            crate::install::APP_ID,
+            "Unpeel Diffs",
+            env!("CARGO_PKG_VERSION"),
+        )
+        .description("Standalone Ratatui diff viewer with an optional native/web projection"),
+    )
+    .map_err(ui_bridge_error)?;
+    let mut ui_revision = 1u64;
+    let mut published = semantic_node(&app);
+    bridge
+        .publish(UI_VIEW_ID, ui_revision, published.clone())
+        .map_err(ui_bridge_error)?;
     let agent = AgentBridge::new();
     agent.refresh();
     let mut last_agent_context_refresh = Instant::now();
@@ -57,6 +80,10 @@ pub fn run(
     let mut highlights = HighlightCache::default();
 
     loop {
+        if drain_bridge(&mut app, &mut bridge, &mut ui_revision, &mut published)? {
+            needs_draw = true;
+        }
+        publish_semantic_projection(&app, &mut bridge, &mut ui_revision, &mut published)?;
         if needs_draw {
             reporter.set_context(&serde_json::json!({
                 "root": app.root(),
@@ -68,14 +95,16 @@ pub fn run(
                     .selection_range()
                     .map(|(start, end)| [start + 1, end + 1]),
             }));
-            let colors = highlights.resolve(&app, theme.scheme);
-            rendered = terminal.draw(&app, &mut drags, menu.as_mut(), colors, theme)?;
-            app.apply_render_metrics(
-                rendered.scroll_offset,
-                rendered.max_scroll,
-                rendered.viewport_rows,
-                rendered.max_horizontal_scroll,
-            );
+            if bridge.should_render_terminal() {
+                let colors = highlights.resolve(&app, theme.scheme);
+                rendered = terminal.draw(&app, &mut drags, menu.as_mut(), colors, theme)?;
+                app.apply_render_metrics(
+                    rendered.scroll_offset,
+                    rendered.max_scroll,
+                    rendered.viewport_rows,
+                    rendered.max_horizontal_scroll,
+                );
+            }
             needs_draw = false;
         }
 
@@ -300,6 +329,229 @@ pub fn run(
     Ok(())
 }
 
+fn semantic_node(app: &App) -> UiNode {
+    UiNode::page(SEMANTIC_ROOT_ID, semantic_page(app))
+}
+
+fn semantic_page(app: &App) -> Page {
+    match &app.screen {
+        Screen::Files => {
+            let mut list = List::new(
+                FILE_LIST_ID,
+                app.files
+                    .iter()
+                    .enumerate()
+                    .map(|(index, file)| file_list_item(file, index))
+                    .collect(),
+            )
+            .empty_message("working tree clean");
+            if !app.files.is_empty() {
+                list = list.selected(
+                    file_node_id(app.selected.min(app.files.len() - 1)),
+                    SELECT_FILE_ACTION,
+                );
+            }
+            Page::new("Changes", list)
+        }
+        Screen::Diff(document) => {
+            let mut items = document
+                .lines
+                .iter()
+                .take(MAX_SEMANTIC_DIFF_LINES)
+                .enumerate()
+                .map(|(index, line)| {
+                    ListItem::new(format!("diff-line-{index}"), semantic_diff_label(line))
+                        .label_tone(diff_line_tone(line))
+                })
+                .collect::<Vec<_>>();
+            if document.lines.len() > MAX_SEMANTIC_DIFF_LINES {
+                items.push(
+                    ListItem::new(
+                        "diff-lines-truncated",
+                        format!(
+                            "… {} more lines; open the terminal view for the complete patch",
+                            document.lines.len() - MAX_SEMANTIC_DIFF_LINES
+                        ),
+                    )
+                    .label_tone(ListItemTone::Muted),
+                );
+            }
+            Page::new(
+                format!(
+                    "{} · +{} −{}",
+                    document.file.list_name(),
+                    document.additions,
+                    document.deletions
+                ),
+                List::new("diff-lines", items).empty_message("No textual diff"),
+            )
+            .back_action(CLOSE_DIFF_ACTION)
+        }
+    }
+}
+
+fn semantic_diff_label(line: &str) -> String {
+    const MAX_LABEL_BYTES: usize = 15 * 1024;
+    let expanded = expand_tabs(line);
+    let mut label = String::new();
+    for character in expanded.chars().filter(|character| !character.is_control()) {
+        if label.len().saturating_add(character.len_utf8()) > MAX_LABEL_BYTES {
+            label.push('…');
+            break;
+        }
+        label.push(character);
+    }
+    label
+}
+
+fn diff_line_tone(line: &str) -> ListItemTone {
+    let bytes = line.as_bytes();
+    match bytes.first() {
+        Some(b'+') if !line.starts_with("+++") => ListItemTone::Success,
+        Some(b'-') if !line.starts_with("---") => ListItemTone::Danger,
+        Some(b'@') => ListItemTone::Info,
+        _ => ListItemTone::Default,
+    }
+}
+
+fn publish_semantic_projection(
+    app: &App,
+    bridge: &mut UiBridge,
+    revision: &mut u64,
+    published: &mut UiNode,
+) -> io::Result<()> {
+    let next = semantic_node(app);
+    if next == *published {
+        return Ok(());
+    }
+    let next_revision = revision
+        .checked_add(1)
+        .ok_or_else(|| io::Error::other("Diffs UI revision space is exhausted"))?;
+    let operations = selection_only_delta(published, &next).map_or_else(
+        || vec![UiDeltaOperation::ReplaceRoot { root: next.clone() }],
+        |operation| vec![operation],
+    );
+    bridge
+        .publish_delta(UI_VIEW_ID, *revision, next_revision, operations)
+        .map_err(ui_bridge_error)?;
+    *revision = next_revision;
+    *published = next;
+    Ok(())
+}
+
+fn drain_bridge(
+    app: &mut App,
+    bridge: &mut UiBridge,
+    revision: &mut u64,
+    published: &mut UiNode,
+) -> io::Result<bool> {
+    let mut changed = false;
+    while let Some(message) = bridge.poll().map_err(ui_bridge_error)? {
+        match message {
+            UiBridgeEvent::Action { event, .. } => {
+                let result = if event.base_revision != *revision {
+                    Err(format!(
+                        "Diffs changed from revision {} to {}; retry the action",
+                        event.base_revision, revision
+                    ))
+                } else {
+                    apply_semantic_action(app, &event.action)
+                };
+                let outcome = match result {
+                    Ok(()) => {
+                        changed = true;
+                        publish_semantic_projection(app, bridge, revision, published)?;
+                        UiEventOutcome::Applied
+                    }
+                    Err(message) => UiEventOutcome::Rejected(message),
+                };
+                bridge
+                    .acknowledge(&event, outcome, *revision)
+                    .map_err(ui_bridge_error)?;
+            }
+            UiBridgeEvent::Attached { .. }
+            | UiBridgeEvent::Detached { .. }
+            | UiBridgeEvent::Lifecycle { .. } => changed = true,
+        }
+    }
+    Ok(changed)
+}
+
+fn apply_semantic_action(app: &mut App, action: &unpeel_app_kit::UiAction) -> Result<(), String> {
+    match (
+        action.node_id.as_str(),
+        action.action.as_str(),
+        action.kind,
+        &action.value,
+    ) {
+        (FILE_LIST_ID, SELECT_FILE_ACTION, UiEventKind::Change, UiEventValue::Text(item_id))
+            if !app.is_detail() =>
+        {
+            let index = file_index_from_node_id(item_id)
+                .ok_or_else(|| "Selected file has an invalid target".to_owned())?;
+            if index >= app.files.len() {
+                return Err("Selected file no longer exists".to_owned());
+            }
+            app.select(index);
+            Ok(())
+        }
+        (node_id, OPEN_FILE_ACTION, UiEventKind::Activate, UiEventValue::None)
+            if !app.is_detail() =>
+        {
+            let index = file_index_from_node_id(node_id)
+                .ok_or_else(|| "File action has an invalid target".to_owned())?;
+            if index >= app.files.len() {
+                return Err("File no longer exists".to_owned());
+            }
+            app.select(index);
+            app.open_selected().map_err(|error| error.to_string())
+        }
+        (SEMANTIC_ROOT_ID, CLOSE_DIFF_ACTION, UiEventKind::Cancel, UiEventValue::None)
+            if app.is_detail() =>
+        {
+            app.back();
+            Ok(())
+        }
+        _ => Err("Action is not declared by the current Diffs Page".to_owned()),
+    }
+}
+
+fn file_index_from_node_id(node_id: &str) -> Option<usize> {
+    node_id.strip_prefix("file-")?.parse().ok()
+}
+
+fn selection_only_delta(previous: &UiNode, next: &UiNode) -> Option<UiDeltaOperation> {
+    if previous.id != next.id {
+        return None;
+    }
+    let (UiComponent::Page(previous_page), UiComponent::Page(next_page)) =
+        (&previous.element, &next.element)
+    else {
+        return None;
+    };
+    if previous_page.list().id != next_page.list().id
+        || previous_page.list().selected_id == next_page.list().selected_id
+    {
+        return None;
+    }
+    let mut previous_without_selection = previous_page.clone();
+    let mut next_without_selection = next_page.clone();
+    let PageBodySlot::List(previous_list) = &mut previous_without_selection.body;
+    let PageBodySlot::List(next_list) = &mut next_without_selection.body;
+    previous_list.selected_id = None;
+    next_list.selected_id = None;
+    (previous_without_selection == next_without_selection).then(|| {
+        UiDeltaOperation::list_set_selection(
+            next_page.list().id.clone(),
+            next_page.list().selected_id.clone(),
+        )
+    })
+}
+
+fn ui_bridge_error(error: unpeel_app_kit::UiBridgeError) -> io::Error {
+    io::Error::other(error.to_string())
+}
+
 fn list_click_at(
     rendered: &RenderResult,
     position: Position,
@@ -370,7 +622,10 @@ fn action_for_key(key: KeyEvent, detail: bool, has_selection: bool) -> Option<In
     if is_force_quit(key) {
         return Some(InputAction::Quit);
     }
-    match key.code {
+    if key.code == KeyCode::Esc && !detail {
+        return None;
+    }
+    let contextual = match key.code {
         KeyCode::Char('q') if !control => Some(InputAction::Quit),
         KeyCode::Enter if detail && has_selection => Some(InputAction::SendToAgent),
         KeyCode::Char('s') if detail && has_selection => Some(InputAction::SendToAgent),
@@ -378,17 +633,28 @@ fn action_for_key(key: KeyEvent, detail: bool, has_selection: bool) -> Option<In
         KeyCode::Enter => Some(InputAction::Activate),
         KeyCode::Esc if detail && has_selection => Some(InputAction::ClearSelection),
         KeyCode::Esc if detail => Some(InputAction::Back),
-        KeyCode::Esc => None,
-        KeyCode::Down | KeyCode::Char('j') => Some(InputAction::Down),
-        KeyCode::Up | KeyCode::Char('k') => Some(InputAction::Up),
-        KeyCode::Home | KeyCode::Char('g') => Some(InputAction::First),
-        KeyCode::End | KeyCode::Char('G') => Some(InputAction::Last),
-        KeyCode::PageDown => Some(InputAction::PageDown),
-        KeyCode::PageUp => Some(InputAction::PageUp),
         KeyCode::Left | KeyCode::Char('h') if detail => Some(InputAction::PanLeft),
         KeyCode::Right | KeyCode::Char('l') if detail => Some(InputAction::PanRight),
         KeyCode::Char('r') => Some(InputAction::Refresh),
         _ => None,
+    };
+    contextual.or_else(|| {
+        ListKeymap::new()
+            .action_for_key(&key)
+            .map(list_navigation_input_action)
+    })
+}
+
+const fn list_navigation_input_action(action: ListNavigationAction) -> InputAction {
+    match action {
+        ListNavigationAction::Down => InputAction::Down,
+        ListNavigationAction::Up => InputAction::Up,
+        ListNavigationAction::First => InputAction::First,
+        ListNavigationAction::Last => InputAction::Last,
+        ListNavigationAction::PageDown => InputAction::PageDown,
+        ListNavigationAction::PageUp => InputAction::PageUp,
+        ListNavigationAction::Activate => InputAction::Activate,
+        ListNavigationAction::Back => InputAction::Back,
     }
 }
 
@@ -865,6 +1131,121 @@ fn render_file_list(
     }
 
     let total_rows = view.files.len();
+    let selected = view.selected.min(total_rows - 1);
+    let list = List::new(
+        FILE_LIST_ID,
+        view.files
+            .iter()
+            .enumerate()
+            .map(|(index, file)| file_list_item(file, index))
+            .collect(),
+    )
+    .selected(file_node_id(selected), SELECT_FILE_ACTION);
+    let mut state = ListState::new(Some(selected));
+    state.set_offset(view.requested_scroll, total_rows);
+    if view.reveal_selected {
+        state.request_reveal();
+    }
+    frame.render_widget(list.widget(&mut state).theme(file_list_theme(theme)), area);
+    let rows_area = state.rows_area();
+    let hits = (0..usize::from(rows_area.height))
+        .filter_map(|row| {
+            let index = state.offset().saturating_add(row);
+            let file = view.files.get(index)?;
+            let row_area = Rect::new(
+                rows_area.x,
+                rows_area
+                    .y
+                    .saturating_add(u16::try_from(row).unwrap_or(u16::MAX)),
+                rows_area.width,
+                1,
+            );
+            drags.register(row_area, view.root.join(file.path()));
+            Some(RowHit {
+                index,
+                area: row_area,
+            })
+        })
+        .collect();
+    RenderResult {
+        hits,
+        scroll_offset: state.offset(),
+        max_scroll: state.max_offset(total_rows),
+        viewport_rows: state.viewport_rows(),
+        ..RenderResult::default()
+    }
+}
+
+fn file_node_id(index: usize) -> String {
+    format!("file-{index}")
+}
+
+fn file_list_item(file: &ChangedFile, index: usize) -> ListItem {
+    let state = file.state_label();
+    let state_width = u16::try_from(UnicodeWidthStr::width(state)).unwrap_or(u16::MAX);
+    ListItem::new(file_node_id(index), file.list_name())
+        .leading(ListItemSlot::status(
+            StatusSymbol::new(file.status_symbol().to_string(), state)
+                .tone(status_tone(file.status_symbol()))
+                .preserve_tone_when_selected(true),
+        ))
+        .value(state)
+        .value_min_width(state_width.saturating_add(17))
+        .activate_action(OPEN_FILE_ACTION)
+}
+
+const fn status_tone(status: char) -> ListItemTone {
+    match status {
+        'A' | '?' => ListItemTone::Success,
+        'D' | 'U' => ListItemTone::Danger,
+        'R' | 'C' => ListItemTone::Info,
+        _ => ListItemTone::Warning,
+    }
+}
+
+fn file_list_theme(theme: KitTheme) -> PageTheme {
+    let mut page = PageTheme::for_theme(theme);
+    page.style = Style::new().fg(theme.text);
+    page.item = Style::new().fg(theme.text);
+    page.value = Style::new().fg(theme.muted);
+    page.selected = theme.selected_row;
+    page.selected_item = Style::new();
+    page.selected_value = Style::new();
+    page.scrollbar_track = theme.scrollbar_track;
+    page.scrollbar_thumb = theme.scrollbar_thumb;
+    page
+}
+
+#[cfg(test)]
+fn render_file_list_legacy(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    view: FileListView<'_>,
+    theme: KitTheme,
+    drags: &mut DragSurface,
+) -> RenderResult {
+    if area.is_empty() {
+        return RenderResult::default();
+    }
+    if view.files.is_empty() {
+        let row = Rect::new(
+            area.x,
+            area.y.saturating_add(area.height.saturating_sub(1) / 2),
+            area.width,
+            1,
+        );
+        frame.render_widget(
+            Paragraph::new("working tree clean")
+                .style(Style::new().fg(theme.muted))
+                .alignment(Alignment::Center),
+            row,
+        );
+        return RenderResult {
+            viewport_rows: usize::from(area.height),
+            ..RenderResult::default()
+        };
+    }
+    let total_rows = view.files.len();
     let show_scrollbar = total_rows > usize::from(area.height) && area.width > 1;
     let rows_area = if show_scrollbar {
         Rect::new(area.x, area.y, area.width - 1, area.height)
@@ -880,7 +1261,6 @@ fn render_file_list(
     } else {
         requested_scroll
     };
-
     let mut hits = Vec::new();
     for row in 0..rows_area.height {
         let index = scroll_offset.saturating_add(usize::from(row));
@@ -888,14 +1268,13 @@ fn render_file_list(
             break;
         };
         let row_area = Rect::new(rows_area.x, rows_area.y + row, rows_area.width, 1);
-        render_file_row(frame.buffer_mut(), row_area, file, index == selected, theme);
+        render_file_row_legacy(frame.buffer_mut(), row_area, file, index == selected, theme);
         drags.register(row_area, view.root.join(file.path()));
         hits.push(RowHit {
             index,
             area: row_area,
         });
     }
-
     if show_scrollbar {
         frame.render_widget(
             VerticalScrollbar::new(total_rows, viewport_rows, scroll_offset)
@@ -904,7 +1283,6 @@ fn render_file_list(
             Rect::new(area.right().saturating_sub(1), area.y, 1, area.height),
         );
     }
-
     RenderResult {
         hits,
         scroll_offset,
@@ -914,7 +1292,8 @@ fn render_file_list(
     }
 }
 
-fn render_file_row(
+#[cfg(test)]
+fn render_file_row_legacy(
     buffer: &mut Buffer,
     area: Rect,
     file: &ChangedFile,
@@ -1208,6 +1587,7 @@ fn frame_line(buffer: &mut Buffer, area: Rect, line: Line<'_>) {
     Paragraph::new(line).render(area, buffer);
 }
 
+#[cfg(test)]
 fn reveal_selected_row(
     selected: usize,
     viewport_rows: usize,
@@ -1382,6 +1762,8 @@ fn visible_cells(line: &str, offset: usize, width: u16) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::process::Command;
+
     use ratatui::backend::TestBackend;
 
     use super::*;
@@ -1404,6 +1786,30 @@ mod tests {
             additions: 1,
             deletions: 1,
         }
+    }
+
+    fn file_app() -> (tempfile::TempDir, App) {
+        let directory = tempfile::tempdir().unwrap();
+        for arguments in [
+            vec!["init", "-b", "main"],
+            vec!["config", "user.name", "Unpeel Tests"],
+            vec!["config", "user.email", "tests@unpeel.local"],
+        ] {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(directory.path())
+                .args(arguments)
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+        }
+        for name in ["a.rs", "b.rs", "c.rs", "d.rs", "e.rs"] {
+            std::fs::write(directory.path().join(name), format!("// {name}\n")).unwrap();
+        }
+        let repository = crate::git::Repository::discover(directory.path()).unwrap();
+        let app = App::new(repository).unwrap();
+        assert_eq!(app.files.len(), 5);
+        (directory, app)
     }
 
     #[test]
@@ -1432,6 +1838,76 @@ mod tests {
             Some(InputAction::SendToAgent)
         );
         assert_eq!(action_for_key(send, true, false), None);
+    }
+
+    #[test]
+    fn migrated_diff_key_sequence_uses_the_shared_clamped_list_navigation() {
+        let (_directory, mut app) = file_app();
+        app.viewport_rows = 3;
+        let mut outcomes = Vec::new();
+        for code in [
+            KeyCode::Up,
+            KeyCode::Char('k'),
+            KeyCode::Down,
+            KeyCode::Char('j'),
+            KeyCode::End,
+            KeyCode::Down,
+            KeyCode::Home,
+            KeyCode::PageDown,
+        ] {
+            let key = KeyEvent::new(code, KeyModifiers::NONE);
+            let action = action_for_key(key, false, false).expect("shared list action");
+            assert!(!handle_action(&mut app, action));
+            outcomes.push(app.selected);
+        }
+        assert_eq!(outcomes, vec![0, 0, 1, 2, 4, 4, 0, 2]);
+    }
+
+    #[test]
+    fn semantic_file_list_carries_status_slots_selection_and_compact_deltas() {
+        let (_directory, mut app) = file_app();
+        let first = semantic_node(&app);
+        let UiComponent::Page(page) = &first.element else {
+            unreachable!()
+        };
+        page.validate().unwrap();
+        assert_eq!(page.list().id, FILE_LIST_ID);
+        assert_eq!(page.list().selected_id.as_deref(), Some("file-0"));
+        assert_eq!(page.list().select.as_deref(), Some(SELECT_FILE_ACTION));
+        assert!(matches!(
+            page.list().items[0].leading,
+            Some(ListItemSlot::Status(_))
+        ));
+
+        apply_semantic_action(
+            &mut app,
+            &unpeel_app_kit::UiAction::new(
+                FILE_LIST_ID,
+                SELECT_FILE_ACTION,
+                UiEventKind::Change,
+                UiEventValue::Text("file-3".to_owned()),
+            ),
+        )
+        .unwrap();
+        assert_eq!(app.selected, 3);
+        let next = semantic_node(&app);
+        assert!(matches!(
+            selection_only_delta(&first, &next),
+            Some(UiDeltaOperation::ListSetSelection { list_id, selected_id })
+                if list_id == FILE_LIST_ID && selected_id.as_deref() == Some("file-3")
+        ));
+    }
+
+    #[test]
+    fn semantic_diff_detail_is_bounded_and_keeps_native_back_navigation() {
+        let (_directory, mut app) = file_app();
+        app.screen = Screen::Diff(document());
+        let page = semantic_page(&app);
+        page.validate().unwrap();
+        assert_eq!(page.back.as_deref(), Some(CLOSE_DIFF_ACTION));
+        assert_eq!(page.list().items.len(), 4);
+        assert_eq!(page.list().items[2].label_tone, ListItemTone::Danger);
+        assert_eq!(page.list().items[3].label_tone, ListItemTone::Success);
     }
 
     #[test]
@@ -1494,6 +1970,69 @@ mod tests {
         assert_eq!(drags.regions().len(), 1);
         assert_eq!(drags.regions()[0].area, Rect::new(0, 0, 48, 1));
         assert_eq!(drags.regions()[0].path, Path::new("/repo/src/ui.rs"));
+    }
+
+    #[test]
+    fn app_kit_file_list_matches_the_frozen_renderer_buffer_for_buffer() {
+        let files = vec![
+            ChangedFile::fixture("src/modified.rs", ' ', 'M'),
+            ChangedFile::fixture("src/added.rs", 'A', ' '),
+            ChangedFile::fixture("src/untracked.rs", '?', '?'),
+            ChangedFile::fixture("src/deleted.rs", 'D', ' '),
+        ];
+        let cases = [
+            (18, 1, 0, 0, true),
+            (26, 2, 2, 0, true),
+            (40, 2, 1, 1, false),
+            (72, 8, 3, 0, true),
+        ];
+        for theme in [KitTheme::light(), KitTheme::dark()] {
+            for (width, height, selected, requested_scroll, reveal_selected) in cases {
+                let view = FileListView {
+                    root: Path::new("/repo"),
+                    files: &files,
+                    selected,
+                    requested_scroll,
+                    reveal_selected,
+                };
+                let mut current = Terminal::new(TestBackend::new(width, height)).unwrap();
+                let mut legacy = Terminal::new(TestBackend::new(width, height)).unwrap();
+                let mut current_result = RenderResult::default();
+                let mut legacy_result = RenderResult::default();
+                let mut current_drags = DragSurface::disabled();
+                let mut legacy_drags = DragSurface::disabled();
+                current_drags.begin_frame();
+                legacy_drags.begin_frame();
+                current
+                    .draw(|frame| {
+                        current_result =
+                            render_file_list(frame, frame.area(), view, theme, &mut current_drags);
+                    })
+                    .unwrap();
+                legacy
+                    .draw(|frame| {
+                        legacy_result = render_file_list_legacy(
+                            frame,
+                            frame.area(),
+                            view,
+                            theme,
+                            &mut legacy_drags,
+                        );
+                    })
+                    .unwrap();
+                assert_eq!(
+                    current.backend().buffer(),
+                    legacy.backend().buffer(),
+                    "{width}x{height}, selected {selected}, {:?}",
+                    theme.scheme
+                );
+                assert_eq!(current_result.hits, legacy_result.hits);
+                assert_eq!(current_result.scroll_offset, legacy_result.scroll_offset);
+                assert_eq!(current_result.max_scroll, legacy_result.max_scroll);
+                assert_eq!(current_result.viewport_rows, legacy_result.viewport_rows);
+                assert_eq!(current_drags.regions(), legacy_drags.regions());
+            }
+        }
     }
 
     #[test]
