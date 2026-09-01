@@ -125,21 +125,14 @@ pub fn run(
                     }
                     continue;
                 }
-                let Some(action) =
-                    action_for_key(key, explorer.filter_focused(), explorer.selected_index())
-                else {
+                let Some(input) = explorer.input_for_key(&key) else {
                     continue;
                 };
-                match action {
-                    AppAction::Quit => break,
-                    AppAction::Explorer(input) => {
-                        status = match explorer.handle(input) {
-                            Ok(event) => status_for_event(event, &explorer),
-                            Err(error) => Some(Status::error(error.to_string())),
-                        };
-                        needs_draw = true;
-                    }
-                }
+                status = match explorer.handle(input) {
+                    Ok(event) => status_for_event(event, &explorer),
+                    Err(error) => Some(Status::error(error.to_string())),
+                };
+                needs_draw = true;
             }
             Event::Mouse(mouse) => {
                 let position = Position::new(mouse.column, mouse.row);
@@ -271,12 +264,6 @@ fn explorer_theme(theme: KitTheme) -> ExplorerTheme {
     ExplorerTheme::for_theme(theme)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AppAction {
-    Quit,
-    Explorer(ExplorerInput),
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ContextAction {
     OpenInEditor(PathBuf),
@@ -309,90 +296,6 @@ fn context_menu(
 
 fn is_force_quit(key: KeyEvent) -> bool {
     key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)
-}
-
-fn action_for_key(key: KeyEvent, filter_focused: bool, selected_index: usize) -> Option<AppAction> {
-    let control = key.modifiers.contains(KeyModifiers::CONTROL);
-    let alternate = key.modifiers.contains(KeyModifiers::ALT);
-    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-    let command = key
-        .modifiers
-        .intersects(KeyModifiers::SUPER | KeyModifiers::META);
-    let non_text_modifier = key.modifiers.intersects(
-        KeyModifiers::CONTROL
-            | KeyModifiers::ALT
-            | KeyModifiers::SUPER
-            | KeyModifiers::HYPER
-            | KeyModifiers::META,
-    );
-    if is_force_quit(key) {
-        return Some(AppAction::Quit);
-    }
-    if filter_focused {
-        return match key.code {
-            KeyCode::Esc => Some(AppAction::Explorer(ExplorerInput::Parent)),
-            KeyCode::Tab => Some(AppAction::Explorer(ExplorerInput::BlurFilter)),
-            KeyCode::Up => Some(AppAction::Explorer(ExplorerInput::Up)),
-            KeyCode::Down => Some(AppAction::Explorer(ExplorerInput::BlurFilter)),
-            KeyCode::Left if command => Some(AppAction::Explorer(ExplorerInput::FilterHome {
-                extend: shift,
-            })),
-            KeyCode::Right if command => Some(AppAction::Explorer(ExplorerInput::FilterEnd {
-                extend: shift,
-            })),
-            KeyCode::Left => Some(AppAction::Explorer(ExplorerInput::FilterLeft {
-                extend: shift,
-                word: control || alternate,
-            })),
-            KeyCode::Right => Some(AppAction::Explorer(ExplorerInput::FilterRight {
-                extend: shift,
-                word: control || alternate,
-            })),
-            KeyCode::Home => Some(AppAction::Explorer(ExplorerInput::FilterHome {
-                extend: shift,
-            })),
-            KeyCode::End => Some(AppAction::Explorer(ExplorerInput::FilterEnd {
-                extend: shift,
-            })),
-            KeyCode::PageUp => Some(AppAction::Explorer(ExplorerInput::PageUp)),
-            KeyCode::PageDown => Some(AppAction::Explorer(ExplorerInput::PageDown)),
-            KeyCode::Enter => Some(AppAction::Explorer(ExplorerInput::Open)),
-            KeyCode::Backspace => Some(AppAction::Explorer(ExplorerInput::FilterBackspace)),
-            KeyCode::Char('h') if control => {
-                Some(AppAction::Explorer(ExplorerInput::FilterBackspace))
-            }
-            KeyCode::Delete => Some(AppAction::Explorer(ExplorerInput::FilterDelete)),
-            KeyCode::Char('a') if control || command => {
-                Some(AppAction::Explorer(ExplorerInput::FilterSelectAll))
-            }
-            KeyCode::Char('u') if control => Some(AppAction::Explorer(ExplorerInput::ClearFilter)),
-            KeyCode::Char(character) if !non_text_modifier => Some(AppAction::Explorer(
-                ExplorerInput::FilterCharacter(character),
-            )),
-            _ => None,
-        };
-    }
-    match key.code {
-        KeyCode::Char('h') if control => Some(AppAction::Explorer(ExplorerInput::ToggleHidden)),
-        KeyCode::Char('f') if control => Some(AppAction::Explorer(ExplorerInput::FocusFilter)),
-        KeyCode::Char('r') if control => Some(AppAction::Explorer(ExplorerInput::Refresh)),
-        KeyCode::Tab | KeyCode::Char('/') => Some(AppAction::Explorer(ExplorerInput::FocusFilter)),
-        KeyCode::Up if selected_index == 0 => Some(AppAction::Explorer(ExplorerInput::FocusFilter)),
-        KeyCode::Up => Some(AppAction::Explorer(ExplorerInput::Up)),
-        KeyCode::Down => Some(AppAction::Explorer(ExplorerInput::Down)),
-        KeyCode::Home => Some(AppAction::Explorer(ExplorerInput::First)),
-        KeyCode::End => Some(AppAction::Explorer(ExplorerInput::Last)),
-        KeyCode::PageUp => Some(AppAction::Explorer(ExplorerInput::PageUp)),
-        KeyCode::PageDown => Some(AppAction::Explorer(ExplorerInput::PageDown)),
-        KeyCode::Esc | KeyCode::Left | KeyCode::Backspace => {
-            Some(AppAction::Explorer(ExplorerInput::Parent))
-        }
-        KeyCode::Right | KeyCode::Enter => Some(AppAction::Explorer(ExplorerInput::Open)),
-        KeyCode::Char(character) if !non_text_modifier => Some(AppAction::Explorer(
-            ExplorerInput::FilterCharacter(character),
-        )),
-        _ => None,
-    }
 }
 
 fn activate_menu(menu: ContextMenu, agent: &AgentBridge) -> Status {
@@ -625,102 +528,81 @@ mod tests {
 
     #[test]
     fn keys_map_to_backend_neutral_explorer_actions() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir(directory.path().join("folder")).unwrap();
+        std::fs::write(directory.path().join("note.md"), "hello").unwrap();
+        let mut explorer = Explorer::scoped(directory.path()).unwrap();
+        explorer.set_selected_index(1);
         assert_eq!(
-            action_for_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE), false, 1),
-            Some(AppAction::Explorer(ExplorerInput::Open))
+            explorer.input_for_key(&KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
+            Some(ExplorerInput::Open)
         );
         assert_eq!(
-            action_for_key(
-                KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
-                false,
-                1
-            ),
-            Some(AppAction::Explorer(ExplorerInput::Parent))
+            explorer.input_for_key(&KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)),
+            Some(ExplorerInput::Parent)
         );
         assert_eq!(
-            action_for_key(
-                KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL),
-                false,
-                1
-            ),
-            Some(AppAction::Explorer(ExplorerInput::ToggleHidden))
+            explorer.input_for_key(&KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL)),
+            Some(ExplorerInput::ToggleHidden)
         );
         assert_eq!(
-            action_for_key(
-                KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
-                false,
-                1
-            ),
-            Some(AppAction::Explorer(ExplorerInput::PageDown))
+            explorer.input_for_key(&KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE)),
+            Some(ExplorerInput::PageDown)
         );
         assert_eq!(
-            action_for_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), false, 1),
-            Some(AppAction::Explorer(ExplorerInput::Parent))
+            explorer.input_for_key(&KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            Some(ExplorerInput::Parent)
         );
         assert_eq!(
-            action_for_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), true, 1),
-            Some(AppAction::Explorer(ExplorerInput::Parent))
+            explorer.input_for_key(&KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)),
+            Some(ExplorerInput::FilterCharacter('q'))
+        );
+        explorer.set_filter_focused(true);
+        assert_eq!(
+            explorer.input_for_key(&KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            Some(ExplorerInput::Parent)
         );
         assert_eq!(
-            action_for_key(
-                KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
-                true,
-                1
-            ),
-            Some(AppAction::Explorer(ExplorerInput::FilterCharacter('q')))
+            explorer.input_for_key(&KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)),
+            Some(ExplorerInput::FilterCharacter('q'))
         );
         assert_eq!(
-            action_for_key(
-                KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
-                false,
-                1
-            ),
-            Some(AppAction::Explorer(ExplorerInput::FilterCharacter('q')))
+            explorer.input_for_key(&KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)),
+            Some(ExplorerInput::FilterBackspace)
         );
         assert_eq!(
-            action_for_key(
-                KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
-                true,
-                1
-            ),
-            Some(AppAction::Explorer(ExplorerInput::FilterBackspace))
-        );
-        assert_eq!(
-            action_for_key(
-                KeyEvent::new(KeyCode::Left, KeyModifiers::ALT | KeyModifiers::SHIFT),
-                true,
-                1
-            ),
-            Some(AppAction::Explorer(ExplorerInput::FilterLeft {
+            explorer.input_for_key(&KeyEvent::new(
+                KeyCode::Left,
+                KeyModifiers::ALT | KeyModifiers::SHIFT
+            )),
+            Some(ExplorerInput::FilterLeft {
                 extend: true,
                 word: true,
-            }))
+            })
         );
         assert_eq!(
-            action_for_key(
-                KeyEvent::new(KeyCode::Char('a'), KeyModifiers::SUPER),
-                true,
-                1
-            ),
-            Some(AppAction::Explorer(ExplorerInput::FilterSelectAll))
+            explorer.input_for_key(&KeyEvent::new(KeyCode::Char('a'), KeyModifiers::SUPER)),
+            Some(ExplorerInput::FilterSelectAll)
         );
         assert_eq!(
-            action_for_key(KeyEvent::new(KeyCode::Home, KeyModifiers::SHIFT), true, 1),
-            Some(AppAction::Explorer(ExplorerInput::FilterHome {
-                extend: true,
-            }))
+            explorer.input_for_key(&KeyEvent::new(KeyCode::Home, KeyModifiers::SHIFT)),
+            Some(ExplorerInput::FilterHome { extend: true })
         );
+        explorer.set_filter_focused(false);
+        explorer.set_selected_index(0);
         assert_eq!(
-            action_for_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE), false, 0),
-            Some(AppAction::Explorer(ExplorerInput::FocusFilter))
+            explorer.input_for_key(&KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
+            Some(ExplorerInput::FocusFilter)
         );
+        explorer.set_selected_index(1);
         assert_eq!(
-            action_for_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE), false, 2),
-            Some(AppAction::Explorer(ExplorerInput::Up))
+            explorer.input_for_key(&KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
+            Some(ExplorerInput::Up)
         );
+        explorer.set_filter_focused(true);
         assert_eq!(
-            action_for_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), true, 0),
-            Some(AppAction::Explorer(ExplorerInput::BlurFilter))
+            explorer.input_for_key(&KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+            Some(ExplorerInput::BlurFilter)
         );
     }
 
