@@ -29,9 +29,9 @@ use unpeel_app_kit::SelectableRow;
 #[cfg(test)]
 use unpeel_app_kit::VerticalScrollbar;
 use unpeel_app_kit::{
-    Badge, Gauge, InputField, KitTheme, List, ListItem, ListItemEmphasis, ListItemSlot,
-    ListItemTone, ListPageBehavior, ListState, Page, PageTheme, Sparkline, Toggle, UiComponent,
-    UiNode, SELECTABLE_LEFT_PADDING,
+    Badge, FooterAction, Gauge, InputField, KitTheme, List, ListItem, ListItemEmphasis,
+    ListItemSlot, ListItemTone, ListPageBehavior, ListState, Page, PageTheme, Sparkline, Toggle,
+    UiComponent, UiNode, SELECTABLE_LEFT_PADDING,
 };
 
 pub const SEMANTIC_ROOT_ID: &str = "usage-page";
@@ -63,7 +63,8 @@ pub fn semantic_page(snapshot: Option<&Snapshot>, view: &View) -> Page {
         return Page::new(
             "Usage",
             List::new("usage-providers", Vec::new()).empty_message("Scanning local usage…"),
-        );
+        )
+        .footer_actions(usage_footer_actions(view.scanning, view.hosted));
     };
     if view.detail_open && !snapshot.providers.is_empty() {
         let index = view.selected.min(snapshot.providers.len() - 1);
@@ -75,38 +76,19 @@ pub fn semantic_page(snapshot: Option<&Snapshot>, view: &View) -> Page {
         );
     }
 
-    let mut items = snapshot
+    let items = snapshot
         .providers
         .iter()
         .enumerate()
         .map(|(index, provider)| provider_list_item(provider, index, 96))
         .collect::<Vec<_>>();
-    items.push(
-        ListItem::new(
-            "refresh-usage",
-            if view.scanning {
-                "Refreshing…"
-            } else {
-                "Refresh"
-            },
-        )
-        .detail("Rescan local provider history and live limits")
-        .activate_action(REFRESH_ACTION),
-    );
-    if view.hosted {
-        items.push(
-            ListItem::new("open-alerts", "Alerts")
-                .detail("Choose which limit changes notify this session")
-                .disclosure_action(OPEN_ALERTS_ACTION),
-        );
-    }
     let mut list = List::new("usage-providers", items)
         .empty_message("No local usage data")
         .page_behavior(ListPageBehavior::Scroll);
     if snapshot.providers.get(view.selected).is_some() {
         list = list.selected(provider_node_id(view.selected), SELECT_PROVIDER_ACTION);
     }
-    Page::new("Usage", list)
+    Page::new("Usage", list).footer_actions(usage_footer_actions(view.scanning, view.hosted))
 }
 
 fn provider_list_item(provider: &Provider, index: usize, row_width: u16) -> ListItem {
@@ -246,20 +228,6 @@ fn semantic_provider_detail(
             )),
         );
     }
-    items.push(
-        ListItem::new(
-            format!("{prefix}-refresh"),
-            if scanning { "Refreshing…" } else { "Refresh" },
-        )
-        .activate_action(REFRESH_ACTION),
-    );
-    if hosted {
-        items.push(
-            ListItem::new(format!("{prefix}-alerts"), "Alerts")
-                .detail("Choose session notifications")
-                .disclosure_action(OPEN_ALERTS_ACTION),
-        );
-    }
     let title = if provider.badge.is_empty() {
         display_provider_name(&provider.name)
     } else {
@@ -269,7 +237,27 @@ fn semantic_provider_detail(
             display_badge(&provider.badge)
         )
     };
-    Page::new(title, List::new("usage-detail", items)).back_action(CLOSE_PROVIDER_ACTION)
+    Page::new(title, List::new("usage-detail", items))
+        .back_action(CLOSE_PROVIDER_ACTION)
+        .footer_actions(usage_footer_actions(scanning, hosted))
+}
+
+fn usage_footer_actions(scanning: bool, hosted: bool) -> Vec<FooterAction> {
+    let mut actions = Vec::with_capacity(usize::from(hosted) + 1);
+    if hosted {
+        actions
+            .push(FooterAction::new("open-alerts", "alert", OPEN_ALERTS_ACTION).accelerator("a"));
+    }
+    actions.push(
+        FooterAction::new(
+            "refresh-usage",
+            if scanning { "refreshing…" } else { "refresh" },
+            REFRESH_ACTION,
+        )
+        .accelerator("r")
+        .disabled(scanning),
+    );
+    actions
 }
 
 /// Canonical bounded-metric presentation shared by every renderer.
@@ -407,6 +395,7 @@ pub struct RenderResult {
     pub scrollbar_area: Option<Rect>,
     pub back_button: Option<Hit>,
     pub alert_option_hits: Vec<Hit>,
+    pub footer_area: Option<Rect>,
 }
 
 /// One selectable row's clickable screen rectangle, inclusive on every edge.
@@ -492,6 +481,7 @@ pub fn draw_node(
             page.layout(frame.area()).title,
         )
     });
+    let footer_area = page.layout(frame.area()).footer;
     let alert_option_hits = if view.alert_dialog.is_some() {
         hits.clone()
     } else {
@@ -505,6 +495,7 @@ pub fn draw_node(
         scrollbar_area,
         back_button,
         alert_option_hits,
+        footer_area,
     }
 }
 
@@ -1247,10 +1238,10 @@ mod tests {
             .expect("bounded quota must enter the semantic tree as a Gauge");
         assert_eq!(quota.value_label(), "97% left · Resets in 6d 18h");
         assert!(detail
-            .list()
-            .items
+            .footer
+            .actions
             .iter()
-            .any(|item| item.activate.as_deref() == Some(REFRESH_ACTION)));
+            .any(|item| item.action == REFRESH_ACTION));
         view.selected = snapshot
             .providers
             .iter()
@@ -1585,18 +1576,18 @@ mod tests {
     }
 
     #[test]
-    fn footer_shows_actions_and_replaces_refresh_with_a_spinner_while_scanning() {
+    fn footer_shows_actions_and_disables_refresh_while_scanning() {
         let (idle, _) = render_footer_state(true, false);
-        assert!(idle.contains("Refresh"), "idle component tree\n{idle}");
-        assert!(idle.contains("Alerts"), "idle component tree\n{idle}");
+        assert!(idle.contains("a alert"), "idle component tree\n{idle}");
+        assert!(idle.contains("r refresh"), "idle component tree\n{idle}");
 
         let (scanning, _) = render_footer_state(true, true);
         assert!(
-            scanning.contains("Refreshing…"),
+            scanning.contains("refreshing…"),
             "scan component tree\n{scanning}"
         );
         assert!(
-            !scanning.contains("  Refresh  "),
+            !scanning.contains("r refresh  "),
             "scan component tree\n{scanning}"
         );
     }
@@ -1622,7 +1613,7 @@ mod tests {
             screen.contains("5-hour 32% · 7-day 44% · Fable 7-day 11% used"),
             "clear Claude quota data including Fable\n{screen}"
         );
-        assert_eq!(hits.len(), 4);
+        assert_eq!(hits.len(), 3);
         assert!(
             !screen.contains('╭') && !screen.contains('╯'),
             "borderless\n{screen}"
@@ -1937,12 +1928,9 @@ mod tests {
     #[test]
     fn hit_regions_cover_each_visible_row_edge_to_edge() {
         let (screen, hits) = render(72, 12, false);
-        assert_eq!(hits.len(), 4);
+        assert_eq!(hits.len(), 3);
         let rows: Vec<&str> = screen.lines().collect();
-        for (hit, title) in hits
-            .iter()
-            .zip(["Codex", "Claude", "Claude · work", "Refresh"])
-        {
+        for (hit, title) in hits.iter().zip(["Codex", "Claude", "Claude · work"]) {
             assert!(
                 rows[hit.top as usize].contains(title),
                 "hit top row should hold {title:?}: {:?}",
@@ -1961,14 +1949,14 @@ mod tests {
 
     #[test]
     fn short_viewport_scrolls_selected_row_into_view() {
-        let (screen, hits) = render_with(72, 3, 2, false);
+        let (screen, hits) = render_with(72, 4, 2, false);
         assert_eq!(hits.first().map(|hit| hit.index), Some(2));
         assert_eq!(hits.last().map(|hit| hit.index), Some(2));
         assert!(screen.contains("Claude · work"), "selected row\n{screen}");
         assert!(screen.contains('┃'), "scrollbar thumb\n{screen}");
         for hit in &hits {
             assert!(
-                hit.bottom < 3,
+                hit.bottom < 4,
                 "hit leaves the viewport: {}..{}",
                 hit.top,
                 hit.bottom
@@ -2002,14 +1990,15 @@ mod tests {
 
     #[test]
     fn row_scrolling_keeps_the_last_item_flush_with_the_viewport() {
-        let (screen, rendered, _) = render_state(72, 3, 2, false, u16::MAX, false);
+        let (screen, rendered, _) = render_state(72, 4, 2, false, u16::MAX, false);
         let rows: Vec<&str> = screen.lines().collect();
         assert_eq!(rendered.scroll_offset, rendered.max_scroll);
-        assert_eq!(rendered.hits.last().map(|hit| hit.index), Some(3));
+        assert_eq!(rendered.hits.last().map(|hit| hit.index), Some(2));
         assert!(
-            rows[2].contains("Refresh"),
+            rows[2].contains("Claude · work"),
             "last row should touch the bottom of the list viewport\n{screen}"
         );
+        assert!(rows[3].contains("r refresh"), "semantic footer\n{screen}");
     }
 
     #[test]
@@ -2141,7 +2130,7 @@ mod tests {
         assert!(rendered.alert_option_hits.is_empty());
         assert!(!screen.contains("alerts off"));
         assert!(!screen.contains("Alerts"));
-        assert!(screen.contains("Refresh"));
+        assert!(screen.contains("r refresh"));
     }
 
     #[test]

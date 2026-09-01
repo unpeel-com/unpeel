@@ -668,6 +668,7 @@ fn run_tui(config: Config) -> io::Result<()> {
         let scrollbar_area = rendered.scrollbar_area;
         let back_button = rendered.back_button;
         let alert_option_hits = rendered.alert_option_hits;
+        let footer_area = rendered.footer_area;
         if !event::poll(Duration::from_millis(100))? {
             if theme_monitor.refresh() {
                 app.palette
@@ -711,26 +712,24 @@ fn run_tui(config: Config) -> io::Result<()> {
                     || key.code == KeyCode::Char('q')
                 {
                     app.quit = true;
+                } else if let Some((node_id, action)) = published
+                    .footer_action_for_key(&key)
+                    .map(|action| (action.id.clone(), action.action.clone()))
+                {
+                    let _ = app.apply_semantic_action(
+                        &node_id,
+                        &action,
+                        UiEventKind::Activate,
+                        &UiEventValue::None,
+                        &trigger_tx,
+                    );
                 } else if let Some(action) = ListKeymap::new().action_for_key(&key) {
                     app.handle_list_navigation(action);
-                } else {
-                    match key.code {
-                        KeyCode::Char('r') => {
-                            if trigger_tx.send(()).is_ok() {
-                                app.scanning = true;
-                            }
-                        }
-                        KeyCode::Char('a') => {
-                            app.open_alert_dialog();
-                        }
-                        KeyCode::Char('t') => {
-                            app.palette = app
-                                .palette
-                                .toggled()
-                                .with_hosted_accent(theme_monitor.hosted_accent());
-                        }
-                        _ => {}
-                    }
+                } else if let KeyCode::Char('t') = key.code {
+                    app.palette = app
+                        .palette
+                        .toggled()
+                        .with_hosted_accent(theme_monitor.hosted_accent());
                 }
             }
             Event::Mouse(mouse) if app.alert_dialog.is_some() => {
@@ -755,7 +754,27 @@ fn run_tui(config: Config) -> io::Result<()> {
                 // Click selects a row; a second click opens its detail view.
                 MouseEventKind::Down(MouseButton::Left)
                 | MouseEventKind::Drag(MouseButton::Left) => {
-                    if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                    let footer_action = (mouse.kind == MouseEventKind::Down(MouseButton::Left))
+                        .then(|| {
+                            footer_area
+                                .and_then(|area| {
+                                    published.footer()?.action_at(
+                                        ratatui::layout::Position::new(mouse.column, mouse.row),
+                                        area,
+                                    )
+                                })
+                                .map(|action| (action.id.clone(), action.action.clone()))
+                        })
+                        .flatten();
+                    if let Some((node_id, action)) = footer_action {
+                        let _ = app.apply_semantic_action(
+                            &node_id,
+                            &action,
+                            UiEventKind::Activate,
+                            &UiEventValue::None,
+                            &trigger_tx,
+                        );
+                    } else if mouse.kind == MouseEventKind::Down(MouseButton::Left)
                         && back_button
                             .as_ref()
                             .is_some_and(|hit| hit.contains(mouse.column, mouse.row))
@@ -778,14 +797,6 @@ fn run_tui(config: Config) -> io::Result<()> {
                             } else {
                                 app.select(index);
                             }
-                        } else if hit.node_id == "refresh-usage"
-                            || hit.node_id.ends_with("-refresh")
-                        {
-                            if trigger_tx.send(()).is_ok() {
-                                app.scanning = true;
-                            }
-                        } else if hit.node_id == "open-alerts" || hit.node_id.ends_with("-alerts") {
-                            app.open_alert_dialog();
                         }
                     }
                 }
@@ -817,6 +828,12 @@ fn semantic_action_is_declared(
             && page.list().select.as_deref() == Some(action))
         || (kind == UiEventKind::Activate
             && page
+                .footer
+                .actions
+                .iter()
+                .any(|item| item.id == node_id && item.action == action && !item.disabled))
+        || (kind == UiEventKind::Activate
+            && page
                 .list()
                 .items
                 .iter()
@@ -843,7 +860,7 @@ fn semantic_action_is_declared(
 mod tests {
     use super::*;
     use crate::sources::{Provider, ProviderKind};
-    use unpeel_app_kit::{List, ListItem, Page, UiDeltaOperation};
+    use unpeel_app_kit::{FooterAction, List, ListItem, Page, UiDeltaOperation};
 
     fn limit_snapshot(level: Level, used: f64, annotation: Option<&str>) -> Snapshot {
         let mut metric =
@@ -940,7 +957,12 @@ mod tests {
                         .activate_action(ui::OPEN_PROVIDER_ACTION)],
                 )
                 .selected("provider-0", ui::SELECT_PROVIDER_ACTION),
-            );
+            )
+            .footer_actions([FooterAction::new(
+                "refresh-usage",
+                "refresh",
+                ui::REFRESH_ACTION,
+            )]);
         assert!(semantic_action_is_declared(
             &page,
             "provider-0",
@@ -953,7 +975,7 @@ mod tests {
             ui::OPEN_PROVIDER_ACTION,
             UiEventKind::Activate,
         ));
-        assert!(!semantic_action_is_declared(
+        assert!(semantic_action_is_declared(
             &page,
             "refresh-usage",
             ui::REFRESH_ACTION,

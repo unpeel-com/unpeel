@@ -42,8 +42,8 @@ the overall weekly allowance, and `Fable 7-day` is that model's weekly
 allowance. Every percentage is the amount used. Email addresses and reset
 dates/times stay in the detail view instead of crowding the list.
 Unpeel's Session title owns the App name, so there is no repeated in-App title.
-The only footer copy is the compact `a alert  r refresh` action row (with a
-spinner replacing `refresh` while a scan is active).
+The only footer copy is the compact `a alert  r refresh` action row; Refresh
+becomes a disabled `r refreshing…` action while a scan is active.
 
 Press Enter to open the borderless detail view; a pinned, transparent `← Back`
 action appears at the top and Enter, Escape, or its full-width click target
@@ -270,5 +270,4 @@ defaults. Data is re-scanned every `refresh_secs` (and on `r`), and the
 sidebar status line updates on every scan. The bottom row keeps `a alert` and
 `r refresh` visible inside Unpeel, using the stronger foreground only for the
 shortcut letters. While either a manual or scheduled scan is actually
-running, `r refresh` becomes `r` plus an animated spinner and `refreshing…`
-status.
+running, the action becomes a disabled `r refreshing…` status.
