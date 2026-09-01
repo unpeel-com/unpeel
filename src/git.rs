@@ -28,6 +28,7 @@ impl ChangedFile {
     }
 
     #[must_use]
+    #[cfg(test)]
     pub fn display_path(&self) -> String {
         self.previous_path.as_ref().map_or_else(
             || self.path.display().to_string(),

@@ -1,5 +1,6 @@
 mod app;
 mod git;
+#[cfg(test)]
 mod highlight;
 mod install;
 mod ui;

@@ -1,7 +1,10 @@
 //! Borderless changed-file list and unified-diff detail surface.
 
 use std::io::{self, Stdout, Write as _};
-use std::path::{Path, PathBuf};
+use std::ops::{Deref, DerefMut};
+#[cfg(test)]
+use std::path::Path;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
@@ -11,32 +14,44 @@ use crossterm::event::{
 use crossterm::execute;
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::backend::CrosstermBackend;
+#[cfg(test)]
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
-use ratatui::style::{Color, Modifier, Style};
+#[cfg(test)]
+use ratatui::layout::{Alignment, Constraint, Layout};
+use ratatui::layout::{Position, Rect};
+use ratatui::style::Style;
+#[cfg(test)]
+use ratatui::style::{Color, Modifier};
+#[cfg(test)]
 use ratatui::text::{Line, Span};
+#[cfg(test)]
 use ratatui::widgets::{Paragraph, Widget};
 use ratatui::{Frame, Terminal};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthChar;
+use unicode_width::UnicodeWidthStr;
 #[cfg(test)]
 use unpeel_app_kit::UiDeltaOperation;
 use unpeel_app_kit::{
     AgentBridge, AppContext, AppMetadata, AppReporter, ColorScheme, Content, ContentEmphasis,
-    ContentFont, ContentLine, ContentLineTone, ContentRun, ContentSelection, ContentTone,
-    DoubleClickTracker, DragSurface, EditorBridge, KeyboardEnhancementGuard, KitTheme, List,
-    ListItem, ListItemSlot, ListItemTone, ListKeymap, ListNavigationAction, ListState, MenuItem,
-    MenuTheme, Page, PageTheme, PopupMenu, SELECTABLE_LEFT_PADDING, SemanticMenu,
+    ContentFont, ContentLine, ContentLineTone, ContentRun, ContentSelection, ContentState,
+    ContentTheme, ContentTone, DoubleClickTracker, DragSurface, EditorBridge, InputField,
+    KeyboardEnhancementGuard, KitTheme, List, ListItem, ListItemSlot, ListItemTone, ListKeymap,
+    ListNavigationAction, ListState, MenuTheme, Page, PageTheme, PopupMenu, SemanticMenu,
     SemanticMenuAnchor, SemanticMenuItem, SemanticMenuPresentation, StatusSymbol, ThemeMonitor,
-    UiBridge, UiBridgeEvent, UiEventKind, UiEventOutcome, UiEventValue, UiNode, VerticalScrollbar,
-    clipboard_sequence, display_path_from_root, page_delta_operations,
+    UiBridge, UiBridgeEvent, UiComponent, UiEventKind, UiEventOutcome, UiEventValue, UiNode,
+    clipboard_sequence, page_delta_operations,
 };
+#[cfg(test)]
+use unpeel_app_kit::{SELECTABLE_LEFT_PADDING, VerticalScrollbar};
 
 use crate::app::{App, Screen};
 use crate::git::{ChangedFile, DiffDocument};
+#[cfg(test)]
 use crate::highlight::{DocumentColors, Highlighter};
 
-const FOOTER_ROWS: u16 = 1;
+#[cfg(test)]
 const DETAIL_GAP_ROWS: u16 = 1;
+#[cfg(test)]
 const DETAIL_META_ROWS: u16 = 1;
 const AUTO_SYNC_INTERVAL: Duration = Duration::from_millis(1000);
 const UI_VIEW_ID: &str = "main";
@@ -71,13 +86,13 @@ pub fn run(
         .description("Standalone Ratatui diff viewer with an optional native/web projection"),
     )
     .map_err(ui_bridge_error)?;
+    let agent = AgentBridge::new();
+    agent.refresh();
     let mut ui_revision = 1u64;
-    let mut published = semantic_node(&app);
+    let mut published = semantic_node(&app, agent.label().is_some());
     bridge
         .publish(UI_VIEW_ID, ui_revision, published.clone())
         .map_err(ui_bridge_error)?;
-    let agent = AgentBridge::new();
-    agent.refresh();
     let mut last_agent_context_refresh = Instant::now();
     let mut rendered = RenderResult::default();
     let mut clicks = DoubleClickTracker::new();
@@ -85,7 +100,6 @@ pub fn run(
     let mut selecting = false;
     let mut needs_draw = true;
     let mut last_sync = Instant::now();
-    let mut highlights = HighlightCache::default();
 
     loop {
         if drain_bridge(
@@ -97,7 +111,13 @@ pub fn run(
         )? {
             needs_draw = true;
         }
-        publish_semantic_projection(&app, &mut bridge, &mut ui_revision, &mut published)?;
+        publish_semantic_projection(
+            &app,
+            agent.label().is_some(),
+            &mut bridge,
+            &mut ui_revision,
+            &mut published,
+        )?;
         if needs_draw {
             reporter.set_context(&serde_json::json!({
                 "root": app.root(),
@@ -110,8 +130,7 @@ pub fn run(
                     .map(|(start, end)| [start + 1, end + 1]),
             }));
             if bridge.should_render_terminal() {
-                let colors = highlights.resolve(&app, theme.scheme);
-                rendered = terminal.draw(&app, &mut drags, menu.as_mut(), colors, theme)?;
+                rendered = terminal.draw(&published, &app, &mut drags, menu.as_mut(), theme)?;
                 app.apply_render_metrics(
                     rendered.scroll_offset,
                     rendered.max_scroll,
@@ -213,7 +232,7 @@ pub fn run(
                             clicks.reset();
                             if open_menu
                                 .item_at(position)
-                                .is_some_and(MenuItem::is_enabled)
+                                .is_some_and(|item| item.is_enabled())
                             {
                                 open_menu.select_at(position);
                                 activate_menu(open_menu, &mut app, &agent);
@@ -259,12 +278,9 @@ pub fn run(
                                     app.begin_selection(index);
                                 }
                                 agent.refresh();
-                                menu = Some(diff_menu(
-                                    app.selected_absolute_path(),
-                                    agent.label().is_some(),
-                                    position,
-                                    theme.scheme,
-                                ));
+                                let absolute = app.selected_absolute_path();
+                                menu = published_context_menu(&published)
+                                    .map(|spec| diff_menu(absolute, spec, position, theme.scheme));
                                 needs_draw = true;
                             } else if menu.take().is_some() {
                                 needs_draw = true;
@@ -281,13 +297,9 @@ pub fn run(
                             {
                                 let relative = control_safe(file.path().to_string_lossy().as_ref());
                                 agent.refresh();
-                                menu = Some(list_menu(
-                                    relative,
-                                    absolute,
-                                    agent.label().is_some(),
-                                    position,
-                                    theme.scheme,
-                                ));
+                                menu = published_context_menu(&published).map(|spec| {
+                                    list_menu(relative, absolute, spec, position, theme.scheme)
+                                });
                             }
                             needs_draw = true;
                         } else if menu.take().is_some() {
@@ -343,11 +355,11 @@ pub fn run(
     Ok(())
 }
 
-fn semantic_node(app: &App) -> UiNode {
-    UiNode::page(SEMANTIC_ROOT_ID, semantic_page(app))
+fn semantic_node(app: &App, can_send: bool) -> UiNode {
+    UiNode::page(SEMANTIC_ROOT_ID, semantic_page(app, can_send))
 }
 
-fn semantic_page(app: &App) -> Page {
+fn semantic_page(app: &App, can_send: bool) -> Page {
     match &app.screen {
         Screen::Files => {
             let mut list = List::new(
@@ -370,7 +382,7 @@ fn semantic_page(app: &App) -> Page {
                     .detail("Reload the working tree")
                     .activate_action(REFRESH_ACTION),
             );
-            list = list.context_menu(semantic_file_menu());
+            list = list.context_menu(semantic_file_menu(can_send));
             Page::new(semantic_page_title(app, "Changes"), list)
         }
         Screen::Diff(document) => {
@@ -389,7 +401,10 @@ fn semantic_page(app: &App) -> Page {
             .font(ContentFont::Monospace)
             .empty_message("No textual diff")
             .select_action(SELECT_DIFF_LINES_ACTION)
-            .context_menu(semantic_diff_menu());
+            .context_menu(semantic_diff_menu(
+                can_send,
+                app.selected_absolute_path().is_some(),
+            ));
             if let Some((anchor, head)) = app.selection {
                 content.selection = Some(ContentSelection::new(
                     diff_line_id(anchor),
@@ -411,7 +426,13 @@ fn semantic_page(app: &App) -> Page {
 fn semantic_page_title(app: &App, base: &str) -> String {
     app.notice.as_ref().map_or_else(
         || base.to_owned(),
-        |notice| format!("{base} · {}", notice.text),
+        |notice| {
+            format!(
+                "{base} · {}{}",
+                if notice.error { "Error: " } else { "" },
+                notice.text
+            )
+        },
     )
 }
 
@@ -469,40 +490,66 @@ fn diff_line_index(node_id: &str) -> Option<usize> {
     node_id.strip_prefix("diff-line-")?.parse().ok()
 }
 
-fn semantic_file_menu() -> SemanticMenu {
-    SemanticMenu::new(
-        "File actions",
-        [
-            SemanticMenuItem::new("open-in-editor", "Open in editor", OPEN_IN_EDITOR_ACTION),
-            SemanticMenuItem::new("send-path", "Send to agent", SEND_TO_AGENT_ACTION),
-            SemanticMenuItem::new("copy-path", "Copy path", COPY_ACTION),
-        ],
-    )
-    .presentation(SemanticMenuPresentation::Context)
-    .anchor(SemanticMenuAnchor::Pointer)
+fn semantic_file_menu(can_send: bool) -> SemanticMenu {
+    let mut items = vec![SemanticMenuItem::new(
+        "open-in-editor",
+        "Open in editor",
+        OPEN_IN_EDITOR_ACTION,
+    )];
+    if can_send {
+        items.push(SemanticMenuItem::new(
+            "send-path",
+            "Send to agent",
+            SEND_TO_AGENT_ACTION,
+        ));
+    }
+    items.push(SemanticMenuItem::new("copy-path", "Copy path", COPY_ACTION));
+    SemanticMenu::new("File actions", items)
+        .presentation(SemanticMenuPresentation::Context)
+        .anchor(SemanticMenuAnchor::Pointer)
 }
 
-fn semantic_diff_menu() -> SemanticMenu {
-    SemanticMenu::new(
-        "Diff actions",
-        [
-            SemanticMenuItem::new("open-in-editor", "Open in editor", OPEN_IN_EDITOR_ACTION),
-            SemanticMenuItem::new("send-lines", "Send to agent", SEND_TO_AGENT_ACTION),
-            SemanticMenuItem::new("copy-lines", "Copy lines", COPY_ACTION),
-            SemanticMenuItem::new("refresh-diff", "Refresh", REFRESH_ACTION),
-        ],
-    )
-    .presentation(SemanticMenuPresentation::Context)
-    .anchor(SemanticMenuAnchor::Pointer)
+fn semantic_diff_menu(can_send: bool, can_open: bool) -> SemanticMenu {
+    let mut open = SemanticMenuItem::new("open-in-editor", "Open in editor", OPEN_IN_EDITOR_ACTION);
+    if !can_open {
+        open = open.disabled(true);
+    }
+    let mut items = vec![open];
+    if can_send {
+        items.push(SemanticMenuItem::new(
+            "send-lines",
+            "Send to agent",
+            SEND_TO_AGENT_ACTION,
+        ));
+    }
+    items.extend([
+        SemanticMenuItem::new("copy-lines", "Copy lines", COPY_ACTION),
+        SemanticMenuItem::new("refresh-diff", "Refresh", REFRESH_ACTION),
+    ]);
+    SemanticMenu::new("Diff actions", items)
+        .presentation(SemanticMenuPresentation::Context)
+        .anchor(SemanticMenuAnchor::Pointer)
+}
+
+fn published_context_menu(node: &UiNode) -> Option<&SemanticMenu> {
+    let UiComponent::Page(page) = &node.element else {
+        return None;
+    };
+    match &page.body {
+        unpeel_app_kit::PageBodySlot::List(list) => list.context_menu.as_ref(),
+        unpeel_app_kit::PageBodySlot::Content(content) => content.context_menu.as_ref(),
+        _ => None,
+    }
 }
 
 fn publish_semantic_projection(
     app: &App,
+    can_send: bool,
     bridge: &mut UiBridge,
     revision: &mut u64,
     published: &mut UiNode,
 ) -> io::Result<()> {
-    let next = semantic_node(app);
+    let next = semantic_node(app, can_send);
     if next == *published {
         return Ok(());
     }
@@ -540,7 +587,13 @@ fn drain_bridge(
                 let outcome = match result {
                     Ok(()) => {
                         changed = true;
-                        publish_semantic_projection(app, bridge, revision, published)?;
+                        publish_semantic_projection(
+                            app,
+                            agent.label().is_some(),
+                            bridge,
+                            revision,
+                            published,
+                        )?;
                         UiEventOutcome::Applied
                     }
                     Err(message) => UiEventOutcome::Rejected(message),
@@ -853,58 +906,84 @@ enum ContextAction {
     /// Bare repo-relative path pasted into the agent input.
     SendPath(String),
     CopyPath(PathBuf),
+    Refresh,
 }
 
-type ContextMenu = PopupMenu<ContextAction>;
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ContextTarget {
+    Diff { absolute: Option<PathBuf> },
+    File { relative: String, absolute: PathBuf },
+}
+
+#[derive(Debug)]
+struct ContextMenu {
+    popup: PopupMenu<String>,
+    target: ContextTarget,
+}
+
+impl Deref for ContextMenu {
+    type Target = PopupMenu<String>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.popup
+    }
+}
+
+impl DerefMut for ContextMenu {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.popup
+    }
+}
 
 fn diff_menu(
     absolute: Option<PathBuf>,
-    can_send: bool,
+    spec: &SemanticMenu,
     anchor: Position,
     scheme: ColorScheme,
 ) -> ContextMenu {
-    let mut items = Vec::with_capacity(3);
-    if let Some(path) = absolute {
-        items.push(MenuItem::new(
-            "Open in editor",
-            ContextAction::OpenInEditor(path),
-        ));
+    ContextMenu {
+        popup: spec.popup(anchor, MenuTheme::for_color_scheme(scheme)),
+        target: ContextTarget::Diff { absolute },
     }
-    if can_send {
-        items.push(MenuItem::new("Send to agent", ContextAction::SendSelection));
-    }
-    items.push(MenuItem::new("Copy lines", ContextAction::CopySelection));
-    PopupMenu::new(anchor, items).with_theme(MenuTheme::for_color_scheme(scheme))
 }
 
 fn list_menu(
     relative: String,
     absolute: PathBuf,
-    can_send: bool,
+    spec: &SemanticMenu,
     anchor: Position,
     scheme: ColorScheme,
 ) -> ContextMenu {
-    let mut items = Vec::with_capacity(3);
-    items.push(MenuItem::new(
-        "Open in editor",
-        ContextAction::OpenInEditor(absolute.clone()),
-    ));
-    if can_send {
-        items.push(MenuItem::new(
-            "Send to agent",
-            ContextAction::SendPath(relative),
-        ));
+    ContextMenu {
+        popup: spec.popup(anchor, MenuTheme::for_color_scheme(scheme)),
+        target: ContextTarget::File { relative, absolute },
     }
-    items.push(MenuItem::new(
-        "Copy path",
-        ContextAction::CopyPath(absolute),
-    ));
-    PopupMenu::new(anchor, items).with_theme(MenuTheme::for_color_scheme(scheme))
 }
 
 fn activate_menu(menu: ContextMenu, app: &mut App, agent: &AgentBridge) {
-    let Some(action) = menu.selected_value().cloned() else {
+    let ContextMenu { popup, target } = menu;
+    let Some(item_id) = popup.selected_value().map(String::as_str) else {
         return;
+    };
+    let action = match (item_id, target) {
+        (
+            "open-in-editor",
+            ContextTarget::Diff {
+                absolute: Some(path),
+            },
+        )
+        | ("open-in-editor", ContextTarget::File { absolute: path, .. }) => {
+            ContextAction::OpenInEditor(path)
+        }
+        ("send-lines", ContextTarget::Diff { .. }) => ContextAction::SendSelection,
+        ("copy-lines", ContextTarget::Diff { .. }) => ContextAction::CopySelection,
+        ("refresh-diff", ContextTarget::Diff { .. }) => ContextAction::Refresh,
+        ("send-path", ContextTarget::File { relative, .. }) => ContextAction::SendPath(relative),
+        ("copy-path", ContextTarget::File { absolute, .. }) => ContextAction::CopyPath(absolute),
+        _ => {
+            app.fail("Menu action is unavailable");
+            return;
+        }
     };
     match action {
         ContextAction::OpenInEditor(path) => match EditorBridge::open(&path) {
@@ -932,6 +1011,11 @@ fn activate_menu(menu: ContextMenu, app: &mut App, agent: &AgentBridge) {
             Ok(()) => app.notify("Path copied"),
             Err(error) => app.fail(format!("Copy failed: {error}")),
         },
+        ContextAction::Refresh => {
+            if let Err(error) = app.refresh() {
+                app.fail(error);
+            }
+        }
     }
 }
 
@@ -1055,16 +1139,16 @@ impl TerminalGuard {
 
     fn draw(
         &mut self,
+        node: &UiNode,
         app: &App,
         drags: &mut DragSurface,
         menu: Option<&mut ContextMenu>,
-        colors: Option<&DocumentColors>,
         theme: KitTheme,
     ) -> io::Result<RenderResult> {
         let mut result = RenderResult::default();
         drags.begin_frame();
         self.terminal.draw(|frame| {
-            result = render_frame(frame, app, drags, menu, colors, theme);
+            result = render_component_frame(frame, node, app, drags, menu, theme);
         })?;
         drags.commit()?;
         Ok(result)
@@ -1121,39 +1205,7 @@ struct RenderResult {
     max_horizontal_scroll: usize,
 }
 
-/// Syntax colors for the open diff, recomputed only when the document or the
-/// terminal color scheme changes. The syntect grammar set loads lazily on
-/// the first diff so the file list stays instant to open.
-#[derive(Default)]
-struct HighlightCache {
-    highlighter: Option<Highlighter>,
-    key: Option<(u64, ColorScheme)>,
-    colors: Option<DocumentColors>,
-}
-
-impl HighlightCache {
-    fn resolve(&mut self, app: &App, scheme: ColorScheme) -> Option<&DocumentColors> {
-        let Screen::Diff(document) = &app.screen else {
-            return None;
-        };
-        let key = (document_fingerprint(document), scheme);
-        if self.key != Some(key) {
-            let highlighter = self.highlighter.get_or_insert_with(Highlighter::new);
-            self.colors = highlighter.document_colors(document, scheme);
-            self.key = Some(key);
-        }
-        self.colors.as_ref()
-    }
-}
-
-fn document_fingerprint(document: &DiffDocument) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::hash::DefaultHasher::new();
-    document.file.path().hash(&mut hasher);
-    document.lines.hash(&mut hasher);
-    hasher.finish()
-}
-
+#[cfg(test)]
 #[derive(Clone, Copy, Debug)]
 struct FileListView<'a> {
     root: &'a Path,
@@ -1163,93 +1215,137 @@ struct FileListView<'a> {
     reveal_selected: bool,
 }
 
-fn render_frame(
+/// Terminal interpretation of the exact Page node published to native and
+/// web renderers. App-specific code may register non-visual drag hit regions,
+/// but it must not paint a second representation of the screen.
+fn render_component_frame(
     frame: &mut Frame<'_>,
+    node: &UiNode,
     app: &App,
     drags: &mut DragSurface,
     menu: Option<&mut ContextMenu>,
-    colors: Option<&DocumentColors>,
     theme: KitTheme,
 ) -> RenderResult {
-    let [body, footer] =
-        Layout::vertical([Constraint::Min(0), Constraint::Length(FOOTER_ROWS)]).areas(frame.area());
-
-    let result = match &app.screen {
-        Screen::Files => render_file_list(
-            frame,
-            body,
-            FileListView {
-                root: app.root(),
-                files: &app.files,
-                selected: app.selected,
-                requested_scroll: app.list_scroll,
-                reveal_selected: app.reveal_selected,
-            },
-            theme,
-            drags,
-        ),
-        Screen::Diff(document) => render_diff_detail(
-            frame,
-            body,
-            document,
-            DiffDetailView {
-                selection: app.selection_range(),
-                requested_scroll: app.detail_scroll,
-                horizontal_scroll: app.horizontal_scroll,
-                colors,
-            },
-            theme,
-        ),
+    let UiComponent::Page(page) = &node.element else {
+        return RenderResult::default();
     };
-    render_footer(frame, footer, app, theme);
+    let layout = page.layout(frame.area());
+    let mut input = InputField::new("");
+    let mut list_state = match &page.body {
+        unpeel_app_kit::PageBodySlot::List(list) => {
+            let selected = list
+                .selected_id
+                .as_deref()
+                .and_then(|id| list.items.iter().position(|item| item.id == id));
+            let mut state = ListState::new(selected);
+            state.set_offset(app.list_scroll, list.items.len());
+            if app.reveal_selected {
+                state.request_reveal();
+            }
+            state
+        }
+        _ => ListState::default(),
+    };
+    let mut content_state = ContentState::new();
+    content_state.set_offsets(
+        u16::try_from(app.detail_scroll).unwrap_or(u16::MAX),
+        u16::try_from(app.horizontal_scroll).unwrap_or(u16::MAX),
+    );
+    frame.render_widget(
+        page.widget_with_content_state(&mut input, &mut list_state, &mut content_state)
+            .theme(file_list_theme(theme))
+            .content_theme(ContentTheme::for_theme(theme)),
+        frame.area(),
+    );
+
+    let result = match (&app.screen, &page.body) {
+        (Screen::Files, unpeel_app_kit::PageBodySlot::List(list)) => {
+            let rows_area = list_state.rows_area();
+            let hits = (0..usize::from(rows_area.height))
+                .filter_map(|row| {
+                    let index = list_state.offset().saturating_add(row);
+                    let file = app.files.get(index)?;
+                    let row_area = Rect::new(
+                        rows_area.x,
+                        rows_area
+                            .y
+                            .saturating_add(u16::try_from(row).unwrap_or(u16::MAX)),
+                        rows_area.width,
+                        1,
+                    );
+                    drags.register(row_area, app.root().join(file.path()));
+                    Some(RowHit {
+                        index,
+                        area: row_area,
+                    })
+                })
+                .collect();
+            RenderResult {
+                hits,
+                scroll_offset: list_state.offset(),
+                max_scroll: list_state.max_offset(list.items.len()),
+                viewport_rows: list_state.viewport_rows(),
+                ..RenderResult::default()
+            }
+        }
+        (Screen::Diff(_), unpeel_app_kit::PageBodySlot::Content(content)) => {
+            let scroll_offset = usize::from(content_state.vertical_offset());
+            let viewport_rows = usize::from(content_state.viewport_rows());
+            let overflow = content.lines.len() > viewport_rows && layout.list.width > 1;
+            let rows_area = Rect::new(
+                layout.list.x,
+                layout.list.y,
+                layout.list.width.saturating_sub(u16::from(overflow)),
+                layout.list.height,
+            );
+            let diff_hits = (0..usize::from(rows_area.height))
+                .filter_map(|row| {
+                    let index = scroll_offset.saturating_add(row);
+                    content.lines.get(index)?;
+                    Some(RowHit {
+                        index,
+                        area: Rect::new(
+                            rows_area.x,
+                            rows_area
+                                .y
+                                .saturating_add(u16::try_from(row).unwrap_or(u16::MAX)),
+                            rows_area.width,
+                            1,
+                        ),
+                    })
+                })
+                .collect();
+            let longest_line = content
+                .lines
+                .iter()
+                .map(|line| UnicodeWidthStr::width(line.text().as_str()))
+                .max()
+                .unwrap_or(0);
+            RenderResult {
+                diff_hits,
+                back_button: page
+                    .back
+                    .as_ref()
+                    .and_then(|_| RectHit::from_rect(layout.title)),
+                scroll_offset,
+                max_scroll: usize::from(content_state.max_vertical_offset(content.lines.len())),
+                viewport_rows,
+                max_horizontal_scroll: longest_line.saturating_sub(usize::from(rows_area.width)),
+                ..RenderResult::default()
+            }
+        }
+        _ => RenderResult::default(),
+    };
     if let Some(menu) = menu {
-        // Do not let the native host begin a path drag through an open menu.
         drags.begin_frame();
         menu.render(frame);
     }
+    // The component widget owns all pixels; the result only carries terminal
+    // geometry back to the App's renderer-local interaction state.
     result
 }
 
-fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App, theme: KitTheme) {
-    if area.is_empty() {
-        return;
-    }
-    let (text, color) = if let Some(notice) = &app.notice {
-        (
-            notice.text.clone(),
-            if notice.error {
-                theme.danger
-            } else {
-                theme.muted
-            },
-        )
-    } else if let Some((start, end)) = app.selection_range().filter(|_| app.is_detail()) {
-        let count = end - start + 1;
-        (
-            format!(
-                "{count} diff line{} selected · Enter to send to agent · Esc to clear",
-                if count == 1 { "" } else { "s" }
-            ),
-            theme.muted,
-        )
-    } else {
-        let path = app
-            .selected_absolute_path()
-            .unwrap_or_else(|| app.root().to_path_buf());
-        (display_path_from_root(path, app.root()), theme.muted)
-    };
-    let padding = SELECTABLE_LEFT_PADDING.min(area.width);
-    frame.render_widget(
-        Paragraph::new(text).style(Style::new().fg(color)),
-        Rect::new(
-            area.x.saturating_add(padding),
-            area.y,
-            area.width.saturating_sub(padding),
-            area.height,
-        ),
-    );
-}
-
+#[cfg(test)]
 fn render_file_list(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -1504,6 +1600,7 @@ fn render_file_row_legacy(
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Default)]
 struct DiffDetailView<'a> {
     selection: Option<(usize, usize)>,
@@ -1512,6 +1609,7 @@ struct DiffDetailView<'a> {
     colors: Option<&'a DocumentColors>,
 }
 
+#[cfg(test)]
 fn render_diff_detail(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -1681,6 +1779,7 @@ fn render_diff_detail(
     }
 }
 
+#[cfg(test)]
 fn render_detail_meta(buffer: &mut Buffer, area: Rect, document: &DiffDocument, theme: KitTheme) {
     if area.is_empty() {
         return;
@@ -1732,6 +1831,7 @@ fn render_detail_meta(buffer: &mut Buffer, area: Rect, document: &DiffDocument, 
     }
 }
 
+#[cfg(test)]
 fn frame_line(buffer: &mut Buffer, area: Rect, line: Line<'_>) {
     Paragraph::new(line).render(area, buffer);
 }
@@ -1758,6 +1858,7 @@ fn reveal_selected_row(
     }
 }
 
+#[cfg(test)]
 fn status_color(status: char, scheme: ColorScheme) -> Color {
     match status {
         'A' | '?' => match scheme {
@@ -1782,6 +1883,7 @@ fn status_color(status: char, scheme: ColorScheme) -> Color {
 /// Full-row tint behind added and removed patch lines, GitHub-style: the
 /// background carries the change kind, so those lines keep the plain text
 /// foreground from [`diff_line_style`].
+#[cfg(test)]
 fn diff_row_background(line: &str, scheme: ColorScheme) -> Option<Color> {
     if line.starts_with("+++") || line.starts_with("---") {
         return None;
@@ -1801,6 +1903,7 @@ fn diff_row_background(line: &str, scheme: ColorScheme) -> Option<Color> {
     }
 }
 
+#[cfg(test)]
 fn diff_line_style(line: &str, theme: KitTheme) -> Style {
     if line.starts_with("+++") || line.starts_with("---") {
         Style::new().fg(theme.muted).add_modifier(Modifier::BOLD)
@@ -1839,6 +1942,7 @@ fn expand_tabs(line: &str) -> String {
 
 /// Span-aware sibling of [`visible_cells`]: expands tabs, skips `offset`
 /// display columns, and clips to `width`, preserving each fragment's style.
+#[cfg(test)]
 fn visible_spans(spans: &[(Style, String)], offset: usize, width: u16) -> Vec<Span<'static>> {
     let width = usize::from(width);
     let mut result = Vec::new();
@@ -1880,6 +1984,7 @@ fn visible_spans(spans: &[(Style, String)], offset: usize, width: u16) -> Vec<Sp
     result
 }
 
+#[cfg(test)]
 fn visible_cells(line: &str, offset: usize, width: u16) -> String {
     let width = usize::from(width);
     if width == 0 {
@@ -2016,7 +2121,7 @@ mod tests {
     fn semantic_file_list_carries_status_slots_selection_and_compact_deltas() {
         let (_directory, mut app) = file_app();
         let agent = AgentBridge::new();
-        let first = semantic_node(&app);
+        let first = semantic_node(&app, true);
         let unpeel_app_kit::UiComponent::Page(page) = &first.element else {
             unreachable!()
         };
@@ -2041,7 +2146,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(app.selected, 3);
-        let next = semantic_node(&app);
+        let next = semantic_node(&app, true);
         assert!(matches!(
             page_delta_operations(&first, &next).as_slice(),
             [UiDeltaOperation::ListSetSelection { list_id, selected_id }]
@@ -2057,7 +2162,7 @@ mod tests {
             .lines
             .extend((0..20_050).map(|index| format!(" context line {index}")));
         app.screen = Screen::Diff(document);
-        let page = semantic_page(&app);
+        let page = semantic_page(&app, true);
         page.validate().unwrap();
         assert_eq!(page.back.as_deref(), Some(CLOSE_DIFF_ACTION));
         let content = page.content().expect("Content detail body");
@@ -2072,7 +2177,9 @@ mod tests {
 
         app.notify("Diff lines copied");
         assert!(
-            semantic_page(&app).title.ends_with(" · Diff lines copied"),
+            semantic_page(&app, true)
+                .title
+                .ends_with(" · Diff lines copied"),
             "terminal footer notices must remain visible in native and web details"
         );
     }
@@ -2081,10 +2188,10 @@ mod tests {
     fn semantic_diff_selection_uses_a_content_delta() {
         let (_directory, mut app) = file_app();
         app.screen = Screen::Diff(document());
-        let first = semantic_node(&app);
+        let first = semantic_node(&app, true);
         app.begin_selection(1);
         app.extend_selection(3);
-        let next = semantic_node(&app);
+        let next = semantic_node(&app, true);
         assert!(matches!(
             page_delta_operations(&first, &next).as_slice(),
             [UiDeltaOperation::ContentSetSelection { content_id, selection }]
@@ -2356,44 +2463,37 @@ mod tests {
     }
 
     #[test]
-    fn context_menus_offer_agent_handoff_only_when_a_peer_exists() {
+    fn terminal_context_menus_are_interpreted_from_the_semantic_menu_spec() {
         let scheme = ColorScheme::Dark;
         let anchor = Position::new(4, 4);
         let detail_path = PathBuf::from("/repo/a.rs");
-        let with_agent = diff_menu(Some(detail_path.clone()), true, anchor, scheme);
-        assert_eq!(with_agent.items().len(), 3);
+        let with_agent_spec = semantic_diff_menu(true, true);
+        let with_agent = diff_menu(Some(detail_path.clone()), &with_agent_spec, anchor, scheme);
+        assert_eq!(with_agent.items().len(), 4);
         assert_eq!(with_agent.items()[0].label(), "Open in editor");
-        assert_eq!(
-            with_agent.items()[0].value(),
-            &ContextAction::OpenInEditor(detail_path)
-        );
+        assert_eq!(with_agent.items()[0].value(), "open-in-editor");
         assert_eq!(with_agent.items()[1].label(), "Send to agent");
-        assert_eq!(with_agent.items()[1].value(), &ContextAction::SendSelection);
+        assert_eq!(with_agent.items()[1].value(), "send-lines");
+        assert_eq!(with_agent.items()[3].value(), "refresh-diff");
 
-        let without_agent = diff_menu(None, false, anchor, scheme);
-        assert_eq!(without_agent.items().len(), 1);
-        assert_eq!(without_agent.items()[0].label(), "Copy lines");
+        let without_agent_spec = semantic_diff_menu(false, false);
+        let without_agent = diff_menu(None, &without_agent_spec, anchor, scheme);
+        assert_eq!(without_agent.items().len(), 3);
+        assert!(!without_agent.items()[0].is_enabled());
+        assert_eq!(without_agent.items()[1].label(), "Copy lines");
 
+        let list_spec = semantic_file_menu(true);
         let list = list_menu(
             "a.rs".to_owned(),
             PathBuf::from("/repo/a.rs"),
-            true,
+            &list_spec,
             anchor,
             scheme,
         );
         assert_eq!(list.items().len(), 3);
-        assert_eq!(
-            list.items()[0].value(),
-            &ContextAction::OpenInEditor(PathBuf::from("/repo/a.rs"))
-        );
-        assert_eq!(
-            list.items()[1].value(),
-            &ContextAction::SendPath("a.rs".to_owned())
-        );
-        assert_eq!(
-            list.items()[2].value(),
-            &ContextAction::CopyPath(PathBuf::from("/repo/a.rs"))
-        );
+        assert_eq!(list.items()[0].value(), "open-in-editor");
+        assert_eq!(list.items()[1].value(), "send-path");
+        assert_eq!(list.items()[2].value(), "copy-path");
     }
 
     #[test]
