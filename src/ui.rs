@@ -59,7 +59,7 @@ pub fn run(
     )
     .map_err(ui_bridge_error)?;
     let mut ui_revision = 1u64;
-    let mut published = semantic_node(&mut explorer, agent.label().is_some());
+    let mut published = semantic_node(&mut explorer, agent.label().is_some(), status.as_ref());
     bridge
         .publish(UI_VIEW_ID, ui_revision, published.clone())
         .map_err(ui_bridge_error)?;
@@ -77,6 +77,7 @@ pub fn run(
         publish_projection(
             &mut explorer,
             agent.label().is_some(),
+            status.as_ref(),
             &mut bridge,
             &mut ui_revision,
             &mut published,
@@ -284,11 +285,12 @@ pub fn run(
 fn publish_projection(
     explorer: &mut Explorer,
     can_send: bool,
+    status: Option<&Status>,
     bridge: &mut UiBridge,
     revision: &mut u64,
     published: &mut UiNode,
 ) -> io::Result<()> {
-    let next = semantic_node(explorer, can_send);
+    let next = semantic_node(explorer, can_send, status);
     if next == *published {
         return Ok(());
     }
@@ -308,13 +310,14 @@ fn publish_projection(
     Ok(())
 }
 
-fn semantic_node(explorer: &mut Explorer, can_send: bool) -> UiNode {
-    UiNode::tree(
-        UI_TREE_ID,
-        explorer
-            .semantic_tree("Files")
-            .context_menu(semantic_context_menu(can_send)),
-    )
+fn semantic_node(explorer: &mut Explorer, can_send: bool, status: Option<&Status>) -> UiNode {
+    let mut tree = explorer
+        .semantic_tree("Files")
+        .context_menu(semantic_context_menu(can_send));
+    if let Some(status) = status {
+        tree.location = format!("{} · {}", tree.location, status.message);
+    }
+    UiNode::tree(UI_TREE_ID, tree)
 }
 
 fn semantic_context_menu(can_send: bool) -> SemanticMenu {
@@ -397,6 +400,7 @@ fn drain_bridge(
         publish_projection(
             explorer,
             agent.label().is_some(),
+            status.as_ref(),
             bridge,
             revision,
             published,
@@ -871,7 +875,7 @@ mod tests {
         std::fs::write(directory.path().join("note.md"), "hello").unwrap();
         let mut explorer = Explorer::scoped(directory.path()).unwrap();
 
-        let node = semantic_node(&mut explorer, false);
+        let node = semantic_node(&mut explorer, false, None);
         let unpeel_app_kit::UiComponent::Tree(tree) = node.element else {
             panic!("File Tree must publish the Tree component");
         };
@@ -886,6 +890,13 @@ mod tests {
                 .contains(directory.path().to_string_lossy().as_ref()),
             "semantic entry ids and labels must never expose the absolute root"
         );
+
+        let status = Status::error("Could not open entry");
+        let node = semantic_node(&mut explorer, false, Some(&status));
+        let unpeel_app_kit::UiComponent::Tree(tree) = node.element else {
+            panic!("File Tree must publish the Tree component");
+        };
+        assert_eq!(tree.location, ". · Could not open entry");
     }
 
     #[test]
@@ -894,7 +905,7 @@ mod tests {
         let path = directory.path().join("note.md");
         std::fs::write(&path, "hello").unwrap();
         let mut explorer = Explorer::scoped(directory.path()).unwrap();
-        let node = semantic_node(&mut explorer, true);
+        let node = semantic_node(&mut explorer, true, None);
         let unpeel_app_kit::UiComponent::Tree(tree) = node.element else {
             panic!("File Tree must publish the Tree component");
         };
