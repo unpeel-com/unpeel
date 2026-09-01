@@ -52,9 +52,9 @@ pub fn provider_index_from_node_id(node_id: &str) -> Option<usize> {
     node_id.strip_prefix("provider-")?.parse().ok()
 }
 
-/// Closed App Kit projection of the same master/detail model as the Ratatui
-/// dashboard. Bounded quota meters keep their compact list metadata, while
-/// numeric history is a semantic Sparkline interpreted by every renderer.
+/// Authoritative master/detail component tree interpreted by Ratatui, SwiftUI,
+/// and web as peers. Quota copy stays in compact List metadata, while numeric
+/// history is a semantic Sparkline interpreted from the same values.
 pub fn semantic_page(snapshot: Option<&Snapshot>, view: &View) -> Page {
     if view.hosted && view.alert_dialog.is_some() {
         return semantic_alerts(view);

@@ -609,7 +609,7 @@ fn run_tui(config: Config) -> io::Result<()> {
     };
     let mut bridge = UiBridge::detect(
         AppMetadata::new(install::APP_ID, "Unpeel Usage", env!("CARGO_PKG_VERSION")).description(
-            "Standalone Ratatui usage dashboard with an optional native/web projection",
+            "One Usage component tree interpreted by Ratatui, native, and web renderers",
         ),
     )
     .map_err(ui_bridge_error)?;

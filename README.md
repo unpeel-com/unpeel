@@ -1,8 +1,8 @@
 # unpeel-usage
 
-Local AI usage & credits at a glance — a small, fast standalone terminal app
-built from native [Ratatui](https://ratatui.rs) layouts and widgets, with an
-optional App Kit semantic projection for hosted native and web views.
+Local AI usage & credits at a glance — a small, fast standalone App Kit app.
+One component tree is interpreted by [Ratatui](https://ratatui.rs) in every
+terminal and, when hosted, by native and web renderers as equal peers.
 It reuses the logins and files your AI tools already keep on this machine:
 no pasted API keys and no daemon. Claude and Grok live limits reuse their CLI
 logins; Codex, Claude, Grok, and Muse history stays local.
@@ -48,21 +48,20 @@ spinner replacing `refresh` while a scan is active).
 Press Enter to open the borderless detail view; a pinned, transparent `← Back`
 action appears at the top and Enter, Escape, or its full-width click target
 returns to the list.
-Detail quotas use a purpose-built Ratatui meter, calendar-day activity uses
-the native `Sparkline` widget, and Claude pace projections keep their blue /
-amber / red semantic states, spare estimate, run-out estimate, and even-pace
-marker.
+The detail screen is the same App Kit `Page` and `List` in every renderer.
+Quota direction and caption are computed once by the App (for example,
+`77% left · Resets in 5d 14h`), calendar-day activity is the shared semantic
+`Sparkline`, and Claude pace values retain their semantic blue / amber / red
+tones.
 
-When a Host injects an App Kit UI endpoint, the same process additionally
-publishes a closed `Page` → `List` → `ListItem` projection. SwiftUI and web
-renderers get the provider catalog with secondary status, trailing summaries,
-row activation, a native detail page, Back, Refresh, and the real numeric
-Usage Trend series through App Kit's semantic `Sparkline`. Swift uses Charts,
-web uses dependency-free inline SVG, and the terminal delegates to App Kit's
-Ratatui widget with buffer-identical output. Those actions and values return
-to the Ratatui process, which remains the sole model owner and acknowledges
-each revision. Purpose-built quota meters keep their bounded semantic values;
-the vocabulary does not try to serialize arbitrary terminal widgets.
+When a Host injects an App Kit UI endpoint, the App publishes that exact owned
+`Page` → `List` → `ListItem` tree. Ratatui, SwiftUI, and web show the same
+provider catalog, status, trailing summaries, row activation, detail rows,
+Back, Refresh, and real numeric Usage Trend series in the same order. Swift
+uses Charts, web uses dependency-free inline SVG, and Ratatui uses App Kit's
+terminal widgets with buffer-tested spacing and selection. Actions return to
+the Rust App, which remains the sole model owner and acknowledges each
+revision; no renderer invents display data or usage transforms.
 
 The **Current project** row attributes local history to the Git project from
 which each agent session was launched. In Unpeel, every background refresh
