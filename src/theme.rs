@@ -1,7 +1,6 @@
 //! Shared look & feel: light and dark semantic palettes, terminal theme
-//! detection, and the shared navigation vocabulary. Plain Ratatui — no SDK.
+//! detection. List navigation is owned by unpeel-app-kit.
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::Color;
 use serde::Deserialize;
 
@@ -303,34 +302,6 @@ pub fn spinner_frame() -> &'static str {
         .map(|duration| duration.as_millis())
         .unwrap_or(0);
     SPINNER_FRAMES[(millis / 100) as usize % SPINNER_FRAMES.len()]
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Nav {
-    Up,
-    Down,
-    Top,
-    Bottom,
-    Select,
-    Back,
-    Quit,
-}
-
-/// The standard list-navigation vocabulary (j/k, g/G, Enter, Esc, q/Ctrl-C).
-pub fn nav(key: &KeyEvent) -> Option<Nav> {
-    if key.modifiers.contains(KeyModifiers::CONTROL) {
-        return matches!(key.code, KeyCode::Char('c')).then_some(Nav::Quit);
-    }
-    match key.code {
-        KeyCode::Char('q') => Some(Nav::Quit),
-        KeyCode::Char('j') | KeyCode::Down => Some(Nav::Down),
-        KeyCode::Char('k') | KeyCode::Up => Some(Nav::Up),
-        KeyCode::Char('g') | KeyCode::Home => Some(Nav::Top),
-        KeyCode::Char('G') | KeyCode::End => Some(Nav::Bottom),
-        KeyCode::Enter => Some(Nav::Select),
-        KeyCode::Esc => Some(Nav::Back),
-        _ => None,
-    }
 }
 
 #[cfg(test)]

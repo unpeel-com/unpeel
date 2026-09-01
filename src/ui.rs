@@ -16,8 +16,11 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Sparkline, Widget};
 use ratatui::Frame;
 use std::path::Path;
+#[cfg(test)]
+use unpeel_app_kit::SelectableRow;
 use unpeel_app_kit::{
-    KitTheme, List, ListItem, Page, SelectableRow, VerticalScrollbar, SELECTABLE_LEFT_PADDING,
+    Badge, KitTheme, List, ListItem, ListItemEmphasis, ListItemSlot, ListItemTone,
+    ListPageBehavior, ListState, Page, PageTheme, VerticalScrollbar, SELECTABLE_LEFT_PADDING,
 };
 
 const METRIC_GAP: u16 = 1;
@@ -25,6 +28,7 @@ const DETAIL_TOP_GAP: u16 = 1;
 
 pub const SEMANTIC_ROOT_ID: &str = "usage-page";
 pub const OPEN_PROVIDER_ACTION: &str = "open-provider";
+pub const SELECT_PROVIDER_ACTION: &str = "select-provider";
 pub const CLOSE_PROVIDER_ACTION: &str = "close-provider";
 pub const REFRESH_ACTION: &str = "refresh-usage";
 
@@ -55,23 +59,7 @@ pub fn semantic_page(snapshot: Option<&Snapshot>, view: &View) -> Page {
         .providers
         .iter()
         .enumerate()
-        .map(|(index, provider)| {
-            let (summary, _) = provider_basic_data(provider, 96);
-            let detail =
-                display_provider_list_badge(&provider.badge).or_else(|| provider.alert.clone());
-            let mut item = ListItem::new(
-                provider_node_id(index),
-                display_provider_list_name(&provider.name),
-            )
-            .activate_action(OPEN_PROVIDER_ACTION);
-            if let Some(detail) = detail.filter(|detail| !detail.is_empty()) {
-                item = item.detail(detail);
-            }
-            if !summary.is_empty() {
-                item = item.value(summary);
-            }
-            item
-        })
+        .map(|(index, provider)| provider_list_item(provider, index, 96))
         .collect::<Vec<_>>();
     items.push(
         ListItem::new(
@@ -85,10 +73,57 @@ pub fn semantic_page(snapshot: Option<&Snapshot>, view: &View) -> Page {
         .detail("Rescan local provider history and live limits")
         .activate_action(REFRESH_ACTION),
     );
-    Page::new(
-        "Usage",
-        List::new("usage-providers", items).empty_message("No local usage data"),
-    )
+    let mut list = List::new("usage-providers", items)
+        .empty_message("No local usage data")
+        .page_behavior(ListPageBehavior::Scroll);
+    if snapshot.providers.get(view.selected).is_some() {
+        list = list.selected(provider_node_id(view.selected), SELECT_PROVIDER_ACTION);
+    }
+    Page::new("Usage", list)
+}
+
+fn provider_list_item(provider: &Provider, index: usize, row_width: u16) -> ListItem {
+    let list_name = display_provider_list_name(&provider.name);
+    let list_badge = display_provider_list_badge(&provider.badge);
+    let title_width = Line::from(match &list_badge {
+        Some(badge) => format!("{list_name} {badge}"),
+        None => list_name.clone(),
+    })
+    .width();
+    let content_width = row_width
+        .saturating_sub(SELECTABLE_LEFT_PADDING)
+        .saturating_sub(1);
+    let reserved_title = u16::try_from(title_width)
+        .unwrap_or(u16::MAX)
+        .min(content_width / 2);
+    let summary_budget = content_width
+        .saturating_sub(reserved_title)
+        .saturating_sub(1);
+    let (summary, level) = provider_basic_data(provider, summary_budget);
+    let mut item = ListItem::new(provider_node_id(index), list_name)
+        .emphasis(ListItemEmphasis::Strong)
+        .label_tone(if provider.alert.is_some() {
+            ListItemTone::Danger
+        } else {
+            ListItemTone::Default
+        })
+        .activate_action(OPEN_PROVIDER_ACTION);
+    if let Some(badge) = list_badge {
+        item = item.accessory(ListItemSlot::badge(Badge::new(badge)));
+    }
+    if !summary.is_empty() {
+        item = item
+            .value(summary)
+            .value_tone(if provider.alert.is_some() || level == Level::Alert {
+                ListItemTone::Danger
+            } else if level == Level::Warn {
+                ListItemTone::Warning
+            } else {
+                ListItemTone::Muted
+            })
+            .value_min_width(0);
+    }
+    item
 }
 
 fn semantic_provider_detail(provider: &Provider, index: usize, scanning: bool) -> Page {
@@ -422,7 +457,106 @@ fn render_provider_list(
     if area.is_empty() {
         return RenderResult::default();
     }
+    let show_scrollbar = providers.len() > usize::from(area.height) && area.width > 1;
+    let row_width = area.width.saturating_sub(u16::from(show_scrollbar));
+    let selected = view.selected.min(providers.len().saturating_sub(1));
+    let items = providers
+        .iter()
+        .enumerate()
+        .map(|(index, provider)| provider_list_item(provider, index, row_width))
+        .collect::<Vec<_>>();
+    let mut list = List::new("usage-providers", items).page_behavior(ListPageBehavior::Scroll);
+    if !providers.is_empty() {
+        list = list.selected(provider_node_id(selected), SELECT_PROVIDER_ACTION);
+    }
+    let mut state = ListState::new((!providers.is_empty()).then_some(selected));
+    state.set_offset(usize::from(view.scroll_offset), providers.len());
+    if view.reveal_selected {
+        state.request_reveal();
+    }
+    frame.render_widget(
+        list.widget(&mut state).theme(provider_list_theme(palette)),
+        area,
+    );
 
+    let rows_area = state.rows_area();
+    let hits = (0..usize::from(rows_area.height))
+        .filter_map(|row| {
+            let index = state.offset().saturating_add(row);
+            if index >= providers.len() {
+                return None;
+            }
+            Hit::from_rect(
+                index,
+                Rect::new(
+                    rows_area.x,
+                    rows_area
+                        .y
+                        .saturating_add(u16::try_from(row).unwrap_or(u16::MAX)),
+                    rows_area.width,
+                    1,
+                ),
+            )
+        })
+        .collect();
+    let scrollbar_area =
+        show_scrollbar.then(|| Rect::new(area.right().saturating_sub(1), area.y, 1, area.height));
+    RenderResult {
+        hits,
+        scroll_offset: u16::try_from(state.offset()).unwrap_or(u16::MAX),
+        max_scroll: u16::try_from(state.max_offset(providers.len())).unwrap_or(u16::MAX),
+        viewport_height: rows_area.height,
+        scrollbar_area,
+        ..RenderResult::default()
+    }
+}
+
+fn provider_list_theme(palette: &ui::Palette) -> PageTheme {
+    let (scrollbar_track, scrollbar_thumb) = scrollbar_styles(palette);
+    PageTheme {
+        style: Style::default(),
+        title: Style::default()
+            .fg(palette.header)
+            .add_modifier(Modifier::BOLD),
+        item: Style::default().fg(palette.primary),
+        detail: Style::default().fg(palette.muted),
+        value: Style::default().fg(palette.muted),
+        accent: Style::default().fg(palette.focus),
+        info: Style::default().fg(palette.meter_blue),
+        success: Style::default().fg(palette.primary),
+        warning: Style::default().fg(palette.warning),
+        danger: Style::default().fg(palette.attention),
+        done: Style::default().fg(palette.muted),
+        toggle: Style::default().fg(palette.focus),
+        badge: Style::default().fg(palette.muted),
+        busy: Style::default().fg(palette.focus),
+        delete: Style::default().fg(palette.muted),
+        empty: Style::default().fg(palette.muted),
+        selected: selected_row_style(palette),
+        selected_item: Style::default(),
+        selected_detail: Style::default().add_modifier(Modifier::DIM),
+        selected_value: Style::default().add_modifier(Modifier::DIM),
+        selected_badge: Style::default().add_modifier(Modifier::DIM),
+        navigation: Style::default().fg(palette.muted),
+        scrollbar_track,
+        scrollbar_thumb,
+        left_padding: SELECTABLE_LEFT_PADDING,
+    }
+}
+
+// Frozen copy of the pre-migration renderer. Buffer-parity tests below keep
+// the shared App Kit List honest as this app's row vocabulary evolves.
+#[cfg(test)]
+fn render_provider_list_legacy(
+    frame: &mut Frame,
+    area: Rect,
+    providers: &[Provider],
+    view: &View,
+    palette: &ui::Palette,
+) -> RenderResult {
+    if area.is_empty() {
+        return RenderResult::default();
+    }
     let selected = view.selected.min(providers.len().saturating_sub(1));
     let total_height = u16::try_from(providers.len()).unwrap_or(u16::MAX);
     let show_scrollbar = total_height > area.height && area.width > 1;
@@ -437,7 +571,6 @@ fn render_provider_list(
             ..RenderResult::default()
         };
     }
-
     let max_scroll = total_height.saturating_sub(rows_area.height);
     let requested = view.scroll_offset.min(max_scroll);
     let scroll_offset = if view.reveal_selected {
@@ -445,7 +578,6 @@ fn render_provider_list(
     } else {
         requested
     };
-
     let mut hits = Vec::new();
     for row in 0..rows_area.height {
         let index = usize::from(scroll_offset.saturating_add(row));
@@ -453,7 +585,7 @@ fn render_provider_list(
             break;
         };
         let row_area = Rect::new(rows_area.x, rows_area.y + row, rows_area.width, 1);
-        render_provider_list_row(
+        render_provider_list_row_legacy(
             frame.buffer_mut(),
             row_area,
             provider,
@@ -464,7 +596,6 @@ fn render_provider_list(
             hits.push(hit);
         }
     }
-
     let scrollbar_area =
         show_scrollbar.then(|| Rect::new(area.right().saturating_sub(1), area.y, 1, area.height));
     if let Some(scrollbar_area) = scrollbar_area {
@@ -477,7 +608,6 @@ fn render_provider_list(
             palette,
         );
     }
-
     RenderResult {
         hits,
         scroll_offset,
@@ -488,6 +618,7 @@ fn render_provider_list(
     }
 }
 
+#[cfg(test)]
 fn reveal_selected_row(
     selected: usize,
     viewport_height: u16,
@@ -510,7 +641,8 @@ fn reveal_selected_row(
     }
 }
 
-fn render_provider_list_row(
+#[cfg(test)]
+fn render_provider_list_row_legacy(
     buffer: &mut Buffer,
     area: Rect,
     provider: &Provider,
@@ -520,7 +652,6 @@ fn render_provider_list_row(
     if area.is_empty() {
         return;
     }
-
     let row_style = if selected {
         selected_row_style(palette)
     } else {
@@ -530,7 +661,6 @@ fn render_provider_list_row(
     if content.is_empty() {
         return;
     }
-
     let list_name = display_provider_list_name(&provider.name);
     let list_badge = display_provider_list_badge(&provider.badge);
     let title_width = Line::from(match &list_badge {
@@ -580,7 +710,6 @@ fn render_provider_list_row(
     Paragraph::new(Line::from(title))
         .style(row_style)
         .render(title_area, buffer);
-
     if summary_width > 0 {
         let summary_style = if selected {
             Style::default().add_modifier(Modifier::DIM)
@@ -1654,6 +1783,15 @@ mod tests {
             catalog.list().items[0].activate.as_deref(),
             Some(OPEN_PROVIDER_ACTION)
         );
+        assert_eq!(catalog.list().selected_id.as_deref(), Some("provider-0"));
+        assert_eq!(
+            catalog.list().select.as_deref(),
+            Some(SELECT_PROVIDER_ACTION)
+        );
+        assert!(matches!(
+            catalog.list().items[0].accessory,
+            Some(ListItemSlot::Badge(_))
+        ));
         assert!(catalog.list().items[0].value.is_some());
         assert_eq!(provider_index_from_node_id("provider-2"), Some(2));
 
@@ -1671,6 +1809,71 @@ mod tests {
             .items
             .iter()
             .any(|item| item.activate.as_deref() == Some(REFRESH_ACTION)));
+    }
+
+    #[test]
+    fn app_kit_list_matches_the_frozen_usage_renderer_buffer_for_buffer() {
+        let snapshot = sample();
+        let cases = [
+            (18, 1, 0, 0, true),
+            (24, 2, 2, 0, true),
+            (40, 2, 1, 1, false),
+            (72, 8, 2, 0, true),
+        ];
+        for palette in [ui::Palette::ADAPTIVE, ui::Palette::LIGHT, ui::Palette::DARK] {
+            for (width, height, selected, scroll_offset, reveal_selected) in cases {
+                let view = View {
+                    selected,
+                    detail_open: false,
+                    scanning: false,
+                    hosted: false,
+                    alerts: Alerts::default(),
+                    alert_dialog: None,
+                    scroll_offset,
+                    reveal_selected,
+                };
+                let mut current = Terminal::new(TestBackend::new(width, height)).unwrap();
+                let mut legacy = Terminal::new(TestBackend::new(width, height)).unwrap();
+                let mut current_result = RenderResult::default();
+                let mut legacy_result = RenderResult::default();
+                current
+                    .draw(|frame| {
+                        current_result = render_provider_list(
+                            frame,
+                            frame.area(),
+                            &snapshot.providers,
+                            &view,
+                            &palette,
+                        );
+                    })
+                    .unwrap();
+                legacy
+                    .draw(|frame| {
+                        legacy_result = render_provider_list_legacy(
+                            frame,
+                            frame.area(),
+                            &snapshot.providers,
+                            &view,
+                            &palette,
+                        );
+                    })
+                    .unwrap();
+                assert_eq!(
+                    current.backend().buffer(),
+                    legacy.backend().buffer(),
+                    "{width}x{height}, selected {selected}, palette {:?}",
+                    palette.mode
+                );
+                assert_eq!(current_result.hits, legacy_result.hits);
+                assert_eq!(current_result.scroll_offset, legacy_result.scroll_offset);
+                assert_eq!(current_result.max_scroll, legacy_result.max_scroll);
+                assert_eq!(
+                    current_result.viewport_height,
+                    legacy_result.viewport_height
+                );
+                assert_eq!(current_result.scrollbar_area, legacy_result.scrollbar_area);
+            }
+        }
     }
 
     fn render_with(

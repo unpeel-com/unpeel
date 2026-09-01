@@ -19,7 +19,6 @@ mod theme;
 mod timeparse;
 mod ui;
 
-use crate::theme::{nav, Nav};
 use config::{AlertOption, Alerts, Config};
 use ratatui::crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
@@ -33,8 +32,9 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Duration;
 use unpeel_app_kit::{
-    AppContext, AppMetadata, AppReporter, KeyboardEnhancementGuard, ThemeMonitor, UiBridge,
-    UiBridgeEvent, UiDeltaOperation, UiEventKind, UiEventOutcome, UiEventValue, UiNode,
+    AppContext, AppMetadata, AppReporter, KeyboardEnhancementGuard, ListKeymap,
+    ListNavigationAction, PageBodySlot, ThemeMonitor, UiBridge, UiBridgeEvent, UiComponent,
+    UiDeltaOperation, UiEventKind, UiEventOutcome, UiEventValue, UiNode,
 };
 
 const UI_VIEW_ID: &str = "main";
@@ -268,13 +268,12 @@ impl App {
         let next_revision = revision
             .checked_add(1)
             .ok_or_else(|| io::Error::other("Usage UI revision space is exhausted"))?;
+        let operations = selection_only_delta(published, &next).map_or_else(
+            || vec![UiDeltaOperation::ReplaceRoot { root: next.clone() }],
+            |op| vec![op],
+        );
         bridge
-            .publish_delta(
-                UI_VIEW_ID,
-                *revision,
-                next_revision,
-                vec![UiDeltaOperation::ReplaceRoot { root: next.clone() }],
-            )
+            .publish_delta(UI_VIEW_ID, *revision, next_revision, operations)
             .map_err(ui_bridge_error)?;
         *revision = next_revision;
         *published = next;
@@ -332,15 +331,23 @@ impl App {
         value: &UiEventValue,
         trigger: &mpsc::Sender<()>,
     ) -> Result<(), String> {
-        if *value != UiEventValue::None {
-            return Err("Usage navigation actions do not accept a value".to_string());
-        }
         let page = ui::semantic_page(self.snapshot.as_ref(), &self.view());
         if !semantic_action_is_declared(&page, node_id, action, kind) {
             return Err("Action is not declared by the current Usage Page".to_string());
         }
-        match (action, kind) {
-            (ui::OPEN_PROVIDER_ACTION, UiEventKind::Activate) => {
+        match (action, kind, value) {
+            (ui::SELECT_PROVIDER_ACTION, UiEventKind::Change, UiEventValue::Text(selected_id))
+                if node_id == "usage-providers" =>
+            {
+                let index = ui::provider_index_from_node_id(selected_id)
+                    .ok_or_else(|| "Selected provider has an invalid target".to_string())?;
+                if index >= self.provider_count() {
+                    return Err("Selected provider no longer exists".to_string());
+                }
+                self.select(index);
+                Ok(())
+            }
+            (ui::OPEN_PROVIDER_ACTION, UiEventKind::Activate, UiEventValue::None) => {
                 let index = ui::provider_index_from_node_id(node_id)
                     .ok_or_else(|| "Provider action has an invalid target".to_string())?;
                 if index >= self.provider_count() {
@@ -350,18 +357,20 @@ impl App {
                 self.open_detail();
                 Ok(())
             }
-            (ui::CLOSE_PROVIDER_ACTION, UiEventKind::Cancel) if node_id == ui::SEMANTIC_ROOT_ID => {
+            (ui::CLOSE_PROVIDER_ACTION, UiEventKind::Cancel, UiEventValue::None)
+                if node_id == ui::SEMANTIC_ROOT_ID =>
+            {
                 self.close_detail();
                 Ok(())
             }
-            (ui::REFRESH_ACTION, UiEventKind::Activate) => {
+            (ui::REFRESH_ACTION, UiEventKind::Activate, UiEventValue::None) => {
                 trigger
                     .send(())
                     .map_err(|_| "Usage scanner is no longer available".to_string())?;
                 self.scanning = true;
                 Ok(())
             }
-            _ => Err("Action is not declared by the Usage Page".to_string()),
+            _ => Err("Action value is not valid for the declared Usage action".to_string()),
         }
     }
 
@@ -419,15 +428,36 @@ impl App {
         self.reveal_selected = true;
     }
 
-    fn select_next(&mut self) {
-        if self.selected + 1 < self.provider_count() {
-            self.select(self.selected + 1);
-        }
-    }
-
-    fn select_prev(&mut self) {
-        if self.selected > 0 {
-            self.select(self.selected - 1);
+    fn handle_list_navigation(&mut self, action: ListNavigationAction) {
+        match (self.detail_open, action) {
+            (true, ListNavigationAction::Down) => self.scroll_down(1),
+            (true, ListNavigationAction::Up) => self.scroll_up(1),
+            (true, ListNavigationAction::First) => self.scroll_up(u16::MAX),
+            (true, ListNavigationAction::Last) => self.scroll_down(u16::MAX),
+            (
+                false,
+                action @ (ListNavigationAction::Down
+                | ListNavigationAction::Up
+                | ListNavigationAction::First
+                | ListNavigationAction::Last),
+            ) => {
+                self.select(list_selection_after(
+                    self.selected,
+                    self.provider_count(),
+                    action,
+                ));
+            }
+            (_, ListNavigationAction::PageDown) => {
+                self.scroll_down(self.viewport_height.saturating_sub(1).max(1));
+            }
+            (_, ListNavigationAction::PageUp) => {
+                self.scroll_up(self.viewport_height.saturating_sub(1).max(1));
+            }
+            (true, ListNavigationAction::Activate | ListNavigationAction::Back) => {
+                self.close_detail();
+            }
+            (false, ListNavigationAction::Activate) => self.open_detail(),
+            (false, ListNavigationAction::Back) => {}
         }
     }
 
@@ -477,6 +507,23 @@ impl App {
             return;
         };
         self.config.alerts.toggle(option);
+    }
+}
+
+fn list_selection_after(current: usize, item_count: usize, action: ListNavigationAction) -> usize {
+    if item_count == 0 {
+        return 0;
+    }
+    let current = current.min(item_count - 1);
+    match action {
+        ListNavigationAction::Down => current.saturating_add(1).min(item_count - 1),
+        ListNavigationAction::Up => current.saturating_sub(1),
+        ListNavigationAction::First => 0,
+        ListNavigationAction::Last => item_count - 1,
+        ListNavigationAction::PageDown
+        | ListNavigationAction::PageUp
+        | ListNavigationAction::Activate
+        | ListNavigationAction::Back => current,
     }
 }
 
@@ -632,35 +679,14 @@ fn run_tui(config: Config) -> io::Result<()> {
                     }
                     continue;
                 }
-                match nav(&key) {
-                    Some(Nav::Quit) => app.quit = true,
-                    Some(Nav::Down) if app.detail_open => app.scroll_down(1),
-                    Some(Nav::Down) => app.select_next(),
-                    Some(Nav::Up) if app.detail_open => app.scroll_up(1),
-                    Some(Nav::Up) => app.select_prev(),
-                    Some(Nav::Top) if app.detail_open => app.scroll_up(u16::MAX),
-                    Some(Nav::Top) => app.select(0),
-                    Some(Nav::Bottom) if app.detail_open => app.scroll_down(u16::MAX),
-                    Some(Nav::Bottom) => app.select(app.provider_count().saturating_sub(1)),
-                    Some(Nav::Select) => {
-                        if app.detail_open {
-                            app.close_detail();
-                        } else {
-                            app.open_detail();
-                        }
-                    }
-                    Some(Nav::Back) => {
-                        if app.detail_open {
-                            app.close_detail();
-                        }
-                    }
-                    None => match key.code {
-                        KeyCode::PageDown => {
-                            app.scroll_down(app.viewport_height.saturating_sub(1).max(1))
-                        }
-                        KeyCode::PageUp => {
-                            app.scroll_up(app.viewport_height.saturating_sub(1).max(1))
-                        }
+                if (key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c'))
+                    || key.code == KeyCode::Char('q')
+                {
+                    app.quit = true;
+                } else if let Some(action) = ListKeymap::new().action_for_key(&key) {
+                    app.handle_list_navigation(action);
+                } else {
+                    match key.code {
                         KeyCode::Char('r') => {
                             if trigger_tx.send(()).is_ok() {
                                 app.scanning = true;
@@ -676,7 +702,7 @@ fn run_tui(config: Config) -> io::Result<()> {
                                 .with_hosted_accent(theme_monitor.hosted_accent());
                         }
                         _ => {}
-                    },
+                    }
                 }
             }
             Event::Mouse(mouse) if app.alert_dialog.is_some() => {
@@ -750,12 +776,43 @@ fn semantic_action_is_declared(
     (node_id == ui::SEMANTIC_ROOT_ID
         && kind == UiEventKind::Cancel
         && page.back.as_deref() == Some(action))
+        || (kind == UiEventKind::Change
+            && page.list().id == node_id
+            && page.list().select.as_deref() == Some(action))
         || (kind == UiEventKind::Activate
             && page
                 .list()
                 .items
                 .iter()
                 .any(|item| item.id == node_id && item.activate.as_deref() == Some(action)))
+}
+
+fn selection_only_delta(previous: &UiNode, next: &UiNode) -> Option<UiDeltaOperation> {
+    if previous.id != next.id {
+        return None;
+    }
+    let (UiComponent::Page(previous_page), UiComponent::Page(next_page)) =
+        (&previous.element, &next.element)
+    else {
+        return None;
+    };
+    let previous_list = previous_page.list();
+    let next_list = next_page.list();
+    if previous_list.id != next_list.id || previous_list.selected_id == next_list.selected_id {
+        return None;
+    }
+    let mut previous_without_selection = previous_page.clone();
+    let mut next_without_selection = next_page.clone();
+    let PageBodySlot::List(previous_list) = &mut previous_without_selection.body;
+    let PageBodySlot::List(next_list) = &mut next_without_selection.body;
+    previous_list.selected_id = None;
+    next_list.selected_id = None;
+    (previous_without_selection == next_without_selection).then(|| {
+        UiDeltaOperation::list_set_selection(
+            next_page.list().id.clone(),
+            next_page.list().selected_id.clone(),
+        )
+    })
 }
 
 #[cfg(test)]
@@ -850,13 +907,16 @@ mod tests {
 
     #[test]
     fn semantic_actions_must_be_declared_on_the_current_page_and_node() {
-        let page = Page::new(
-            "Usage",
-            List::new(
-                "providers",
-                vec![ListItem::new("provider-0", "Codex").activate_action(ui::OPEN_PROVIDER_ACTION)],
-            ),
-        );
+        let page =
+            Page::new(
+                "Usage",
+                List::new(
+                    "providers",
+                    vec![ListItem::new("provider-0", "Codex")
+                        .activate_action(ui::OPEN_PROVIDER_ACTION)],
+                )
+                .selected("provider-0", ui::SELECT_PROVIDER_ACTION),
+            );
         assert!(semantic_action_is_declared(
             &page,
             "provider-0",
@@ -875,5 +935,75 @@ mod tests {
             ui::REFRESH_ACTION,
             UiEventKind::Activate,
         ));
+        assert!(semantic_action_is_declared(
+            &page,
+            "providers",
+            ui::SELECT_PROVIDER_ACTION,
+            UiEventKind::Change,
+        ));
+        assert!(!semantic_action_is_declared(
+            &page,
+            "forged-list",
+            ui::SELECT_PROVIDER_ACTION,
+            UiEventKind::Change,
+        ));
+    }
+
+    #[test]
+    fn migrated_usage_key_sequences_preserve_clamped_selection() {
+        let keymap = ListKeymap::new();
+        let mut selected = 0;
+        let mut outcomes = Vec::new();
+        for code in [
+            KeyCode::Up,
+            KeyCode::Char('k'),
+            KeyCode::Down,
+            KeyCode::Char('j'),
+            KeyCode::End,
+            KeyCode::Down,
+            KeyCode::Home,
+            KeyCode::PageDown,
+        ] {
+            let key = ratatui::crossterm::event::KeyEvent::new(code, KeyModifiers::NONE);
+            let action = keymap.action_for_key(&key).expect("shared list key");
+            selected = list_selection_after(selected, 5, action);
+            outcomes.push(selected);
+        }
+        assert_eq!(outcomes, vec![0, 0, 1, 2, 4, 4, 0, 0]);
+    }
+
+    #[test]
+    fn selection_only_semantic_changes_use_the_compact_list_delta() {
+        let node = |selected: &str| {
+            UiNode::page(
+                ui::SEMANTIC_ROOT_ID,
+                Page::new(
+                    "Usage",
+                    List::new(
+                        "usage-providers",
+                        vec![
+                            ListItem::new("provider-0", "Codex"),
+                            ListItem::new("provider-1", "Claude"),
+                        ],
+                    )
+                    .selected(selected, ui::SELECT_PROVIDER_ACTION),
+                ),
+            )
+        };
+        let operation = selection_only_delta(&node("provider-0"), &node("provider-1"));
+        assert!(matches!(
+            operation,
+            Some(UiDeltaOperation::ListSetSelection { list_id, selected_id })
+                if list_id == "usage-providers"
+                    && selected_id.as_deref() == Some("provider-1")
+        ));
+
+        let mut changed = node("provider-1");
+        let UiComponent::Page(page) = &mut changed.element else {
+            unreachable!()
+        };
+        let PageBodySlot::List(list) = &mut page.body;
+        list.items[1].label = "Claude Code".to_string();
+        assert!(selection_only_delta(&node("provider-0"), &changed).is_none());
     }
 }

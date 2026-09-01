@@ -1706,6 +1706,7 @@ name = "unpeel-app-kit"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "crossterm",
  "hmac",
  "libc",
  "ratatui",
