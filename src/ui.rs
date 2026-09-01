@@ -9,23 +9,30 @@ use crate::config::{AlertOption, Alerts};
 use crate::sources::{Level, Metric, PercentDisplay, Provider, ProviderKind, Snapshot};
 use crate::theme as ui;
 use crate::timeparse::{compact_duration, now_epoch_secs};
+#[cfg(test)]
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Alignment, Constraint, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Widget};
+use ratatui::layout::Rect;
+#[cfg(test)]
+use ratatui::layout::{Alignment, Constraint, Layout};
+#[cfg(test)]
+use ratatui::style::Color;
+use ratatui::style::{Modifier, Style};
+use ratatui::text::Line;
+#[cfg(test)]
+use ratatui::text::Span;
+#[cfg(test)]
+use ratatui::widgets::{Paragraph, Widget};
 use ratatui::Frame;
 use std::path::Path;
 #[cfg(test)]
 use unpeel_app_kit::SelectableRow;
+#[cfg(test)]
+use unpeel_app_kit::VerticalScrollbar;
 use unpeel_app_kit::{
-    Badge, KitTheme, List, ListItem, ListItemEmphasis, ListItemSlot, ListItemTone,
-    ListPageBehavior, ListState, Page, PageTheme, Sparkline, Toggle, VerticalScrollbar,
+    Badge, InputField, KitTheme, List, ListItem, ListItemEmphasis, ListItemSlot, ListItemTone,
+    ListPageBehavior, ListState, Page, PageTheme, Sparkline, Toggle, UiComponent, UiNode,
     SELECTABLE_LEFT_PADDING,
 };
-
-const METRIC_GAP: u16 = 1;
-const DETAIL_TOP_GAP: u16 = 1;
 
 pub const SEMANTIC_ROOT_ID: &str = "usage-page";
 pub const OPEN_PROVIDER_ACTION: &str = "open-provider";
@@ -60,7 +67,12 @@ pub fn semantic_page(snapshot: Option<&Snapshot>, view: &View) -> Page {
     };
     if view.detail_open && !snapshot.providers.is_empty() {
         let index = view.selected.min(snapshot.providers.len() - 1);
-        return semantic_provider_detail(&snapshot.providers[index], index, view.scanning);
+        return semantic_provider_detail(
+            &snapshot.providers[index],
+            index,
+            view.scanning,
+            view.hosted,
+        );
     }
 
     let mut items = snapshot
@@ -141,7 +153,12 @@ fn provider_list_item(provider: &Provider, index: usize, row_width: u16) -> List
     item
 }
 
-fn semantic_provider_detail(provider: &Provider, index: usize, scanning: bool) -> Page {
+fn semantic_provider_detail(
+    provider: &Provider,
+    index: usize,
+    scanning: bool,
+    hosted: bool,
+) -> Page {
     let prefix = provider_node_id(index);
     let mut items = Vec::new();
     if let Some(alert) = &provider.alert {
@@ -156,12 +173,13 @@ fn semantic_provider_detail(provider: &Provider, index: usize, scanning: bool) -
         items.push(ListItem::new(format!("{prefix}-status"), "Status").value("No recent activity"));
     }
     for (metric_index, metric) in provider.metrics.iter().enumerate() {
+        let presentation = metric_presentation(metric);
         let mut item = ListItem::new(
             format!("{prefix}-metric-{metric_index}"),
             display_metric_label(&metric.label),
         );
-        if !metric.value.is_empty() {
-            item = item.value(metric.value.clone());
+        if !presentation.caption.is_empty() {
+            item = item.value(presentation.caption);
         }
         if !metric.spark.is_empty() {
             item = item
@@ -224,11 +242,13 @@ fn semantic_provider_detail(provider: &Provider, index: usize, scanning: bool) -
         )
         .activate_action(REFRESH_ACTION),
     );
-    items.push(
-        ListItem::new(format!("{prefix}-alerts"), "Alerts")
-            .detail("Choose session notifications")
-            .disclosure_action(OPEN_ALERTS_ACTION),
-    );
+    if hosted {
+        items.push(
+            ListItem::new(format!("{prefix}-alerts"), "Alerts")
+                .detail("Choose session notifications")
+                .disclosure_action(OPEN_ALERTS_ACTION),
+        );
+    }
     let title = if provider.badge.is_empty() {
         display_provider_name(&provider.name)
     } else {
@@ -239,6 +259,42 @@ fn semantic_provider_detail(provider: &Provider, index: usize, scanning: bool) -
         )
     };
     Page::new(title, List::new("usage-detail", items)).back_action(CLOSE_PROVIDER_ACTION)
+}
+
+/// Canonical bounded-metric presentation shared by every renderer.
+///
+/// Provider APIs report a used percentage. `PercentDisplay` is App-owned
+/// product intent, so the used/remaining transform happens here before the
+/// component tree is published. Ratatui, Swift, and web receive the same
+/// caption and must not infer the opposite direction.
+#[derive(Clone, Debug, PartialEq)]
+struct MetricPresentation {
+    caption: String,
+    ratio: Option<f64>,
+}
+
+fn metric_presentation(metric: &Metric) -> MetricPresentation {
+    let Some(used_percent) = metric.percent else {
+        return MetricPresentation {
+            caption: metric.value.clone(),
+            ratio: None,
+        };
+    };
+    let used_ratio = (used_percent / 100.0).clamp(0.0, 1.0);
+    let (ratio, headline) = match metric.percent_display {
+        PercentDisplay::Remaining => {
+            let remaining = 1.0 - used_ratio;
+            (remaining, format!("{:.0}% left", remaining * 100.0))
+        }
+        PercentDisplay::Used => (used_ratio, format!("{used_percent:.0}% used")),
+    };
+    let (_, context) = split_metric_value(&metric.value);
+    MetricPresentation {
+        caption: context.map_or(headline.clone(), |context| {
+            format!("{headline} · {context}")
+        }),
+        ratio: Some(ratio),
+    }
 }
 
 fn metric_tone(level: Level) -> ListItemTone {
@@ -311,24 +367,6 @@ pub fn alert_index_from_node_id(node_id: &str) -> Option<usize> {
         .ok()
 }
 
-fn accent(palette: &ui::Palette, kind: ProviderKind) -> Color {
-    match kind {
-        ProviderKind::Codex => palette.codex_accent,
-        ProviderKind::Claude => palette.claude_accent,
-        ProviderKind::Grok => palette.grok_accent,
-        ProviderKind::Muse => palette.muse_accent,
-        ProviderKind::CurrentProject | ProviderKind::Total => palette.focus,
-    }
-}
-
-fn level_color(palette: &ui::Palette, level: Level) -> Color {
-    match level {
-        Level::Ok => palette.meter_blue,
-        Level::Warn => palette.warning,
-        Level::Alert => palette.attention,
-    }
-}
-
 pub struct View {
     pub selected: usize,
     pub detail_open: bool,
@@ -353,13 +391,13 @@ pub struct RenderResult {
     pub scrollbar_area: Option<Rect>,
     pub back_button: Option<Hit>,
     pub alert_option_hits: Vec<Hit>,
-    pub alert_dialog_area: Option<Rect>,
 }
 
 /// One selectable row's clickable screen rectangle, inclusive on every edge.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hit {
     pub index: usize,
+    pub node_id: String,
     pub left: u16,
     pub right: u16,
     pub top: u16,
@@ -371,9 +409,10 @@ impl Hit {
         (self.left..=self.right).contains(&column) && (self.top..=self.bottom).contains(&row)
     }
 
-    fn from_rect(index: usize, area: Rect) -> Option<Self> {
+    fn from_rect(index: usize, node_id: impl Into<String>, area: Rect) -> Option<Self> {
         (!area.is_empty()).then_some(Self {
             index,
+            node_id: node_id.into(),
             left: area.x,
             right: area.right().saturating_sub(1),
             top: area.y,
@@ -382,212 +421,40 @@ impl Hit {
     }
 }
 
-pub fn draw(
+pub fn draw_node(
     frame: &mut Frame,
-    snapshot: Option<&Snapshot>,
+    node: &UiNode,
     view: &View,
     palette: &ui::Palette,
 ) -> RenderResult {
-    let [body, footer] =
-        Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
-
-    let mut result = match snapshot {
-        None => {
-            render_empty_state(frame, body, view.scanning, palette);
-            RenderResult::default()
-        }
-        Some(snapshot) if snapshot.providers.is_empty() => {
-            render_empty_state(frame, body, false, palette);
-            RenderResult::default()
-        }
-        Some(snapshot) if view.detail_open => {
-            let selected = view
-                .selected
-                .min(snapshot.providers.len().saturating_sub(1));
-            render_provider_detail(frame, body, &snapshot.providers[selected], view, palette)
-        }
-        Some(snapshot) => render_provider_list(frame, body, &snapshot.providers, view, palette),
-    };
-    render_footer(frame, footer, view, palette);
-    if let Some(selected) = view.alert_dialog.filter(|_| view.hosted) {
-        let (area, hits) = render_alert_dialog(frame, selected, view.alerts, palette);
-        result.alert_dialog_area = Some(area);
-        result.alert_option_hits = hits;
-    }
-    result
-}
-
-fn render_empty_state(frame: &mut Frame, area: Rect, scanning: bool, palette: &ui::Palette) {
-    if area.is_empty() {
-        return;
-    }
-    let message = if scanning {
-        "scanning local usage…"
-    } else {
-        "no local usage data"
-    };
-    let row = Rect::new(
-        area.x,
-        area.y.saturating_add(area.height.saturating_sub(1) / 2),
-        area.width,
-        1,
-    );
-    frame.render_widget(
-        Paragraph::new(message)
-            .style(Style::default().fg(palette.muted))
-            .alignment(Alignment::Center),
-        row,
-    );
-}
-
-fn render_footer(frame: &mut Frame, area: Rect, view: &View, palette: &ui::Palette) {
-    if area.is_empty() {
-        return;
-    }
-    let mut spans = vec![Span::raw("  ")];
-    if view.hosted {
-        spans.push(Span::styled("a", Style::default().fg(palette.primary)));
-        spans.push(Span::styled(" alert  ", Style::default().fg(palette.muted)));
-    }
-    spans.push(Span::styled("r", Style::default().fg(palette.primary)));
-    if view.scanning {
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled(
-            ui::spinner_frame(),
-            Style::default().fg(palette.focus),
-        ));
-        spans.push(Span::styled(
-            " refreshing…",
-            Style::default().fg(palette.muted),
-        ));
-    } else {
-        spans.push(Span::styled(" refresh", Style::default().fg(palette.muted)));
-    }
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
-}
-
-fn centered_dialog(area: Rect) -> Rect {
-    let width = area.width.min(62);
-    let height = area.height.min(11);
-    Rect::new(
-        area.x.saturating_add(area.width.saturating_sub(width) / 2),
-        area.y
-            .saturating_add(area.height.saturating_sub(height) / 2),
-        width,
-        height,
-    )
-}
-
-fn render_alert_dialog(
-    frame: &mut Frame,
-    selected: usize,
-    alerts: Alerts,
-    palette: &ui::Palette,
-) -> (Rect, Vec<Hit>) {
-    let area = centered_dialog(frame.area());
-    if area.is_empty() {
-        return (area, Vec::new());
-    }
-    frame.render_widget(Clear, area);
-    let block = Block::new()
-        .title(" Alerts ")
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(palette.focus));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    if inner.is_empty() {
-        return (area, Vec::new());
-    }
-
-    frame.render_widget(
-        Paragraph::new("Unpeel notifications for this session")
-            .style(Style::default().fg(palette.muted)),
-        row_at(inner, inner.y),
-    );
-
-    let mut hits = Vec::new();
-    for (index, option) in AlertOption::ALL.into_iter().enumerate() {
-        let title_y = inner.y.saturating_add(2 + index as u16 * 2);
-        if title_y >= inner.bottom() {
-            break;
-        }
-        let active = selected.min(AlertOption::ALL.len() - 1) == index;
-        let marker = if active { "▎" } else { " " };
-        let checkbox = if alerts.enabled(option) { "[x]" } else { "[ ]" };
-        let style = Style::default()
-            .fg(if active {
-                palette.header
-            } else {
-                palette.primary
-            })
-            .add_modifier(if active {
-                Modifier::BOLD
-            } else {
-                Modifier::empty()
-            });
-        frame.render_widget(
-            Paragraph::new(format!("{marker} {checkbox} {}", option.label())).style(style),
-            row_at(inner, title_y),
-        );
-        let description_y = title_y.saturating_add(1);
-        if description_y < inner.bottom() {
-            frame.render_widget(
-                Paragraph::new(format!("      {}", option.description()))
-                    .style(Style::default().fg(palette.muted)),
-                row_at(inner, description_y),
-            );
-        }
-        let height = 1 + u16::from(description_y < inner.bottom());
-        if let Some(hit) = Hit::from_rect(index, Rect::new(inner.x, title_y, inner.width, height)) {
-            hits.push(hit);
-        }
-    }
-
-    (area, hits)
-}
-
-fn render_provider_list(
-    frame: &mut Frame,
-    area: Rect,
-    providers: &[Provider],
-    view: &View,
-    palette: &ui::Palette,
-) -> RenderResult {
-    if area.is_empty() {
+    let UiComponent::Page(page) = &node.element else {
         return RenderResult::default();
-    }
-    let show_scrollbar = providers.len() > usize::from(area.height) && area.width > 1;
-    let row_width = area.width.saturating_sub(u16::from(show_scrollbar));
-    let selected = view.selected.min(providers.len().saturating_sub(1));
-    let items = providers
-        .iter()
-        .enumerate()
-        .map(|(index, provider)| provider_list_item(provider, index, row_width))
-        .collect::<Vec<_>>();
-    let mut list = List::new("usage-providers", items).page_behavior(ListPageBehavior::Scroll);
-    if !providers.is_empty() {
-        list = list.selected(provider_node_id(selected), SELECT_PROVIDER_ACTION);
-    }
-    let mut state = ListState::new((!providers.is_empty()).then_some(selected));
-    state.set_offset(usize::from(view.scroll_offset), providers.len());
+    };
+    let list = page.list();
+    let selected = list
+        .selected_id
+        .as_deref()
+        .and_then(|selected| list.items.iter().position(|item| item.id == selected));
+    let mut state = ListState::new(selected);
+    state.set_offset(usize::from(view.scroll_offset), list.items.len());
     if view.reveal_selected {
         state.request_reveal();
     }
+    let mut input = InputField::new("");
     frame.render_widget(
-        list.widget(&mut state).theme(provider_list_theme(palette)),
-        area,
+        page.widget(&mut input, &mut state)
+            .theme(provider_list_theme(palette)),
+        frame.area(),
     );
 
     let rows_area = state.rows_area();
-    let hits = (0..usize::from(rows_area.height))
+    let hits: Vec<Hit> = (0..usize::from(rows_area.height))
         .filter_map(|row| {
             let index = state.offset().saturating_add(row);
-            if index >= providers.len() {
-                return None;
-            }
+            let item = list.items.get(index)?;
             Hit::from_rect(
                 index,
+                item.id.clone(),
                 Rect::new(
                     rows_area.x,
                     rows_area
@@ -599,16 +466,42 @@ fn render_provider_list(
             )
         })
         .collect();
-    let scrollbar_area =
-        show_scrollbar.then(|| Rect::new(area.right().saturating_sub(1), area.y, 1, area.height));
+    let scrollbar_area = (list.items.len() > usize::from(rows_area.height)
+        && frame.area().width > 1)
+        .then(|| Rect::new(rows_area.right(), rows_area.y, 1, rows_area.height));
+    let back_button = page.back.as_ref().and_then(|_| {
+        Hit::from_rect(
+            usize::MAX,
+            node.id.as_str().to_owned(),
+            page.layout(frame.area()).title,
+        )
+    });
+    let alert_option_hits = if view.alert_dialog.is_some() {
+        hits.clone()
+    } else {
+        Vec::new()
+    };
     RenderResult {
         hits,
         scroll_offset: u16::try_from(state.offset()).unwrap_or(u16::MAX),
-        max_scroll: u16::try_from(state.max_offset(providers.len())).unwrap_or(u16::MAX),
+        max_scroll: u16::try_from(state.max_offset(list.items.len())).unwrap_or(u16::MAX),
         viewport_height: rows_area.height,
         scrollbar_area,
+        back_button,
+        alert_option_hits,
         ..RenderResult::default()
     }
+}
+
+#[cfg(test)]
+fn draw(
+    frame: &mut Frame,
+    snapshot: Option<&Snapshot>,
+    view: &View,
+    palette: &ui::Palette,
+) -> RenderResult {
+    let node = UiNode::page(SEMANTIC_ROOT_ID, semantic_page(snapshot, view));
+    draw_node(frame, &node, view, palette)
 }
 
 fn provider_list_theme(palette: &ui::Palette) -> PageTheme {
@@ -646,6 +539,71 @@ fn provider_list_theme(palette: &ui::Palette) -> PageTheme {
         right_padding: 1,
         style_value_gap: true,
         style_status_spacing: false,
+    }
+}
+
+// Direct List parity harness retained only for the frozen pre-migration
+// buffer test. Runtime screens render the published Page through `draw_node`.
+#[cfg(test)]
+fn render_provider_list(
+    frame: &mut Frame,
+    area: Rect,
+    providers: &[Provider],
+    view: &View,
+    palette: &ui::Palette,
+) -> RenderResult {
+    if area.is_empty() {
+        return RenderResult::default();
+    }
+    let show_scrollbar = providers.len() > usize::from(area.height) && area.width > 1;
+    let row_width = area.width.saturating_sub(u16::from(show_scrollbar));
+    let selected = view.selected.min(providers.len().saturating_sub(1));
+    let items = providers
+        .iter()
+        .enumerate()
+        .map(|(index, provider)| provider_list_item(provider, index, row_width))
+        .collect::<Vec<_>>();
+    let mut list = List::new("usage-providers", items).page_behavior(ListPageBehavior::Scroll);
+    if !providers.is_empty() {
+        list = list.selected(provider_node_id(selected), SELECT_PROVIDER_ACTION);
+    }
+    let mut state = ListState::new((!providers.is_empty()).then_some(selected));
+    state.set_offset(usize::from(view.scroll_offset), providers.len());
+    if view.reveal_selected {
+        state.request_reveal();
+    }
+    frame.render_widget(
+        list.widget(&mut state).theme(provider_list_theme(palette)),
+        area,
+    );
+    let rows_area = state.rows_area();
+    let hits = (0..usize::from(rows_area.height))
+        .filter_map(|row| {
+            let index = state.offset().saturating_add(row);
+            providers.get(index)?;
+            Hit::from_rect(
+                index,
+                provider_node_id(index),
+                Rect::new(
+                    rows_area.x,
+                    rows_area
+                        .y
+                        .saturating_add(u16::try_from(row).unwrap_or(u16::MAX)),
+                    rows_area.width,
+                    1,
+                ),
+            )
+        })
+        .collect();
+    let scrollbar_area =
+        show_scrollbar.then(|| Rect::new(area.right().saturating_sub(1), area.y, 1, area.height));
+    RenderResult {
+        hits,
+        scroll_offset: u16::try_from(state.offset()).unwrap_or(u16::MAX),
+        max_scroll: u16::try_from(state.max_offset(providers.len())).unwrap_or(u16::MAX),
+        viewport_height: rows_area.height,
+        scrollbar_area,
+        ..RenderResult::default()
     }
 }
 
@@ -697,7 +655,7 @@ fn render_provider_list_legacy(
             index == selected,
             palette,
         );
-        if let Some(hit) = Hit::from_rect(index, row_area) {
+        if let Some(hit) = Hit::from_rect(index, provider_node_id(index), row_area) {
             hits.push(hit);
         }
     }
@@ -953,371 +911,6 @@ fn metric_group_level(metrics: &[&Metric]) -> Level {
     }
 }
 
-fn metric_height(metric: &Metric) -> u16 {
-    if metric.percent.is_some() {
-        3
-    } else if !metric.spark.is_empty() {
-        if chart_is_inline(metric) {
-            1
-        } else {
-            2
-        }
-    } else {
-        1
-    }
-}
-
-fn chart_is_inline(metric: &Metric) -> bool {
-    metric.label.eq_ignore_ascii_case("Usage Trend")
-}
-
-fn render_provider_detail(
-    frame: &mut Frame,
-    area: Rect,
-    provider: &Provider,
-    view: &View,
-    palette: &ui::Palette,
-) -> RenderResult {
-    if area.is_empty() {
-        return RenderResult::default();
-    }
-
-    let back_area = Rect::new(area.x, area.y, area.width, 1);
-    let back_style = Style::default()
-        .fg(palette.primary)
-        .add_modifier(Modifier::BOLD);
-    let padding = SELECTABLE_LEFT_PADDING.min(back_area.width);
-    frame.render_widget(
-        Paragraph::new("← Back").style(back_style),
-        Rect::new(
-            back_area.x.saturating_add(padding),
-            back_area.y,
-            back_area.width.saturating_sub(padding),
-            1,
-        ),
-    );
-
-    let viewport_y = area.y.saturating_add(1).saturating_add(DETAIL_TOP_GAP);
-    let viewport_height = area.bottom().saturating_sub(viewport_y);
-    let horizontal_padding = if area.width >= 5 {
-        SELECTABLE_LEFT_PADDING
-    } else if area.width >= 3 {
-        1
-    } else {
-        0
-    };
-    let content_area = Rect::new(
-        area.x.saturating_add(horizontal_padding),
-        viewport_y,
-        area.width
-            .saturating_sub(horizontal_padding.saturating_mul(2)),
-        viewport_height,
-    );
-    let total_height = detail_content_height(provider);
-    let max_scroll = total_height.saturating_sub(content_area.height);
-    let scroll_offset = view.scroll_offset.min(max_scroll);
-
-    if !content_area.is_empty() {
-        let virtual_area = Rect::new(0, 0, content_area.width, total_height.max(1));
-        let mut virtual_buffer = Buffer::empty(virtual_area);
-        render_detail_content(&mut virtual_buffer, virtual_area, provider, palette);
-        let destination = frame.buffer_mut();
-        for row in 0..content_area.height {
-            let source_y = scroll_offset.saturating_add(row);
-            if source_y >= total_height {
-                break;
-            }
-            for column in 0..content_area.width {
-                destination[(content_area.x + column, content_area.y + row)] =
-                    virtual_buffer[(column, source_y)].clone();
-            }
-        }
-    }
-
-    let show_scrollbar = total_height > content_area.height && area.width > 1;
-    let scrollbar_area = show_scrollbar.then(|| {
-        Rect::new(
-            area.right().saturating_sub(1),
-            viewport_y,
-            1,
-            viewport_height,
-        )
-    });
-    if let Some(scrollbar_area) = scrollbar_area {
-        render_scrollbar(
-            frame,
-            scrollbar_area,
-            total_height,
-            content_area.height,
-            scroll_offset,
-            palette,
-        );
-    }
-
-    RenderResult {
-        scroll_offset,
-        max_scroll,
-        viewport_height: content_area.height,
-        scrollbar_area,
-        back_button: Hit::from_rect(view.selected, back_area),
-        ..RenderResult::default()
-    }
-}
-
-fn detail_content_height(provider: &Provider) -> u16 {
-    if matches!(
-        provider.kind,
-        ProviderKind::CurrentProject | ProviderKind::Total
-    ) {
-        let project_rows = if provider.kind == ProviderKind::Total {
-            u16::try_from(current_project_rows(provider).len().max(1)).unwrap_or(u16::MAX)
-        } else {
-            0
-        };
-        let mut height = 1u16.saturating_add(METRIC_GAP);
-        if provider.kind == ProviderKind::Total {
-            height = height
-                .saturating_add(1)
-                .saturating_add(project_rows)
-                .saturating_add(METRIC_GAP);
-        }
-        height = height
-            .saturating_add(1)
-            .saturating_add(u16::try_from(provider.monthly_tokens.len()).unwrap_or(u16::MAX));
-        let metadata_rows = u16::try_from(provider.detail.len())
-            .unwrap_or(u16::MAX)
-            .saturating_add(u16::from(provider.as_of.is_some()));
-        return height.saturating_add(if metadata_rows > 0 {
-            METRIC_GAP.saturating_add(metadata_rows)
-        } else {
-            0
-        });
-    }
-    let mut height = 1u16;
-    height = height.saturating_add(u16::from(provider.alert.is_some()));
-    height = height.saturating_add(METRIC_GAP);
-    if !provider.present || provider.metrics.is_empty() {
-        return height.saturating_add(1);
-    }
-    let metric_rows = provider
-        .metrics
-        .iter()
-        .map(metric_height)
-        .fold(0u16, u16::saturating_add)
-        .saturating_add(METRIC_GAP.saturating_mul(
-            u16::try_from(provider.metrics.len().saturating_sub(1)).unwrap_or(u16::MAX),
-        ));
-    height = height.saturating_add(metric_rows);
-    let detail_rows = u16::try_from(provider.detail.len())
-        .unwrap_or(u16::MAX)
-        .saturating_add(u16::from(provider.as_of.is_some()));
-    height.saturating_add(if detail_rows > 0 {
-        METRIC_GAP.saturating_add(detail_rows)
-    } else {
-        0
-    })
-}
-
-fn render_detail_content(
-    buffer: &mut Buffer,
-    area: Rect,
-    provider: &Provider,
-    palette: &ui::Palette,
-) {
-    if area.is_empty() {
-        return;
-    }
-
-    render_detail_header(buffer, row_at(area, area.y), provider, palette);
-    let mut y = area.y.saturating_add(1);
-    if matches!(
-        provider.kind,
-        ProviderKind::CurrentProject | ProviderKind::Total
-    ) {
-        render_usage_summary(buffer, area, provider, palette, y);
-        return;
-    }
-    if let Some(alert) = &provider.alert {
-        Paragraph::new(format!("⚠ {alert}"))
-            .style(Style::default().fg(palette.attention))
-            .render(row_at(area, y), buffer);
-        y = y.saturating_add(1);
-    }
-    y = y.saturating_add(METRIC_GAP);
-    if !provider.present {
-        render_muted_row(buffer, row_at(area, y), "not installed", palette);
-        return;
-    }
-    if provider.metrics.is_empty() {
-        render_muted_row(buffer, row_at(area, y), "no recent activity", palette);
-        return;
-    }
-    for (index, metric) in provider.metrics.iter().enumerate() {
-        if y >= area.bottom() {
-            return;
-        }
-        let height = metric_height(metric).min(area.bottom().saturating_sub(y));
-        render_metric(
-            buffer,
-            Rect::new(area.x, y, area.width, height),
-            metric,
-            palette,
-        );
-        y = y.saturating_add(metric_height(metric));
-        if index + 1 < provider.metrics.len() {
-            y = y.saturating_add(METRIC_GAP);
-        }
-    }
-    let has_details = !provider.detail.is_empty() || provider.as_of.is_some();
-    if has_details {
-        y = y.saturating_add(METRIC_GAP);
-    }
-    for (key, value) in &provider.detail {
-        if y >= area.bottom() {
-            return;
-        }
-        render_key_value(buffer, row_at(area, y), key, value, palette);
-        y = y.saturating_add(1);
-    }
-    if let Some(as_of) = provider.as_of {
-        if y < area.bottom() {
-            let age = compact_duration(now_epoch_secs() - as_of);
-            render_key_value(
-                buffer,
-                row_at(area, y),
-                "updated",
-                &format!("{age} ago"),
-                palette,
-            );
-        }
-    }
-}
-
-fn render_usage_summary(
-    buffer: &mut Buffer,
-    area: Rect,
-    provider: &Provider,
-    palette: &ui::Palette,
-    mut y: u16,
-) {
-    y = y.saturating_add(METRIC_GAP);
-    if y >= area.bottom() {
-        return;
-    }
-    if provider.kind == ProviderKind::Total {
-        render_split_row(
-            buffer,
-            row_at(area, y),
-            "Project",
-            "This month",
-            Style::default()
-                .fg(palette.muted)
-                .add_modifier(Modifier::BOLD),
-            Style::default()
-                .fg(palette.muted)
-                .add_modifier(Modifier::BOLD),
-        );
-        y = y.saturating_add(1);
-        let rows = current_project_rows(provider);
-        if rows.is_empty() {
-            render_muted_row(buffer, row_at(area, y), "No project data", palette);
-            y = y.saturating_add(1);
-        } else {
-            for (path, tokens) in rows {
-                if y >= area.bottom() {
-                    return;
-                }
-                render_split_row(
-                    buffer,
-                    row_at(area, y),
-                    &project_label(path),
-                    &format_exact_tokens(tokens),
-                    Style::default().fg(palette.primary),
-                    Style::default().fg(palette.header),
-                );
-                y = y.saturating_add(1);
-            }
-        }
-        y = y.saturating_add(METRIC_GAP);
-        if y >= area.bottom() {
-            return;
-        }
-    }
-    render_split_row(
-        buffer,
-        row_at(area, y),
-        "Month",
-        "Tokens",
-        Style::default()
-            .fg(palette.muted)
-            .add_modifier(Modifier::BOLD),
-        Style::default()
-            .fg(palette.muted)
-            .add_modifier(Modifier::BOLD),
-    );
-    y = y.saturating_add(1);
-    for (index, usage) in provider.monthly_tokens.iter().enumerate() {
-        if y >= area.bottom() {
-            return;
-        }
-        let current = index == 0;
-        let label = month_label(usage.month, usage.year, current);
-        let value = if usage.tokens == 0 {
-            "—".into()
-        } else {
-            format_exact_tokens(usage.tokens)
-        };
-        let label_style = if current {
-            Style::default()
-                .fg(palette.primary)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(palette.primary)
-        };
-        let value_style = if current {
-            Style::default()
-                .fg(palette.header)
-                .add_modifier(Modifier::BOLD)
-        } else if usage.tokens == 0 {
-            Style::default().fg(palette.muted)
-        } else {
-            Style::default().fg(palette.header)
-        };
-        render_split_row(
-            buffer,
-            row_at(area, y),
-            &label,
-            &value,
-            label_style,
-            value_style,
-        );
-        y = y.saturating_add(1);
-    }
-    let has_metadata = !provider.detail.is_empty() || provider.as_of.is_some();
-    if has_metadata {
-        y = y.saturating_add(METRIC_GAP);
-    }
-    for (key, value) in &provider.detail {
-        if y >= area.bottom() {
-            return;
-        }
-        render_key_value(buffer, row_at(area, y), key, value, palette);
-        y = y.saturating_add(1);
-    }
-    if let Some(as_of) = provider.as_of {
-        if y < area.bottom() {
-            let age = compact_duration(now_epoch_secs() - as_of);
-            render_key_value(
-                buffer,
-                row_at(area, y),
-                "updated",
-                &format!("{age} ago"),
-                palette,
-            );
-        }
-    }
-}
-
 fn current_project_rows(provider: &Provider) -> Vec<(&Path, u64)> {
     let Some(current) = provider.monthly_tokens.first() else {
         return Vec::new();
@@ -1385,50 +978,6 @@ fn format_exact_tokens(tokens: u64) -> String {
     output
 }
 
-fn render_detail_header(
-    buffer: &mut Buffer,
-    area: Rect,
-    provider: &Provider,
-    palette: &ui::Palette,
-) {
-    if area.is_empty() {
-        return;
-    }
-    let mut title = vec![Span::styled(
-        display_provider_name(&provider.name),
-        Style::default()
-            .fg(if provider.alert.is_some() {
-                palette.attention
-            } else {
-                palette.primary
-            })
-            .add_modifier(Modifier::BOLD),
-    )];
-    if !provider.badge.is_empty() {
-        title.push(Span::raw(" "));
-        title.push(Span::styled(
-            display_badge(&provider.badge),
-            Style::default().fg(palette.muted),
-        ));
-    }
-    let [title_area, status_area] = Layout::horizontal([
-        Constraint::Min(0),
-        Constraint::Length(u16::from(area.width >= 2).saturating_mul(2)),
-    ])
-    .areas(area);
-    Paragraph::new(Line::from(title)).render(title_area, buffer);
-    let status_color = if provider.alert.is_some() {
-        palette.attention
-    } else if provider.present && !provider.metrics.is_empty() {
-        accent(palette, provider.kind)
-    } else {
-        palette.track
-    };
-    Paragraph::new(Span::styled("●", Style::default().fg(status_color)))
-        .alignment(Alignment::Right)
-        .render(status_area, buffer);
-}
-
 fn selected_row_style(palette: &ui::Palette) -> Style {
     match palette.mode {
         ui::ThemeMode::Dark => KitTheme::dark().selected_row,
@@ -1455,6 +1004,7 @@ fn scrollbar_styles(palette: &ui::Palette) -> (Style, Style) {
     }
 }
 
+#[cfg(test)]
 fn render_scrollbar(
     frame: &mut Frame,
     area: Rect,
@@ -1503,177 +1053,6 @@ fn display_badge(badge: &str) -> String {
     }
 }
 
-fn row_at(area: Rect, y: u16) -> Rect {
-    Rect::new(area.x, y, area.width, u16::from(y < area.bottom()))
-}
-
-fn render_muted_row(buffer: &mut Buffer, area: Rect, text: &str, palette: &ui::Palette) {
-    Paragraph::new(text.to_string())
-        .style(Style::default().fg(palette.muted))
-        .render(area, buffer);
-}
-
-fn render_metric(buffer: &mut Buffer, area: Rect, metric: &Metric, palette: &ui::Palette) {
-    if area.is_empty() {
-        return;
-    }
-
-    if metric.percent.is_some() {
-        render_bounded_metric(buffer, area, metric, palette);
-    } else if !metric.spark.is_empty() {
-        render_chart_metric(buffer, area, metric, palette);
-    } else {
-        render_unbounded_metric(buffer, area, metric, palette);
-    }
-}
-
-fn render_bounded_metric(buffer: &mut Buffer, area: Rect, metric: &Metric, palette: &ui::Palette) {
-    let annotation_color = if metric.annotation.is_some() && metric.level == Level::Alert {
-        palette.attention
-    } else {
-        palette.muted
-    };
-    let (raw_value, context) = split_metric_value(&metric.value);
-    let supporting_value = metric
-        .annotation
-        .as_deref()
-        .or_else(|| (!raw_value.trim_end().ends_with('%')).then_some(raw_value.as_str()));
-    render_split_row(
-        buffer,
-        row_at(area, area.y),
-        &display_metric_label(&metric.label),
-        supporting_value.unwrap_or_default(),
-        Style::default()
-            .fg(palette.primary)
-            .add_modifier(Modifier::BOLD),
-        Style::default().fg(annotation_color),
-    );
-
-    let Some(used_percent) = metric.percent else {
-        return;
-    };
-    let ratio = match metric.percent_display {
-        PercentDisplay::Remaining => 1.0 - (used_percent / 100.0).clamp(0.0, 1.0),
-        PercentDisplay::Used => (used_percent / 100.0).clamp(0.0, 1.0),
-    };
-    if area.height >= 2 {
-        UsageMeter {
-            ratio,
-            marker: metric.marker,
-            level: metric.level,
-            palette: *palette,
-        }
-        .render(row_at(area, area.y + 1), buffer);
-    }
-    if area.height >= 3 {
-        let headline = match metric.percent_display {
-            PercentDisplay::Remaining => {
-                let remaining = (100.0 - used_percent).clamp(0.0, 100.0);
-                format!("{remaining:.0}% left")
-            }
-            PercentDisplay::Used => format!("{used_percent:.0}% used"),
-        };
-        render_split_row(
-            buffer,
-            row_at(area, area.y + 2),
-            &headline,
-            context.as_deref().unwrap_or_default(),
-            Style::default().fg(palette.primary),
-            Style::default().fg(palette.muted),
-        );
-    }
-}
-
-fn render_chart_metric(buffer: &mut Buffer, area: Rect, metric: &Metric, palette: &ui::Palette) {
-    let sparkline = metric_sparkline("terminal-metric-sparkline", metric);
-    if chart_is_inline(metric) {
-        render_label_value_row(buffer, row_at(area, area.y), metric, palette);
-        let chart_width = u16::try_from(metric.spark.len())
-            .unwrap_or(u16::MAX)
-            .min(area.width.saturating_sub(18));
-        if chart_width > 0 {
-            let chart_area = Rect::new(
-                area.right().saturating_sub(chart_width),
-                area.y,
-                chart_width,
-                1,
-            );
-            sparkline
-                .widget()
-                .style(Style::default().fg(level_color(palette, metric.level)))
-                .render(chart_area, buffer);
-        }
-    } else {
-        render_label_value_row(buffer, row_at(area, area.y), metric, palette);
-        if area.height >= 2 {
-            sparkline
-                .widget()
-                .style(Style::default().fg(level_color(palette, metric.level)))
-                .render(row_at(area, area.y + 1), buffer);
-        }
-    }
-}
-
-fn render_unbounded_metric(
-    buffer: &mut Buffer,
-    area: Rect,
-    metric: &Metric,
-    palette: &ui::Palette,
-) {
-    render_label_value_row(buffer, row_at(area, area.y), metric, palette);
-}
-
-fn render_label_value_row(buffer: &mut Buffer, area: Rect, metric: &Metric, palette: &ui::Palette) {
-    let value_color = if metric.level == Level::Ok {
-        palette.muted
-    } else {
-        level_color(palette, metric.level)
-    };
-    render_split_row(
-        buffer,
-        area,
-        &display_metric_label(&metric.label),
-        &metric.value,
-        Style::default()
-            .fg(palette.primary)
-            .add_modifier(Modifier::BOLD),
-        Style::default().fg(value_color),
-    );
-}
-
-fn render_split_row(
-    buffer: &mut Buffer,
-    area: Rect,
-    left: &str,
-    right: &str,
-    left_style: Style,
-    right_style: Style,
-) {
-    if area.is_empty() {
-        return;
-    }
-    if right.is_empty() {
-        Paragraph::new(left.to_string())
-            .style(left_style)
-            .render(area, buffer);
-        return;
-    }
-    let right_natural = u16::try_from(Line::from(right).width()).unwrap_or(u16::MAX);
-    let right_width = right_natural.min(area.width.saturating_sub(8).max(area.width / 2));
-    let [left_area, right_area] = Layout::horizontal([
-        Constraint::Min(0),
-        Constraint::Length(right_width.saturating_add(u16::from(area.width > right_width))),
-    ])
-    .areas(area);
-    Paragraph::new(left.to_string())
-        .style(left_style)
-        .render(left_area, buffer);
-    Paragraph::new(right.to_string())
-        .style(right_style)
-        .alignment(Alignment::Right)
-        .render(right_area, buffer);
-}
-
 fn split_metric_value(value: &str) -> (String, Option<String>) {
     let (primary, context) = value
         .split_once(" · ")
@@ -1705,68 +1084,6 @@ fn title_case(text: &str) -> String {
         return String::new();
     };
     first.to_uppercase().chain(chars).collect()
-}
-
-#[derive(Debug, Clone, Copy)]
-struct UsageMeter {
-    ratio: f64,
-    marker: Option<f64>,
-    level: Level,
-    palette: ui::Palette,
-}
-
-impl Widget for UsageMeter {
-    fn render(self, area: Rect, buffer: &mut Buffer) {
-        if area.is_empty() {
-            return;
-        }
-        let ratio = self.ratio.clamp(0.0, 1.0);
-        let raw_fill = (ratio * f64::from(area.width)).round() as u16;
-        let filled = if ratio > 0.0 { raw_fill.max(1) } else { 0 }.min(area.width);
-        for offset in 0..area.width {
-            let (symbol, color) = if offset < filled {
-                ("━", level_color(&self.palette, self.level))
-            } else {
-                ("─", self.palette.track)
-            };
-            buffer[(area.x + offset, area.y)]
-                .set_symbol(symbol)
-                .set_fg(color);
-        }
-        if let Some(marker) = self.marker.filter(|marker| marker.is_finite()) {
-            let offset = ((marker.clamp(0.0, 1.0) * f64::from(area.width)).round() as u16)
-                .min(area.width.saturating_sub(1));
-            buffer[(area.x + offset, area.y)]
-                .set_symbol("│")
-                .set_fg(self.palette.muted);
-        }
-    }
-}
-
-fn render_key_value(
-    buffer: &mut Buffer,
-    area: Rect,
-    key: &str,
-    value: &str,
-    palette: &ui::Palette,
-) {
-    if area.is_empty() {
-        return;
-    }
-    let key_natural = Line::from(key).width() as u16;
-    let key_width = key_natural.min(area.width / 2).max(1);
-    let [key_area, value_area] = Layout::horizontal([
-        Constraint::Length(key_width.saturating_add(1)),
-        Constraint::Min(0),
-    ])
-    .areas(area);
-    Paragraph::new(key.to_string())
-        .style(Style::default().fg(palette.muted))
-        .render(key_area, buffer);
-    Paragraph::new(value.to_string())
-        .style(Style::default().fg(palette.header))
-        .alignment(Alignment::Right)
-        .render(value_area, buffer);
 }
 
 #[cfg(test)]
@@ -2070,7 +1387,7 @@ mod tests {
 
     fn render_footer_state(hosted: bool, scanning: bool) -> (String, Buffer) {
         let width = 48;
-        let height = 6;
+        let height = 8;
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let snapshot = sample();
         terminal
@@ -2093,10 +1410,15 @@ mod tests {
             })
             .unwrap();
         let buffer = terminal.backend().buffer().clone();
-        let row = (0..width)
-            .map(|x| buffer[(x, height - 1)].symbol().to_string())
-            .collect::<String>();
-        (row, buffer)
+        let screen = (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        (screen, buffer)
     }
 
     #[test]
@@ -2165,14 +1487,10 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         for expected in [
-            "← Back",
-            "Total usage",
-            "Project",
+            "‹  Total usage",
             "This month",
             "unpeel",
             "1,000,000",
-            "Month",
-            "Tokens",
             "August 2026 · current",
             "1,234,567",
             "July 2026",
@@ -2232,7 +1550,7 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(screen.contains("Current project Unpeel"), "{screen}");
+        assert!(screen.contains("Current project · Unpeel"), "{screen}");
         assert!(screen.contains("August 2026 · current"), "{screen}");
         assert!(screen.contains("42,000"), "{screen}");
         assert!(
@@ -2243,35 +1561,28 @@ mod tests {
 
     #[test]
     fn footer_shows_actions_and_replaces_refresh_with_a_spinner_while_scanning() {
-        let (idle, buffer) = render_footer_state(true, false);
-        assert!(
-            idle.starts_with("  a alert  r refresh"),
-            "idle footer\n{idle}"
-        );
-        assert_eq!(buffer[(2, 5)].fg, ui::Palette::DARK.primary);
-        assert_eq!(buffer[(4, 5)].fg, ui::Palette::DARK.muted);
-        assert_eq!(buffer[(11, 5)].fg, ui::Palette::DARK.primary);
-        assert_eq!(buffer[(13, 5)].fg, ui::Palette::DARK.muted);
+        let (idle, _) = render_footer_state(true, false);
+        assert!(idle.contains("Refresh"), "idle component tree\n{idle}");
+        assert!(idle.contains("Alerts"), "idle component tree\n{idle}");
 
         let (scanning, _) = render_footer_state(true, true);
         assert!(
-            scanning.starts_with("  a alert  r "),
-            "scan footer\n{scanning}"
+            scanning.contains("Refreshing…"),
+            "scan component tree\n{scanning}"
         );
-        assert!(scanning.contains(" refreshing…"), "scan footer\n{scanning}");
-        assert!(!scanning.contains("r refresh"), "scan footer\n{scanning}");
+        assert!(
+            !scanning.contains("  Refresh  "),
+            "scan component tree\n{scanning}"
+        );
     }
 
     #[test]
     fn default_view_is_a_compact_explorer_style_list() {
         let (screen, hits) = render(72, 12, false);
-        assert!(
-            screen
-                .lines()
-                .next()
-                .is_some_and(|line| line.starts_with("  Codex Pro")),
-            "content starts with the two-cell-inset provider list\n{screen}"
-        );
+        assert!(screen
+            .lines()
+            .next()
+            .is_some_and(|line| line.contains("Usage")));
         assert!(screen.contains("Codex Pro"), "provider and badge\n{screen}");
         assert!(
             !screen.contains("tommy@uxthemes.com") && !screen.contains("work@uxthemes.com"),
@@ -2286,7 +1597,7 @@ mod tests {
             screen.contains("5-hour 32% · 7-day 44% · Fable 7-day 11% used"),
             "clear Claude quota data including Fable\n{screen}"
         );
-        assert_eq!(hits.len(), 3);
+        assert_eq!(hits.len(), 4);
         assert!(
             !screen.contains('╭') && !screen.contains('╯'),
             "borderless\n{screen}"
@@ -2327,9 +1638,24 @@ mod tests {
 
     #[test]
     fn narrow_list_prioritizes_a_spelled_out_fable_reading() {
-        let (screen, _) = render(38, 12, false);
-        assert!(screen.contains("Fable 11% used"), "Fable quota\n{screen}");
-        assert!(!screen.contains('@'), "email hidden\n{screen}");
+        let snapshot = sample();
+        let page = semantic_page(
+            Some(&snapshot),
+            &View {
+                selected: 0,
+                detail_open: false,
+                scanning: false,
+                hosted: false,
+                alerts: Alerts::default(),
+                alert_dialog: None,
+                scroll_offset: 0,
+                reveal_selected: true,
+            },
+        );
+        assert!(page.list().items[1]
+            .value
+            .as_deref()
+            .is_some_and(|value| value.contains("Fable 7-day 11% used")));
     }
 
     #[test]
@@ -2416,8 +1742,7 @@ mod tests {
             .join("\n");
 
         for expected in [
-            "← Back",
-            "Claude Team 5x",
+            "‹  Claude · Team 5x",
             "5-hour limit",
             "39% used",
             "7-day limit",
@@ -2437,29 +1762,6 @@ mod tests {
             !screen.contains('╭') && !screen.contains('╯'),
             "borderless\n{screen}"
         );
-    }
-
-    #[test]
-    fn usage_meter_is_full_width_and_uses_status_colors() {
-        let mut terminal = Terminal::new(TestBackend::new(10, 1)).unwrap();
-        terminal
-            .draw(|frame| {
-                frame.render_widget(
-                    UsageMeter {
-                        ratio: 0.6,
-                        marker: None,
-                        level: Level::Ok,
-                        palette: ui::Palette::DARK,
-                    },
-                    frame.area(),
-                );
-            })
-            .unwrap();
-        let buffer = terminal.backend().buffer();
-        let symbols = (0..10).map(|x| buffer[(x, 0)].symbol()).collect::<String>();
-        assert_eq!(symbols, "━━━━━━────");
-        assert_eq!(buffer[(0, 0)].fg, ui::Palette::DARK.meter_blue);
-        assert_eq!(buffer[(9, 0)].fg, ui::Palette::DARK.track);
     }
 
     #[test]
@@ -2488,13 +1790,13 @@ mod tests {
             let expected = selected_row_style(&palette);
             let expected_background = expected.bg.expect("kit selection background");
             assert!(
-                (0..width).all(|x| buffer[(x, 0)].bg == expected_background),
+                (0..width).all(|x| buffer[(x, 2)].bg == expected_background),
                 "selection should paint the complete row"
             );
-            assert_eq!(buffer[(0, 1)].bg, Color::Reset, "unselected row");
-            assert_eq!(buffer[(0, 0)].symbol(), " ");
-            assert_eq!(buffer[(1, 0)].symbol(), " ");
-            assert_eq!(buffer[(2, 0)].symbol(), "C", "two-cell label inset");
+            assert_eq!(buffer[(0, 3)].bg, Color::Reset, "unselected row");
+            assert_eq!(buffer[(0, 2)].symbol(), " ");
+            assert_eq!(buffer[(1, 2)].symbol(), " ");
+            assert_eq!(buffer[(2, 2)].symbol(), "C", "two-cell label inset");
         }
     }
 
@@ -2528,6 +1830,59 @@ mod tests {
     }
 
     #[test]
+    fn remaining_quota_is_transformed_once_before_any_renderer_sees_it() {
+        let mut metric =
+            Metric::used_percent("7-day limit", 23.0, "23% · resets 5d 14h".into(), Level::Ok);
+        metric.percent_display = PercentDisplay::Remaining;
+        let presentation = metric_presentation(&metric);
+        assert_eq!(presentation.caption, "77% left · Resets in 5d 14h");
+        assert!(presentation
+            .ratio
+            .is_some_and(|ratio| (ratio - 0.77).abs() < f64::EPSILON * 4.0));
+
+        let mut snapshot = sample();
+        snapshot.providers[0].metrics = vec![metric];
+        let view = View {
+            selected: 0,
+            detail_open: true,
+            scanning: false,
+            hosted: false,
+            alerts: Alerts::default(),
+            alert_dialog: None,
+            scroll_offset: 0,
+            reveal_selected: true,
+        };
+        let node = UiNode::page(SEMANTIC_ROOT_ID, semantic_page(Some(&snapshot), &view));
+        let UiComponent::Page(page) = &node.element else {
+            unreachable!()
+        };
+        assert_eq!(
+            page.list().items[0].value.as_deref(),
+            Some("77% left · Resets in 5d 14h")
+        );
+
+        let mut terminal = Terminal::new(TestBackend::new(72, 7)).unwrap();
+        terminal
+            .draw(|frame| {
+                draw_node(frame, &node, &view, &ui::Palette::DARK);
+            })
+            .unwrap();
+        let screen = (0..7)
+            .map(|y| {
+                (0..72)
+                    .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(screen.contains("77% left · Resets in 5d 14h"), "{screen}");
+        assert!(
+            !screen.contains("23% left"),
+            "renderer inverted the canonical value\n{screen}"
+        );
+    }
+
+    #[test]
     fn narrow_layout_never_wraps() {
         for width in [20u16, 38, 44, 52] {
             let (screen, _) = render(width, 24, true);
@@ -2544,9 +1899,12 @@ mod tests {
     #[test]
     fn hit_regions_cover_each_visible_row_edge_to_edge() {
         let (screen, hits) = render(72, 12, false);
-        assert_eq!(hits.len(), 3);
+        assert_eq!(hits.len(), 4);
         let rows: Vec<&str> = screen.lines().collect();
-        for (hit, title) in hits.iter().zip(["Codex", "Claude", "Claude · work"]) {
+        for (hit, title) in hits
+            .iter()
+            .zip(["Codex", "Claude", "Claude · work", "Refresh"])
+        {
             assert!(
                 rows[hit.top as usize].contains(title),
                 "hit top row should hold {title:?}: {:?}",
@@ -2560,19 +1918,19 @@ mod tests {
         for pair in hits.windows(2) {
             assert_eq!(pair[1].top, pair[0].bottom + 1);
         }
-        assert!(hits.last().unwrap().bottom < 11);
+        assert!(hits.last().unwrap().bottom < 12);
     }
 
     #[test]
     fn short_viewport_scrolls_selected_row_into_view() {
         let (screen, hits) = render_with(72, 3, 2, false);
-        assert_eq!(hits.first().map(|hit| hit.index), Some(1));
+        assert_eq!(hits.first().map(|hit| hit.index), Some(2));
         assert_eq!(hits.last().map(|hit| hit.index), Some(2));
         assert!(screen.contains("Claude · work"), "selected row\n{screen}");
         assert!(screen.contains('┃'), "scrollbar thumb\n{screen}");
         for hit in &hits {
             assert!(
-                hit.bottom < 2,
+                hit.bottom < 3,
                 "hit leaves the viewport: {}..{}",
                 hit.top,
                 hit.bottom
@@ -2582,7 +1940,7 @@ mod tests {
 
     #[test]
     fn scrollbar_reaches_the_exact_top_and_bottom_rows() {
-        let (top_screen, top, _) = render_state(72, 2, 0, false, 0, false);
+        let (top_screen, top, _) = render_state(72, 4, 0, false, 0, false);
         let area = top.scrollbar_area.expect("top scrollbar");
         let top_rows: Vec<&str> = top_screen.lines().collect();
         assert_eq!(
@@ -2591,7 +1949,7 @@ mod tests {
             "thumb should start at the first track row\n{top_screen}"
         );
 
-        let (bottom_screen, bottom, _) = render_state(72, 2, 2, false, u16::MAX, false);
+        let (bottom_screen, bottom, _) = render_state(72, 4, 2, false, u16::MAX, false);
         let area = bottom.scrollbar_area.expect("bottom scrollbar");
         let bottom_rows: Vec<&str> = bottom_screen.lines().collect();
         assert_eq!(bottom.scroll_offset, bottom.max_scroll);
@@ -2609,17 +1967,16 @@ mod tests {
         let (screen, rendered, _) = render_state(72, 3, 2, false, u16::MAX, false);
         let rows: Vec<&str> = screen.lines().collect();
         assert_eq!(rendered.scroll_offset, rendered.max_scroll);
-        assert_eq!(rendered.hits.last().map(|hit| hit.index), Some(2));
+        assert_eq!(rendered.hits.last().map(|hit| hit.index), Some(3));
         assert!(
-            rows[1].contains("Claude · work"),
+            rows[2].contains("Refresh"),
             "last row should touch the bottom of the list viewport\n{screen}"
         );
-        assert!(rows[0].contains("Claude"), "preceding row\n{screen}");
     }
 
     #[test]
     fn scrollbar_thumb_is_proportional_to_visible_content() {
-        let (screen, rendered, _) = render_state(72, 15, 1, true, 0, false);
+        let (screen, rendered, _) = render_state(72, 8, 1, true, 0, false);
         let area = rendered.scrollbar_area.expect("scrollbar");
         let rows: Vec<&str> = screen.lines().collect();
         let thumb_rows = (area.y..area.bottom())
@@ -2634,7 +1991,7 @@ mod tests {
     #[test]
     fn clicks_must_be_inside_both_row_axes() {
         let (_, hits) = render(72, 24, false);
-        let first = hits[0];
+        let first = &hits[0];
         assert!(first.contains(first.left, first.top));
         assert!(!first.contains(first.right.saturating_add(1), first.top));
         assert!(!first.contains(first.left, first.bottom.saturating_add(1)));
@@ -2666,17 +2023,23 @@ mod tests {
         assert_eq!(back.left, 0);
         assert_eq!(back.right, 71);
         assert_eq!(back.top, 0);
-        assert_eq!(back.bottom, 0);
-        assert!(screen.lines().next().unwrap().contains("  ← Back"));
+        assert_eq!(back.bottom, 1);
+        assert!(screen.lines().next().unwrap().contains("  ‹  "));
         assert!(
             (0..72).all(|x| buffer[(x, 0)].bg == Color::Reset),
             "Back should not paint a row background"
         );
-        assert!(rendered.hits.is_empty(), "detail has no provider-row hits");
+        assert!(
+            rendered
+                .hits
+                .iter()
+                .all(|hit| hit.node_id.starts_with("provider-1-")),
+            "detail hits must come from the exact published detail items"
+        );
     }
 
     #[test]
-    fn hosted_alerts_open_as_a_ratatui_dialog() {
+    fn hosted_alerts_render_the_exact_semantic_page() {
         let width = 72;
         let height = 24;
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -2720,7 +2083,7 @@ mod tests {
             "Close to a limit",
             "Limit reached",
             "Available again",
-            "[x] Available again",
+            "[x]",
         ] {
             assert!(screen.contains(expected), "missing {expected:?}\n{screen}");
         }
@@ -2739,9 +2102,8 @@ mod tests {
         let (screen, rendered, _) = render_state(72, 24, 0, false, 0, true);
         assert!(rendered.alert_option_hits.is_empty());
         assert!(!screen.contains("alerts off"));
-        assert!(!screen.contains("a alerts"));
-        assert!(!screen.contains("a alert"));
-        assert!(screen.contains("r refresh"));
+        assert!(!screen.contains("Alerts"));
+        assert!(screen.contains("Refresh"));
     }
 
     #[test]

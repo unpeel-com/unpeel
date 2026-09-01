@@ -292,18 +292,6 @@ fn ansi_color_is_light(index: u8) -> bool {
     (u16::from(red) * 3 + u16::from(green) * 6 + u16::from(blue)) / 10 >= 150
 }
 
-const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-
-/// Braille spinner keyed to wall time (100ms per frame), so every widget
-/// animates in sync.
-pub fn spinner_frame() -> &'static str {
-    let millis = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or(0);
-    SPINNER_FRAMES[(millis / 100) as usize % SPINNER_FRAMES.len()]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

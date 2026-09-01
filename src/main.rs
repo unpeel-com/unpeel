@@ -658,7 +658,7 @@ fn run_tui(config: Config) -> io::Result<()> {
         let rendered_terminal = bridge.should_render_terminal();
         if rendered_terminal {
             terminal.draw(|frame| {
-                rendered = ui::draw(frame, app.snapshot.as_ref(), &view, &app.palette);
+                rendered = ui::draw_node(frame, &published, &view, &app.palette);
             })?;
         }
         let hits = rendered.hits;
@@ -671,7 +671,6 @@ fn run_tui(config: Config) -> io::Result<()> {
         let scrollbar_area = rendered.scrollbar_area;
         let back_button = rendered.back_button;
         let alert_option_hits = rendered.alert_option_hits;
-        let alert_dialog_area = rendered.alert_dialog_area;
         if !event::poll(Duration::from_millis(100))? {
             if theme_monitor.refresh() {
                 app.palette
@@ -739,19 +738,17 @@ fn run_tui(config: Config) -> io::Result<()> {
             }
             Event::Mouse(mouse) if app.alert_dialog.is_some() => {
                 if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
-                    if let Some(hit) = alert_option_hits
+                    if back_button
+                        .as_ref()
+                        .is_some_and(|hit| hit.contains(mouse.column, mouse.row))
+                    {
+                        app.alert_dialog = None;
+                    } else if let Some(hit) = alert_option_hits
                         .iter()
                         .find(|hit| hit.contains(mouse.column, mouse.row))
                     {
                         app.alert_dialog = Some(hit.index);
                         app.toggle_alert_option(hit.index);
-                    } else if alert_dialog_area.is_some_and(|area| {
-                        mouse.column < area.x
-                            || mouse.column >= area.right()
-                            || mouse.row < area.y
-                            || mouse.row >= area.bottom()
-                    }) {
-                        app.alert_dialog = None;
                     }
                 }
             }
@@ -778,10 +775,20 @@ fn run_tui(config: Config) -> io::Result<()> {
                         .iter()
                         .find(|hit| hit.contains(mouse.column, mouse.row))
                     {
-                        if hit.index == app.selected {
-                            app.open_detail();
-                        } else {
-                            app.select(hit.index);
+                        if let Some(index) = ui::provider_index_from_node_id(&hit.node_id) {
+                            if index == app.selected {
+                                app.open_detail();
+                            } else {
+                                app.select(index);
+                            }
+                        } else if hit.node_id == "refresh-usage"
+                            || hit.node_id.ends_with("-refresh")
+                        {
+                            if trigger_tx.send(()).is_ok() {
+                                app.scanning = true;
+                            }
+                        } else if hit.node_id == "open-alerts" || hit.node_id.ends_with("-alerts") {
+                            app.open_alert_dialog();
                         }
                     }
                 }
