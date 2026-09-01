@@ -33,8 +33,8 @@ use std::sync::mpsc;
 use std::time::Duration;
 use unpeel_app_kit::{
     page_delta_operations, AppContext, AppMetadata, AppReporter, KeyboardEnhancementGuard,
-    ListKeymap, ListNavigationAction, ThemeMonitor, UiBridge, UiBridgeEvent, UiEventKind,
-    UiEventOutcome, UiEventValue, UiNode,
+    ListKeymap, ListNavigationAction, TerminalPointerState, ThemeMonitor, UiBridge, UiBridgeEvent,
+    UiEventKind, UiEventOutcome, UiEventValue, UiNode,
 };
 
 const UI_VIEW_ID: &str = "main";
@@ -226,6 +226,7 @@ struct App {
     hosted: bool,
     alert_dialog: Option<usize>,
     alert_tracker: AlertTracker,
+    pointer: TerminalPointerState,
     quit: bool,
 }
 
@@ -602,6 +603,7 @@ fn run_tui(config: Config) -> io::Result<()> {
         hosted,
         alert_dialog: None,
         alert_tracker: AlertTracker::default(),
+        pointer: TerminalPointerState::new(),
         quit: false,
     };
     let mut bridge = UiBridge::detect(
@@ -655,7 +657,8 @@ fn run_tui(config: Config) -> io::Result<()> {
         let rendered_terminal = bridge.should_render_terminal();
         if rendered_terminal {
             terminal.draw(|frame| {
-                rendered = ui::draw_node(frame, &published, &view, &app.palette);
+                rendered =
+                    ui::draw_node_with_pointer(frame, &published, &view, &app.palette, app.pointer);
             })?;
         }
         let hits = rendered.hits;
@@ -733,6 +736,7 @@ fn run_tui(config: Config) -> io::Result<()> {
                 }
             }
             Event::Mouse(mouse) if app.alert_dialog.is_some() => {
+                app.pointer.track(&mouse);
                 if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
                     if back_button
                         .as_ref()
@@ -748,60 +752,81 @@ fn run_tui(config: Config) -> io::Result<()> {
                     }
                 }
             }
-            Event::Mouse(mouse) => match mouse.kind {
-                MouseEventKind::ScrollDown => app.scroll_down(3),
-                MouseEventKind::ScrollUp => app.scroll_up(3),
-                // Click selects a row; a second click opens its detail view.
-                MouseEventKind::Down(MouseButton::Left)
-                | MouseEventKind::Drag(MouseButton::Left) => {
-                    let footer_action = (mouse.kind == MouseEventKind::Down(MouseButton::Left))
-                        .then(|| {
-                            footer_area
-                                .and_then(|area| {
-                                    published.footer()?.action_at(
-                                        ratatui::layout::Position::new(mouse.column, mouse.row),
-                                        area,
-                                    )
+            Event::Mouse(mouse) => {
+                app.pointer.track(&mouse);
+                match mouse.kind {
+                    MouseEventKind::ScrollDown => app.scroll_down(3),
+                    MouseEventKind::ScrollUp => app.scroll_up(3),
+                    // A row click invokes the same declared primary action as Enter.
+                    // Dragging across a static row only updates local focus.
+                    MouseEventKind::Down(MouseButton::Left)
+                    | MouseEventKind::Drag(MouseButton::Left) => {
+                        let footer_action = (mouse.kind == MouseEventKind::Down(MouseButton::Left))
+                            .then(|| {
+                                footer_area
+                                    .and_then(|area| {
+                                        published.footer()?.action_at(
+                                            ratatui::layout::Position::new(mouse.column, mouse.row),
+                                            area,
+                                        )
+                                    })
+                                    .map(|action| (action.id.clone(), action.action.clone()))
+                            })
+                            .flatten();
+                        if let Some((node_id, action)) = footer_action {
+                            let _ = app.apply_semantic_action(
+                                &node_id,
+                                &action,
+                                UiEventKind::Activate,
+                                &UiEventValue::None,
+                                &trigger_tx,
+                            );
+                        } else if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                            && back_button
+                                .as_ref()
+                                .is_some_and(|hit| hit.contains(mouse.column, mouse.row))
+                        {
+                            app.close_detail();
+                        } else if let Some(area) = scrollbar_area.filter(|area| {
+                            mouse.column >= area.x
+                                && mouse.column < area.right()
+                                && mouse.row >= area.y
+                                && mouse.row < area.bottom()
+                        }) {
+                            app.scroll_to_bar_row(mouse.row, area);
+                        } else if let Some(hit) = hits
+                            .iter()
+                            .find(|hit| hit.contains(mouse.column, mouse.row))
+                        {
+                            let primary = (mouse.kind == MouseEventKind::Down(MouseButton::Left))
+                                .then(|| match &published.element {
+                                    unpeel_app_kit::UiComponent::Page(page) => page
+                                        .list()
+                                        .items
+                                        .iter()
+                                        .find(|item| item.id == hit.node_id)
+                                        .and_then(unpeel_app_kit::ListItem::primary_ui_action),
+                                    _ => None,
                                 })
-                                .map(|action| (action.id.clone(), action.action.clone()))
-                        })
-                        .flatten();
-                    if let Some((node_id, action)) = footer_action {
-                        let _ = app.apply_semantic_action(
-                            &node_id,
-                            &action,
-                            UiEventKind::Activate,
-                            &UiEventValue::None,
-                            &trigger_tx,
-                        );
-                    } else if mouse.kind == MouseEventKind::Down(MouseButton::Left)
-                        && back_button
-                            .as_ref()
-                            .is_some_and(|hit| hit.contains(mouse.column, mouse.row))
-                    {
-                        app.close_detail();
-                    } else if let Some(area) = scrollbar_area.filter(|area| {
-                        mouse.column >= area.x
-                            && mouse.column < area.right()
-                            && mouse.row >= area.y
-                            && mouse.row < area.bottom()
-                    }) {
-                        app.scroll_to_bar_row(mouse.row, area);
-                    } else if let Some(hit) = hits
-                        .iter()
-                        .find(|hit| hit.contains(mouse.column, mouse.row))
-                    {
-                        if let Some(index) = ui::provider_index_from_node_id(&hit.node_id) {
-                            if index == app.selected {
-                                app.open_detail();
-                            } else {
+                                .flatten();
+                            if let Some(action) = primary {
+                                let _ = app.apply_semantic_action(
+                                    action.node_id.as_str(),
+                                    action.action.as_str(),
+                                    action.kind,
+                                    &action.value,
+                                    &trigger_tx,
+                                );
+                            } else if let Some(index) =
+                                ui::provider_index_from_node_id(&hit.node_id)
+                            {
                                 app.select(index);
                             }
                         }
                     }
+                    _ => {}
                 }
-                _ => {}
-            },
+            }
             Event::Resize(_, _) => app.reveal_selected = true,
             _ => {}
         }

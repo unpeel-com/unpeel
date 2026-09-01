@@ -30,8 +30,8 @@ use unpeel_app_kit::SelectableRow;
 use unpeel_app_kit::VerticalScrollbar;
 use unpeel_app_kit::{
     Badge, FooterAction, Gauge, InputField, KitTheme, List, ListItem, ListItemEmphasis,
-    ListItemSlot, ListItemTone, ListPageBehavior, ListState, Page, PageTheme, Sparkline, Toggle,
-    UiComponent, UiNode, SELECTABLE_LEFT_PADDING,
+    ListItemSlot, ListItemTone, ListPageBehavior, ListState, Page, PageTheme, Sparkline,
+    TerminalPointerState, Toggle, UiComponent, UiNode, SELECTABLE_LEFT_PADDING,
 };
 
 pub const SEMANTIC_ROOT_ID: &str = "usage-page";
@@ -426,11 +426,22 @@ impl Hit {
     }
 }
 
+#[cfg(test)]
 pub fn draw_node(
     frame: &mut Frame,
     node: &UiNode,
     view: &View,
     palette: &ui::Palette,
+) -> RenderResult {
+    draw_node_with_pointer(frame, node, view, palette, TerminalPointerState::new())
+}
+
+pub fn draw_node_with_pointer(
+    frame: &mut Frame,
+    node: &UiNode,
+    view: &View,
+    palette: &ui::Palette,
+    pointer: TerminalPointerState,
 ) -> RenderResult {
     let UiComponent::Page(page) = &node.element else {
         return RenderResult::default();
@@ -441,6 +452,7 @@ pub fn draw_node(
         .as_deref()
         .and_then(|selected| list.items.iter().position(|item| item.id == selected));
     let mut state = ListState::new(selected);
+    state.set_pointer(pointer);
     state.set_offset(usize::from(view.scroll_offset), list.items.len());
     if view.reveal_selected {
         state.request_reveal();
