@@ -14,13 +14,16 @@ use ratatui::style::Style;
 use ratatui::widgets::Paragraph;
 use ratatui::{Frame, Terminal};
 use unpeel_app_kit::{
-    AgentBridge, AppContext, AppReporter, ColorScheme, DoubleClickTracker, DragSurface,
-    EditorBridge, Explorer, ExplorerEvent, ExplorerInput, ExplorerTheme, KeyboardEnhancementGuard,
-    KitTheme, MenuItem, MenuTheme, PopupMenu, ThemeMonitor, clipboard_sequence,
-    display_path_from_root,
+    AgentBridge, AppContext, AppMetadata, AppReporter, ColorScheme, DoubleClickTracker,
+    DragSurface, EditorBridge, Explorer, ExplorerEvent, ExplorerInput, ExplorerTheme,
+    KeyboardEnhancementGuard, KitTheme, MenuItem, MenuTheme, PopupMenu, ThemeMonitor, UiBridge,
+    UiBridgeEvent, UiEventOutcome, UiNode, clipboard_sequence, display_path_from_root,
+    tree_delta_operations,
 };
 
 const FOOTER_ROWS: u16 = 1;
+const UI_VIEW_ID: &str = "main";
+const UI_TREE_ID: &str = "file-tree";
 
 pub fn run(
     mut explorer: Explorer,
@@ -42,8 +45,31 @@ pub fn run(
     let mut clicks = DoubleClickTracker::new();
     let mut status = None;
     let mut needs_draw = true;
+    let mut bridge = UiBridge::detect(
+        AppMetadata::new(
+            crate::install::APP_ID,
+            "Unpeel File Tree",
+            env!("CARGO_PKG_VERSION"),
+        )
+        .description("Standalone Explorer with an optional semantic Tree projection"),
+    )
+    .map_err(ui_bridge_error)?;
+    let mut ui_revision = 1u64;
+    let mut published = UiNode::tree(UI_TREE_ID, explorer.semantic_tree("Files"));
+    bridge
+        .publish(UI_VIEW_ID, ui_revision, published.clone())
+        .map_err(ui_bridge_error)?;
 
     loop {
+        drain_bridge(
+            &mut explorer,
+            &mut bridge,
+            &mut ui_revision,
+            &mut published,
+            &mut status,
+            &mut needs_draw,
+        )?;
+        publish_projection(&mut explorer, &mut bridge, &mut ui_revision, &mut published)?;
         if needs_draw {
             let selected = explorer.selected();
             reporter.set_context(&serde_json::json!({
@@ -55,13 +81,15 @@ pub fn run(
                     "file"
                 }),
             }));
-            terminal.draw(
-                &mut explorer,
-                &mut drags,
-                menu.as_mut(),
-                status.as_ref(),
-                theme,
-            )?;
+            if bridge.should_render_terminal() {
+                terminal.draw(
+                    &mut explorer,
+                    &mut drags,
+                    menu.as_mut(),
+                    status.as_ref(),
+                    theme,
+                )?;
+            }
             needs_draw = false;
         }
         if !event::poll(Duration::from_millis(250))? {
@@ -240,6 +268,75 @@ pub fn run(
         }
     }
     Ok(())
+}
+
+fn publish_projection(
+    explorer: &mut Explorer,
+    bridge: &mut UiBridge,
+    revision: &mut u64,
+    published: &mut UiNode,
+) -> io::Result<()> {
+    let next = UiNode::tree(UI_TREE_ID, explorer.semantic_tree("Files"));
+    if next == *published {
+        return Ok(());
+    }
+    let next_revision = revision
+        .checked_add(1)
+        .ok_or_else(|| io::Error::other("File Tree UI revision space is exhausted"))?;
+    bridge
+        .publish_delta(
+            UI_VIEW_ID,
+            *revision,
+            next_revision,
+            tree_delta_operations(published, &next),
+        )
+        .map_err(ui_bridge_error)?;
+    *revision = next_revision;
+    *published = next;
+    Ok(())
+}
+
+fn drain_bridge(
+    explorer: &mut Explorer,
+    bridge: &mut UiBridge,
+    revision: &mut u64,
+    published: &mut UiNode,
+    status: &mut Option<Status>,
+    needs_draw: &mut bool,
+) -> io::Result<()> {
+    while let Some(message) = bridge.poll().map_err(ui_bridge_error)? {
+        let event = match message {
+            UiBridgeEvent::Action { event, .. } => event,
+            UiBridgeEvent::Attached { .. }
+            | UiBridgeEvent::Detached { .. }
+            | UiBridgeEvent::Lifecycle { .. } => {
+                // A detached native/web renderer can make the PTY visible
+                // again, so repaint even when the Explorer model is unchanged.
+                *needs_draw = true;
+                continue;
+            }
+        };
+        let outcome = match explorer.handle_ui_event(*revision, UI_TREE_ID, &event) {
+            Ok(Some(explorer_event)) => {
+                *status = status_for_event(explorer_event, explorer);
+                *needs_draw = true;
+                UiEventOutcome::Applied
+            }
+            Ok(None) => UiEventOutcome::Rejected(
+                "Action targets a different File Tree component".to_string(),
+            ),
+            Err(message) => UiEventOutcome::Rejected(message),
+        };
+        publish_projection(explorer, bridge, revision, published)?;
+        bridge
+            .acknowledge(&event, outcome, *revision)
+            .map_err(ui_bridge_error)?;
+    }
+    Ok(())
+}
+
+fn ui_bridge_error(error: unpeel_app_kit::UiBridgeError) -> io::Error {
+    io::Error::other(error)
 }
 
 fn explorer_click_at(
@@ -661,6 +758,29 @@ mod tests {
             !filter_row.contains(directory.path().to_string_lossy().as_ref())
                 && !first_item_row.contains(directory.path().to_string_lossy().as_ref()),
             "folder path should only appear in the footer\n{filter_row}\n{first_item_row}"
+        );
+    }
+
+    #[test]
+    fn app_projects_the_same_explorer_as_an_opaque_semantic_tree() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir(directory.path().join("folder")).unwrap();
+        std::fs::write(directory.path().join("note.md"), "hello").unwrap();
+        let mut explorer = Explorer::scoped(directory.path()).unwrap();
+
+        let node = UiNode::tree(UI_TREE_ID, explorer.semantic_tree("Files"));
+        let unpeel_app_kit::UiComponent::Tree(tree) = node.element else {
+            panic!("File Tree must publish the Tree component");
+        };
+        assert_eq!(tree.label, "Files");
+        assert!(tree.filter.is_some());
+        assert_eq!(tree.items.len(), 2);
+        assert!(tree.items.iter().all(|item| item.id.starts_with("entry-")));
+        assert!(
+            !serde_json::to_string(&tree)
+                .unwrap()
+                .contains(directory.path().to_string_lossy().as_ref()),
+            "semantic entry ids and labels must never expose the absolute root"
         );
     }
 

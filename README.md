@@ -14,6 +14,13 @@ This is a test harness, not a proposed built-in Unpeel file browser. It lives
 outside the Unpeel repository and does not add a preset or file-tree chrome to
 the product.
 
+When a Host injects App Kit's optional UI endpoint, the same Explorer publishes
+the closed semantic Tree projection. SwiftUI and web render native/ARIA tree
+rows with the same filter, selection, parent, directory, file, and activation
+semantics; ids are opaque and absolute paths remain inside the App for trusted
+local opening and dragging. With no Host present the bridge is inert and this
+remains the unchanged standalone Ratatui TUI.
+
 ## Install
 
 The hosted binary route is ready for the App release channel but its artifact
