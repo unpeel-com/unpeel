@@ -54,7 +54,7 @@ pub fn run(
             "Unpeel File Tree",
             env!("CARGO_PKG_VERSION"),
         )
-        .description("Standalone Explorer with an optional semantic Tree projection"),
+        .description("One Explorer Tree interpreted by Ratatui, native, and web renderers"),
     )
     .map_err(ui_bridge_error)?;
     let mut ui_revision = 1u64;
