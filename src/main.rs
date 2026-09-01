@@ -370,6 +370,38 @@ impl App {
                 self.scanning = true;
                 Ok(())
             }
+            (ui::OPEN_ALERTS_ACTION, UiEventKind::Activate, UiEventValue::None) if self.hosted => {
+                self.open_alert_dialog();
+                Ok(())
+            }
+            (ui::CLOSE_ALERTS_ACTION, UiEventKind::Cancel, UiEventValue::None)
+                if node_id == ui::SEMANTIC_ROOT_ID && self.alert_dialog.is_some() =>
+            {
+                self.alert_dialog = None;
+                Ok(())
+            }
+            (ui::SELECT_ALERT_ACTION, UiEventKind::Change, UiEventValue::Text(selected_id))
+                if node_id == "usage-alerts" && self.alert_dialog.is_some() =>
+            {
+                let index = ui::alert_index_from_node_id(selected_id)
+                    .filter(|index| *index < AlertOption::ALL.len())
+                    .ok_or_else(|| "Selected alert option is invalid".to_string())?;
+                self.alert_dialog = Some(index);
+                Ok(())
+            }
+            (ui::SET_ALERT_ACTION, UiEventKind::Change, UiEventValue::Bool(value))
+                if self.alert_dialog.is_some() =>
+            {
+                let index = ui::alert_index_from_node_id(node_id)
+                    .filter(|index| *index < AlertOption::ALL.len())
+                    .ok_or_else(|| "Alert toggle target is invalid".to_string())?;
+                let option = AlertOption::ALL[index];
+                if self.config.alerts.enabled(option) != *value {
+                    self.config.alerts.toggle(option);
+                }
+                self.alert_dialog = Some(index);
+                Ok(())
+            }
             _ => Err("Action value is not valid for the declared Usage action".to_string()),
         }
     }
@@ -785,6 +817,22 @@ fn semantic_action_is_declared(
                 .items
                 .iter()
                 .any(|item| item.id == node_id && item.activate.as_deref() == Some(action)))
+        || (kind == UiEventKind::Change
+            && page.list().items.iter().any(|item| {
+                [
+                    item.leading.as_ref(),
+                    item.trailing.as_ref(),
+                    item.accessory.as_ref(),
+                ]
+                .into_iter()
+                .flatten()
+                .any(|slot| match slot {
+                    unpeel_app_kit::ListItemSlot::Toggle(toggle) => {
+                        toggle.id == node_id && toggle.set_value == action
+                    }
+                    _ => false,
+                })
+            }))
 }
 
 fn selection_only_delta(previous: &UiNode, next: &UiNode) -> Option<UiDeltaOperation> {
@@ -803,8 +851,12 @@ fn selection_only_delta(previous: &UiNode, next: &UiNode) -> Option<UiDeltaOpera
     }
     let mut previous_without_selection = previous_page.clone();
     let mut next_without_selection = next_page.clone();
-    let PageBodySlot::List(previous_list) = &mut previous_without_selection.body;
-    let PageBodySlot::List(next_list) = &mut next_without_selection.body;
+    let PageBodySlot::List(previous_list) = &mut previous_without_selection.body else {
+        return None;
+    };
+    let PageBodySlot::List(next_list) = &mut next_without_selection.body else {
+        return None;
+    };
     previous_list.selected_id = None;
     next_list.selected_id = None;
     (previous_without_selection == next_without_selection).then(|| {
@@ -1002,7 +1054,9 @@ mod tests {
         let UiComponent::Page(page) = &mut changed.element else {
             unreachable!()
         };
-        let PageBodySlot::List(list) = &mut page.body;
+        let PageBodySlot::List(list) = &mut page.body else {
+            panic!("test Page must contain a List");
+        };
         list.items[1].label = "Claude Code".to_string();
         assert!(selection_only_delta(&node("provider-0"), &changed).is_none());
     }

@@ -20,7 +20,8 @@ use std::path::Path;
 use unpeel_app_kit::SelectableRow;
 use unpeel_app_kit::{
     Badge, KitTheme, List, ListItem, ListItemEmphasis, ListItemSlot, ListItemTone,
-    ListPageBehavior, ListState, Page, PageTheme, VerticalScrollbar, SELECTABLE_LEFT_PADDING,
+    ListPageBehavior, ListState, Page, PageTheme, Toggle, VerticalScrollbar,
+    SELECTABLE_LEFT_PADDING,
 };
 
 const METRIC_GAP: u16 = 1;
@@ -31,6 +32,10 @@ pub const OPEN_PROVIDER_ACTION: &str = "open-provider";
 pub const SELECT_PROVIDER_ACTION: &str = "select-provider";
 pub const CLOSE_PROVIDER_ACTION: &str = "close-provider";
 pub const REFRESH_ACTION: &str = "refresh-usage";
+pub const OPEN_ALERTS_ACTION: &str = "open-alerts";
+pub const CLOSE_ALERTS_ACTION: &str = "close-alerts";
+pub const SELECT_ALERT_ACTION: &str = "select-alert";
+pub const SET_ALERT_ACTION: &str = "set-alert";
 
 pub fn provider_node_id(index: usize) -> String {
     format!("provider-{index}")
@@ -44,6 +49,9 @@ pub fn provider_index_from_node_id(node_id: &str) -> Option<usize> {
 /// dashboard. Rich meters remain terminal-native; native and web render the
 /// provider catalog, values, details, history, back navigation, and refresh.
 pub fn semantic_page(snapshot: Option<&Snapshot>, view: &View) -> Page {
+    if view.hosted && view.alert_dialog.is_some() {
+        return semantic_alerts(view);
+    }
     let Some(snapshot) = snapshot else {
         return Page::new(
             "Usage",
@@ -73,6 +81,13 @@ pub fn semantic_page(snapshot: Option<&Snapshot>, view: &View) -> Page {
         .detail("Rescan local provider history and live limits")
         .activate_action(REFRESH_ACTION),
     );
+    if view.hosted {
+        items.push(
+            ListItem::new("open-alerts", "Alerts")
+                .detail("Choose which limit changes notify this session")
+                .disclosure_action(OPEN_ALERTS_ACTION),
+        );
+    }
     let mut list = List::new("usage-providers", items)
         .empty_message("No local usage data")
         .page_behavior(ListPageBehavior::Scroll);
@@ -199,6 +214,11 @@ fn semantic_provider_detail(provider: &Provider, index: usize, scanning: bool) -
         )
         .activate_action(REFRESH_ACTION),
     );
+    items.push(
+        ListItem::new(format!("{prefix}-alerts"), "Alerts")
+            .detail("Choose session notifications")
+            .disclosure_action(OPEN_ALERTS_ACTION),
+    );
     let title = if provider.badge.is_empty() {
         display_provider_name(&provider.name)
     } else {
@@ -209,6 +229,50 @@ fn semantic_provider_detail(provider: &Provider, index: usize, scanning: bool) -
         )
     };
     Page::new(title, List::new("usage-detail", items)).back_action(CLOSE_PROVIDER_ACTION)
+}
+
+fn semantic_alerts(view: &View) -> Page {
+    let selected = view
+        .alert_dialog
+        .unwrap_or_default()
+        .min(AlertOption::ALL.len() - 1);
+    let items = AlertOption::ALL
+        .into_iter()
+        .enumerate()
+        .map(|(index, option)| {
+            let enabled = view.alerts.enabled(option);
+            ListItem::new(alert_node_id(index), option.label())
+                .detail(option.description())
+                .done(enabled)
+                .trailing(ListItemSlot::toggle(Toggle::new(
+                    alert_toggle_id(index),
+                    option.label(),
+                    enabled,
+                    SET_ALERT_ACTION,
+                )))
+        })
+        .collect();
+    Page::new(
+        "Alerts",
+        List::new("usage-alerts", items).selected(alert_node_id(selected), SELECT_ALERT_ACTION),
+    )
+    .back_action(CLOSE_ALERTS_ACTION)
+}
+
+pub fn alert_node_id(index: usize) -> String {
+    format!("alert-{index}")
+}
+
+pub fn alert_toggle_id(index: usize) -> String {
+    format!("alert-toggle-{index}")
+}
+
+pub fn alert_index_from_node_id(node_id: &str) -> Option<usize> {
+    node_id
+        .strip_prefix("alert-toggle-")
+        .or_else(|| node_id.strip_prefix("alert-"))?
+        .parse()
+        .ok()
 }
 
 fn accent(palette: &ui::Palette, kind: ProviderKind) -> Color {
@@ -1814,6 +1878,33 @@ mod tests {
             .items
             .iter()
             .any(|item| item.activate.as_deref() == Some(REFRESH_ACTION)));
+    }
+
+    #[test]
+    fn semantic_alerts_page_exposes_native_toggles_and_back_navigation() {
+        let view = View {
+            selected: 0,
+            detail_open: false,
+            scanning: false,
+            hosted: true,
+            alerts: Alerts {
+                close_to_limit: true,
+                ..Alerts::default()
+            },
+            alert_dialog: Some(1),
+            scroll_offset: 0,
+            reveal_selected: true,
+        };
+        let page = semantic_page(Some(&sample()), &view);
+        page.validate().unwrap();
+        assert_eq!(page.title, "Alerts");
+        assert_eq!(page.back.as_deref(), Some(CLOSE_ALERTS_ACTION));
+        assert_eq!(page.list().selected_id.as_deref(), Some("alert-1"));
+        let ListItemSlot::Toggle(toggle) = page.list().items[0].trailing.as_ref().unwrap() else {
+            panic!("alert row must contain Toggle");
+        };
+        assert!(toggle.value);
+        assert_eq!(toggle.set_value, SET_ALERT_ACTION);
     }
 
     #[test]
