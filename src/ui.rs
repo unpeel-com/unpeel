@@ -19,12 +19,14 @@ use ratatui::widgets::{Paragraph, Widget};
 use ratatui::{Frame, Terminal};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use unpeel_app_kit::{
-    AgentBridge, AppContext, AppMetadata, AppReporter, ColorScheme, DoubleClickTracker,
-    DragSurface, EditorBridge, KeyboardEnhancementGuard, KitTheme, List, ListItem, ListItemSlot,
-    ListItemTone, ListKeymap, ListNavigationAction, ListState, MenuItem, MenuTheme, Page,
-    PageBodySlot, PageTheme, PopupMenu, SELECTABLE_LEFT_PADDING, StatusSymbol, ThemeMonitor,
-    UiBridge, UiBridgeEvent, UiComponent, UiDeltaOperation, UiEventKind, UiEventOutcome,
-    UiEventValue, UiNode, VerticalScrollbar, clipboard_sequence, display_path_from_root,
+    AgentBridge, AppContext, AppMetadata, AppReporter, ColorScheme, Content, ContentEmphasis,
+    ContentFont, ContentLine, ContentLineTone, ContentRun, ContentSelection, ContentTone,
+    DoubleClickTracker, DragSurface, EditorBridge, KeyboardEnhancementGuard, KitTheme, List,
+    ListItem, ListItemSlot, ListItemTone, ListKeymap, ListNavigationAction, ListState, MenuItem,
+    MenuTheme, Page, PageTheme, PopupMenu, SELECTABLE_LEFT_PADDING, SemanticMenu,
+    SemanticMenuAnchor, SemanticMenuItem, SemanticMenuPresentation, StatusSymbol, ThemeMonitor,
+    UiBridge, UiBridgeEvent, UiDeltaOperation, UiEventKind, UiEventOutcome, UiEventValue, UiNode,
+    VerticalScrollbar, clipboard_sequence, display_path_from_root, page_delta_operations,
 };
 
 use crate::app::{App, Screen};
@@ -41,7 +43,11 @@ const FILE_LIST_ID: &str = "diff-files";
 const SELECT_FILE_ACTION: &str = "select-file";
 const OPEN_FILE_ACTION: &str = "open-file";
 const CLOSE_DIFF_ACTION: &str = "close-diff";
-const MAX_SEMANTIC_DIFF_LINES: usize = 20_000;
+const REFRESH_ACTION: &str = "refresh-diffs";
+const SELECT_DIFF_LINES_ACTION: &str = "select-diff-lines";
+const OPEN_IN_EDITOR_ACTION: &str = "open-in-editor";
+const SEND_TO_AGENT_ACTION: &str = "send-to-agent";
+const COPY_ACTION: &str = "copy";
 
 pub fn run(
     mut app: App,
@@ -80,7 +86,13 @@ pub fn run(
     let mut highlights = HighlightCache::default();
 
     loop {
-        if drain_bridge(&mut app, &mut bridge, &mut ui_revision, &mut published)? {
+        if drain_bridge(
+            &mut app,
+            &agent,
+            &mut bridge,
+            &mut ui_revision,
+            &mut published,
+        )? {
             needs_draw = true;
         }
         publish_semantic_projection(&app, &mut bridge, &mut ui_revision, &mut published)?;
@@ -351,67 +363,130 @@ fn semantic_page(app: &App) -> Page {
                     SELECT_FILE_ACTION,
                 );
             }
+            list.items.push(
+                ListItem::new("refresh-diffs", "Refresh")
+                    .detail("Reload the working tree")
+                    .activate_action(REFRESH_ACTION),
+            );
+            list = list.context_menu(semantic_file_menu());
             Page::new("Changes", list)
         }
         Screen::Diff(document) => {
-            let mut items = document
+            let lines = document
                 .lines
                 .iter()
-                .take(MAX_SEMANTIC_DIFF_LINES)
                 .enumerate()
-                .map(|(index, line)| {
-                    ListItem::new(format!("diff-line-{index}"), semantic_diff_label(line))
-                        .label_tone(diff_line_tone(line))
-                })
+                .map(|(index, line)| semantic_diff_line(index, line))
                 .collect::<Vec<_>>();
-            if document.lines.len() > MAX_SEMANTIC_DIFF_LINES {
-                items.push(
-                    ListItem::new(
-                        "diff-lines-truncated",
-                        format!(
-                            "… {} more lines; open the terminal view for the complete patch",
-                            document.lines.len() - MAX_SEMANTIC_DIFF_LINES
-                        ),
-                    )
-                    .label_tone(ListItemTone::Muted),
-                );
+            let mut content = Content::new(
+                "diff-content",
+                format!("Patch for {}", document.file.list_name()),
+                lines,
+            )
+            .wrap(false)
+            .font(ContentFont::Monospace)
+            .empty_message("No textual diff")
+            .select_action(SELECT_DIFF_LINES_ACTION)
+            .context_menu(semantic_diff_menu());
+            if let Some((anchor, head)) = app.selection {
+                content.selection = Some(ContentSelection::new(
+                    diff_line_id(anchor),
+                    diff_line_id(head),
+                ));
             }
-            Page::new(
+            Page::with_content(
                 format!(
                     "{} · +{} −{}",
                     document.file.list_name(),
                     document.additions,
                     document.deletions
                 ),
-                List::new("diff-lines", items).empty_message("No textual diff"),
+                content,
             )
             .back_action(CLOSE_DIFF_ACTION)
         }
     }
 }
 
-fn semantic_diff_label(line: &str) -> String {
-    const MAX_LABEL_BYTES: usize = 15 * 1024;
+fn semantic_diff_text(line: &str) -> String {
     let expanded = expand_tabs(line);
-    let mut label = String::new();
+    let mut label = String::with_capacity(expanded.len());
     for character in expanded.chars().filter(|character| !character.is_control()) {
-        if label.len().saturating_add(character.len_utf8()) > MAX_LABEL_BYTES {
-            label.push('…');
-            break;
-        }
         label.push(character);
     }
     label
 }
 
-fn diff_line_tone(line: &str) -> ListItemTone {
+fn semantic_diff_line(index: usize, line: &str) -> ContentLine {
+    let text = semantic_diff_text(line);
     let bytes = line.as_bytes();
-    match bytes.first() {
-        Some(b'+') if !line.starts_with("+++") => ListItemTone::Success,
-        Some(b'-') if !line.starts_with("---") => ListItemTone::Danger,
-        Some(b'@') => ListItemTone::Info,
-        _ => ListItemTone::Default,
-    }
+    let (line_tone, run_tone, emphasis) = match bytes.first() {
+        Some(b'+') if !line.starts_with("+++") => (
+            ContentLineTone::Added,
+            ContentTone::Success,
+            ContentEmphasis::Regular,
+        ),
+        Some(b'-') if !line.starts_with("---") => (
+            ContentLineTone::Removed,
+            ContentTone::Danger,
+            ContentEmphasis::Regular,
+        ),
+        Some(b'@') => (
+            ContentLineTone::Header,
+            ContentTone::Info,
+            ContentEmphasis::Strong,
+        ),
+        _ if line.starts_with("diff ") || line.starts_with("index ") => (
+            ContentLineTone::Muted,
+            ContentTone::Muted,
+            ContentEmphasis::Regular,
+        ),
+        _ => (
+            ContentLineTone::Default,
+            ContentTone::Default,
+            ContentEmphasis::Regular,
+        ),
+    };
+    ContentLine::styled(
+        diff_line_id(index),
+        vec![ContentRun::new(text).tone(run_tone).emphasis(emphasis)],
+    )
+    .tone(line_tone)
+}
+
+fn diff_line_id(index: usize) -> String {
+    format!("diff-line-{index}")
+}
+
+fn diff_line_index(node_id: &str) -> Option<usize> {
+    node_id.strip_prefix("diff-line-")?.parse().ok()
+}
+
+fn semantic_file_menu() -> SemanticMenu {
+    SemanticMenu::new(
+        "File actions",
+        [
+            SemanticMenuItem::new("open-in-editor", "Open in editor", OPEN_IN_EDITOR_ACTION),
+            SemanticMenuItem::new("send-path", "Send to agent", SEND_TO_AGENT_ACTION),
+            SemanticMenuItem::new("copy-path", "Copy path", COPY_ACTION),
+        ],
+    )
+    .presentation(SemanticMenuPresentation::Context)
+    .anchor(SemanticMenuAnchor::Pointer)
+}
+
+fn semantic_diff_menu() -> SemanticMenu {
+    SemanticMenu::new(
+        "Diff actions",
+        [
+            SemanticMenuItem::new("open-in-editor", "Open in editor", OPEN_IN_EDITOR_ACTION),
+            SemanticMenuItem::new("send-lines", "Send to agent", SEND_TO_AGENT_ACTION),
+            SemanticMenuItem::new("copy-lines", "Copy lines", COPY_ACTION),
+            SemanticMenuItem::new("refresh-diff", "Refresh", REFRESH_ACTION),
+        ],
+    )
+    .presentation(SemanticMenuPresentation::Context)
+    .anchor(SemanticMenuAnchor::Pointer)
 }
 
 fn publish_semantic_projection(
@@ -427,10 +502,7 @@ fn publish_semantic_projection(
     let next_revision = revision
         .checked_add(1)
         .ok_or_else(|| io::Error::other("Diffs UI revision space is exhausted"))?;
-    let operations = selection_only_delta(published, &next).map_or_else(
-        || vec![UiDeltaOperation::ReplaceRoot { root: next.clone() }],
-        |operation| vec![operation],
-    );
+    let operations = page_delta_operations(published, &next);
     bridge
         .publish_delta(UI_VIEW_ID, *revision, next_revision, operations)
         .map_err(ui_bridge_error)?;
@@ -441,6 +513,7 @@ fn publish_semantic_projection(
 
 fn drain_bridge(
     app: &mut App,
+    agent: &AgentBridge,
     bridge: &mut UiBridge,
     revision: &mut u64,
     published: &mut UiNode,
@@ -455,7 +528,7 @@ fn drain_bridge(
                         event.base_revision, revision
                     ))
                 } else {
-                    apply_semantic_action(app, &event.action)
+                    apply_semantic_action(app, agent, &event.action)
                 };
                 let outcome = match result {
                     Ok(()) => {
@@ -477,7 +550,11 @@ fn drain_bridge(
     Ok(changed)
 }
 
-fn apply_semantic_action(app: &mut App, action: &unpeel_app_kit::UiAction) -> Result<(), String> {
+fn apply_semantic_action(
+    app: &mut App,
+    agent: &AgentBridge,
+    action: &unpeel_app_kit::UiAction,
+) -> Result<(), String> {
     match (
         action.node_id.as_str(),
         action.action.as_str(),
@@ -487,6 +564,11 @@ fn apply_semantic_action(app: &mut App, action: &unpeel_app_kit::UiAction) -> Re
         (FILE_LIST_ID, SELECT_FILE_ACTION, UiEventKind::Change, UiEventValue::Text(item_id))
             if !app.is_detail() =>
         {
+            // Command rows participate in the shared focus engine, but do not
+            // replace the authoritative changed-file selection.
+            if item_id == "refresh-diffs" {
+                return Ok(());
+            }
             let index = file_index_from_node_id(item_id)
                 .ok_or_else(|| "Selected file has an invalid target".to_owned())?;
             if index >= app.files.len() {
@@ -512,40 +594,100 @@ fn apply_semantic_action(app: &mut App, action: &unpeel_app_kit::UiAction) -> Re
             app.back();
             Ok(())
         }
+        ("refresh-diffs", REFRESH_ACTION, UiEventKind::Activate, UiEventValue::None)
+        | (_, REFRESH_ACTION, UiEventKind::Activate, _) => {
+            app.refresh().map_err(|error| error.to_string())
+        }
+        (
+            "diff-content",
+            SELECT_DIFF_LINES_ACTION,
+            UiEventKind::Select,
+            UiEventValue::TextList(ids),
+        ) if app.is_detail() && ids.len() == 2 => {
+            let anchor = diff_line_index(&ids[0])
+                .ok_or_else(|| "Diff selection anchor is invalid".to_owned())?;
+            let head = diff_line_index(&ids[1])
+                .ok_or_else(|| "Diff selection head is invalid".to_owned())?;
+            app.begin_selection(anchor);
+            app.extend_selection(head);
+            Ok(())
+        }
+        (_, OPEN_IN_EDITOR_ACTION, UiEventKind::Activate, UiEventValue::Text(target)) => {
+            select_semantic_target(app, target)?;
+            let path = app
+                .selected_absolute_path()
+                .ok_or_else(|| "File no longer exists".to_owned())?;
+            EditorBridge::open(&path).map_err(|error| error.to_string())?;
+            app.notify("Opened in editor");
+            Ok(())
+        }
+        (_, SEND_TO_AGENT_ACTION, UiEventKind::Activate, UiEventValue::Text(target)) => {
+            select_semantic_target(app, target)?;
+            if app.is_detail() {
+                ensure_semantic_diff_selection(app, target)?;
+                send_selection(app, agent);
+            } else {
+                let file = app
+                    .selected_file()
+                    .ok_or_else(|| "File no longer exists".to_owned())?;
+                let path = control_safe(file.path().to_string_lossy().as_ref());
+                match agent.send_text(&path) {
+                    Ok(label) => app.notify(format!("Sent path to {label}")),
+                    Err(error) => return Err(error.to_string()),
+                }
+            }
+            Ok(())
+        }
+        (_, COPY_ACTION, UiEventKind::Activate, UiEventValue::Text(target)) => {
+            select_semantic_target(app, target)?;
+            let text = if app.is_detail() {
+                ensure_semantic_diff_selection(app, target)?;
+                app.selected_diff_lines()
+                    .map(|lines| lines.join("\n"))
+                    .ok_or_else(|| "No diff lines selected".to_owned())?
+            } else {
+                app.selected_absolute_path()
+                    .ok_or_else(|| "File no longer exists".to_owned())?
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            copy_text(&text).map_err(|error| error.to_string())?;
+            app.notify(if app.is_detail() {
+                "Diff lines copied"
+            } else {
+                "Path copied"
+            });
+            Ok(())
+        }
         _ => Err("Action is not declared by the current Diffs Page".to_owned()),
     }
 }
 
-fn file_index_from_node_id(node_id: &str) -> Option<usize> {
-    node_id.strip_prefix("file-")?.parse().ok()
+fn select_semantic_target(app: &mut App, target: &str) -> Result<(), String> {
+    if let Some(index) = file_index_from_node_id(target) {
+        if index >= app.files.len() {
+            return Err("File no longer exists".to_owned());
+        }
+        app.select(index);
+    }
+    Ok(())
 }
 
-fn selection_only_delta(previous: &UiNode, next: &UiNode) -> Option<UiDeltaOperation> {
-    if previous.id != next.id {
-        return None;
-    }
-    let (UiComponent::Page(previous_page), UiComponent::Page(next_page)) =
-        (&previous.element, &next.element)
-    else {
-        return None;
+fn ensure_semantic_diff_selection(app: &mut App, target: &str) -> Result<(), String> {
+    let Some(index) = diff_line_index(target) else {
+        return Ok(());
     };
-    if previous_page.list().id != next_page.list().id
-        || previous_page.list().selected_id == next_page.list().selected_id
-    {
-        return None;
+    let covered = app
+        .selection_range()
+        .is_some_and(|(start, end)| index >= start && index <= end);
+    if !covered {
+        app.begin_selection(index);
     }
-    let mut previous_without_selection = previous_page.clone();
-    let mut next_without_selection = next_page.clone();
-    let PageBodySlot::List(previous_list) = &mut previous_without_selection.body;
-    let PageBodySlot::List(next_list) = &mut next_without_selection.body;
-    previous_list.selected_id = None;
-    next_list.selected_id = None;
-    (previous_without_selection == next_without_selection).then(|| {
-        UiDeltaOperation::list_set_selection(
-            next_page.list().id.clone(),
-            next_page.list().selected_id.clone(),
-        )
-    })
+    Ok(())
+}
+
+fn file_index_from_node_id(node_id: &str) -> Option<usize> {
+    node_id.strip_prefix("file-")?.parse().ok()
 }
 
 fn ui_bridge_error(error: unpeel_app_kit::UiBridgeError) -> io::Error {
@@ -1866,8 +2008,9 @@ mod tests {
     #[test]
     fn semantic_file_list_carries_status_slots_selection_and_compact_deltas() {
         let (_directory, mut app) = file_app();
+        let agent = AgentBridge::new();
         let first = semantic_node(&app);
-        let UiComponent::Page(page) = &first.element else {
+        let unpeel_app_kit::UiComponent::Page(page) = &first.element else {
             unreachable!()
         };
         page.validate().unwrap();
@@ -1881,6 +2024,7 @@ mod tests {
 
         apply_semantic_action(
             &mut app,
+            &agent,
             &unpeel_app_kit::UiAction::new(
                 FILE_LIST_ID,
                 SELECT_FILE_ACTION,
@@ -1892,22 +2036,50 @@ mod tests {
         assert_eq!(app.selected, 3);
         let next = semantic_node(&app);
         assert!(matches!(
-            selection_only_delta(&first, &next),
-            Some(UiDeltaOperation::ListSetSelection { list_id, selected_id })
+            page_delta_operations(&first, &next).as_slice(),
+            [UiDeltaOperation::ListSetSelection { list_id, selected_id }]
                 if list_id == FILE_LIST_ID && selected_id.as_deref() == Some("file-3")
         ));
     }
 
     #[test]
-    fn semantic_diff_detail_is_bounded_and_keeps_native_back_navigation() {
+    fn semantic_diff_detail_publishes_the_complete_styled_patch_and_native_actions() {
         let (_directory, mut app) = file_app();
-        app.screen = Screen::Diff(document());
+        let mut document = document();
+        document
+            .lines
+            .extend((0..20_050).map(|index| format!(" context line {index}")));
+        app.screen = Screen::Diff(document);
         let page = semantic_page(&app);
         page.validate().unwrap();
         assert_eq!(page.back.as_deref(), Some(CLOSE_DIFF_ACTION));
-        assert_eq!(page.list().items.len(), 4);
-        assert_eq!(page.list().items[2].label_tone, ListItemTone::Danger);
-        assert_eq!(page.list().items[3].label_tone, ListItemTone::Success);
+        let content = page.content().expect("Content detail body");
+        assert_eq!(content.lines.len(), 20_054);
+        assert_eq!(content.lines[2].tone, ContentLineTone::Removed);
+        assert_eq!(content.lines[3].tone, ContentLineTone::Added);
+        assert_eq!(
+            content.context_menu.as_ref().unwrap().items.len(),
+            4,
+            "native and web detail renderers expose the terminal actions"
+        );
+    }
+
+    #[test]
+    fn semantic_diff_selection_uses_a_content_delta() {
+        let (_directory, mut app) = file_app();
+        app.screen = Screen::Diff(document());
+        let first = semantic_node(&app);
+        app.begin_selection(1);
+        app.extend_selection(3);
+        let next = semantic_node(&app);
+        assert!(matches!(
+            page_delta_operations(&first, &next).as_slice(),
+            [UiDeltaOperation::ContentSetSelection { content_id, selection }]
+                if content_id == "diff-content"
+                    && selection.as_ref().is_some_and(|selection|
+                        selection.anchor_id == "diff-line-1"
+                            && selection.head_id == "diff-line-3")
+        ));
     }
 
     #[test]
