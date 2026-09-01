@@ -83,7 +83,7 @@ pub fn run(
             "Unpeel Diffs",
             env!("CARGO_PKG_VERSION"),
         )
-        .description("Standalone Ratatui diff viewer with an optional native/web projection"),
+        .description("One Diffs component tree interpreted by Ratatui, native, and web renderers"),
     )
     .map_err(ui_bridge_error)?;
     let agent = AgentBridge::new();
