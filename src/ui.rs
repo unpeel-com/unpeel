@@ -182,6 +182,7 @@ pub fn run(
                 needs_draw = true;
             }
             Event::Mouse(mouse) => {
+                needs_draw |= tree_state.track_mouse(&mouse);
                 let position = Position::new(mouse.column, mouse.row);
                 match mouse.kind {
                     MouseEventKind::Down(MouseButton::Right) => {
@@ -208,11 +209,7 @@ pub fn run(
                     MouseEventKind::Down(MouseButton::Left) => {
                         if let Some(mut open_menu) = menu.take() {
                             clicks.reset();
-                            if open_menu
-                                .item_at(position)
-                                .is_some_and(|item| item.is_enabled())
-                            {
-                                open_menu.select_at(position);
+                            if open_menu.action_index_for_mouse(&mouse).is_some() {
                                 status = Some(activate_menu(open_menu, &agent));
                             }
                             needs_draw = true;
