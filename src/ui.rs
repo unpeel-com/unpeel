@@ -530,6 +530,7 @@ fn provider_list_theme(palette: &ui::Palette) -> PageTheme {
         toggle: Style::default().fg(palette.focus),
         badge: Style::default().fg(palette.muted),
         busy: Style::default().fg(palette.focus),
+        selected_busy: Style::default(),
         delete: Style::default().fg(palette.muted),
         empty: Style::default().fg(palette.muted),
         selected: selected_row_style(palette),
@@ -541,6 +542,10 @@ fn provider_list_theme(palette: &ui::Palette) -> PageTheme {
         scrollbar_track,
         scrollbar_thumb,
         left_padding: SELECTABLE_LEFT_PADDING,
+        left_padding_style: Style::default(),
+        right_padding: 1,
+        style_value_gap: true,
+        style_status_spacing: false,
     }
 }
 
