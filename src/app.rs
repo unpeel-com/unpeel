@@ -1,6 +1,8 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+use unpeel_app_kit::TerminalPointerState;
+
 use crate::git::{ChangedFile, DiffDocument, Repository};
 
 #[derive(Clone, Debug)]
@@ -31,6 +33,7 @@ pub struct App {
     /// Anchor and head diff-line indexes of the detail selection. The head
     /// may precede the anchor while dragging upward.
     pub selection: Option<(usize, usize)>,
+    pub pointer: TerminalPointerState,
 }
 
 impl App {
@@ -50,6 +53,7 @@ impl App {
             max_horizontal_scroll: 0,
             notice: None,
             selection: None,
+            pointer: TerminalPointerState::new(),
         })
     }
 

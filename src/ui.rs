@@ -34,12 +34,12 @@ use unpeel_app_kit::UiDeltaOperation;
 use unpeel_app_kit::{
     AgentBridge, AppContext, AppMetadata, AppReporter, ColorScheme, Content, ContentEmphasis,
     ContentFont, ContentLine, ContentLineTone, ContentRun, ContentSelection, ContentState,
-    ContentTheme, ContentTone, DoubleClickTracker, DragSurface, EditorBridge, FooterAction,
-    InputField, KeyboardEnhancementGuard, KitTheme, List, ListItem, ListItemSlot, ListItemTone,
-    ListKeymap, ListNavigationAction, ListState, MenuTheme, Page, PageTheme, PopupMenu,
-    SemanticMenu, SemanticMenuAnchor, SemanticMenuItem, SemanticMenuPresentation, StatusSymbol,
-    ThemeMonitor, UiAction, UiBridge, UiBridgeEvent, UiComponent, UiEventKind, UiEventOutcome,
-    UiEventValue, UiNode, clipboard_sequence, page_delta_operations,
+    ContentTheme, ContentTone, DragSurface, EditorBridge, FooterAction, InputField,
+    KeyboardEnhancementGuard, KitTheme, List, ListItem, ListItemSlot, ListItemTone, ListKeymap,
+    ListNavigationAction, ListState, MenuTheme, Page, PageTheme, PopupMenu, SemanticMenu,
+    SemanticMenuAnchor, SemanticMenuItem, SemanticMenuPresentation, StatusSymbol, ThemeMonitor,
+    UiAction, UiBridge, UiBridgeEvent, UiComponent, UiEventKind, UiEventOutcome, UiEventValue,
+    UiNode, clipboard_sequence, page_delta_operations,
 };
 #[cfg(test)]
 use unpeel_app_kit::{SELECTABLE_LEFT_PADDING, VerticalScrollbar};
@@ -95,7 +95,6 @@ pub fn run(
         .map_err(ui_bridge_error)?;
     let mut last_agent_context_refresh = Instant::now();
     let mut rendered = RenderResult::default();
-    let mut clicks = DoubleClickTracker::new();
     let mut menu: Option<ContextMenu> = None;
     let mut selecting = false;
     let mut needs_draw = true;
@@ -182,7 +181,6 @@ pub fn run(
         }
         match event::read()? {
             Event::Key(key) if key.kind != KeyEventKind::Release => {
-                clicks.reset();
                 if is_force_quit(key) {
                     break;
                 }
@@ -230,16 +228,12 @@ pub fn run(
                 needs_draw = true;
             }
             Event::Mouse(mouse) => {
+                needs_draw |= app.pointer.track(&mouse);
                 let position = Position::new(mouse.column, mouse.row);
                 match mouse.kind {
                     MouseEventKind::Down(MouseButton::Left) => {
                         if let Some(mut open_menu) = menu.take() {
-                            clicks.reset();
-                            if open_menu
-                                .item_at(position)
-                                .is_some_and(|item| item.is_enabled())
-                            {
-                                open_menu.select_at(position);
+                            if open_menu.action_index_for_mouse(&mouse).is_some() {
                                 activate_menu(open_menu, &mut app, &agent);
                             }
                             needs_draw = true;
@@ -248,12 +242,10 @@ pub fn run(
                             .and_then(|area| published.footer()?.action_at(position, area))
                             .cloned()
                         {
-                            clicks.reset();
                             selecting = false;
                             apply_footer_action(&mut app, &agent, &action);
                             needs_draw = true;
                         } else if app.is_detail() {
-                            clicks.reset();
                             if rendered
                                 .back_button
                                 .is_some_and(|hit| hit.contains(position))
@@ -270,18 +262,33 @@ pub fn run(
                                 app.clear_selection();
                             }
                             needs_draw = true;
-                        } else if let Some((index, activate)) =
-                            list_click_at(&rendered, position, &mut clicks)
+                        } else if let Some(hit) = rendered
+                            .hits
+                            .iter()
+                            .copied()
+                            .find(|hit| hit.contains(position))
                         {
-                            app.select(index);
-                            if activate && let Err(error) = app.open_selected() {
-                                app.fail(error);
+                            let action = match &published.element {
+                                UiComponent::Page(page) => page
+                                    .list()
+                                    .items
+                                    .get(hit.index)
+                                    .and_then(unpeel_app_kit::ListItem::primary_ui_action),
+                                _ => None,
+                            };
+                            if let Some(action) = action {
+                                if let Err(message) =
+                                    apply_semantic_action(&mut app, &agent, &action)
+                                {
+                                    app.fail(io::Error::other(message));
+                                }
+                            } else {
+                                app.select(hit.index);
                             }
                             needs_draw = true;
                         }
                     }
                     MouseEventKind::Down(MouseButton::Right) => {
-                        clicks.reset();
                         selecting = false;
                         if app.is_detail() {
                             if let Some(index) = diff_line_at(&rendered, position) {
@@ -330,7 +337,6 @@ pub fn run(
                         selecting = false;
                     }
                     MouseEventKind::ScrollUp => {
-                        clicks.reset();
                         if let Some(open_menu) = menu.as_mut() {
                             open_menu.move_selection(-1);
                         } else {
@@ -339,7 +345,6 @@ pub fn run(
                         needs_draw = true;
                     }
                     MouseEventKind::ScrollDown => {
-                        clicks.reset();
                         if let Some(open_menu) = menu.as_mut() {
                             open_menu.move_selection(1);
                         } else {
@@ -359,7 +364,6 @@ pub fn run(
                 }
             }
             Event::Resize(_, _) => {
-                clicks.reset();
                 app.reveal_selected = true;
                 needs_draw = true;
             }
@@ -773,23 +777,6 @@ fn file_index_from_node_id(node_id: &str) -> Option<usize> {
 
 fn ui_bridge_error(error: unpeel_app_kit::UiBridgeError) -> io::Error {
     io::Error::other(error.to_string())
-}
-
-fn list_click_at(
-    rendered: &RenderResult,
-    position: Position,
-    clicks: &mut DoubleClickTracker<usize>,
-) -> Option<(usize, bool)> {
-    let Some(hit) = rendered
-        .hits
-        .iter()
-        .copied()
-        .find(|hit| hit.contains(position))
-    else {
-        clicks.reset();
-        return None;
-    };
-    Some((hit.index, clicks.click(hit.index)))
 }
 
 fn diff_line_at(rendered: &RenderResult, position: Position) -> Option<usize> {
@@ -1262,6 +1249,7 @@ fn render_component_frame(
         _ => ListState::default(),
     };
     let mut content_state = ContentState::new();
+    list_state.set_pointer(app.pointer);
     content_state.set_offsets(
         u16::try_from(app.detail_scroll).unwrap_or(u16::MAX),
         u16::try_from(app.horizontal_scroll).unwrap_or(u16::MAX),
@@ -2220,32 +2208,6 @@ mod tests {
                         selection.anchor_id == "diff-line-1"
                             && selection.head_id == "diff-line-3")
         ));
-    }
-
-    #[test]
-    fn double_clicking_the_same_file_row_requests_activation() {
-        let rendered = RenderResult {
-            hits: vec![RowHit {
-                index: 2,
-                area: Rect::new(0, 3, 40, 1),
-            }],
-            ..RenderResult::default()
-        };
-        let position = Position::new(12, 3);
-        let mut clicks = DoubleClickTracker::new();
-
-        assert_eq!(
-            list_click_at(&rendered, position, &mut clicks),
-            Some((2, false))
-        );
-        assert_eq!(
-            list_click_at(&rendered, position, &mut clicks),
-            Some((2, true))
-        );
-        assert_eq!(
-            list_click_at(&rendered, Position::new(12, 4), &mut clicks),
-            None
-        );
     }
 
     #[test]
