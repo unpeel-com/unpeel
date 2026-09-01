@@ -34,12 +34,12 @@ use unpeel_app_kit::UiDeltaOperation;
 use unpeel_app_kit::{
     AgentBridge, AppContext, AppMetadata, AppReporter, ColorScheme, Content, ContentEmphasis,
     ContentFont, ContentLine, ContentLineTone, ContentRun, ContentSelection, ContentState,
-    ContentTheme, ContentTone, DoubleClickTracker, DragSurface, EditorBridge, InputField,
-    KeyboardEnhancementGuard, KitTheme, List, ListItem, ListItemSlot, ListItemTone, ListKeymap,
-    ListNavigationAction, ListState, MenuTheme, Page, PageTheme, PopupMenu, SemanticMenu,
-    SemanticMenuAnchor, SemanticMenuItem, SemanticMenuPresentation, StatusSymbol, ThemeMonitor,
-    UiBridge, UiBridgeEvent, UiComponent, UiEventKind, UiEventOutcome, UiEventValue, UiNode,
-    clipboard_sequence, page_delta_operations,
+    ContentTheme, ContentTone, DoubleClickTracker, DragSurface, EditorBridge, FooterAction,
+    InputField, KeyboardEnhancementGuard, KitTheme, List, ListItem, ListItemSlot, ListItemTone,
+    ListKeymap, ListNavigationAction, ListState, MenuTheme, Page, PageTheme, PopupMenu,
+    SemanticMenu, SemanticMenuAnchor, SemanticMenuItem, SemanticMenuPresentation, StatusSymbol,
+    ThemeMonitor, UiAction, UiBridge, UiBridgeEvent, UiComponent, UiEventKind, UiEventOutcome,
+    UiEventValue, UiNode, clipboard_sequence, page_delta_operations,
 };
 #[cfg(test)]
 use unpeel_app_kit::{SELECTABLE_LEFT_PADDING, VerticalScrollbar};
@@ -209,6 +209,11 @@ pub fn run(
                     }
                     continue;
                 }
+                if let Some(action) = published.footer_action_for_key(&key).cloned() {
+                    apply_footer_action(&mut app, &agent, &action);
+                    needs_draw = true;
+                    continue;
+                }
                 let Some(action) =
                     action_for_key(key, app.is_detail(), app.selection_range().is_some())
                 else {
@@ -237,6 +242,15 @@ pub fn run(
                                 open_menu.select_at(position);
                                 activate_menu(open_menu, &mut app, &agent);
                             }
+                            needs_draw = true;
+                        } else if let Some(action) = rendered
+                            .footer_area
+                            .and_then(|area| published.footer()?.action_at(position, area))
+                            .cloned()
+                        {
+                            clicks.reset();
+                            selecting = false;
+                            apply_footer_action(&mut app, &agent, &action);
                             needs_draw = true;
                         } else if app.is_detail() {
                             clicks.reset();
@@ -377,13 +391,10 @@ fn semantic_page(app: &App, can_send: bool) -> Page {
                     SELECT_FILE_ACTION,
                 );
             }
-            list.items.push(
-                ListItem::new("refresh-diffs", "Refresh")
-                    .detail("Reload the working tree")
-                    .activate_action(REFRESH_ACTION),
-            );
             list = list.context_menu(semantic_file_menu(can_send));
-            Page::new(semantic_page_title(app, "Changes"), list)
+            Page::new(semantic_page_title(app, "Changes"), list).footer_actions([
+                FooterAction::new("refresh-diffs", "refresh", REFRESH_ACTION).accelerator("r"),
+            ])
         }
         Screen::Diff(document) => {
             let lines = document
@@ -419,6 +430,9 @@ fn semantic_page(app: &App, can_send: bool) -> Page {
             );
             Page::with_content(semantic_page_title(app, &title), content)
                 .back_action(CLOSE_DIFF_ACTION)
+                .footer_actions([
+                    FooterAction::new("refresh-diffs", "refresh", REFRESH_ACTION).accelerator("r"),
+                ])
         }
     }
 }
@@ -624,11 +638,6 @@ fn apply_semantic_action(
         (FILE_LIST_ID, SELECT_FILE_ACTION, UiEventKind::Change, UiEventValue::Text(item_id))
             if !app.is_detail() =>
         {
-            // Command rows participate in the shared focus engine, but do not
-            // replace the authoritative changed-file selection.
-            if item_id == "refresh-diffs" {
-                return Ok(());
-            }
             let index = file_index_from_node_id(item_id)
                 .ok_or_else(|| "Selected file has an invalid target".to_owned())?;
             if index >= app.files.len() {
@@ -655,7 +664,7 @@ fn apply_semantic_action(
             Ok(())
         }
         ("refresh-diffs", REFRESH_ACTION, UiEventKind::Activate, UiEventValue::None)
-        | (_, REFRESH_ACTION, UiEventKind::Activate, _) => {
+        | ("refresh-diff", REFRESH_ACTION, UiEventKind::Activate, UiEventValue::Text(_)) => {
             app.refresh().map_err(|error| error.to_string())
         }
         (
@@ -720,6 +729,18 @@ fn apply_semantic_action(
             Ok(())
         }
         _ => Err("Action is not declared by the current Diffs Page".to_owned()),
+    }
+}
+
+fn apply_footer_action(app: &mut App, agent: &AgentBridge, action: &FooterAction) {
+    let event = UiAction::new(
+        action.id.clone(),
+        action.action.clone(),
+        UiEventKind::Activate,
+        UiEventValue::None,
+    );
+    if let Err(error) = apply_semantic_action(app, agent, &event) {
+        app.fail(error);
     }
 }
 
@@ -810,7 +831,6 @@ enum InputAction {
     PageUp,
     PanLeft,
     PanRight,
-    Refresh,
     SendToAgent,
     ClearSelection,
 }
@@ -837,7 +857,6 @@ fn action_for_key(key: KeyEvent, detail: bool, has_selection: bool) -> Option<In
         KeyCode::Esc if detail => Some(InputAction::Back),
         KeyCode::Left | KeyCode::Char('h') if detail => Some(InputAction::PanLeft),
         KeyCode::Right | KeyCode::Char('l') if detail => Some(InputAction::PanRight),
-        KeyCode::Char('r') => Some(InputAction::Refresh),
         _ => None,
     };
     contextual.or_else(|| {
@@ -885,11 +904,6 @@ fn handle_action(app: &mut App, action: InputAction) -> bool {
         InputAction::PageUp => app.page_selection(-1),
         InputAction::PanLeft => app.scroll_horizontal(-4),
         InputAction::PanRight => app.scroll_horizontal(4),
-        InputAction::Refresh => {
-            if let Err(error) = app.refresh() {
-                app.fail(error);
-            }
-        }
         InputAction::SendToAgent => {}
         InputAction::ClearSelection => {
             app.clear_selection();
@@ -1199,6 +1213,7 @@ struct RenderResult {
     hits: Vec<RowHit>,
     diff_hits: Vec<RowHit>,
     back_button: Option<RectHit>,
+    footer_area: Option<Rect>,
     scroll_offset: usize,
     max_scroll: usize,
     viewport_rows: usize,
@@ -1258,7 +1273,7 @@ fn render_component_frame(
         frame.area(),
     );
 
-    let result = match (&app.screen, &page.body) {
+    let mut result = match (&app.screen, &page.body) {
         (Screen::Files, unpeel_app_kit::PageBodySlot::List(list)) => {
             let rows_area = list_state.rows_area();
             let hits = (0..usize::from(rows_area.height))
@@ -1342,6 +1357,7 @@ fn render_component_frame(
     }
     // The component widget owns all pixels; the result only carries terminal
     // geometry back to the App's renderer-local interaction state.
+    result.footer_area = layout.footer;
     result
 }
 
@@ -2129,6 +2145,8 @@ mod tests {
         assert_eq!(page.list().id, FILE_LIST_ID);
         assert_eq!(page.list().selected_id.as_deref(), Some("file-0"));
         assert_eq!(page.list().select.as_deref(), Some(SELECT_FILE_ACTION));
+        assert_eq!(page.footer.actions[0].id, "refresh-diffs");
+        assert_eq!(page.footer.actions[0].accelerator.as_deref(), Some("r"));
         assert!(matches!(
             page.list().items[0].leading,
             Some(ListItemSlot::Status(_))
@@ -2165,6 +2183,8 @@ mod tests {
         let page = semantic_page(&app, true);
         page.validate().unwrap();
         assert_eq!(page.back.as_deref(), Some(CLOSE_DIFF_ACTION));
+        assert_eq!(page.footer.actions[0].id, "refresh-diffs");
+        assert_eq!(page.footer.actions[0].accelerator.as_deref(), Some("r"));
         let content = page.content().expect("Content detail body");
         assert_eq!(content.lines.len(), 20_054);
         assert_eq!(content.lines[2].tone, ContentLineTone::Removed);
