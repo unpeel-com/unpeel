@@ -1,4 +1,5 @@
 use std::io::{self, Stdout, Write};
+use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -10,19 +11,16 @@ use crossterm::execute;
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Position, Rect};
-use ratatui::style::Style;
-use ratatui::widgets::Paragraph;
 use ratatui::{Frame, Terminal};
 use unpeel_app_kit::{
-    AgentBridge, AppContext, AppMetadata, AppReporter, ColorScheme, DoubleClickTracker,
-    DragSurface, EditorBridge, Explorer, ExplorerEvent, ExplorerInput, ExplorerTheme,
-    KeyboardEnhancementGuard, KitTheme, MenuItem, MenuTheme, PopupMenu, SemanticMenu,
-    SemanticMenuAnchor, SemanticMenuItem, SemanticMenuPresentation, ThemeMonitor, UiBridge,
-    UiBridgeEvent, UiEventKind, UiEventOutcome, UiEventValue, UiNode, clipboard_sequence,
-    display_path_from_root, tree_delta_operations,
+    AgentBridge, AppContext, AppMetadata, AppReporter, DoubleClickTracker, DragSurface,
+    EditorBridge, Explorer, ExplorerEvent, ExplorerInput, ExplorerTheme, KeyboardEnhancementGuard,
+    KitTheme, MenuTheme, PopupMenu, SemanticMenu, SemanticMenuAnchor, SemanticMenuItem,
+    SemanticMenuPresentation, ThemeMonitor, TreeState, TreeTheme, UiBridge, UiBridgeEvent,
+    UiComponent, UiEventKind, UiEventOutcome, UiEventValue, UiNode, clipboard_sequence,
+    tree_delta_operations,
 };
 
-const FOOTER_ROWS: u16 = 1;
 const UI_VIEW_ID: &str = "main";
 const UI_TREE_ID: &str = "file-tree";
 const OPEN_IN_EDITOR_ACTION: &str = "open-in-editor";
@@ -49,6 +47,7 @@ pub fn run(
     let mut clicks = DoubleClickTracker::new();
     let mut status = None;
     let mut needs_draw = true;
+    let mut tree_state = TreeState::default();
     let mut bridge = UiBridge::detect(
         AppMetadata::new(
             crate::install::APP_ID,
@@ -95,10 +94,11 @@ pub fn run(
             }));
             if bridge.should_render_terminal() {
                 terminal.draw(
+                    &published,
                     &mut explorer,
                     &mut drags,
+                    &mut tree_state,
                     menu.as_mut(),
-                    status.as_ref(),
                     theme,
                 )?;
             }
@@ -179,19 +179,20 @@ pub fn run(
                 match mouse.kind {
                     MouseEventKind::Down(MouseButton::Right) => {
                         clicks.reset();
-                        if let Some(path) = explorer
-                            .entry_at(position)
-                            .map(|entry| entry.path().to_path_buf())
-                        {
+                        let target = tree_state.item_id_at(position).map(str::to_owned);
+                        if let Some((target, path)) = target.and_then(|target| {
+                            explorer
+                                .path_for_semantic_item(&target)
+                                .map(|path| (target, path.to_path_buf()))
+                        }) {
                             explorer.set_filter_focused(false);
-                            explorer.select_at(position);
+                            let _ = explorer.select_semantic_item(&target);
                             agent.refresh();
-                            menu = Some(context_menu(
-                                path,
-                                agent.label().is_some(),
-                                position,
-                                theme.scheme,
-                            ));
+                            menu = match &published.element {
+                                UiComponent::Tree(tree) => tree.context_menu.as_ref(),
+                                _ => None,
+                            }
+                            .map(|spec| context_menu(path, spec, position, theme.scheme));
                             needs_draw = true;
                         } else if menu.take().is_some() {
                             needs_draw = true;
@@ -202,7 +203,7 @@ pub fn run(
                             clicks.reset();
                             if open_menu
                                 .item_at(position)
-                                .is_some_and(MenuItem::is_enabled)
+                                .is_some_and(|item| item.is_enabled())
                             {
                                 open_menu.select_at(position);
                                 status = Some(activate_menu(open_menu, &agent));
@@ -217,7 +218,7 @@ pub fn run(
                             status = None;
                             needs_draw = true;
                         } else if let Some(activate) =
-                            explorer_click_at(&mut explorer, position, &mut clicks)
+                            explorer_click_at(&mut explorer, &tree_state, position, &mut clicks)
                         {
                             if activate {
                                 status = handle_explorer(&mut explorer, ExplorerInput::Open);
@@ -315,7 +316,12 @@ fn semantic_node(explorer: &mut Explorer, can_send: bool, status: Option<&Status
         .semantic_tree("Files")
         .context_menu(semantic_context_menu(can_send));
     if let Some(status) = status {
-        tree.location = format!("{} · {}", tree.location, status.message);
+        tree.location = format!(
+            "{} · {}{}",
+            tree.location,
+            if status.error { "Error: " } else { "" },
+            status.message
+        );
     }
     UiNode::tree(UI_TREE_ID, tree)
 }
@@ -444,19 +450,24 @@ fn ui_bridge_error(error: unpeel_app_kit::UiBridgeError) -> io::Error {
 
 fn explorer_click_at(
     explorer: &mut Explorer,
+    tree_state: &TreeState,
     position: Position,
     clicks: &mut DoubleClickTracker<PathBuf>,
 ) -> Option<bool> {
+    let Some(target) = tree_state.item_id_at(position).map(str::to_owned) else {
+        clicks.reset();
+        return None;
+    };
     let Some(path) = explorer
-        .entry_at(position)
-        .map(|entry| entry.path().to_path_buf())
+        .path_for_semantic_item(&target)
+        .map(std::path::Path::to_path_buf)
     else {
         clicks.reset();
         return None;
     };
     explorer.set_filter_focused(false);
     let activate = clicks.click(path);
-    explorer.select_at(position);
+    let _ = explorer.select_semantic_item(&target);
     Some(activate)
 }
 
@@ -471,27 +482,36 @@ enum ContextAction {
     CopyPath(PathBuf),
 }
 
-type ContextMenu = PopupMenu<ContextAction>;
+#[derive(Debug)]
+struct ContextMenu {
+    popup: PopupMenu<String>,
+    path: PathBuf,
+}
+
+impl Deref for ContextMenu {
+    type Target = PopupMenu<String>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.popup
+    }
+}
+
+impl DerefMut for ContextMenu {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.popup
+    }
+}
 
 fn context_menu(
     path: PathBuf,
-    can_send: bool,
+    spec: &SemanticMenu,
     anchor: Position,
-    scheme: ColorScheme,
+    scheme: unpeel_app_kit::ColorScheme,
 ) -> ContextMenu {
-    let mut items = Vec::with_capacity(3);
-    items.push(MenuItem::new(
-        "Open in editor",
-        ContextAction::OpenInEditor(path.clone()),
-    ));
-    if can_send {
-        items.push(MenuItem::new(
-            "Send to agent",
-            ContextAction::SendToAgent(path.clone()),
-        ));
+    ContextMenu {
+        popup: spec.popup(anchor, MenuTheme::for_color_scheme(scheme)),
+        path,
     }
-    items.push(MenuItem::new("Copy path", ContextAction::CopyPath(path)));
-    PopupMenu::new(anchor, items).with_theme(MenuTheme::for_color_scheme(scheme))
 }
 
 fn is_force_quit(key: KeyEvent) -> bool {
@@ -499,8 +519,15 @@ fn is_force_quit(key: KeyEvent) -> bool {
 }
 
 fn activate_menu(menu: ContextMenu, agent: &AgentBridge) -> Status {
-    let Some(action) = menu.selected_value().cloned() else {
+    let ContextMenu { popup, path } = menu;
+    let Some(item_id) = popup.selected_value().map(String::as_str) else {
         return Status::error("No menu action selected");
+    };
+    let action = match item_id {
+        "open-in-editor" => ContextAction::OpenInEditor(path),
+        "send-to-agent" => ContextAction::SendToAgent(path),
+        "copy-path" => ContextAction::CopyPath(path),
+        _ => return Status::error("Unknown menu action"),
     };
     activate_context_action(action, agent)
 }
@@ -636,15 +663,17 @@ impl TerminalGuard {
 
     fn draw(
         &mut self,
+        node: &UiNode,
         explorer: &mut Explorer,
         drags: &mut DragSurface,
+        tree_state: &mut TreeState,
         menu: Option<&mut ContextMenu>,
-        status: Option<&Status>,
         theme: KitTheme,
     ) -> io::Result<()> {
         drags.begin_frame();
-        self.terminal
-            .draw(|frame| render_frame(frame, explorer, drags, menu, status, theme))?;
+        self.terminal.draw(|frame| {
+            render_component_frame(frame, node, explorer, drags, tree_state, menu, theme);
+        })?;
         drags.commit()
     }
 }
@@ -662,56 +691,39 @@ impl Drop for TerminalGuard {
     }
 }
 
-fn render_frame(
+fn render_component_frame(
     frame: &mut Frame<'_>,
+    node: &UiNode,
     explorer: &mut Explorer,
     drags: &mut DragSurface,
+    tree_state: &mut TreeState,
     menu: Option<&mut ContextMenu>,
-    status: Option<&Status>,
     theme: KitTheme,
 ) {
-    let area = frame.area();
+    let UiComponent::Tree(tree) = &node.element else {
+        return;
+    };
     let menu_open = menu.is_some();
-    let footer_rows = if area.height >= 2 { FOOTER_ROWS } else { 0 };
-    let explorer_area = Rect::new(
-        area.x,
-        area.y,
-        area.width,
-        area.height.saturating_sub(footer_rows),
+    frame.render_widget(
+        tree.widget_with_filter(tree_state, explorer.filter_input_mut())
+            .theme(TreeTheme::for_theme(theme)),
+        frame.area(),
     );
-    frame.render_widget(explorer.widget(drags), explorer_area);
 
-    if footer_rows > 0 {
-        let footer_area = Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1);
-        let (message, style) = status.map_or_else(
-            || {
-                drags.register(footer_area, explorer.cwd());
-                let root = explorer.navigation_root().unwrap_or_else(|| explorer.cwd());
-                (
-                    display_path_from_root(explorer.cwd(), root),
-                    Style::new().fg(theme.muted),
-                )
-            },
-            |status| {
-                (
-                    status.message.clone(),
-                    Style::new().fg(if status.error {
-                        theme.danger
-                    } else {
-                        theme.muted
-                    }),
-                )
-            },
-        );
-        frame.render_widget(
-            Paragraph::new(format!("  {message}")).style(style),
-            footer_area,
-        );
+    let rows = tree_state.rows_area();
+    for row in 0..rows.height {
+        let position = Position::new(rows.x, rows.y.saturating_add(row));
+        if let Some(path) = tree_state
+            .item_id_at(position)
+            .and_then(|id| explorer.path_for_semantic_item(id))
+        {
+            drags.register(Rect::new(rows.x, position.y, rows.width, 1), path);
+        }
     }
 
     if let Some(menu) = menu {
         // The native drag receiver sees the frame-level map. Suppress
-        // underlying path drags while a context menu covers the Explorer.
+        // underlying path drags while a context menu covers the Tree.
         drags.begin_frame();
         menu.render(frame);
     }
@@ -811,7 +823,7 @@ mod tests {
     }
 
     #[test]
-    fn app_renders_the_shared_borderless_draggable_explorer() {
+    fn app_renders_the_exact_published_tree_and_registers_local_drags() {
         let directory = tempfile::tempdir().unwrap();
         std::fs::create_dir(directory.path().join("folder")).unwrap();
         std::fs::write(directory.path().join("file.txt"), "hello").unwrap();
@@ -820,51 +832,55 @@ mod tests {
             .unwrap()
             .with_theme(explorer_theme(theme));
         explorer.set_show_path(false);
+        let node = semantic_node(&mut explorer, false, None);
         let mut terminal = Terminal::new(TestBackend::new(50, 12)).unwrap();
         let mut drags = DragSurface::disabled();
+        let mut state = TreeState::default();
 
         drags.begin_frame();
         terminal
-            .draw(|frame| render_frame(frame, &mut explorer, &mut drags, None, None, theme))
+            .draw(|frame| {
+                render_component_frame(
+                    frame,
+                    &node,
+                    &mut explorer,
+                    &mut drags,
+                    &mut state,
+                    None,
+                    theme,
+                );
+            })
             .unwrap();
 
-        assert_eq!(drags.regions().len(), 3);
-        let cwd_drag = drags
-            .regions()
-            .iter()
-            .find(|region| region.path == explorer.cwd())
-            .expect("current-folder footer drag");
-        assert_eq!(cwd_drag.area.y, 11);
+        assert_eq!(drags.regions().len(), 2);
         assert!(drags.regions()[0].path.ends_with("folder"));
         assert_eq!(terminal.backend().buffer()[(49, 0)].bg, Color::Reset);
         assert_eq!(
-            terminal.backend().buffer()[(49, 1)].bg,
+            terminal.backend().buffer()[(49, 2)].bg,
             theme.selected_row.bg.unwrap()
         );
         assert_eq!(terminal.backend().buffer()[(49, 9)].bg, Color::Reset);
-        let footer = (0..50)
-            .map(|x| terminal.backend().buffer()[(x, 11)].symbol())
+        let location = (0..50)
+            .map(|x| terminal.backend().buffer()[(x, 1)].symbol())
             .collect::<String>();
         assert!(
-            footer.contains("  ."),
-            "project-root-relative folder path\n{footer}"
+            location.contains("  ."),
+            "project-root-relative path\n{location}"
         );
         assert!(
-            !footer.contains(directory.path().to_string_lossy().as_ref()),
-            "footer must not expose the absolute project path\n{footer}"
+            !location.contains(directory.path().to_string_lossy().as_ref()),
+            "Tree location must not expose the absolute project path\n{location}"
         );
-        assert!(!footer.contains("Enter open"), "no shortcut help\n{footer}");
-        assert_eq!(terminal.backend().buffer()[(2, 11)].fg, theme.muted);
         let filter_row = (0..50)
             .map(|x| terminal.backend().buffer()[(x, 0)].symbol())
             .collect::<String>();
         let first_item_row = (0..50)
-            .map(|x| terminal.backend().buffer()[(x, 1)].symbol())
+            .map(|x| terminal.backend().buffer()[(x, 2)].symbol())
             .collect::<String>();
         assert!(
             !filter_row.contains(directory.path().to_string_lossy().as_ref())
                 && !first_item_row.contains(directory.path().to_string_lossy().as_ref()),
-            "folder path should only appear in the footer\n{filter_row}\n{first_item_row}"
+            "folder path must stay out of the published Tree\n{filter_row}\n{first_item_row}"
         );
     }
 
@@ -896,7 +912,7 @@ mod tests {
         let unpeel_app_kit::UiComponent::Tree(tree) = node.element else {
             panic!("File Tree must publish the Tree component");
         };
-        assert_eq!(tree.location, ". · Could not open entry");
+        assert_eq!(tree.location, ". · Error: Could not open entry");
     }
 
     #[test]
@@ -933,18 +949,22 @@ mod tests {
             .unwrap()
             .with_theme(explorer_theme(theme));
         let path = directory.path().join("file.txt");
-        let mut menu = context_menu(path, true, Position::new(4, 4), theme.scheme);
+        let spec = semantic_context_menu(true);
+        let mut menu = context_menu(path, &spec, Position::new(4, 4), theme.scheme);
         let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
         let mut drags = DragSurface::disabled();
+        let node = semantic_node(&mut explorer, true, None);
+        let mut state = TreeState::default();
 
         terminal
             .draw(|frame| {
-                render_frame(
+                render_component_frame(
                     frame,
+                    &node,
                     &mut explorer,
                     &mut drags,
+                    &mut state,
                     Some(&mut menu),
-                    None,
                     theme,
                 );
             })
@@ -983,37 +1003,39 @@ mod tests {
         let mut explorer = Explorer::scoped(directory.path()).unwrap();
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         let mut drags = DragSurface::disabled();
+        let node = semantic_node(&mut explorer, false, None);
+        let mut state = TreeState::default();
         terminal
             .draw(|frame| {
-                render_frame(
+                render_component_frame(
                     frame,
+                    &node,
                     &mut explorer,
                     &mut drags,
-                    None,
+                    &mut state,
                     None,
                     KitTheme::dark(),
                 )
             })
             .unwrap();
 
-        let index = explorer
-            .entries()
-            .iter()
-            .position(|entry| entry.path() == folder)
-            .unwrap();
-        let position = Position::new(
-            explorer.list_area().x,
-            explorer.list_area().y + (index - explorer.scroll_offset()) as u16,
-        );
+        let position = (state.rows_area().y..state.rows_area().bottom())
+            .map(|y| Position::new(state.rows_area().x, y))
+            .find(|position| {
+                state
+                    .item_id_at(*position)
+                    .is_some_and(|id| explorer.path_for_semantic_item(id) == Some(folder.as_path()))
+            })
+            .expect("folder row");
         let mut clicks = DoubleClickTracker::new();
 
         assert_eq!(
-            explorer_click_at(&mut explorer, position, &mut clicks),
+            explorer_click_at(&mut explorer, &state, position, &mut clicks),
             Some(false)
         );
         assert_eq!(explorer.selected().unwrap().path(), folder);
         assert_eq!(
-            explorer_click_at(&mut explorer, position, &mut clicks),
+            explorer_click_at(&mut explorer, &state, position, &mut clicks),
             Some(true)
         );
         assert_eq!(
