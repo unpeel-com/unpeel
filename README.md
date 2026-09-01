@@ -56,11 +56,13 @@ marker.
 When a Host injects an App Kit UI endpoint, the same process additionally
 publishes a closed `Page` → `List` → `ListItem` projection. SwiftUI and web
 renderers get the provider catalog with secondary status, trailing summaries,
-row activation, a native detail page, Back, and Refresh. Those actions return
+row activation, a native detail page, Back, Refresh, and the real numeric
+Usage Trend series through App Kit's semantic `Sparkline`. Swift uses Charts,
+web uses dependency-free inline SVG, and the terminal delegates to App Kit's
+Ratatui widget with buffer-identical output. Those actions and values return
 to the Ratatui process, which remains the sole model owner and acknowledges
-each revision. Rich quota meters and sparklines stay in the complete terminal
-view; the semantic view preserves the useful data and actions rather than
-trying to serialize arbitrary terminal widgets.
+each revision. Purpose-built quota meters keep their bounded semantic values;
+the vocabulary does not try to serialize arbitrary terminal widgets.
 
 The **Current project** row attributes local history to the Git project from
 which each agent session was launched. In Unpeel, every background refresh

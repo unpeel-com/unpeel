@@ -13,14 +13,14 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Sparkline, Widget};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Widget};
 use ratatui::Frame;
 use std::path::Path;
 #[cfg(test)]
 use unpeel_app_kit::SelectableRow;
 use unpeel_app_kit::{
     Badge, KitTheme, List, ListItem, ListItemEmphasis, ListItemSlot, ListItemTone,
-    ListPageBehavior, ListState, Page, PageTheme, Toggle, VerticalScrollbar,
+    ListPageBehavior, ListState, Page, PageTheme, Sparkline, Toggle, VerticalScrollbar,
     SELECTABLE_LEFT_PADDING,
 };
 
@@ -46,8 +46,8 @@ pub fn provider_index_from_node_id(node_id: &str) -> Option<usize> {
 }
 
 /// Closed App Kit projection of the same master/detail model as the Ratatui
-/// dashboard. Rich meters remain terminal-native; native and web render the
-/// provider catalog, values, details, history, back navigation, and refresh.
+/// dashboard. Bounded quota meters keep their compact list metadata, while
+/// numeric history is a semantic Sparkline interpreted by every renderer.
 pub fn semantic_page(snapshot: Option<&Snapshot>, view: &View) -> Page {
     if view.hosted && view.alert_dialog.is_some() {
         return semantic_alerts(view);
@@ -159,8 +159,18 @@ fn semantic_provider_detail(provider: &Provider, index: usize, scanning: bool) -
         let mut item = ListItem::new(
             format!("{prefix}-metric-{metric_index}"),
             display_metric_label(&metric.label),
-        )
-        .value(metric.value.clone());
+        );
+        if !metric.value.is_empty() {
+            item = item.value(metric.value.clone());
+        }
+        if !metric.spark.is_empty() {
+            item = item
+                .trailing(ListItemSlot::sparkline(metric_sparkline(
+                    format!("{prefix}-metric-{metric_index}-sparkline"),
+                    metric,
+                )))
+                .value_tone(metric_tone(metric.level));
+        }
         if let Some(annotation) = &metric.annotation {
             item = item.detail(annotation.clone());
         }
@@ -229,6 +239,32 @@ fn semantic_provider_detail(provider: &Provider, index: usize, scanning: bool) -
         )
     };
     Page::new(title, List::new("usage-detail", items)).back_action(CLOSE_PROVIDER_ACTION)
+}
+
+fn metric_tone(level: Level) -> ListItemTone {
+    match level {
+        Level::Ok => ListItemTone::Info,
+        Level::Warn => ListItemTone::Warning,
+        Level::Alert => ListItemTone::Danger,
+    }
+}
+
+fn metric_sparkline(id: impl Into<String>, metric: &Metric) -> Sparkline {
+    let label = display_metric_label(&metric.label);
+    let minimum = metric.spark.iter().copied().fold(f64::INFINITY, f64::min);
+    let maximum = metric
+        .spark
+        .iter()
+        .copied()
+        .fold(f64::NEG_INFINITY, f64::max);
+    Sparkline::new(
+        id,
+        metric.spark.iter().copied(),
+        format!(
+            "{label} history: {} points, minimum {minimum}, maximum {maximum}",
+            metric.spark.len()
+        ),
+    )
 }
 
 fn semantic_alerts(view: &View) -> Page {
@@ -1549,14 +1585,10 @@ fn render_bounded_metric(buffer: &mut Buffer, area: Rect, metric: &Metric, palet
 }
 
 fn render_chart_metric(buffer: &mut Buffer, area: Rect, metric: &Metric, palette: &ui::Palette) {
-    let data: Vec<u64> = metric
-        .spark
-        .iter()
-        .map(|value| (value.max(0.0) * 1_000.0).round() as u64)
-        .collect();
+    let sparkline = metric_sparkline("terminal-metric-sparkline", metric);
     if chart_is_inline(metric) {
         render_label_value_row(buffer, row_at(area, area.y), metric, palette);
-        let chart_width = u16::try_from(data.len())
+        let chart_width = u16::try_from(metric.spark.len())
             .unwrap_or(u16::MAX)
             .min(area.width.saturating_sub(18));
         if chart_width > 0 {
@@ -1566,18 +1598,16 @@ fn render_chart_metric(buffer: &mut Buffer, area: Rect, metric: &Metric, palette
                 chart_width,
                 1,
             );
-            let start = data.len().saturating_sub(chart_width as usize);
-            Sparkline::default()
-                .data(&data[start..])
+            sparkline
+                .widget()
                 .style(Style::default().fg(level_color(palette, metric.level)))
                 .render(chart_area, buffer);
         }
     } else {
         render_label_value_row(buffer, row_at(area, area.y), metric, palette);
         if area.height >= 2 {
-            let start = data.len().saturating_sub(area.width as usize);
-            Sparkline::default()
-                .data(&data[start..])
+            sparkline
+                .widget()
                 .style(Style::default().fg(level_color(palette, metric.level)))
                 .render(row_at(area, area.y + 1), buffer);
         }
@@ -1743,6 +1773,7 @@ fn render_key_value(
 mod tests {
     use super::*;
     use ratatui::backend::TestBackend;
+    use ratatui::widgets::Sparkline as RatatuiSparkline;
     use ratatui::Terminal;
 
     fn sample() -> Snapshot {
@@ -1878,6 +1909,57 @@ mod tests {
             .items
             .iter()
             .any(|item| item.activate.as_deref() == Some(REFRESH_ACTION)));
+        view.selected = snapshot
+            .providers
+            .iter()
+            .position(|provider| {
+                provider
+                    .metrics
+                    .iter()
+                    .any(|metric| !metric.spark.is_empty())
+            })
+            .expect("sample must include history");
+        let history_detail = semantic_page(Some(&snapshot), &view);
+        let history = history_detail
+            .list()
+            .items
+            .iter()
+            .find_map(|item| match item.trailing.as_ref() {
+                Some(ListItemSlot::Sparkline(sparkline)) => Some(sparkline),
+                _ => None,
+            })
+            .expect("history must enter the semantic tree");
+        assert_eq!(history.values().count(), 24);
+        assert!(history.accessibility_text.contains("24 points"));
+    }
+
+    #[test]
+    fn app_kit_sparkline_is_buffer_identical_to_the_frozen_usage_graph() {
+        let values: [f64; 7] = [0.0, 1.0, 4.0, 2.0, 3.0, 8.0, 1.0];
+        let data = values
+            .iter()
+            .map(|value| ((*value).max(0.0) * 1_000.0).round() as u64)
+            .collect::<Vec<_>>();
+        let metric = Metric {
+            spark: values.to_vec(),
+            ..Metric::new("Usage Trend", String::new(), Level::Ok)
+        };
+        let sparkline = metric_sparkline("usage-trend-test", &metric);
+        let style = Style::default().fg(ui::Palette::DARK.meter_blue);
+
+        for width in [1, 3, 7] {
+            let area = Rect::new(0, 0, width, 1);
+            let start = data.len().saturating_sub(usize::from(width));
+            let mut legacy = Buffer::empty(area);
+            RatatuiSparkline::default()
+                .data(&data[start..])
+                .style(style)
+                .render(area, &mut legacy);
+
+            let mut component = Buffer::empty(area);
+            sparkline.widget().style(style).render(area, &mut component);
+            assert_eq!(component, legacy, "width {width}");
+        }
     }
 
     #[test]
