@@ -18,6 +18,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 use ratatui::{Frame, Terminal};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+#[cfg(test)]
+use unpeel_app_kit::UiDeltaOperation;
 use unpeel_app_kit::{
     AgentBridge, AppContext, AppMetadata, AppReporter, ColorScheme, Content, ContentEmphasis,
     ContentFont, ContentLine, ContentLineTone, ContentRun, ContentSelection, ContentTone,
@@ -25,8 +27,8 @@ use unpeel_app_kit::{
     ListItem, ListItemSlot, ListItemTone, ListKeymap, ListNavigationAction, ListState, MenuItem,
     MenuTheme, Page, PageTheme, PopupMenu, SELECTABLE_LEFT_PADDING, SemanticMenu,
     SemanticMenuAnchor, SemanticMenuItem, SemanticMenuPresentation, StatusSymbol, ThemeMonitor,
-    UiBridge, UiBridgeEvent, UiDeltaOperation, UiEventKind, UiEventOutcome, UiEventValue, UiNode,
-    VerticalScrollbar, clipboard_sequence, display_path_from_root, page_delta_operations,
+    UiBridge, UiBridgeEvent, UiEventKind, UiEventOutcome, UiEventValue, UiNode, VerticalScrollbar,
+    clipboard_sequence, display_path_from_root, page_delta_operations,
 };
 
 use crate::app::{App, Screen};
@@ -369,7 +371,7 @@ fn semantic_page(app: &App) -> Page {
                     .activate_action(REFRESH_ACTION),
             );
             list = list.context_menu(semantic_file_menu());
-            Page::new("Changes", list)
+            Page::new(semantic_page_title(app, "Changes"), list)
         }
         Screen::Diff(document) => {
             let lines = document
@@ -394,18 +396,23 @@ fn semantic_page(app: &App) -> Page {
                     diff_line_id(head),
                 ));
             }
-            Page::with_content(
-                format!(
-                    "{} · +{} −{}",
-                    document.file.list_name(),
-                    document.additions,
-                    document.deletions
-                ),
-                content,
-            )
-            .back_action(CLOSE_DIFF_ACTION)
+            let title = format!(
+                "{} · +{} −{}",
+                document.file.list_name(),
+                document.additions,
+                document.deletions
+            );
+            Page::with_content(semantic_page_title(app, &title), content)
+                .back_action(CLOSE_DIFF_ACTION)
         }
     }
+}
+
+fn semantic_page_title(app: &App, base: &str) -> String {
+    app.notice.as_ref().map_or_else(
+        || base.to_owned(),
+        |notice| format!("{base} · {}", notice.text),
+    )
 }
 
 fn semantic_diff_text(line: &str) -> String {
@@ -2061,6 +2068,12 @@ mod tests {
             content.context_menu.as_ref().unwrap().items.len(),
             4,
             "native and web detail renderers expose the terminal actions"
+        );
+
+        app.notify("Diff lines copied");
+        assert!(
+            semantic_page(&app).title.ends_with(" · Diff lines copied"),
+            "terminal footer notices must remain visible in native and web details"
         );
     }
 
