@@ -29,9 +29,9 @@ use unpeel_app_kit::SelectableRow;
 #[cfg(test)]
 use unpeel_app_kit::VerticalScrollbar;
 use unpeel_app_kit::{
-    Badge, InputField, KitTheme, List, ListItem, ListItemEmphasis, ListItemSlot, ListItemTone,
-    ListPageBehavior, ListState, Page, PageTheme, Sparkline, Toggle, UiComponent, UiNode,
-    SELECTABLE_LEFT_PADDING,
+    Badge, Gauge, InputField, KitTheme, List, ListItem, ListItemEmphasis, ListItemSlot,
+    ListItemTone, ListPageBehavior, ListState, Page, PageTheme, Sparkline, Toggle, UiComponent,
+    UiNode, SELECTABLE_LEFT_PADDING,
 };
 
 pub const SEMANTIC_ROOT_ID: &str = "usage-page";
@@ -53,8 +53,8 @@ pub fn provider_index_from_node_id(node_id: &str) -> Option<usize> {
 }
 
 /// Authoritative master/detail component tree interpreted by Ratatui, SwiftUI,
-/// and web as peers. Quota copy stays in compact List metadata, while numeric
-/// history is a semantic Sparkline interpreted from the same values.
+/// and web as peers. Bounded quotas are semantic Gauge slots with App-owned
+/// direction/copy, while numeric history is a Sparkline over the same values.
 pub fn semantic_page(snapshot: Option<&Snapshot>, view: &View) -> Page {
     if view.hosted && view.alert_dialog.is_some() {
         return semantic_alerts(view);
@@ -178,16 +178,27 @@ fn semantic_provider_detail(
             format!("{prefix}-metric-{metric_index}"),
             display_metric_label(&metric.label),
         );
-        if !presentation.caption.is_empty() {
-            item = item.value(presentation.caption);
-        }
-        if !metric.spark.is_empty() {
+        if let Some(ratio) = presentation.ratio {
+            item = item
+                .trailing(ListItemSlot::gauge(metric_gauge(
+                    format!("{prefix}-metric-{metric_index}-gauge"),
+                    metric,
+                    ratio,
+                    &presentation.caption,
+                )))
+                .value_tone(metric_tone(metric.level));
+        } else if !metric.spark.is_empty() {
             item = item
                 .trailing(ListItemSlot::sparkline(metric_sparkline(
                     format!("{prefix}-metric-{metric_index}-sparkline"),
                     metric,
                 )))
                 .value_tone(metric_tone(metric.level));
+            if !presentation.caption.is_empty() {
+                item = item.value(presentation.caption);
+            }
+        } else if !presentation.caption.is_empty() {
+            item = item.value(presentation.caption);
         }
         if let Some(annotation) = &metric.annotation {
             item = item.detail(annotation.clone());
@@ -321,6 +332,11 @@ fn metric_sparkline(id: impl Into<String>, metric: &Metric) -> Sparkline {
             metric.spark.len()
         ),
     )
+}
+
+fn metric_gauge(id: impl Into<String>, metric: &Metric, ratio: f64, caption: &str) -> Gauge {
+    let label = display_metric_label(&metric.label);
+    Gauge::new(id, ratio, label.clone(), format!("{label}: {caption}")).caption(caption)
 }
 
 fn semantic_alerts(view: &View) -> Page {
@@ -489,7 +505,6 @@ pub fn draw_node(
         scrollbar_area,
         back_button,
         alert_option_hits,
-        ..RenderResult::default()
     }
 }
 
@@ -1221,6 +1236,16 @@ mod tests {
             .items
             .iter()
             .any(|item| item.label == "7-day limit"));
+        let quota = detail
+            .list()
+            .items
+            .iter()
+            .find_map(|item| match item.trailing.as_ref() {
+                Some(ListItemSlot::Gauge(gauge)) => Some(gauge),
+                _ => None,
+            })
+            .expect("bounded quota must enter the semantic tree as a Gauge");
+        assert_eq!(quota.value_label(), "97% left · Resets in 6d 18h");
         assert!(detail
             .list()
             .items
@@ -1856,10 +1881,11 @@ mod tests {
         let UiComponent::Page(page) = &node.element else {
             unreachable!()
         };
-        assert_eq!(
-            page.list().items[0].value.as_deref(),
-            Some("77% left · Resets in 5d 14h")
-        );
+        let Some(ListItemSlot::Gauge(gauge)) = page.list().items[0].trailing.as_ref() else {
+            panic!("bounded quota must publish a Gauge");
+        };
+        assert_eq!(gauge.ratio.value(), 0.77);
+        assert_eq!(gauge.value_label(), "77% left · Resets in 5d 14h");
 
         let mut terminal = Terminal::new(TestBackend::new(72, 7)).unwrap();
         terminal
@@ -1876,6 +1902,18 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(screen.contains("77% left · Resets in 5d 14h"), "{screen}");
+        let meter_row = (0..72)
+            .map(|x| &terminal.backend().buffer()[(x, 2)])
+            .collect::<Vec<_>>();
+        assert!(
+            meter_row.iter().any(|cell| {
+                cell.symbol() == "─" && cell.fg == ui::Palette::DARK.meter_blue
+            })
+                && meter_row.iter().any(|cell| {
+                    cell.symbol() == "─" && cell.fg == ui::Palette::DARK.muted
+                }),
+            "terminal must interpret the shared Gauge as distinct filled and remaining tracks\n{screen}"
+        );
         assert!(
             !screen.contains("23% left"),
             "renderer inverted the canonical value\n{screen}"

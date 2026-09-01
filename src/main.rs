@@ -32,9 +32,9 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Duration;
 use unpeel_app_kit::{
-    AppContext, AppMetadata, AppReporter, KeyboardEnhancementGuard, ListKeymap,
-    ListNavigationAction, PageBodySlot, ThemeMonitor, UiBridge, UiBridgeEvent, UiComponent,
-    UiDeltaOperation, UiEventKind, UiEventOutcome, UiEventValue, UiNode,
+    page_delta_operations, AppContext, AppMetadata, AppReporter, KeyboardEnhancementGuard,
+    ListKeymap, ListNavigationAction, ThemeMonitor, UiBridge, UiBridgeEvent, UiEventKind,
+    UiEventOutcome, UiEventValue, UiNode,
 };
 
 const UI_VIEW_ID: &str = "main";
@@ -268,10 +268,7 @@ impl App {
         let next_revision = revision
             .checked_add(1)
             .ok_or_else(|| io::Error::other("Usage UI revision space is exhausted"))?;
-        let operations = selection_only_delta(published, &next).map_or_else(
-            || vec![UiDeltaOperation::ReplaceRoot { root: next.clone() }],
-            |op| vec![op],
-        );
+        let operations = page_delta_operations(published, &next);
         bridge
             .publish_delta(UI_VIEW_ID, *revision, next_revision, operations)
             .map_err(ui_bridge_error)?;
@@ -842,43 +839,11 @@ fn semantic_action_is_declared(
             }))
 }
 
-fn selection_only_delta(previous: &UiNode, next: &UiNode) -> Option<UiDeltaOperation> {
-    if previous.id != next.id {
-        return None;
-    }
-    let (UiComponent::Page(previous_page), UiComponent::Page(next_page)) =
-        (&previous.element, &next.element)
-    else {
-        return None;
-    };
-    let previous_list = previous_page.list();
-    let next_list = next_page.list();
-    if previous_list.id != next_list.id || previous_list.selected_id == next_list.selected_id {
-        return None;
-    }
-    let mut previous_without_selection = previous_page.clone();
-    let mut next_without_selection = next_page.clone();
-    let PageBodySlot::List(previous_list) = &mut previous_without_selection.body else {
-        return None;
-    };
-    let PageBodySlot::List(next_list) = &mut next_without_selection.body else {
-        return None;
-    };
-    previous_list.selected_id = None;
-    next_list.selected_id = None;
-    (previous_without_selection == next_without_selection).then(|| {
-        UiDeltaOperation::list_set_selection(
-            next_page.list().id.clone(),
-            next_page.list().selected_id.clone(),
-        )
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::sources::{Provider, ProviderKind};
-    use unpeel_app_kit::{List, ListItem, Page};
+    use unpeel_app_kit::{List, ListItem, Page, UiDeltaOperation};
 
     fn limit_snapshot(level: Level, used: f64, annotation: Option<&str>) -> Snapshot {
         let mut metric =
@@ -1049,22 +1014,31 @@ mod tests {
                 ),
             )
         };
-        let operation = selection_only_delta(&node("provider-0"), &node("provider-1"));
+        let operations = page_delta_operations(&node("provider-0"), &node("provider-1"));
         assert!(matches!(
-            operation,
-            Some(UiDeltaOperation::ListSetSelection { list_id, selected_id })
+            operations.as_slice(),
+            [UiDeltaOperation::ListSetSelection { list_id, selected_id }]
                 if list_id == "usage-providers"
                     && selected_id.as_deref() == Some("provider-1")
         ));
 
-        let mut changed = node("provider-1");
-        let UiComponent::Page(page) = &mut changed.element else {
-            unreachable!()
-        };
-        let PageBodySlot::List(list) = &mut page.body else {
-            panic!("test Page must contain a List");
-        };
-        list.items[1].label = "Claude Code".to_string();
-        assert!(selection_only_delta(&node("provider-0"), &changed).is_none());
+        let changed = UiNode::page(
+            ui::SEMANTIC_ROOT_ID,
+            Page::new(
+                "Usage",
+                List::new(
+                    "usage-providers",
+                    vec![
+                        ListItem::new("provider-0", "Codex"),
+                        ListItem::new("provider-1", "Claude Code"),
+                    ],
+                )
+                .selected("provider-1", ui::SELECT_PROVIDER_ACTION),
+            ),
+        );
+        assert!(matches!(
+            page_delta_operations(&node("provider-0"), &changed).as_slice(),
+            [UiDeltaOperation::ReplaceRoot { .. }]
+        ));
     }
 }

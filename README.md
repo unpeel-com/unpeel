@@ -49,19 +49,22 @@ Press Enter to open the borderless detail view; a pinned, transparent `← Back`
 action appears at the top and Enter, Escape, or its full-width click target
 returns to the list.
 The detail screen is the same App Kit `Page` and `List` in every renderer.
-Quota direction and caption are computed once by the App (for example,
-`77% left · Resets in 5d 14h`), calendar-day activity is the shared semantic
-`Sparkline`, and Claude pace values retain their semantic blue / amber / red
-tones.
+Every bounded quota is a trailing semantic `Gauge`: its ratio, fill direction,
+tone, and caption are computed once by the App (for example, ratio `0.77` plus
+`77% left · Resets in 5d 14h`). Ratatui draws a compact line meter, SwiftUI a
+linear `ProgressView`, and web a native progress track. Calendar-day activity
+is the shared semantic `Sparkline`, and Claude pace values retain their
+semantic blue / amber / red tones.
 
 When a Host injects an App Kit UI endpoint, the App publishes that exact owned
 `Page` → `List` → `ListItem` tree. Ratatui, SwiftUI, and web show the same
 provider catalog, status, trailing summaries, row activation, detail rows,
-Back, Refresh, and real numeric Usage Trend series in the same order. Swift
-uses Charts, web uses dependency-free inline SVG, and Ratatui uses App Kit's
-terminal widgets with buffer-tested spacing and selection. Actions return to
-the Rust App, which remains the sole model owner and acknowledges each
-revision; no renderer invents display data or usage transforms.
+Back, Refresh, bounded Gauge meters, and real numeric Usage Trend series in the
+same order. Swift uses Charts/ProgressView, web uses SVG/native progress, and
+Ratatui uses App Kit's terminal widgets with buffer-tested spacing and
+selection. Actions return to the Rust App, which remains the sole model owner
+and acknowledges each revision; no renderer invents display data or usage
+transforms.
 
 The **Current project** row attributes local history to the Git project from
 which each agent session was launched. In Unpeel, every background refresh
