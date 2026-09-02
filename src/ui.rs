@@ -29,10 +29,15 @@ use unpeel_app_kit::SelectableRow;
 #[cfg(test)]
 use unpeel_app_kit::VerticalScrollbar;
 use unpeel_app_kit::{
-    Badge, FooterAction, Gauge, InputField, KitTheme, List, ListItem, ListItemEmphasis,
-    ListItemSlot, ListItemTone, ListPageBehavior, ListState, Page, PageTheme, Sparkline,
-    TerminalPointerState, Toggle, UiComponent, UiNode, SELECTABLE_LEFT_PADDING,
+    Badge, FooterAction, Gauge, InputField, KitTheme, List, ListItem, ListItemBand,
+    ListItemEmphasis, ListItemSlot, ListItemTone, ListPageBehavior, ListRowLayout, ListState, Page,
+    PageTheme, Sparkline, TerminalPointerState, Toggle, UiComponent, UiNode,
+    SELECTABLE_LEFT_PADDING,
 };
+
+/// Below this row width the terminal stacks a row's value beneath its label
+/// instead of truncating it on the right.
+const STACK_BELOW_WIDTH: u16 = 60;
 
 pub const SEMANTIC_ROOT_ID: &str = "usage-page";
 pub const OPEN_PROVIDER_ACTION: &str = "open-provider";
@@ -76,15 +81,25 @@ pub fn semantic_page(snapshot: Option<&Snapshot>, view: &View) -> Page {
         );
     }
 
-    let items = snapshot
-        .providers
-        .iter()
-        .enumerate()
-        .map(|(index, provider)| provider_list_item(provider, index, 96))
-        .collect::<Vec<_>>();
+    let mut items = Vec::with_capacity(snapshot.providers.len() + 1);
+    let mut aggregate_divider = false;
+    for (index, provider) in snapshot.providers.iter().enumerate() {
+        let aggregate = matches!(
+            provider.kind,
+            ProviderKind::CurrentProject | ProviderKind::Total
+        );
+        if aggregate && !aggregate_divider && index > 0 {
+            items.push(ListItem::divider("usage-providers-aggregate"));
+            aggregate_divider = true;
+        }
+        items.push(provider_list_item(provider, index, 96));
+    }
     let mut list = List::new("usage-providers", items)
         .empty_message("No local usage data")
-        .page_behavior(ListPageBehavior::Scroll);
+        .page_behavior(ListPageBehavior::Scroll)
+        .row_layout(ListRowLayout::Auto {
+            stack_below_width: STACK_BELOW_WIDTH,
+        });
     if snapshot.providers.get(view.selected).is_some() {
         list = list.selected(provider_node_id(view.selected), SELECT_PROVIDER_ACTION);
     }
@@ -144,7 +159,13 @@ fn semantic_provider_detail(
     let prefix = provider_node_id(index);
     let mut items = Vec::new();
     if let Some(alert) = &provider.alert {
-        items.push(ListItem::new(format!("{prefix}-alert"), "Alert").value(alert.clone()));
+        items.push(
+            ListItem::new(format!("{prefix}-alert"), "Alert")
+                .label_tone(ListItemTone::Danger)
+                .emphasis(ListItemEmphasis::Strong)
+                .value(alert.clone())
+                .value_tone(ListItemTone::Danger),
+        );
     }
     if !provider.present {
         items.push(ListItem::new(format!("{prefix}-status"), "Status").value("Not installed"));
@@ -161,6 +182,8 @@ fn semantic_provider_detail(
             display_metric_label(&metric.label),
         );
         if let Some(ratio) = presentation.ratio {
+            // The trailing slot is the native meter; the bottom band is the
+            // terminal's full-width interpretation of the same quota.
             item = item
                 .trailing(ListItemSlot::gauge(metric_gauge(
                     format!("{prefix}-metric-{metric_index}-gauge"),
@@ -168,6 +191,13 @@ fn semantic_provider_detail(
                     ratio,
                     &presentation.caption,
                 )))
+                .bottom(ListItemBand::gauge(metric_gauge(
+                    format!("{prefix}-metric-{metric_index}-meter"),
+                    metric,
+                    ratio,
+                    &presentation.caption,
+                )))
+                .value(presentation.caption.clone())
                 .value_tone(metric_tone(metric.level));
         } else if !metric.spark.is_empty() {
             item = item
@@ -175,12 +205,18 @@ fn semantic_provider_detail(
                     format!("{prefix}-metric-{metric_index}-sparkline"),
                     metric,
                 )))
+                .bottom(ListItemBand::sparkline(metric_sparkline(
+                    format!("{prefix}-metric-{metric_index}-history"),
+                    metric,
+                )))
                 .value_tone(metric_tone(metric.level));
             if !presentation.caption.is_empty() {
                 item = item.value(presentation.caption);
             }
         } else if !presentation.caption.is_empty() {
-            item = item.value(presentation.caption);
+            item = item
+                .value(presentation.caption)
+                .value_tone(metric_tone(metric.level));
         }
         if let Some(annotation) = &metric.annotation {
             item = item.detail(annotation.clone());
@@ -188,9 +224,14 @@ fn semantic_provider_detail(
         items.push(item);
     }
     if provider.kind == ProviderKind::Total {
-        for (project_index, (path, tokens)) in
-            current_project_rows(provider).into_iter().enumerate()
-        {
+        let projects = current_project_rows(provider);
+        if !projects.is_empty() {
+            items.push(ListItem::divider_labeled(
+                format!("{prefix}-section-projects"),
+                "Projects this month",
+            ));
+        }
+        for (project_index, (path, tokens)) in projects.into_iter().enumerate() {
             items.push(
                 ListItem::new(
                     format!("{prefix}-project-{project_index}"),
@@ -200,6 +241,12 @@ fn semantic_provider_detail(
                 .value(format_exact_tokens(tokens)),
             );
         }
+    }
+    if !provider.monthly_tokens.is_empty() {
+        items.push(ListItem::divider_labeled(
+            format!("{prefix}-section-history"),
+            "History",
+        ));
     }
     for (month_index, usage) in provider.monthly_tokens.iter().enumerate() {
         items.push(
@@ -213,6 +260,12 @@ fn semantic_provider_detail(
                 format_exact_tokens(usage.tokens)
             }),
         );
+    }
+    if !provider.detail.is_empty() || provider.as_of.is_some() {
+        items.push(ListItem::divider_labeled(
+            format!("{prefix}-section-details"),
+            "Details",
+        ));
     }
     for (detail_index, (key, value)) in provider.detail.iter().enumerate() {
         items.push(
@@ -237,9 +290,14 @@ fn semantic_provider_detail(
             display_badge(&provider.badge)
         )
     };
-    Page::new(title, List::new("usage-detail", items))
-        .back_action(CLOSE_PROVIDER_ACTION)
-        .footer_actions(usage_footer_actions(scanning, hosted))
+    Page::new(
+        title,
+        List::new("usage-detail", items).row_layout(ListRowLayout::Auto {
+            stack_below_width: STACK_BELOW_WIDTH,
+        }),
+    )
+    .back_action(CLOSE_PROVIDER_ACTION)
+    .footer_actions(usage_footer_actions(scanning, hosted))
 }
 
 fn usage_footer_actions(scanning: bool, hosted: bool) -> Vec<FooterAction> {
@@ -255,6 +313,7 @@ fn usage_footer_actions(scanning: bool, hosted: bool) -> Vec<FooterAction> {
             REFRESH_ACTION,
         )
         .accelerator("r")
+        .busy(scanning)
         .disabled(scanning),
     );
     actions
@@ -339,8 +398,7 @@ fn semantic_alerts(view: &View) -> Page {
             let enabled = view.alerts.enabled(option);
             ListItem::new(alert_node_id(index), option.label())
                 .detail(option.description())
-                .done(enabled)
-                .trailing(ListItemSlot::toggle(Toggle::new(
+                .trailing(ListItemSlot::toggle(Toggle::setting(
                     alert_toggle_id(index),
                     option.label(),
                     enabled,
@@ -384,6 +442,10 @@ pub struct View {
     /// refreshes and resize. Mouse/page scrolling disables this
     /// until selection changes again.
     pub reveal_selected: bool,
+    /// The detail Page's back row holds keyboard focus (Up from the top).
+    pub back_focused: bool,
+    /// Braille spinner frame for busy footer actions and rows.
+    pub spinner_frame: usize,
 }
 
 #[derive(Debug, Default)]
@@ -453,6 +515,8 @@ pub fn draw_node_with_pointer(
         .and_then(|selected| list.items.iter().position(|item| item.id == selected));
     let mut state = ListState::new(selected);
     state.set_pointer(pointer);
+    state.set_back_focused(view.back_focused && page.back.is_some());
+    state.set_spinner_frame(view.spinner_frame);
     state.set_offset(usize::from(view.scroll_offset), list.items.len());
     if view.reveal_selected {
         state.request_reveal();
@@ -465,25 +529,15 @@ pub fn draw_node_with_pointer(
     );
 
     let rows_area = state.rows_area();
-    let hits: Vec<Hit> = (0..usize::from(rows_area.height))
-        .filter_map(|row| {
-            let index = state.offset().saturating_add(row);
-            let item = list.items.get(index)?;
-            Hit::from_rect(
-                index,
-                item.id.clone(),
-                Rect::new(
-                    rows_area.x,
-                    rows_area
-                        .y
-                        .saturating_add(u16::try_from(row).unwrap_or(u16::MAX)),
-                    rows_area.width,
-                    1,
-                ),
-            )
-        })
+    let item_count = list.items.len();
+    // Rows may span several terminal lines; the kit reports each item's
+    // rectangle and dividers are never clickable.
+    let hits: Vec<Hit> = (state.offset()..item_count)
+        .map_while(|index| Some((index, state.item_area(index)?)))
+        .filter(|(index, _)| !list.items[*index].is_divider())
+        .filter_map(|(index, area)| Hit::from_rect(index, list.items[index].id.clone(), area))
         .collect();
-    let scrollbar_area = (list.items.len() > usize::from(rows_area.height)
+    let scrollbar_area = (state.content_rows(item_count) > usize::from(rows_area.height)
         && frame.area().width > 1)
         .then(|| Rect::new(rows_area.right(), rows_area.y, 1, rows_area.height));
     let back_button = page.back.as_ref().and_then(|_| {
@@ -502,8 +556,11 @@ pub fn draw_node_with_pointer(
     RenderResult {
         hits,
         scroll_offset: u16::try_from(state.offset()).unwrap_or(u16::MAX),
-        max_scroll: u16::try_from(state.max_offset(list.items.len())).unwrap_or(u16::MAX),
-        viewport_height: rows_area.height,
+        max_scroll: u16::try_from(state.max_offset(item_count)).unwrap_or(u16::MAX),
+        // Paging moves whole items, so report items rather than lines.
+        viewport_height: u16::try_from(state.visible_item_count(item_count))
+            .unwrap_or(u16::MAX)
+            .max(u16::from(rows_area.height > 0)),
         scrollbar_area,
         back_button,
         alert_option_hits,
@@ -545,11 +602,15 @@ fn provider_list_theme(palette: &ui::Palette) -> PageTheme {
         delete: Style::default().fg(palette.muted),
         empty: Style::default().fg(palette.muted),
         selected: selected_row_style(palette),
+        hovered: hovered_row_style(palette),
         selected_item: Style::default(),
         selected_detail: Style::default().add_modifier(Modifier::DIM),
         selected_value: Style::default().add_modifier(Modifier::DIM),
         selected_badge: Style::default().add_modifier(Modifier::DIM),
         navigation: Style::default().fg(palette.muted),
+        divider: Style::default()
+            .fg(palette.muted)
+            .add_modifier(Modifier::DIM),
         scrollbar_track,
         scrollbar_thumb,
         left_padding: SELECTABLE_LEFT_PADDING,
@@ -996,6 +1057,16 @@ fn format_exact_tokens(tokens: u64) -> String {
     output
 }
 
+fn hovered_row_style(palette: &ui::Palette) -> Style {
+    match palette.mode {
+        ui::ThemeMode::Dark => KitTheme::dark().hovered_row,
+        ui::ThemeMode::Light => KitTheme::light().hovered_row,
+        ui::ThemeMode::Adaptive => Style::default()
+            .add_modifier(Modifier::REVERSED)
+            .add_modifier(Modifier::DIM),
+    }
+}
+
 fn selected_row_style(palette: &ui::Palette) -> Style {
     match palette.mode {
         ui::ThemeMode::Dark => KitTheme::dark().selected_row,
@@ -1180,6 +1251,8 @@ mod tests {
             alert_dialog: None,
             scroll_offset,
             reveal_selected,
+            back_focused: false,
+            spinner_frame: 0,
         };
         let mut rendered = RenderResult::default();
         terminal
@@ -1211,6 +1284,8 @@ mod tests {
             alert_dialog: None,
             scroll_offset: 0,
             reveal_selected: true,
+            back_focused: false,
+            spinner_frame: 0,
         };
         let catalog = semantic_page(Some(&snapshot), &view);
         catalog.validate().unwrap();
@@ -1321,6 +1396,8 @@ mod tests {
             alert_dialog: Some(1),
             scroll_offset: 0,
             reveal_selected: true,
+            back_focused: false,
+            spinner_frame: 0,
         };
         let page = semantic_page(Some(&sample()), &view);
         page.validate().unwrap();
@@ -1354,6 +1431,8 @@ mod tests {
                     alert_dialog: None,
                     scroll_offset,
                     reveal_selected,
+                    back_focused: false,
+                    spinner_frame: 0,
                 };
                 let mut current = Terminal::new(TestBackend::new(width, height)).unwrap();
                 let mut legacy = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -1432,6 +1511,8 @@ mod tests {
                         alert_dialog: None,
                         scroll_offset: 0,
                         reveal_selected: true,
+                        back_focused: false,
+                        spinner_frame: 0,
                     },
                     &ui::Palette::DARK,
                 );
@@ -1500,6 +1581,8 @@ mod tests {
                         alert_dialog: None,
                         scroll_offset: 0,
                         reveal_selected: true,
+                        back_focused: false,
+                        spinner_frame: 0,
                     },
                     &ui::Palette::DARK,
                 );
@@ -1565,6 +1648,8 @@ mod tests {
                         alert_dialog: None,
                         scroll_offset: 0,
                         reveal_selected: true,
+                        back_focused: false,
+                        spinner_frame: 0,
                     },
                     &ui::Palette::DARK,
                 );
@@ -1678,6 +1763,8 @@ mod tests {
                 alert_dialog: None,
                 scroll_offset: 0,
                 reveal_selected: true,
+                back_focused: false,
+                spinner_frame: 0,
             },
         );
         assert!(page.list().items[1]
@@ -1754,6 +1841,8 @@ mod tests {
                         alert_dialog: None,
                         scroll_offset: 0,
                         reveal_selected: true,
+                        back_focused: false,
+                        spinner_frame: 0,
                     },
                     &ui::Palette::LIGHT,
                 );
@@ -1795,7 +1884,8 @@ mod tests {
     #[test]
     fn selected_rows_use_the_shared_light_and_dark_kit_backgrounds() {
         for palette in [ui::Palette::LIGHT, ui::Palette::DARK] {
-            let width = 40;
+            // Wide enough to stay inline; narrower panes stack rows.
+            let width = 72;
             let height = 8;
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             let snapshot = sample();
@@ -1808,6 +1898,8 @@ mod tests {
                 alert_dialog: None,
                 scroll_offset: 0,
                 reveal_selected: true,
+                back_focused: false,
+                spinner_frame: 0,
             };
             terminal
                 .draw(|frame| {
@@ -1879,6 +1971,8 @@ mod tests {
             alert_dialog: None,
             scroll_offset: 0,
             reveal_selected: true,
+            back_focused: false,
+            spinner_frame: 0,
         };
         let node = UiNode::page(SEMANTIC_ROOT_ID, semantic_page(Some(&snapshot), &view));
         let UiComponent::Page(page) = &node.element else {
@@ -1905,8 +1999,10 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(screen.contains("77% left · Resets in 5d 14h"), "{screen}");
+        // The quota row carries its caption as the value; the full-width
+        // meter band follows on the next terminal row.
         let meter_row = (0..72)
-            .map(|x| &terminal.backend().buffer()[(x, 2)])
+            .map(|x| &terminal.backend().buffer()[(x, 3)])
             .collect::<Vec<_>>();
         assert!(
             meter_row.iter().any(|cell| {
@@ -2102,6 +2198,8 @@ mod tests {
                         alert_dialog: Some(2),
                         scroll_offset: 0,
                         reveal_selected: true,
+                        back_focused: false,
+                        spinner_frame: 0,
                     },
                     &ui::Palette::DARK,
                 );
@@ -2122,7 +2220,7 @@ mod tests {
             "Close to a limit",
             "Limit reached",
             "Available again",
-            "[x]",
+            "(●)",
         ] {
             assert!(screen.contains(expected), "missing {expected:?}\n{screen}");
         }

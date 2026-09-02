@@ -222,6 +222,8 @@ struct App {
     max_scroll: u16,
     viewport_height: u16,
     reveal_selected: bool,
+    back_focused: bool,
+    spinner: unpeel_app_kit::Spinner,
     scanning: bool,
     hosted: bool,
     alert_dialog: Option<usize>,
@@ -246,6 +248,8 @@ impl App {
             alert_dialog: self.alert_dialog,
             scroll_offset: self.scroll_offset,
             reveal_selected: self.reveal_selected,
+            back_focused: self.back_focused,
+            spinner_frame: self.spinner.frame(),
         }
     }
 
@@ -450,20 +454,36 @@ impl App {
         self.detail_open = true;
         self.scroll_offset = 0;
         self.reveal_selected = false;
+        self.back_focused = false;
     }
 
     fn close_detail(&mut self) {
         self.detail_open = false;
         self.scroll_offset = 0;
         self.reveal_selected = true;
+        self.back_focused = false;
     }
 
     fn handle_list_navigation(&mut self, action: ListNavigationAction) {
         match (self.detail_open, action) {
+            // The back row is a focusable stop above the detail rows: Up at
+            // the top focuses it (gray), Down leaves it, Enter/Esc close.
+            (true, ListNavigationAction::Down) if self.back_focused => {
+                self.back_focused = false;
+            }
             (true, ListNavigationAction::Down) => self.scroll_down(1),
+            (true, ListNavigationAction::Up) if self.scroll_offset == 0 => {
+                self.back_focused = true;
+            }
             (true, ListNavigationAction::Up) => self.scroll_up(1),
-            (true, ListNavigationAction::First) => self.scroll_up(u16::MAX),
-            (true, ListNavigationAction::Last) => self.scroll_down(u16::MAX),
+            (true, ListNavigationAction::First) => {
+                self.scroll_up(u16::MAX);
+                self.back_focused = true;
+            }
+            (true, ListNavigationAction::Last) => {
+                self.back_focused = false;
+                self.scroll_down(u16::MAX);
+            }
             (
                 false,
                 action @ (ListNavigationAction::Down
@@ -478,6 +498,7 @@ impl App {
                 ));
             }
             (_, ListNavigationAction::PageDown) => {
+                self.back_focused = false;
                 self.scroll_down(self.viewport_height.saturating_sub(1).max(1));
             }
             (_, ListNavigationAction::PageUp) => {
@@ -599,6 +620,8 @@ fn run_tui(config: Config) -> io::Result<()> {
         max_scroll: 0,
         viewport_height: 0,
         reveal_selected: true,
+        back_focused: false,
+        spinner: unpeel_app_kit::Spinner::new(),
         scanning: true,
         hosted,
         alert_dialog: None,
@@ -673,6 +696,9 @@ fn run_tui(config: Config) -> io::Result<()> {
         let alert_option_hits = rendered.alert_option_hits;
         let footer_area = rendered.footer_area;
         if !event::poll(Duration::from_millis(100))? {
+            if app.scanning {
+                app.spinner.tick();
+            }
             if theme_monitor.refresh() {
                 app.palette
                     .apply_hosted_accent(theme_monitor.hosted_accent());
@@ -1083,9 +1109,23 @@ mod tests {
                 .selected("provider-1", ui::SELECT_PROVIDER_ACTION),
             ),
         );
-        assert!(matches!(
-            page_delta_operations(&node("provider-0"), &changed).as_slice(),
-            [UiDeltaOperation::ReplaceRoot { .. }]
-        ));
+        // Row changes travel as item operations plus the selection, never as
+        // a whole-root replacement.
+        let operations = page_delta_operations(&node("provider-0"), &changed);
+        assert!(
+            !matches!(
+                operations.as_slice(),
+                [UiDeltaOperation::ReplaceRoot { .. }]
+            ),
+            "{operations:?}"
+        );
+        assert!(
+            operations.iter().any(|operation| matches!(
+                operation,
+                UiDeltaOperation::ListSetSelection { selected_id, .. }
+                    if selected_id.as_deref() == Some("provider-1")
+            )),
+            "{operations:?}"
+        );
     }
 }
