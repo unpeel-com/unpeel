@@ -939,17 +939,26 @@ mod tests {
         assert_eq!(drags.regions().len(), 2);
         assert!(drags.regions()[0].path.ends_with("folder"));
         assert_eq!(terminal.backend().buffer()[(49, 0)].bg, Color::Reset);
+        // Filter, location title, padding row, then the selected first row.
+        assert_eq!(terminal.backend().buffer()[(49, 2)].bg, Color::Reset);
         assert_eq!(
-            terminal.backend().buffer()[(49, 2)].bg,
+            terminal.backend().buffer()[(49, 3)].bg,
             theme.selected_row.bg.unwrap()
         );
         assert_eq!(terminal.backend().buffer()[(49, 9)].bg, Color::Reset);
         let location = (0..50)
             .map(|x| terminal.backend().buffer()[(x, 1)].symbol())
             .collect::<String>();
-        assert!(
-            location.contains("  ."),
-            "project-root-relative path\n{location}"
+        let root_name = directory
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(
+            location.trim_end(),
+            format!("  {root_name}"),
+            "the root shows its folder name, not a lone dot"
         );
         assert!(
             !location.contains(directory.path().to_string_lossy().as_ref()),
@@ -1007,7 +1016,16 @@ mod tests {
         let unpeel_app_kit::UiComponent::Tree(tree) = node.element else {
             panic!("File Tree must publish the Tree component");
         };
-        assert_eq!(tree.location, ". · Error: Could not open entry");
+        let root_name = std::fs::canonicalize(directory.path())
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(
+            tree.location,
+            format!("{root_name} · Error: Could not open entry")
+        );
     }
 
     #[test]
