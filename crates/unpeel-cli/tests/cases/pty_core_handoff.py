@@ -381,7 +381,15 @@ def body(case):
         except (FileNotFoundError, ValueError):
             return None
 
-    # Default policy since 0.5.2 (no UNPEEL_PTY_CORE_TAKEOVER): the supervisor
+    def core_trace():
+        try:
+            with open(home.path("hooks", "trace.log"), errors="replace") as handle:
+                lines = [l.strip()[-150:] for l in handle if "PTY core" in l or "pty-core" in l]
+            return " || ".join(lines[-10:])
+        except FileNotFoundError:
+            return "(no trace)"
+
+        # Default policy since 0.5.2 (no UNPEEL_PTY_CORE_TAKEOVER): the supervisor
     # never takes an older-build core over in place. It keeps serving its
     # Sessions, new Sessions run one process each, and once it is empty it is
     # asked to exit so a current-build core starts.
@@ -434,7 +442,7 @@ def body(case):
     case.check(
         "once empty, the older core exits and a current-build core takes its place",
         wait_for(lambda: serve_json().get("ptyCore", {}).get("state") == "live" and record_pid() not in (None, drain_core.pid), timeout=45),
-        f"ptyCore={serve_json().get('ptyCore')} record_pid={record_pid()}",
+        f"ptyCore={serve_json().get('ptyCore')} record_pid={record_pid()} trace={core_trace()}",
     )
     try:
         drain_core.wait(timeout=20)
@@ -448,7 +456,7 @@ def body(case):
         "a Session created afterwards lands in the current-build core and runs",
         wait_for(lambda: screen(home, after_session).count("fresh-core-text") >= 2)
         and home.manifests().get(after_session, {}).get("host_pid") == record_pid(),
-        f"host_pid={home.manifests().get(after_session, {}).get('host_pid')} core={record_pid()}",
+        f"host_pid={home.manifests().get(after_session, {}).get('host_pid')} core={record_pid()} trace={core_trace()}",
     )
     # 0.5.2 regression guard for the load-storm P0: a Session that exits on a
     # core reached through the drain->fresh-core path must be REAPED — no
