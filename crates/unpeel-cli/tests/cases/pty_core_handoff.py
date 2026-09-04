@@ -16,9 +16,26 @@ import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from harness import BINARY, CRATES, run, run_cli, wait_running  # noqa: E402
+from harness import (  # noqa: E402
+    BINARY,
+    CRATES,
+    leftover_host_processes,
+    run,
+    run_cli,
+    wait_running,
+)
 
 HOST_BIN = os.path.join(CRATES, "target", "debug", "unpeel-host")
+
+
+def pid_is_zombie(pid):
+    """True while `pid` is an unreaped <defunct> child. A reaped child is
+    gone entirely (empty STAT); a leaked one shows STAT 'Z'."""
+    stat = subprocess.run(
+        ["ps", "-o", "stat=", "-p", str(pid)],
+        capture_output=True, text=True, check=False,
+    ).stdout.strip()
+    return "Z" in stat
 
 
 def core_request(home, request, timeout=12.0):
@@ -428,8 +445,27 @@ def body(case):
         and home.manifests().get(after_session, {}).get("host_pid") == record_pid(),
         f"host_pid={home.manifests().get(after_session, {}).get('host_pid')} core={record_pid()}",
     )
+    # 0.5.2 regression guard for the load-storm P0: a Session that exits on a
+    # core reached through the drain->fresh-core path must be REAPED — no
+    # <defunct> zombie child, no leftover per-process host. The wild failure
+    # was new spawns dying at exec and their shells never being waited on.
+    exiting_children = {
+        session_id: home.manifests()[session_id]["pid"]
+        for session_id in (fresh_session, after_session)
+    }
     for session_id in (fresh_session, after_session):
         run_cli(home, ["rm", session_id], timeout=45)
+    for session_id, child in exiting_children.items():
+        case.check(
+            f"{session_id[:8]} exit is reaped (no zombie child) after the drain",
+            wait_for(lambda child=child: not pid_is_zombie(child), timeout=15),
+            f"child {child} STAT still a zombie",
+        )
+    case.check(
+        "no leftover per-process host survives the drain-and-reap",
+        wait_for(lambda: not leftover_host_processes(home.root), timeout=15),
+        str(leftover_host_processes(home.root)),
+    )
     serve.close()
 
 
