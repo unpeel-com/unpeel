@@ -6931,8 +6931,11 @@ final class UnpeelStore: ObservableObject {
     // MARK: - Project folder colors
 
     func projectFolderColor(for projectID: String) -> ProjectFolderColor? {
+        // The Host's projection carries the color for every scope; this
+        // instance's own UserDefaults dictionary is only a `.local` fallback
+        // (a scoped workspace's ids must never pick up this home's colors).
         let raw = remoteProjectSummariesByID[projectID]?.colorID
-            ?? projectFolderColorIDs[projectID]
+            ?? (selectedHostScope == .local ? projectFolderColorIDs[projectID] : nil)
         guard let raw else { return nil }
         return ProjectFolderColor(rawValue: raw)
     }
@@ -11184,7 +11187,7 @@ final class UnpeelStore: ObservableObject {
     /// the git branch or move an existing checkout folder; live sessions and
     /// saved manifests continue to point at the same path.
     func promptRenameWorktreeProject(_ projectID: String) {
-        guard let project = projectsByID[projectID],
+        guard let project = displayProjectsByID[projectID] ?? projectsByID[projectID],
               project.parentProjectID != nil
         else { return }
         let branch = project.worktreeBranch
@@ -11210,8 +11213,39 @@ final class UnpeelStore: ObservableObject {
             // `tui-` ids) — the worktree path's native-record lookup would
             // silently drop the rename for those.
             renameGroupProject(projectID, to: field.stringValue)
+        } else if selectedHostScope.scopedLocalHome != nil {
+            renameScopedWorkspaceWorktreeProject(projectID, to: field.stringValue)
         } else {
             renameWorktreeProject(projectID, to: field.stringValue)
+        }
+    }
+
+    /// `.localWorkspace` worktree rename: the scoped home's own native
+    /// records and its `app-state.json` entry (the gateway reads only the
+    /// file), never this instance's. The git branch and checkout stay put,
+    /// exactly like the `.local` rename.
+    private func renameScopedWorkspaceWorktreeProject(_ projectID: String, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let project = displayProjectsByID[projectID],
+              project.parentProjectID != nil,
+              trimmed != project.name
+        else { return }
+        let defaults = scopedAppDefaults
+        var records = Self.loadNativeProjects(from: defaults)
+        if let index = records.firstIndex(where: { $0.id == projectID }) {
+            records[index].name = trimmed
+            if let data = try? JSONEncoder().encode(records) {
+                defaults.set(data, forKey: Self.nativeProjectsKey)
+            }
+        }
+        editScopedAppStateAnnouncing { object in
+            var projects = (object["projects"] as? [[String: Any]]) ?? []
+            guard let index = projects.firstIndex(where: {
+                ($0["id"] as? String) == projectID
+            }) else { return }
+            projects[index]["name"] = trimmed
+            object["projects"] = projects
         }
     }
 
@@ -11250,7 +11284,8 @@ final class UnpeelStore: ObservableObject {
     /// sessions — moving a session in is a `project-override.json` marker,
     /// never a manifest edit.
     func promptCreateGroup(projectID: String) {
-        guard let project = projectsByID[projectID] else { return }
+        guard let project = displayProjectsByID[projectID] ?? projectsByID[projectID]
+        else { return }
         let alert = NSAlert()
         alert.messageText = "New group"
         alert.informativeText = "Group sessions under a named folder in the sidebar. Sessions keep running where they are — this only organizes the list."
@@ -11263,6 +11298,10 @@ final class UnpeelStore: ObservableObject {
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
+        if selectedHostScope.scopedLocalHome != nil {
+            createScopedWorkspaceGroup(name: name, parent: project)
+            return
+        }
         var records = loadNativeProjects()
         records.append(NativeProjectRecord(
             id: "native-\(UUID().uuidString.lowercased())",
@@ -11277,6 +11316,42 @@ final class UnpeelStore: ObservableObject {
         }
         expandedProjectIDs.insert(projectID)
         rescan()
+    }
+
+    /// `.localWorkspace` New group: the child record lands in the SCOPED
+    /// workspace's own native suite and is mirrored into its `app-state.json`
+    /// under the shared lock (the gateway reads only the file), then the
+    /// re-bootstrap is nudged so the folder row appears in the scoped
+    /// sidebar. Same shape `mirrorProjectsToSharedState` writes for `.local`.
+    private func createScopedWorkspaceGroup(name: String, parent: Project) {
+        let record = NativeProjectRecord(
+            id: "native-\(UUID().uuidString.lowercased())",
+            name: name,
+            path: parent.path,
+            parentProjectID: parent.id,
+            isFolder: true
+        )
+        let defaults = scopedAppDefaults
+        var records = Self.loadNativeProjects(from: defaults)
+        records.append(record)
+        if let data = try? JSONEncoder().encode(records) {
+            defaults.set(data, forKey: Self.nativeProjectsKey)
+        }
+        editScopedAppStateAnnouncing { object in
+            var projects = (object["projects"] as? [[String: Any]]) ?? []
+            guard !projects.contains(where: { ($0["id"] as? String) == record.id }) else {
+                return
+            }
+            projects.append([
+                "id": record.id,
+                "name": record.name,
+                "path": record.path,
+                "parent_project_id": parent.id,
+                "is_folder": true,
+            ])
+            object["projects"] = projects
+        }
+        expandedProjectIDs.insert(parent.id)
     }
 
     /// Rename either a native-record group or a shared-file group. The latter
@@ -11332,6 +11407,9 @@ final class UnpeelStore: ObservableObject {
     /// Controller callers already confirmed and pass `confirm: false`.
     @discardableResult
     func removeGroupProject(_ projectID: String, confirm: Bool = true) -> Int? {
+        if selectedHostScope.scopedLocalHome != nil {
+            return removeScopedWorkspaceGroup(projectID, confirm: confirm)
+        }
         guard let project = projectsByID[projectID],
               let parentID = project.parentProjectID,
               project.acceptsSessionDrop
@@ -11374,6 +11452,44 @@ final class UnpeelStore: ObservableObject {
         }
         rescan()
         return archivedCount
+    }
+
+    /// `.localWorkspace` Remove group: the member Sessions ride the Host's
+    /// move/archive verbs (awaited in order, so the Host still knows the
+    /// group while it re-files them), then the organizational record leaves
+    /// the scoped home's own records and `app-state.json`. Returns the number
+    /// of members that will be archived (the count the confirm quoted).
+    private func removeScopedWorkspaceGroup(_ projectID: String, confirm: Bool) -> Int? {
+        guard let project = displayProjectsByID[projectID],
+              let parentID = project.parentProjectID,
+              project.acceptsSessionDrop
+        else { return nil }
+        let members = displaySessionsByID.values
+            .filter { $0.projectID == projectID }
+            .sorted { $0.id < $1.id }
+        if confirm && !members.isEmpty {
+            let count = members.count
+            let noun = count == 1 ? "session" : "sessions"
+            let parentName = displayProjectsByID[parentID]?.name ?? "the parent project"
+            let alert = NSAlert()
+            alert.messageText = "Remove group?"
+            alert.informativeText = "\(count) \(noun) will move under \(parentName). Resumable conversations will also be archived."
+            alert.addButton(withTitle: "Remove Group")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        }
+        let archivable = members.filter { sessionCanArchive($0.id) }.map(\.id)
+        let memberIDs = members.map(\.id)
+        performRemoteVerb("Couldn't remove the group") { [weak self] runtime in
+            for sessionID in memberIDs {
+                try await runtime.setSessionProject(sessionID, projectID: parentID)
+            }
+            for sessionID in archivable {
+                try await runtime.archiveSession(sessionID)
+            }
+            self?.removeScopedWorkspaceProject(projectID)
+        }
+        return archivable.count
     }
 
     /// Whether a session row in a DATE-SORTED list still participates in the
@@ -12775,10 +12891,13 @@ final class UnpeelStore: ObservableObject {
     /// work stays on the branch either way
     /// (handleRemoveProject, Sidebar.svelte:74-106).
     func removeWorktreeProject(_ projectID: String) {
-        guard let project = projectsByID[projectID],
+        let projects = displayProjectsByID
+        guard let project = projects[projectID] ?? projectsByID[projectID],
               let branch = project.worktreeBranch
         else { return }
-        let parentPath = project.parentProjectID.flatMap { projectsByID[$0]?.path }
+        let parentPath = project.parentProjectID.flatMap {
+            (projects[$0] ?? projectsByID[$0])?.path
+        }
 
         let alert = NSAlert()
         alert.messageText = "Remove worktree \"\(project.name)\"?"
