@@ -26,7 +26,7 @@ pub fn binary_path(home: &Path, app: &CatalogApp) -> PathBuf {
     install_dir(home).join(&app.binary)
 }
 
-fn release_target() -> Option<&'static str> {
+pub(crate) fn release_target() -> Option<&'static str> {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("macos", _) => Some("macos-universal"),
         ("linux", "x86_64") => Some("linux-x86_64"),

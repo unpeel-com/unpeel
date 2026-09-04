@@ -1,19 +1,29 @@
 //! `unpeel apps` — inspect and install official Host-side Unpeel Apps.
 
+use std::io::{self, IsTerminal, Write};
+
 use unpeel_core::{app_installer, apps_mcp};
 
 pub const HELP: &str = "\
 unpeel apps — Host-side Unpeel Apps
 
   unpeel apps list [--json]
-  unpeel apps install <app-id> [--check] [--json]
+  unpeel apps install <app-id> [--check] [--yes] [--json]
 
 Apps install under ~/.unpeel/apps/bin after the release tarball is verified
-against its mandatory SHA-256 sidecar. --check never downloads anything.";
+against its mandatory SHA-256 sidecar. --check never downloads anything.
+Interactive installs ask first; noninteractive installs require --yes.";
 
 pub fn run(args: &[String]) -> i32 {
     let json = args.iter().any(|arg| arg == "--json");
     let check = args.iter().any(|arg| arg == "--check");
+    let yes = args.iter().any(|arg| arg == "--yes");
+    if let Some(flag) = args.iter().find(|arg| {
+        arg.starts_with("--") && !matches!(arg.as_str(), "--json" | "--check" | "--yes")
+    }) {
+        eprintln!("unknown apps option {flag:?}\n\n{HELP}");
+        return 1;
+    }
     let positional: Vec<&str> = args
         .iter()
         .filter(|arg| !arg.starts_with("--"))
@@ -25,7 +35,7 @@ pub fn run(args: &[String]) -> i32 {
             0
         }
         ["list"] => list(json),
-        ["install", app_id] => install(app_id, check, json),
+        ["install", app_id] => install(app_id, check, yes, json),
         _ => {
             eprintln!("{HELP}");
             1
@@ -52,7 +62,7 @@ fn list(json: bool) -> i32 {
     0
 }
 
-fn install(app_id: &str, check: bool, json: bool) -> i32 {
+fn install(app_id: &str, check: bool, yes: bool, json: bool) -> i32 {
     let Some(app) = apps_mcp::catalog_app(app_id) else {
         eprintln!("unknown or unsupported App id {app_id:?}");
         return 1;
@@ -64,6 +74,19 @@ fn install(app_id: &str, check: bool, json: bool) -> i32 {
     } else if check {
         3
     } else {
+        if !yes {
+            match confirm_install(&app.name) {
+                Ok(true) => {}
+                Ok(false) => {
+                    eprintln!("Installation cancelled.");
+                    return 1;
+                }
+                Err(error) => {
+                    eprintln!("{error}");
+                    return 1;
+                }
+            }
+        }
         match app_installer::install(&home, &app.id) {
             Ok(path) => {
                 status.state = "ready".into();
@@ -93,4 +116,24 @@ fn install(app_id: &str, check: bool, json: bool) -> i32 {
         }
     }
     code
+}
+
+fn confirm_install(app_name: &str) -> Result<bool, String> {
+    if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
+        return Err(format!(
+            "Refusing to install {app_name} non-interactively. Ask the user to run this command in a terminal, or pass --yes from user-owned automation."
+        ));
+    }
+    eprint!("Install {app_name} in this workspace? [y/N] ");
+    io::stderr()
+        .flush()
+        .map_err(|error| format!("show install prompt: {error}"))?;
+    let mut answer = String::new();
+    io::stdin()
+        .read_line(&mut answer)
+        .map_err(|error| format!("read install answer: {error}"))?;
+    Ok(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }

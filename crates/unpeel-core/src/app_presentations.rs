@@ -769,6 +769,28 @@ pub fn ensure_existing_app_presentation(
     crate::app_state::edit(|root| ensure_in_root(root, request, now_ms, false))
 }
 
+/// Read the exact existing App instance an agent open would be allowed to
+/// attach to. This performs no state edit and is used before presenting an
+/// approval prompt.
+pub fn existing_app_instance(
+    request: &EnsureAppPresentation,
+) -> Result<Option<AppInstance>, String> {
+    validate_ensure(request)?;
+    let value = crate::app_state::load()?;
+    let root = value.as_object().ok_or("app-state.json is not an object")?;
+    let envelope = validated_envelope_from_root(root)?;
+    Ok(envelope
+        .instances
+        .iter()
+        .filter_map(parse_instance)
+        .map(|stored| stored.value)
+        .find(|instance| {
+            instance.app_id == request.app_id
+                && instance.project_id == request.project_id
+                && instance.resource == request.resource
+        }))
+}
+
 #[cfg(test)]
 fn ensure_app_presentation_at(
     path: &Path,
@@ -874,6 +896,21 @@ pub fn controller_app_presentations() -> Result<Vec<ControllerAppPresentation>, 
 /// reconcile one shape and one reveal-revision contract.
 pub fn controller_app_presentations_wire() -> Result<Value, String> {
     let bindings = controller_app_presentations()?;
+    Ok(controller_app_presentations_wire_from(
+        bindings,
+        |companion_session_id| {
+            crate::session_host::refresh_manifest_health(companion_session_id).is_some_and(
+                |manifest| manifest.state == crate::session_host::HostedSessionState::Running,
+            )
+        },
+    ))
+}
+
+fn controller_app_presentations_wire_from(
+    mut bindings: Vec<ControllerAppPresentation>,
+    is_running: impl Fn(&str) -> bool,
+) -> Value {
+    bindings.retain(|binding| is_running(&binding.companion_session_id));
     let mut instances = bindings
         .iter()
         .map(|binding| {
@@ -906,11 +943,11 @@ pub fn controller_app_presentations_wire() -> Result<Value, String> {
             })
         })
         .collect::<Vec<_>>();
-    Ok(serde_json::json!({
+    serde_json::json!({
         "version": APP_PRESENTATIONS_STATE_VERSION,
         "instances": instances,
         "presentations": presentations,
-    }))
+    })
 }
 
 fn controller_app_presentations_from_root(
@@ -1138,6 +1175,28 @@ mod tests {
             result.instance.companion_session_id
         );
         assert_eq!(controller[0].reveal_revision, 1);
+    }
+
+    #[test]
+    fn controller_wire_projects_only_running_companions() {
+        let binding = |suffix: &str| ControllerAppPresentation {
+            presentation_id: format!("presentation-{suffix}"),
+            caller_session_id: "caller".into(),
+            companion_session_id: format!("companion-{suffix}"),
+            instance_id: format!("instance-{suffix}"),
+            app_id: "unpeel.app.design".into(),
+            view_id: "canvas".into(),
+            target: AppPresentationTarget::Panel,
+            reveal_revision: 1,
+        };
+        let wire = controller_app_presentations_wire_from(
+            vec![binding("running"), binding("exited")],
+            |session_id| session_id == "companion-running",
+        );
+        assert_eq!(wire["instances"].as_array().unwrap().len(), 1);
+        assert_eq!(wire["presentations"].as_array().unwrap().len(), 1);
+        assert_eq!(wire["instances"][0]["id"], "instance-running");
+        assert_eq!(wire["presentations"][0]["id"], "presentation-running");
     }
 
     #[test]

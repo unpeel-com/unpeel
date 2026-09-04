@@ -282,6 +282,12 @@ shell-safe argument to the resolved App executable. Agent MCP opens retain the
 per-caller/App prompt for attaching/revealing an existing instance, while
 cmd-click is already a direct user action and may install then create it.
 
+That lifecycle boundary is enforced on the supported MCP adapter, not as an
+OS sandbox around arbitrary commands. A hosted process runs as the user's
+account and can invoke the ordinary `unpeel` CLI; noninteractive
+`unpeel apps install` requires an explicit `--yes`, but the cooperative-policy
+contract still depends on agents using the MCP surface for App actions.
+
 Presentation state is the versioned `app_presentations` envelope in
 `app-state.json`: App instances are project/resource identities; bindings pair
 one caller with a view/`panel` target and monotonic reveal revision. Agent MCP

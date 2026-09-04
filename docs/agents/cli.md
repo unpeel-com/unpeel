@@ -187,7 +187,7 @@ Linux/SSH Host:
 
 ```text
 unpeel apps list [--json]
-unpeel apps install <app-id> [--check] [--json]
+unpeel apps install <app-id> [--check] [--yes] [--json]
 unpeel open <path> [--with <app-id>] [--media-type <type>] [--json]
 unpeel open git:working-tree [--with diffs] [--json]
 unpeel open <resource-id> --kind <resource-kind> [--with <app-id>] [--json]
@@ -200,6 +200,9 @@ requires the release archive's `.sha256` sidecar, extracts only the declared
 binary, and atomically replaces it under a flock. `--check` reports exit 3
 when the App is absent and never downloads. Bootstrap publishes the catalog,
 installed subset, and typed opener map to capability-aware Controllers.
+Direct installs prompt on an interactive terminal. Noninteractive automation
+must pass `--yes`; without it the CLI fails closed. `--check` never prompts or
+downloads.
 
 `unpeel open` is the user-facing dispatcher. It normalizes the argument into
 a typed resource, resolves a workspace preference or the registry's

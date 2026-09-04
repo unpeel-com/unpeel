@@ -251,7 +251,16 @@ pub fn open_app(request: &OpenAppRequest, hook_port: Option<u16>) -> Result<Open
 /// Agent-owned entry: attach/reveal only a companion Session that a user
 /// already created through a Controller or the CLI. Unlike `open_app`, this
 /// path deliberately has no spawn/remove/restart branch.
-pub fn open_existing_app(request: &OpenAppRequest) -> Result<OpenAppResult, String> {
+fn prepare_existing_app(
+    request: &OpenAppRequest,
+) -> Result<
+    (
+        crate::apps_mcp::InstalledApp,
+        EnsureAppPresentation,
+        crate::app_presentations::AppInstance,
+    ),
+    String,
+> {
     let caller = session_host::load_manifest(&request.caller_session_id)
         .ok_or_else(|| format!("Unknown caller session id '{}'.", request.caller_session_id))?;
     if caller.state != HostedSessionState::Running {
@@ -275,15 +284,41 @@ pub fn open_existing_app(request: &OpenAppRequest) -> Result<OpenAppResult, Stri
         reveal: request.reveal,
         request_id: request.request_id.clone(),
     };
-    let presentation = crate::app_presentations::ensure_existing_app_presentation(&ensure)?;
-    if companion_manifest_state(&presentation.instance.companion_session_id)
-        != Some(HostedSessionState::Running)
+    let instance = crate::app_presentations::existing_app_instance(&ensure)?.ok_or_else(|| {
+        format!(
+            "No existing App instance matches '{}' in this project. Agents cannot create App Sessions; ask the user to open it first.",
+            ensure.app_id
+        )
+    })?;
+    if companion_manifest_state(&instance.companion_session_id) != Some(HostedSessionState::Running)
     {
         return Err(format!(
             "The existing {} companion is not running. Agents cannot create or restart App Sessions; ask the user to open it first.",
             app.name
         ));
     }
+    Ok((app, ensure, instance))
+}
+
+/// Validate that MCP open has a matching running, user-created instance.
+/// This is deliberately side-effect free so a missing target fails before an
+/// approval request is presented.
+pub fn validate_existing_app(request: &OpenAppRequest) -> Result<(), String> {
+    prepare_existing_app(request).map(|_| ())
+}
+
+pub fn open_existing_app(request: &OpenAppRequest) -> Result<OpenAppResult, String> {
+    let (app, ensure, instance) = prepare_existing_app(request)?;
+    let _lifecycle_lock =
+        crate::session_ops::lock_session_lifecycle(&instance.companion_session_id)?;
+    if companion_manifest_state(&instance.companion_session_id) != Some(HostedSessionState::Running)
+    {
+        return Err(format!(
+            "The existing {} companion is not running. Agents cannot create or restart App Sessions; ask the user to open it first.",
+            app.name
+        ));
+    }
+    let presentation = crate::app_presentations::ensure_existing_app_presentation(&ensure)?;
     Ok(OpenAppResult {
         app_id: app.id,
         app_name: app.name,

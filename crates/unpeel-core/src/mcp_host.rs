@@ -1137,9 +1137,12 @@ fn tool_apps_open(args: &Value) -> Result<String, String> {
         request_id: optional_trimmed_str(args, "request_id").map(str::to_string),
     };
 
-    // Launching an installed App is an effect distinct from terminal writes.
-    // Remember approval per caller/App pair before committing new Host state,
-    // so a decline cannot leave a phantom instance behind.
+    // A missing/stopped user-owned instance must fail before consuming the
+    // user's attention or recording an approval that cannot be used.
+    crate::app_open::validate_existing_app(&request)?;
+    // Revealing an installed App is an effect distinct from terminal writes.
+    // Remember approval per caller/App pair before committing the caller's
+    // presentation binding, so a decline cannot leave a phantom attachment.
     require_app_open_approval(&caller.session.id, &app.id, &app.name)?;
     // An approval answered after the client cancelled this call must not
     // still commit Host state or launch the companion.

@@ -555,9 +555,26 @@ pub fn opener_response(body: &Value) -> (u16, Value) {
 /// Shared Host semantics for `apps.install`. The id is resolved only through
 /// the embedded allowlist; no caller-provided download or path is accepted.
 pub fn app_install_response(body: &Value) -> (u16, Value) {
-    let Some(app_id) = body.get("appID").and_then(Value::as_str) else {
+    let Some(app_id) = body
+        .get("appID")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
         return (400, json!({ "error": "appID must be a string" }));
     };
+    if crate::apps_mcp::catalog_app(app_id).is_none() {
+        return (
+            404,
+            json!({ "error": format!("Unknown App id '{app_id}'.") }),
+        );
+    }
+    if crate::app_installer::release_target().is_none() {
+        return (
+            422,
+            json!({ "error": format!("Unpeel Apps publish no build for {}-{}", std::env::consts::OS, std::env::consts::ARCH) }),
+        );
+    }
     match crate::app_installer::install(&crate::app_paths::unpeel_home(), app_id) {
         Ok(path) => (200, json!({ "ok": true, "path": path })),
         Err(error) => (502, json!({ "error": error })),
@@ -3203,6 +3220,19 @@ mod tests {
         }));
         assert_eq!(typed["resource:git.working-tree"], "app:unpeel.app.diffs");
         assert!(typed.get("resource:folder").is_none());
+    }
+
+    #[test]
+    fn app_install_rejects_bad_controller_input_without_a_fetch() {
+        let (missing_status, _) = app_install_response(&json!({}));
+        assert_eq!(missing_status, 400);
+
+        let (unknown_status, unknown_body) =
+            app_install_response(&json!({ "appID": "unpeel.app.unknown" }));
+        assert_eq!(unknown_status, 404);
+        assert!(unknown_body["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("Unknown App id")));
     }
 
     /// Validation and no-op paths only — nothing here may touch shared
