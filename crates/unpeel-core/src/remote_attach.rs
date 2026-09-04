@@ -483,11 +483,19 @@ fn request(
 }
 
 fn tls_config(fingerprint: Option<String>) -> Result<rustls::ClientConfig, String> {
+    Ok(pinned_client_config(fingerprint))
+}
+
+/// A rustls client config that pins the Host certificate to `fingerprint`
+/// (lowercase hex SHA-256 of the leaf DER, the value pairing and bootstrap
+/// advertise) instead of a CA chain. `None` accepts any certificate: loopback
+/// tests and unpinned dev use only.
+pub fn pinned_client_config(fingerprint: Option<String>) -> rustls::ClientConfig {
     let verifier = Arc::new(FingerprintVerifier { fingerprint });
-    Ok(rustls::ClientConfig::builder()
+    rustls::ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(verifier)
-        .with_no_client_auth())
+        .with_no_client_auth()
 }
 
 /// Pins the server certificate to a SHA-256 fingerprint (the one the remote

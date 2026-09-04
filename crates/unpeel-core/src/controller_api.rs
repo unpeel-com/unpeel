@@ -1204,6 +1204,7 @@ fn bootstrap_body(context: &HostBootstrapContext) -> Value {
         "protocolVersion": 1,
         "hostProtocol": context.protocol,
         "capturedAtUnixMs": current_timestamp_ms(),
+        "serverVersion": env!("CARGO_PKG_VERSION"),
     });
     if let (Some(object), Some(snapshot)) = (envelope.as_object_mut(), context.snapshot.as_object())
     {
@@ -1213,6 +1214,10 @@ fn bootstrap_body(context: &HostBootstrapContext) -> Value {
         // Router-owned metadata wins over anything cached in the UI snapshot.
         object.insert("protocolVersion".into(), 1.into());
         object.insert("capturedAtUnixMs".into(), current_timestamp_ms().into());
+        // Additive: the Host's crate version. A Controller without the
+        // capability list falls back to `serverVersion >= 0.5.3` to decide
+        // that the direct `/mobile` endpoint is TLS.
+        object.insert("serverVersion".into(), env!("CARGO_PKG_VERSION").into());
         object.insert(
             "hostProtocol".into(),
             serde_json::to_value(&context.protocol).unwrap_or(Value::Null),

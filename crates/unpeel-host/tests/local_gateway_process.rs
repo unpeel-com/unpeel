@@ -129,6 +129,45 @@ fn recv_platform_callbacks(
     found
 }
 
+/// A bearer request over the worker's direct `/mobile` endpoint: TLS pinned
+/// to the workspace's Host certificate, the way a paired phone speaks to it.
+fn direct_tls_request(
+    home: &Path,
+    port: u16,
+    method: &str,
+    path: &str,
+    bearer: &str,
+    body: &[u8],
+) -> Vec<u8> {
+    use unpeel_core::rustls;
+    let fingerprint =
+        unpeel_core::remote_server::ensure_tls_material_in(&home.join("remote").join("tls"))
+            .expect("workspace Host certificate")
+            .fingerprint;
+    let config = Arc::new(unpeel_core::remote_attach::pinned_client_config(Some(
+        fingerprint,
+    )));
+    let name = rustls::pki_types::ServerName::try_from("localhost").unwrap();
+    let connection = rustls::ClientConnection::new(config, name).unwrap();
+    let tcp = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    tcp.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+    let mut stream = rustls::StreamOwned::new(connection, tcp);
+    write!(
+        stream,
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {bearer}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )
+    .unwrap();
+    stream.write_all(body).unwrap();
+    stream.flush().unwrap();
+    let mut response = Vec::new();
+    // The server closes without a TLS close_notify; keep what arrived.
+    let _ = stream.read_to_end(&mut response);
+    response
+}
+
+/// A cleartext request to the worker's loopback hook port (platform and App
+/// routes), which is not the paired-device transport.
 fn direct_mobile_request(
     port: u16,
     method: &str,
@@ -716,7 +755,8 @@ fn unified_worker_advertises_and_withdraws_connection_scoped_platform_adapter() 
     let request = recv_platform_callback(&captured_rx, "app.open-in-editor");
     assert!(request.contains("open-me.txt"));
 
-    let thumbnail = direct_mobile_request(
+    let thumbnail = direct_tls_request(
+        &fixture.host_home,
         direct_port,
         "GET",
         "/mobile/artifact?session_id=s1&kind=screenshots&name=shot.png&offset=0&limit=3&max_dim=128",
@@ -734,7 +774,8 @@ fn unified_worker_advertises_and_withdraws_connection_scoped_platform_adapter() 
     assert!(request.contains("\"max_dim\":\"128\""));
     #[cfg(target_os = "macos")]
     {
-        let direct_bootstrap = direct_mobile_request(
+        let direct_bootstrap = direct_tls_request(
+            &fixture.host_home,
             direct_port,
             "GET",
             "/mobile/bootstrap",
@@ -761,7 +802,8 @@ fn unified_worker_advertises_and_withdraws_connection_scoped_platform_adapter() 
             true
         );
     }
-    let direct_color = direct_mobile_request(
+    let direct_color = direct_tls_request(
+        &fixture.host_home,
         direct_port,
         "POST",
         "/mobile/project-organization",
@@ -777,7 +819,8 @@ fn unified_worker_advertises_and_withdraws_connection_scoped_platform_adapter() 
     assert!(request.contains("\"projectID\":\"p1\""));
     assert!(request.contains("\"colorID\":\"teal\""));
 
-    let push = direct_mobile_request(
+    let push = direct_tls_request(
+        &fixture.host_home,
         direct_port,
         "POST",
         "/mobile/push-token",
@@ -793,7 +836,8 @@ fn unified_worker_advertises_and_withdraws_connection_scoped_platform_adapter() 
     assert!(request.contains("\"operation\":\"push.register\""));
     assert!(request.contains("\"deviceID\":\"phone-process\""));
 
-    let relay = direct_mobile_request(
+    let relay = direct_tls_request(
+        &fixture.host_home,
         direct_port,
         "GET",
         "/mobile/relay-credentials",

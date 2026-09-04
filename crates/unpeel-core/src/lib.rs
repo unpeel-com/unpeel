@@ -91,6 +91,10 @@ pub mod relay_wire;
 pub mod remote_attach;
 #[cfg(feature = "native-host")]
 pub mod remote_server;
+/// The TLS stack behind the Host's pinned certificate. Re-exported so the
+/// serving crates and their tests use this one rustls, never a second copy.
+#[cfg(feature = "native-host")]
+pub use rustls;
 #[cfg(feature = "controller-core")]
 pub mod remote_session_backend;
 #[cfg(feature = "native-host")]

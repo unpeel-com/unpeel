@@ -10,7 +10,7 @@
 use serde::{Deserialize, Serialize};
 
 pub const HOST_PROTOCOL_MAJOR: u16 = 1;
-pub const HOST_PROTOCOL_MINOR: u16 = 14;
+pub const HOST_PROTOCOL_MINOR: u16 = 15;
 
 pub const NATIVE_HOST_CAPABILITIES: &[&str] = &[
     "approval.answer",
@@ -22,6 +22,7 @@ pub const NATIVE_HOST_CAPABILITIES: &[&str] = &[
     "artifact.upload",
     "artifact.upload.resumable",
     "host.bootstrap",
+    "host.mobile.tls",
     "pairing.create",
     "pairing.invitation",
     "project.organization.set",
@@ -62,6 +63,7 @@ pub const HEADLESS_HOST_CAPABILITIES: &[&str] = &[
     "artifact.request_screenshot",
     "artifact.upload.resumable",
     "host.bootstrap",
+    "host.mobile.tls",
     "pairing.create",
     "pairing.invitation",
     "project.organization.set",

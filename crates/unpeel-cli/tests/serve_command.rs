@@ -97,7 +97,49 @@ fn wait_until(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
     condition()
 }
 
-fn mobile_request(port: u16, token: &str) -> (u16, serde_json::Value) {
+/// The pin a paired phone holds: the Host certificate under this workspace's
+/// `remote/tls`. Generating it here first means serve loads this exact file.
+fn host_certificate_fingerprint(home: &Path) -> String {
+    unpeel_core::remote_server::ensure_tls_material_in(&home.join("remote").join("tls"))
+        .expect("workspace Host certificate")
+        .fingerprint
+}
+
+/// A bearer request over the direct `/mobile` endpoint: TLS, pinned to the
+/// Host certificate, the way the phone speaks to it.
+fn mobile_request(home: &Path, port: u16, token: &str) -> (u16, serde_json::Value) {
+    use unpeel_core::rustls;
+    let config = Arc::new(unpeel_core::remote_attach::pinned_client_config(Some(
+        host_certificate_fingerprint(home),
+    )));
+    let name = rustls::pki_types::ServerName::try_from("localhost").unwrap();
+    let connection = rustls::ClientConnection::new(config, name).unwrap();
+    let tcp = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    tcp.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let mut stream = rustls::StreamOwned::new(connection, tcp);
+    write!(
+        stream,
+        "GET /mobile/bootstrap HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    stream.flush().unwrap();
+    let mut raw = Vec::new();
+    // The server closes without a TLS close_notify; keep what arrived.
+    let _ = stream.read_to_end(&mut raw);
+    let response = String::from_utf8(raw).unwrap();
+    let (head, body) = response.split_once("\r\n\r\n").unwrap();
+    let status = head
+        .split_whitespace()
+        .nth(1)
+        .unwrap()
+        .parse::<u16>()
+        .unwrap();
+    let body = serde_json::from_str(body).unwrap();
+    (status, body)
+}
+
+/// The pre-TLS phone's request shape: cleartext HTTP with the bearer.
+fn plaintext_mobile_request(port: u16, token: &str) -> (u16, serde_json::Value) {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
@@ -117,8 +159,7 @@ fn mobile_request(port: u16, token: &str) -> (u16, serde_json::Value) {
         .unwrap()
         .parse::<u16>()
         .unwrap();
-    let body = serde_json::from_str(body).unwrap();
-    (status, body)
+    (status, serde_json::from_str(body).unwrap())
 }
 
 fn write_pairing_fixture(home: &Path, port: u16, token: &str) {
@@ -174,10 +215,33 @@ fn serve_runs_the_host_protocol_and_holds_one_workspace_lease() {
         "serve never published its Direct endpoint"
     );
 
-    let (status, bootstrap) = mobile_request(port, token);
+    let (status, bootstrap) = mobile_request(&home, port, token);
     assert_eq!(status, 200);
     assert_eq!(bootstrap["hostProtocol"]["majorVersion"], 1);
     assert!(bootstrap["hostProtocol"]["capabilities"].is_array());
+    assert!(
+        bootstrap["hostProtocol"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "host.mobile.tls"),
+        "bootstrap advertises the TLS direct endpoint: {bootstrap}"
+    );
+    assert_eq!(
+        bootstrap["serverVersion"],
+        env!("CARGO_PKG_VERSION"),
+        "bootstrap carries the Host version as the phone's fallback TLS signal"
+    );
+    assert_eq!(
+        bootstrap["remoteServerCertificateFingerprint"],
+        host_certificate_fingerprint(&home),
+        "bootstrap advertises the pinned Host certificate"
+    );
+
+    // The same paired token in the clear is refused before it is looked up.
+    let (status, body) = plaintext_mobile_request(port, token);
+    assert_eq!(status, 426, "{body}");
+    assert_eq!(body["error"], "use https");
 
     let duplicate = Command::new(env!("CARGO_BIN_EXE_unpeel"))
         .arg("serve")

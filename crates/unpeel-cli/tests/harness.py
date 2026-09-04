@@ -20,6 +20,8 @@ Three things here are load-bearing and easy to get wrong:
 
 import fcntl
 import glob
+import hashlib
+import http.client
 import json
 import os
 import pty
@@ -28,6 +30,7 @@ import select
 import shutil
 import signal
 import socket
+import ssl
 import struct
 import subprocess
 import sys
@@ -286,6 +289,11 @@ def leftover_host_processes(home_root):
     return leftovers
 
 
+# Every private home this process built, oldest first; `host_certificate_pin`
+# finds the Host certificate a running serve wrote under one of them.
+_HOMES = []
+
+
 class Home:
     """A private `~/.unpeel` built from scratch."""
 
@@ -293,6 +301,7 @@ class Home:
         self.root = root
         self._hosts = []
         self._socks = []
+        _HOMES.append(self)
         os.makedirs(root, exist_ok=True)
         os.makedirs(self.path("app-sessions"), exist_ok=True)
         os.makedirs(self.path("mobile"), exist_ok=True)
@@ -1205,7 +1214,66 @@ def mcp_post(port, route, body, token=None, timeout=25):
         return 0, {"error": str(error)}
 
 
-def mobile_request(port, path, token, method="GET", body=None, timeout=10, headers=None):
+def host_certificate_pin(home=None):
+    """Hex SHA-256 of the Host certificate a private home serves, or None.
+
+    A paired phone pins this fingerprint (never a CA chain) for the direct
+    `/mobile` endpoint and the WSS streamer alike, so the harness pins the
+    same way: a Host serving any other certificate fails here. With no
+    `home`, the newest private home holding a certificate is used."""
+    homes = [home] if home is not None else list(reversed(_HOMES))
+    for candidate in homes:
+        try:
+            with open(candidate.path("remote", "tls", "cert.pem")) as handle:
+                pem = handle.read()
+        except OSError:
+            continue
+        return hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem)).hexdigest()
+    return None
+
+
+def mobile_request(port, path, token, method="GET", body=None, timeout=10, headers=None,
+                   data=None, content_type="application/json", home=None):
+    """An authenticated `/mobile/*` call the way a paired phone makes it:
+    HTTPS on the direct port, pinned to the Host certificate. `body` is sent
+    as JSON; `data` sends raw bytes tagged `content_type`. Returns
+    `(status, json)`; a transport failure is `(0, {"error": ...})`."""
+    pin = host_certificate_pin(home)
+    if pin is None:
+        return 0, {"error": "no Host certificate under a private home yet"}
+    if data is not None:
+        payload = data
+    elif body is not None:
+        payload = json.dumps(body).encode()
+    else:
+        payload = None
+    request_headers = {"Authorization": f"Bearer {token}", "Content-Type": content_type}
+    request_headers.update(headers or {})
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE  # the fingerprint pin below is the trust decision
+    connection = http.client.HTTPSConnection("127.0.0.1", port, timeout=timeout, context=context)
+    try:
+        connection.connect()
+        served = hashlib.sha256(connection.sock.getpeercert(binary_form=True)).hexdigest()
+        if served != pin:
+            return 0, {"error": f"Host certificate pin mismatch: served {served}, pinned {pin}"}
+        connection.request(method, path, body=payload, headers=request_headers)
+        response = connection.getresponse()
+        raw = response.read()
+        try:
+            return response.status, json.loads(raw or b"{}")
+        except ValueError:
+            return response.status, {}
+    except Exception as error:  # noqa: BLE001 - surfaced as a failed check
+        return 0, {"error": str(error)}
+    finally:
+        connection.close()
+
+
+def plaintext_mobile_request(port, path, token, method="GET", body=None, timeout=10):
+    """The pre-TLS phone's request shape: cleartext HTTP carrying the bearer.
+    The Host must answer 426 without authenticating it."""
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}{path}",
         data=json.dumps(body).encode() if body is not None else None,
@@ -1213,8 +1281,6 @@ def mobile_request(port, path, token, method="GET", body=None, timeout=10, heade
     )
     request.add_header("Authorization", f"Bearer {token}")
     request.add_header("Content-Type", "application/json")
-    for name, value in (headers or {}).items():
-        request.add_header(name, value)
     try:
         response = urllib.request.urlopen(request, timeout=timeout)
         return response.status, json.loads(response.read() or b"{}")

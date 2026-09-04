@@ -232,6 +232,10 @@ struct ServeStatus<'a> {
     local_socket: &'a Path,
     #[serde(skip_serializing_if = "Option::is_none")]
     direct_port: Option<u16>,
+    /// Lowercase hex SHA-256 of the Host certificate the direct `/mobile`
+    /// listener serves (additive; the same pin as the WSS streamer).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    direct_certificate_fingerprint: Option<String>,
     link_running: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     terminal_streamer: Option<crate::remote_streamer::StreamerStatus>,
@@ -1869,6 +1873,10 @@ impl HostRuntime {
             hook_port: self.hook_port,
             local_socket: self.local_gateway.path(),
             direct_port: self.direct_port(),
+            direct_certificate_fingerprint: self
+                .mobile_server
+                .as_ref()
+                .map(|server| server.certificate_fingerprint.clone()),
             link_running: self.relay_uplink.is_some(),
             terminal_streamer: self
                 .mobile_server
@@ -2162,6 +2170,7 @@ mod tests {
             hook_port: 41000,
             local_socket: Path::new("/tmp/workspace/host.sock"),
             direct_port: Some(42000),
+            direct_certificate_fingerprint: Some("ab".repeat(32)),
             link_running: true,
             terminal_streamer: Some(crate::remote_streamer::StreamerStatus {
                 state: "live",
@@ -2211,6 +2220,7 @@ mod tests {
         assert_eq!(value["hookPort"], 41000);
         assert_eq!(value["localSocket"], "/tmp/workspace/host.sock");
         assert_eq!(value["directPort"], 42000);
+        assert_eq!(value["directCertificateFingerprint"], "ab".repeat(32));
         assert_eq!(value["linkRunning"], true);
     }
 }

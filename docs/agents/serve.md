@@ -104,6 +104,50 @@ toggle per-device Link allowance. The app never constructs
 `RelayUplinkManager` in this path. `unpeel-attach` remains the direct terminal
 data plane and the worker supervises exactly one `__remote__` TLS streamer.
 
+### Direct `/mobile` transport: TLS with the Host certificate
+
+The direct `/mobile` listener (`crates/unpeel-serve/src/mobile.rs`) binds all
+interfaces on the persisted phone port and serves HTTP/1.1 **over TLS** with
+the Host certificate — the same self-signed material under
+`<home>/remote/tls/` that the `__remote__` WSS streamer serves
+(`unpeel_core::remote_server::ensure_tls_material`). A Controller therefore
+holds one fingerprint pin for both transports: the sealed pairing response and
+`/mobile/bootstrap` carry it as `remoteServerCertificateFingerprint`
+(advertised whenever the direct listener has it, streamer alive or not),
+`serve.json.directCertificateFingerprint` publishes it for operators, and the
+bootstrap capability `host.mobile.tls` (`protocol/host-capabilities-v1.json`,
+protocol 1.15) tells a Controller the endpoint is TLS. Bootstrap and the
+sealed pairing response also carry the additive `serverVersion` (the Host's
+crate version, e.g. `"0.5.3"`), the phone's fallback signal when the
+capability list is unavailable (`serverVersion >= 0.5.3` means TLS), and the
+pairing response adds `directTLS: true`. Without loadable certificate
+material there is no listener (fail closed); a cleartext-only server would
+refuse every paired device anyway.
+
+One port carries both transports during the client transition. Each accepted
+socket is classified by peeking its first byte (`0x16` is a TLS ClientHello;
+`Transport::Tls` / `Transport::Plaintext`), and the plaintext gate runs before
+routing and before any token lookup: a cleartext request that presents an
+`Authorization` header is answered `426 Upgrade Required`
+(`Upgrade: TLS/1.3, HTTP/1.1`, `Connection: close`, body
+`{"error":"use https"}`) and the token is never hashed or compared. Plaintext
+may still reach `POST /mobile/pair`, whose exchange is sealed at the
+application layer, so the QR-code pairing client and `unpeel pair` work
+unchanged; every other plaintext request gets the 401/404 it always got. The
+advertised endpoint string stays `http://<lan>:<port>/mobile` for the shipped
+Controllers' parsers; a TLS-aware Controller connects HTTPS to that authority
+with its pin. Phones on builds that still speak cleartext fall back to the
+relay path, which is unaffected.
+
+Proofs: `mobile.rs` unit tests (first-byte classification, the gate's truth
+table, plaintext bearer → 426 end to end, TLS bearer past the gate, pairing on
+both transports, a wrong pin never completing the handshake), the process
+tests `serve_command.rs`, `remote_streamer_supervision_process.rs`, and
+`local_gateway_process.rs` (pinned TLS clients via
+`unpeel_core::remote_attach::pinned_client_config`), and the PTY matrix, whose
+`mobile_request` helper pins the private home's certificate the way a phone
+does (`crates/unpeel-cli/tests/harness.py`).
+
 ### Terminal streamer supervision
 
 The worker owns the `unpeel-host __remote__` TLS/WSS streamer's whole

@@ -1,28 +1,23 @@
 """Serve a paired phone with no desktop app in the Host tree: `unpeel serve`
 is the complete phone-facing Host."""
 
-import sys, os, base64, hashlib, json, time, urllib.error, urllib.parse, urllib.request
+import sys, os, base64, hashlib, json, time, urllib.parse
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from harness import run, mobile_request  # noqa: E402
+from harness import (  # noqa: E402
+    host_certificate_pin,
+    mobile_request,
+    plaintext_mobile_request,
+    run,
+)
 
 
 def mobile_binary_request(port, path, token, data, content_type, timeout=10):
-    request = urllib.request.Request(
-        f"http://127.0.0.1:{port}{path}", data=data, method="POST"
+    """A raw-bodied POST over the same pinned TLS transport as `mobile_request`."""
+    return mobile_request(
+        port, path, token, method="POST", timeout=timeout,
+        data=data, content_type=content_type,
     )
-    request.add_header("Authorization", f"Bearer {token}")
-    request.add_header("Content-Type", content_type)
-    try:
-        response = urllib.request.urlopen(request, timeout=timeout)
-        return response.status, json.loads(response.read() or b"{}")
-    except urllib.error.HTTPError as error:
-        try:
-            return error.code, json.loads(error.read() or b"{}")
-        except ValueError:
-            return error.code, {}
-    except Exception as error:  # noqa: BLE001 - surfaced as a failed check
-        return 0, {"error": str(error)}
 
 
 def body(case):
@@ -148,6 +143,25 @@ def body(case):
         str({k: boot.get(k) for k in ("macID", "protocolVersion")}),
     )
     host_capabilities = set(boot.get("hostProtocol", {}).get("capabilities", []))
+    case.check(
+        "the direct endpoint is TLS with the pinned Host certificate",
+        "host.mobile.tls" in host_capabilities
+        and boot.get("remoteServerCertificateFingerprint") == host_certificate_pin(home)
+        and driver.status().get("directCertificateFingerprint") == host_certificate_pin(home),
+        str((sorted(host_capabilities), boot.get("remoteServerCertificateFingerprint"),
+             driver.status().get("directCertificateFingerprint"))),
+    )
+    case.check(
+        "bootstrap carries the Host version as the phone's fallback TLS signal",
+        boot.get("serverVersion") == driver.status().get("hostVersion"),
+        str((boot.get("serverVersion"), driver.status().get("hostVersion"))),
+    )
+    plain_status, plain = plaintext_mobile_request(port, "/mobile/bootstrap", token)
+    case.check(
+        "a paired token in the clear is refused, never authenticated",
+        plain_status == 426 and plain.get("error") == "use https",
+        str((plain_status, plain)),
+    )
     case.check(
         "bootstrap advertises the implemented headless Host operations",
         {

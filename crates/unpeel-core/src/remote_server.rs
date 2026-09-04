@@ -185,11 +185,17 @@ pub struct TlsMaterial {
 }
 
 /// Load the persisted self-signed certificate, generating one on first use.
+///
+/// This is the one Host certificate every pinned transport serves — the
+/// `__remote__` WSS streamer and the direct `/mobile` listener — so a
+/// Controller keeps a single fingerprint pin for both.
 pub fn ensure_tls_material() -> Result<TlsMaterial, String> {
     ensure_tls_material_in(&tls_dir())
 }
 
-pub(crate) fn ensure_tls_material_in(dir: &std::path::Path) -> Result<TlsMaterial, String> {
+/// [`ensure_tls_material`] against an explicit directory (tests and tools
+/// that address a specific `UNPEEL_HOME`).
+pub fn ensure_tls_material_in(dir: &std::path::Path) -> Result<TlsMaterial, String> {
     let cert_path = dir.join("cert.pem");
     let key_path = dir.join("key.pem");
     if cert_path.exists() && key_path.exists() {
@@ -250,7 +256,8 @@ fn write_private(path: &std::path::Path, data: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-fn build_tls_config(material: TlsMaterial) -> Result<Arc<rustls::ServerConfig>, String> {
+/// A rustls server config that serves the Host certificate.
+pub fn build_tls_config(material: TlsMaterial) -> Result<Arc<rustls::ServerConfig>, String> {
     let config = rustls::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(material.certs, material.key)
