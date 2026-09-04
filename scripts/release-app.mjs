@@ -25,6 +25,11 @@ import { tmpdir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import {
+  assertPublishableAppReleaseSource,
+  readReleaseSourceState
+} from './release-source-state.mjs'
+
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 // Publishing coordinates live in scripts/r2.jsonc (see release-cli.mjs).
 const r2Config = readFileSync(resolve(repoRoot, 'scripts/r2.jsonc'), 'utf8')
@@ -37,7 +42,7 @@ for (let i = 2; i < argv.length; i += 1) {
   const arg = argv[i]
   if (!arg.startsWith('--')) throw new Error(`Unexpected argument: ${arg}`)
   const key = arg.slice(2)
-  if (key === 'dry-run' || key === 'skip-build') {
+  if (key === 'dry-run' || key === 'skip-build' || key === 'allow-dirty') {
     args[key] = true
   } else {
     args[key] = argv[++i]
@@ -61,6 +66,13 @@ if (!['alpha', 'beta', 'stable'].includes(channel)) {
 }
 const bucket = String(args.bucket ?? configBucket ?? 'unpeel-releases')
 const dryRun = Boolean(args['dry-run'])
+const allowDirty = Boolean(args['allow-dirty'])
+
+// Never upload protocol/app-registry.json (or any App artifact) from a dirty
+// or unaligned tree: a real publish reads the registry from the working tree,
+// so an uncommitted edit would ship silently. Same gate release-cli.mjs uses.
+const sourceState = readReleaseSourceState(repoRoot, { checkRemote: !dryRun })
+assertPublishableAppReleaseSource(sourceState, { dryRun, allowDirty })
 
 const manifest = readFileSync(resolve(designDir, 'Cargo.toml'), 'utf8')
 const version = String(

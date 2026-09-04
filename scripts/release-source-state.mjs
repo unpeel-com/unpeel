@@ -70,6 +70,16 @@ export function assertPublishableReleaseSource(state) {
   }
 }
 
+/// The App-publish gate: real App publishes must run from a clean, aligned
+/// main so `protocol/app-registry.json` is uploaded from a committed tree,
+/// never with uncommitted working-tree edits. `dryRun` skips the check
+/// (rehearsals are unaffected) and an explicit `allowDirty` is the deliberate
+/// local-run escape hatch; both are ignored for a real publish otherwise.
+export function assertPublishableAppReleaseSource(state, { dryRun = false, allowDirty = false } = {}) {
+  if (dryRun || allowDirty) return
+  assertPublishableReleaseSource(state)
+}
+
 export function cliBuildProvenance({ state, version, target }) {
   return {
     schema: 1,
