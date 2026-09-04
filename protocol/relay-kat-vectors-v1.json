@@ -1,0 +1,5 @@
+{
+  "_comment": "Cross-language known-answer vectors for the relay E2E crypto. Produced by both RelayCryptoVectorTests.swift (CryptoKit) and kat.test.mjs (WebCrypto) from identical fixed inputs; a match proves the Swift and JS implementations interoperate byte for byte. Regenerate on an intentional protocol change.",
+  "transcriptMAC": "+BBTo0DBUwkP829M9w6eviupf+3pv5XxzrtNnUeYNQc=",
+  "sealedFrame": "AAAAAAAAAAFXoFTergM+a27Rbw/LTzDUy/OhPJRbGDcDIEpfVPJbKdy1zzcoCQ=="
+}

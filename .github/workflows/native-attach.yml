@@ -1,0 +1,39 @@
+# unpeel-attach is the Controller-side terminal client (crates/unpeel-attach,
+# a standalone crate). Its live output follower uses kqueue on macOS and
+# epoll+inotify on Linux; linux-cli.yml covers the Linux arm, this job the
+# macOS arm the app bundles.
+name: Native attach
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/unpeel-attach/**'
+      - '.github/workflows/native-attach.yml'
+  pull_request:
+    paths:
+      - 'crates/unpeel-attach/**'
+      - '.github/workflows/native-attach.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  macos-attach:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install declared Rust MSRV
+        uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/unpeel-attach
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path crates/unpeel-attach/Cargo.toml -- --check
+      - name: Clippy (strict)
+        run: cargo clippy --manifest-path crates/unpeel-attach/Cargo.toml --all-targets --locked -- -D warnings
+      - name: Tests
+        run: cargo test --manifest-path crates/unpeel-attach/Cargo.toml --all-targets --locked

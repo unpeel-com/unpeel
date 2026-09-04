@@ -1,0 +1,51 @@
+Unpeel: smaller standard pages and no page preheat for the Host-side VT.
+
+Why: docs/plans/pty-core.md, 'Round 3, Lane 3'. Upstream's standard page is
+512 KiB and PageList.minMaxSize forces at least two pages, so any
+max_scrollback under 1 MiB is silently raised to 1 MiB; page_preheat = 4
+touches 8 x 16 KiB per terminal before a cell is written. Applied only when
+building the vendored libghostty-vt.a for unpeel-host (build.sh); the app's
+GhosttyKit build is untouched.
+
+diff --git a/src/terminal/PageList.zig b/src/terminal/PageList.zig
+index 7562286e8..d52688e74 100644
+--- a/src/terminal/PageList.zig
++++ b/src/terminal/PageList.zig
+@@ -31,7 +31,11 @@ const log = std.log.scoped(.page_list);
+ /// too small will cause the pool to have to allocate more memory later.
+ /// This should be set to some reasonable minimum that we expect a terminal
+ /// window to scroll into quickly.
+-const page_preheat = 4;
++///
++/// Unpeel: no preheat. Each preheated slot costs one resident OS page (the
++/// pool's free-list node) per screen before any output arrives; the Host
++/// runs hundreds of terminals and allocates pages on demand instead.
++const page_preheat = 0;
+ 
+ /// The list of pages in the screen. These are expected to be in order
+ /// where the first page is the topmost page (scrollback) and the last is
+diff --git a/src/terminal/page.zig b/src/terminal/page.zig
+index 0942e260c..6edba6827 100644
+--- a/src/terminal/page.zig
++++ b/src/terminal/page.zig
+@@ -1780,11 +1780,18 @@ pub const Page = struct {
+ /// The standard capacity is chosen as the fast-path for allocation since
+ /// pages of standard capacity use a pooled allocator instead of single-use
+ /// mmaps.
++///
++/// Unpeel: a much smaller standard page than upstream's 512 KiB one, so
++/// PageList.minMaxSize (two pages) stays inside the Host's 256 KiB
++/// scrollback budget and a filled 80x24 terminal stays under 400 KiB
++/// resident. Styles and grapheme bytes are sized for a terminal that is
++/// read by a Host, not rendered; pages that need more grow to non-standard
++/// capacity exactly as upstream does.
+ pub const std_capacity: Capacity = .{
+     .cols = 215,
+-    .rows = 215,
++    .rows = 32,
+     .styles = 128,
+-    .grapheme_bytes = if (builtin.is_test) 512 else 8192,
++    .grapheme_bytes = if (builtin.is_test) 512 else 2048,
+ };
+ 
+ /// The size of this page.

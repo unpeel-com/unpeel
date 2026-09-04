@@ -1,0 +1,1103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://unpeel.com/protocol/unpeel-ui-v1.schema.json",
+  "title": "Unpeel UI protocol v1 message",
+  "description": "One newline-delimited message exchanged by an Unpeel App and Host. Unknown properties are permitted and ignored as an additive-compatibility allowance; message, node, primitive, color, constraint, spacing, and event-value discriminators are closed for v1. An omitted optional field uses the default stated on its definition. Optional values accept either omission or explicit JSON null; canonical Rust output omits them. Revisions and event integers stay within JavaScript's exactly representable safe-integer range for future web renderers.",
+  "$ref": "#/$defs/message",
+  "$defs": {
+    "message": {
+      "oneOf": [
+        { "$ref": "#/$defs/clientHello" },
+        { "$ref": "#/$defs/hostHello" },
+        { "$ref": "#/$defs/snapshot" },
+        { "$ref": "#/$defs/event" }
+      ]
+    },
+    "protocolHeader": {
+      "type": "object",
+      "properties": {
+        "protocol": { "const": "unpeel.ui" },
+        "protocolVersion": { "const": 1 }
+      },
+      "required": ["protocol", "protocolVersion"],
+      "additionalProperties": true
+    },
+    "clientHello": {
+      "type": "object",
+      "allOf": [{ "$ref": "#/$defs/protocolHeader" }],
+      "properties": {
+        "type": { "const": "clientHello" },
+        "protocol": { "const": "unpeel.ui" },
+        "protocolVersion": { "const": 1 },
+        "app": { "$ref": "#/$defs/appMetadata" }
+      },
+      "required": ["type", "protocol", "protocolVersion", "app"],
+      "additionalProperties": true
+    },
+    "hostHello": {
+      "type": "object",
+      "allOf": [{ "$ref": "#/$defs/protocolHeader" }],
+      "properties": {
+        "type": { "const": "hostHello" },
+        "protocol": { "const": "unpeel.ui" },
+        "protocolVersion": { "const": 1 },
+        "renderMode": { "$ref": "#/$defs/renderMode" }
+      },
+      "required": ["type", "protocol", "protocolVersion", "renderMode"],
+      "additionalProperties": true
+    },
+    "snapshot": {
+      "type": "object",
+      "allOf": [{ "$ref": "#/$defs/protocolHeader" }],
+      "properties": {
+        "type": { "const": "snapshot" },
+        "protocol": { "const": "unpeel.ui" },
+        "protocolVersion": { "const": 1 },
+        "revision": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "root": { "$ref": "#/$defs/node" }
+      },
+      "required": ["type", "protocol", "protocolVersion", "revision", "root"],
+      "additionalProperties": true
+    },
+    "event": {
+      "type": "object",
+      "allOf": [{ "$ref": "#/$defs/protocolHeader" }],
+      "properties": {
+        "type": { "const": "event" },
+        "protocol": { "const": "unpeel.ui" },
+        "protocolVersion": { "const": 1 },
+        "revision": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "nodeId": { "$ref": "#/$defs/nonEmptyString" },
+        "action": { "$ref": "#/$defs/nonEmptyString" },
+        "kind": { "$ref": "#/$defs/eventKind" },
+        "value": { "$ref": "#/$defs/eventValue" }
+      },
+      "required": [
+        "type",
+        "protocol",
+        "protocolVersion",
+        "revision",
+        "nodeId",
+        "action",
+        "kind",
+        "value"
+      ],
+      "additionalProperties": true
+    },
+    "appMetadata": {
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/$defs/nonEmptyString" },
+        "name": { "$ref": "#/$defs/nonEmptyString" },
+        "version": { "$ref": "#/$defs/nonEmptyString" },
+        "description": {
+          "anyOf": [{ "type": "string" }, { "type": "null" }]
+        }
+      },
+      "required": ["id", "name", "version"],
+      "additionalProperties": true
+    },
+    "renderMode": {
+      "enum": ["terminal", "structured"]
+    },
+    "eventKind": {
+      "enum": ["activate", "select", "change", "submit", "cancel"]
+    },
+    "eventValue": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": { "type": { "const": "none" } },
+          "required": ["type"],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "bool" },
+            "value": { "type": "boolean" }
+          },
+          "required": ["type", "value"],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "index" },
+            "value": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+          },
+          "required": ["type", "value"],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "integer" },
+            "value": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": ["type", "value"],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "number" },
+            "value": { "type": "number" }
+          },
+          "required": ["type", "value"],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "text" },
+            "value": { "type": "string" }
+          },
+          "required": ["type", "value"],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "textList" },
+            "value": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          },
+          "required": ["type", "value"],
+          "additionalProperties": true
+        }
+      ]
+    },
+    "node": {
+      "oneOf": [
+        { "$ref": "#/$defs/layoutNode" },
+        { "$ref": "#/$defs/paragraphNode" },
+        { "$ref": "#/$defs/tabsNode" },
+        { "$ref": "#/$defs/listNode" },
+        { "$ref": "#/$defs/tableNode" },
+        { "$ref": "#/$defs/canvasNode" }
+      ]
+    },
+    "nodeIdentity": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "anyOf": [{ "$ref": "#/$defs/nonEmptyString" }, { "type": "null" }]
+        }
+      },
+      "additionalProperties": true
+    },
+    "layoutNode": {
+      "type": "object",
+      "description": "Omitted margin is zero on every edge, flex is start, spacing is space(0), children is empty, and onReorder means none.",
+      "allOf": [
+        { "$ref": "#/$defs/nodeIdentity" },
+        {
+          "if": {
+            "properties": { "onReorder": { "$ref": "#/$defs/nonEmptyString" } },
+            "required": ["onReorder"]
+          },
+          "then": {
+            "properties": {
+              "id": { "$ref": "#/$defs/nonEmptyString" },
+              "children": {
+                "type": "array",
+                "items": {
+                  "allOf": [{ "$ref": "#/$defs/node" }],
+                  "properties": { "id": { "$ref": "#/$defs/nonEmptyString" } },
+                  "required": ["id"]
+                }
+              }
+            },
+            "required": ["id"]
+          }
+        }
+      ],
+      "properties": {
+        "id": {
+          "anyOf": [{ "$ref": "#/$defs/nonEmptyString" }, { "type": "null" }]
+        },
+        "type": { "const": "layout" },
+        "direction": { "$ref": "#/$defs/direction" },
+        "constraints": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/constraint" }
+        },
+        "margin": { "$ref": "#/$defs/padding", "default": { "left": 0, "right": 0, "top": 0, "bottom": 0 } },
+        "flex": { "$ref": "#/$defs/flex", "default": "start" },
+        "spacing": { "$ref": "#/$defs/spacing", "default": { "type": "space", "value": 0 } },
+        "children": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/node" },
+          "default": []
+        },
+        "onReorder": {
+          "anyOf": [{ "$ref": "#/$defs/nonEmptyString" }, { "type": "null" }]
+        }
+      },
+      "required": ["type", "direction", "constraints"],
+      "additionalProperties": true
+    },
+    "paragraphNode": {
+      "type": "object",
+      "description": "Omitted block and wrap mean none; style is empty, scroll is [0, 0], and alignment is left.",
+      "allOf": [{ "$ref": "#/$defs/nodeIdentity" }],
+      "properties": {
+        "id": {
+          "anyOf": [{ "$ref": "#/$defs/nonEmptyString" }, { "type": "null" }]
+        },
+        "type": { "const": "paragraph" },
+        "block": {
+          "anyOf": [{ "$ref": "#/$defs/block" }, { "type": "null" }]
+        },
+        "style": { "$ref": "#/$defs/style", "default": {} },
+        "wrap": {
+          "anyOf": [{ "$ref": "#/$defs/wrap" }, { "type": "null" }]
+        },
+        "text": { "$ref": "#/$defs/text" },
+        "scroll": {
+          "type": "array",
+          "prefixItems": [
+            { "type": "integer", "minimum": 0, "maximum": 65535 },
+            { "type": "integer", "minimum": 0, "maximum": 65535 }
+          ],
+          "minItems": 2,
+          "maxItems": 2,
+          "default": [0, 0]
+        },
+        "alignment": { "$ref": "#/$defs/alignment", "default": "left" }
+      },
+      "required": ["type", "text"],
+      "additionalProperties": true
+    },
+    "tabsNode": {
+      "type": "object",
+      "description": "Omitted titles and tabIds are empty; selected, block, onSelect, and onReorder mean none; style and highlightStyle are empty. divider, paddingLeft, and paddingRight are explicit wire values.",
+      "allOf": [
+        { "$ref": "#/$defs/nodeIdentity" },
+        {
+          "if": {
+            "properties": { "onSelect": { "$ref": "#/$defs/nonEmptyString" } },
+            "required": ["onSelect"]
+          },
+          "then": {
+            "properties": { "id": { "$ref": "#/$defs/nonEmptyString" } },
+            "required": ["id"]
+          }
+        },
+        {
+          "if": {
+            "properties": { "onReorder": { "$ref": "#/$defs/nonEmptyString" } },
+            "required": ["onReorder"]
+          },
+          "then": {
+            "properties": { "id": { "$ref": "#/$defs/nonEmptyString" } },
+            "required": ["id"]
+          }
+        }
+      ],
+      "properties": {
+        "id": {
+          "anyOf": [{ "$ref": "#/$defs/nonEmptyString" }, { "type": "null" }]
+        },
+        "type": { "const": "tabs" },
+        "block": {
+          "anyOf": [{ "$ref": "#/$defs/block" }, { "type": "null" }]
+        },
+        "titles": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/line" },
+          "default": []
+        },
+        "tabIds": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/nonEmptyString" },
+          "uniqueItems": true,
+          "default": []
+        },
+        "selected": {
+          "anyOf": [
+            { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+            { "type": "null" }
+          ]
+        },
+        "style": { "$ref": "#/$defs/style", "default": {} },
+        "highlightStyle": { "$ref": "#/$defs/style", "default": {} },
+        "divider": { "$ref": "#/$defs/span" },
+        "paddingLeft": { "$ref": "#/$defs/line" },
+        "paddingRight": { "$ref": "#/$defs/line" },
+        "onSelect": {
+          "anyOf": [{ "$ref": "#/$defs/nonEmptyString" }, { "type": "null" }]
+        },
+        "onReorder": {
+          "anyOf": [{ "$ref": "#/$defs/nonEmptyString" }, { "type": "null" }]
+        }
+      },
+      "required": ["type", "divider", "paddingLeft", "paddingRight"],
+      "additionalProperties": true
+    },
+    "listNode": {
+      "type": "object",
+      "description": "Owned Ratatui List plus inline selection state and a semantic reorder action. Omitted items is empty; selected, block, highlightSymbol, and onReorder mean none; styles are empty, direction is topToBottom, offset and scrollPadding are zero, repeatHighlightSymbol is false, and highlightSpacing is whenSelected.",
+      "allOf": [
+        { "$ref": "#/$defs/nodeIdentity" },
+        {
+          "if": {
+            "properties": { "onReorder": { "$ref": "#/$defs/nonEmptyString" } },
+            "required": ["onReorder"]
+          },
+          "then": {
+            "properties": {
+              "id": { "$ref": "#/$defs/nonEmptyString" },
+              "items": {
+                "type": "array",
+                "items": {
+                  "allOf": [{ "$ref": "#/$defs/listItem" }],
+                  "properties": { "id": { "$ref": "#/$defs/nonEmptyString" } },
+                  "required": ["id"]
+                }
+              }
+            },
+            "required": ["id"]
+          }
+        }
+      ],
+      "properties": {
+        "id": {
+          "anyOf": [{ "$ref": "#/$defs/nonEmptyString" }, { "type": "null" }]
+        },
+        "type": { "const": "list" },
+        "block": {
+          "anyOf": [{ "$ref": "#/$defs/block" }, { "type": "null" }]
+        },
+        "items": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/listItem" },
+          "default": []
+        },
+        "style": { "$ref": "#/$defs/style", "default": {} },
+        "direction": { "$ref": "#/$defs/listDirection", "default": "topToBottom" },
+        "selected": {
+          "anyOf": [
+            { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+            { "type": "null" }
+          ]
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "default": 0
+        },
+        "highlightStyle": { "$ref": "#/$defs/style", "default": {} },
+        "highlightSymbol": {
+          "anyOf": [{ "type": "string" }, { "type": "null" }]
+        },
+        "repeatHighlightSymbol": { "type": "boolean", "default": false },
+        "highlightSpacing": {
+          "$ref": "#/$defs/highlightSpacing",
+          "default": "whenSelected"
+        },
+        "scrollPadding": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "default": 0
+        },
+        "onReorder": {
+          "anyOf": [{ "$ref": "#/$defs/nonEmptyString" }, { "type": "null" }]
+        }
+      },
+      "required": ["type"],
+      "additionalProperties": true
+    },
+    "listItem": {
+      "type": "object",
+      "description": "A List item. id is scoped to its collection and is required by runtime validation when reorder is enabled.",
+      "properties": {
+        "id": {
+          "anyOf": [{ "$ref": "#/$defs/nonEmptyString" }, { "type": "null" }]
+        },
+        "content": { "$ref": "#/$defs/text" },
+        "style": { "$ref": "#/$defs/style", "default": {} }
+      },
+      "required": ["content"],
+      "additionalProperties": true
+    },
+    "tableNode": {
+      "type": "object",
+      "description": "Owned Ratatui Table plus inline row/column selection state and semantic reorder actions. Omitted rows, widths, and columnIds are empty; header, footer, block, selections, and reorder actions mean none. columnSpacing is one, offset is zero, highlightSpacing is whenSelected, flex is start, and styles and highlightSymbol are empty.",
+      "allOf": [
+        { "$ref": "#/$defs/nodeIdentity" },
+        {
+          "if": {
+            "anyOf": [
+              {
+                "properties": { "onReorderRows": { "$ref": "#/$defs/nonEmptyString" } },
+                "required": ["onReorderRows"]
+              },
+              {
+                "properties": { "onReorderColumns": { "$ref": "#/$defs/nonEmptyString" } },
+                "required": ["onReorderColumns"]
+              }
+            ]
+          },
+          "then": {
+            "properties": { "id": { "$ref": "#/$defs/nonEmptyString" } },
+            "required": ["id"]
+          }
+        },
+        {
+          "if": {
+            "properties": { "onReorderRows": { "$ref": "#/$defs/nonEmptyString" } },
+            "required": ["onReorderRows"]
+          },
+          "then": {
+            "properties": {
+              "rows": {
+                "type": "array",
+                "items": {
+                  "allOf": [{ "$ref": "#/$defs/tableRow" }],
+                  "properties": { "id": { "$ref": "#/$defs/nonEmptyString" } },
+                  "required": ["id"]
+                }
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "id": {
+          "anyOf": [{ "$ref": "#/$defs/nonEmptyString" }, { "type": "null" }]
+        },
+        "type": { "const": "table" },
+        "rows": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/tableRow" },
+          "default": []
+        },
+        "header": {
+          "anyOf": [{ "$ref": "#/$defs/tableRow" }, { "type": "null" }]
+        },
+        "footer": {
+          "anyOf": [{ "$ref": "#/$defs/tableRow" }, { "type": "null" }]
+        },
+        "widths": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/constraint" },
+          "default": []
+        },
+        "columnIds": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/nonEmptyString" },
+          "uniqueItems": true,
+          "default": []
+        },
+        "columnSpacing": { "$ref": "#/$defs/u16", "default": 1 },
+        "block": {
+          "anyOf": [{ "$ref": "#/$defs/block" }, { "type": "null" }]
+        },
+        "style": { "$ref": "#/$defs/style", "default": {} },
+        "rowHighlightStyle": { "$ref": "#/$defs/style", "default": {} },
+        "columnHighlightStyle": { "$ref": "#/$defs/style", "default": {} },
+        "cellHighlightStyle": { "$ref": "#/$defs/style", "default": {} },
+        "highlightSymbol": { "$ref": "#/$defs/text", "default": {} },
+        "highlightSpacing": {
+          "$ref": "#/$defs/highlightSpacing",
+          "default": "whenSelected"
+        },
+        "flex": { "$ref": "#/$defs/flex", "default": "start" },
+        "selected": {
+          "anyOf": [
+            { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+            { "type": "null" }
+          ]
+        },
+        "selectedColumn": {
+          "anyOf": [
+            { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+            { "type": "null" }
+          ]
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "default": 0
+        },
+        "onReorderRows": {
+          "anyOf": [{ "$ref": "#/$defs/nonEmptyString" }, { "type": "null" }]
+        },
+        "onReorderColumns": {
+          "anyOf": [{ "$ref": "#/$defs/nonEmptyString" }, { "type": "null" }]
+        }
+      },
+      "required": ["type"],
+      "additionalProperties": true
+    },
+    "tableRow": {
+      "type": "object",
+      "description": "A Table row. id is scoped to the body-row collection and is required by runtime validation when row reorder is enabled.",
+      "properties": {
+        "id": {
+          "anyOf": [{ "$ref": "#/$defs/nonEmptyString" }, { "type": "null" }]
+        },
+        "cells": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/tableCell" },
+          "default": []
+        },
+        "height": { "$ref": "#/$defs/u16", "default": 1 },
+        "topMargin": { "$ref": "#/$defs/u16", "default": 0 },
+        "bottomMargin": { "$ref": "#/$defs/u16", "default": 0 },
+        "style": { "$ref": "#/$defs/style", "default": {} }
+      },
+      "additionalProperties": true
+    },
+    "tableCell": {
+      "type": "object",
+      "properties": {
+        "content": { "$ref": "#/$defs/text" },
+        "style": { "$ref": "#/$defs/style", "default": {} }
+      },
+      "required": ["content"],
+      "additionalProperties": true
+    },
+    "listDirection": {
+      "enum": ["topToBottom", "bottomToTop"]
+    },
+    "highlightSpacing": {
+      "enum": ["always", "whenSelected", "never"]
+    },
+    "canvasNode": {
+      "type": "object",
+      "description": "Omitted block means none; backgroundColor is reset, marker is braille, and layers and labels are empty.",
+      "allOf": [{ "$ref": "#/$defs/nodeIdentity" }],
+      "properties": {
+        "id": {
+          "anyOf": [{ "$ref": "#/$defs/nonEmptyString" }, { "type": "null" }]
+        },
+        "type": { "const": "canvas" },
+        "block": {
+          "anyOf": [{ "$ref": "#/$defs/block" }, { "type": "null" }]
+        },
+        "xBounds": { "$ref": "#/$defs/bounds" },
+        "yBounds": { "$ref": "#/$defs/bounds" },
+        "backgroundColor": { "$ref": "#/$defs/color", "default": { "type": "reset" } },
+        "marker": { "$ref": "#/$defs/marker", "default": "braille" },
+        "layers": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/canvasLayer" },
+          "default": []
+        },
+        "labels": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/label" },
+          "default": []
+        }
+      },
+      "required": ["type", "xBounds", "yBounds"],
+      "additionalProperties": true
+    },
+    "direction": {
+      "enum": ["horizontal", "vertical"]
+    },
+    "flex": {
+      "enum": [
+        "legacy",
+        "start",
+        "end",
+        "center",
+        "spaceBetween",
+        "spaceAround"
+      ]
+    },
+    "constraint": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "min" },
+            "value": { "$ref": "#/$defs/u16" }
+          },
+          "required": ["type", "value"],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "max" },
+            "value": { "$ref": "#/$defs/u16" }
+          },
+          "required": ["type", "value"],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "length" },
+            "value": { "$ref": "#/$defs/u16" }
+          },
+          "required": ["type", "value"],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "percentage" },
+            "value": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            }
+          },
+          "required": ["type", "value"],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "ratio" },
+            "value": {
+              "type": "array",
+              "prefixItems": [
+                { "$ref": "#/$defs/u32" },
+                { "type": "integer", "minimum": 1, "maximum": 4294967295 }
+              ],
+              "minItems": 2,
+              "maxItems": 2
+            }
+          },
+          "required": ["type", "value"],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "fill" },
+            "value": { "$ref": "#/$defs/u16" }
+          },
+          "required": ["type", "value"],
+          "additionalProperties": true
+        }
+      ]
+    },
+    "spacing": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "space" },
+            "value": { "$ref": "#/$defs/u16" }
+          },
+          "required": ["type", "value"],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "overlap" },
+            "value": { "$ref": "#/$defs/u16" }
+          },
+          "required": ["type", "value"],
+          "additionalProperties": true
+        }
+      ]
+    },
+    "text": {
+      "type": "object",
+      "description": "Omitted lines is empty, style is empty, and alignment means no text-level override.",
+      "properties": {
+        "lines": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/line" },
+          "default": []
+        },
+        "style": { "$ref": "#/$defs/style", "default": {} },
+        "alignment": {
+          "anyOf": [{ "$ref": "#/$defs/alignment" }, { "type": "null" }]
+        }
+      },
+      "additionalProperties": true
+    },
+    "line": {
+      "type": "object",
+      "description": "Omitted spans is empty, style is empty, and alignment means no line-level override.",
+      "properties": {
+        "spans": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/span" },
+          "default": []
+        },
+        "style": { "$ref": "#/$defs/style", "default": {} },
+        "alignment": {
+          "anyOf": [{ "$ref": "#/$defs/alignment" }, { "type": "null" }]
+        }
+      },
+      "additionalProperties": true
+    },
+    "span": {
+      "type": "object",
+      "properties": {
+        "content": { "type": "string" },
+        "style": { "$ref": "#/$defs/style", "default": {} }
+      },
+      "required": ["content"],
+      "additionalProperties": true
+    },
+    "style": {
+      "type": "object",
+      "description": "Every field is optional. Omitted colors inherit and omitted modifier lists are empty.",
+      "properties": {
+        "fg": {
+          "anyOf": [{ "$ref": "#/$defs/color" }, { "type": "null" }]
+        },
+        "bg": {
+          "anyOf": [{ "$ref": "#/$defs/color" }, { "type": "null" }]
+        },
+        "underlineColor": {
+          "anyOf": [{ "$ref": "#/$defs/color" }, { "type": "null" }]
+        },
+        "addModifiers": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/modifier" },
+          "default": []
+        },
+        "subModifiers": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/modifier" },
+          "default": []
+        }
+      },
+      "additionalProperties": true
+    },
+    "color": {
+      "oneOf": [
+        { "$ref": "#/$defs/resetColor" },
+        { "$ref": "#/$defs/blackColor" },
+        { "$ref": "#/$defs/redColor" },
+        { "$ref": "#/$defs/greenColor" },
+        { "$ref": "#/$defs/yellowColor" },
+        { "$ref": "#/$defs/blueColor" },
+        { "$ref": "#/$defs/magentaColor" },
+        { "$ref": "#/$defs/cyanColor" },
+        { "$ref": "#/$defs/grayColor" },
+        { "$ref": "#/$defs/darkGrayColor" },
+        { "$ref": "#/$defs/lightRedColor" },
+        { "$ref": "#/$defs/lightGreenColor" },
+        { "$ref": "#/$defs/lightYellowColor" },
+        { "$ref": "#/$defs/lightBlueColor" },
+        { "$ref": "#/$defs/lightMagentaColor" },
+        { "$ref": "#/$defs/lightCyanColor" },
+        { "$ref": "#/$defs/whiteColor" },
+        { "$ref": "#/$defs/rgbColor" },
+        { "$ref": "#/$defs/indexedColor" }
+      ]
+    },
+    "resetColor": {
+      "$ref": "#/$defs/unitColorTemplate",
+      "properties": { "type": { "const": "reset" } }
+    },
+    "blackColor": {
+      "$ref": "#/$defs/unitColorTemplate",
+      "properties": { "type": { "const": "black" } }
+    },
+    "redColor": {
+      "$ref": "#/$defs/unitColorTemplate",
+      "properties": { "type": { "const": "red" } }
+    },
+    "greenColor": {
+      "$ref": "#/$defs/unitColorTemplate",
+      "properties": { "type": { "const": "green" } }
+    },
+    "yellowColor": {
+      "$ref": "#/$defs/unitColorTemplate",
+      "properties": { "type": { "const": "yellow" } }
+    },
+    "blueColor": {
+      "$ref": "#/$defs/unitColorTemplate",
+      "properties": { "type": { "const": "blue" } }
+    },
+    "magentaColor": {
+      "$ref": "#/$defs/unitColorTemplate",
+      "properties": { "type": { "const": "magenta" } }
+    },
+    "cyanColor": {
+      "$ref": "#/$defs/unitColorTemplate",
+      "properties": { "type": { "const": "cyan" } }
+    },
+    "grayColor": {
+      "$ref": "#/$defs/unitColorTemplate",
+      "properties": { "type": { "const": "gray" } }
+    },
+    "darkGrayColor": {
+      "$ref": "#/$defs/unitColorTemplate",
+      "properties": { "type": { "const": "darkGray" } }
+    },
+    "lightRedColor": {
+      "$ref": "#/$defs/unitColorTemplate",
+      "properties": { "type": { "const": "lightRed" } }
+    },
+    "lightGreenColor": {
+      "$ref": "#/$defs/unitColorTemplate",
+      "properties": { "type": { "const": "lightGreen" } }
+    },
+    "lightYellowColor": {
+      "$ref": "#/$defs/unitColorTemplate",
+      "properties": { "type": { "const": "lightYellow" } }
+    },
+    "lightBlueColor": {
+      "$ref": "#/$defs/unitColorTemplate",
+      "properties": { "type": { "const": "lightBlue" } }
+    },
+    "lightMagentaColor": {
+      "$ref": "#/$defs/unitColorTemplate",
+      "properties": { "type": { "const": "lightMagenta" } }
+    },
+    "lightCyanColor": {
+      "$ref": "#/$defs/unitColorTemplate",
+      "properties": { "type": { "const": "lightCyan" } }
+    },
+    "whiteColor": {
+      "$ref": "#/$defs/unitColorTemplate",
+      "properties": { "type": { "const": "white" } }
+    },
+    "unitColorTemplate": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": true
+    },
+    "rgbColor": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "rgb" },
+        "red": { "$ref": "#/$defs/u8" },
+        "green": { "$ref": "#/$defs/u8" },
+        "blue": { "$ref": "#/$defs/u8" }
+      },
+      "required": ["type", "red", "green", "blue"],
+      "additionalProperties": true
+    },
+    "indexedColor": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "indexed" },
+        "index": { "$ref": "#/$defs/u8" }
+      },
+      "required": ["type", "index"],
+      "additionalProperties": true
+    },
+    "modifier": {
+      "enum": [
+        "bold",
+        "dim",
+        "italic",
+        "underlined",
+        "slowBlink",
+        "rapidBlink",
+        "reversed",
+        "hidden",
+        "crossedOut"
+      ]
+    },
+    "alignment": {
+      "enum": ["left", "center", "right"]
+    },
+    "block": {
+      "type": "object",
+      "description": "Omitted title means none; borders and padding are zero, borderType is plain, and styles are empty.",
+      "properties": {
+        "title": {
+          "anyOf": [{ "$ref": "#/$defs/line" }, { "type": "null" }]
+        },
+        "borders": {
+          "$ref": "#/$defs/borders",
+          "default": { "top": false, "right": false, "bottom": false, "left": false }
+        },
+        "borderType": { "$ref": "#/$defs/borderType", "default": "plain" },
+        "style": { "$ref": "#/$defs/style", "default": {} },
+        "borderStyle": { "$ref": "#/$defs/style", "default": {} },
+        "titleStyle": { "$ref": "#/$defs/style", "default": {} },
+        "padding": {
+          "$ref": "#/$defs/padding",
+          "default": { "left": 0, "right": 0, "top": 0, "bottom": 0 }
+        }
+      },
+      "additionalProperties": true
+    },
+    "borders": {
+      "type": "object",
+      "properties": {
+        "top": { "type": "boolean" },
+        "right": { "type": "boolean" },
+        "bottom": { "type": "boolean" },
+        "left": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "borderType": {
+      "enum": [
+        "plain",
+        "rounded",
+        "double",
+        "thick",
+        "quadrantInside",
+        "quadrantOutside"
+      ]
+    },
+    "padding": {
+      "type": "object",
+      "properties": {
+        "left": { "$ref": "#/$defs/u16" },
+        "right": { "$ref": "#/$defs/u16" },
+        "top": { "$ref": "#/$defs/u16" },
+        "bottom": { "$ref": "#/$defs/u16" }
+      },
+      "required": ["left", "right", "top", "bottom"],
+      "additionalProperties": true
+    },
+    "wrap": {
+      "type": "object",
+      "properties": {
+        "trim": { "type": "boolean" }
+      },
+      "required": ["trim"],
+      "additionalProperties": true
+    },
+    "marker": {
+      "enum": ["dot", "block", "bar", "braille", "halfBlock"]
+    },
+    "bounds": {
+      "type": "array",
+      "prefixItems": [{ "type": "number" }, { "type": "number" }],
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "canvasLayer": {
+      "type": "object",
+      "properties": {
+        "primitives": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/primitive" },
+          "default": []
+        }
+      },
+      "additionalProperties": true
+    },
+    "primitive": {
+      "oneOf": [
+        { "$ref": "#/$defs/canvasLine" },
+        { "$ref": "#/$defs/rectangle" },
+        { "$ref": "#/$defs/circle" },
+        { "$ref": "#/$defs/points" },
+        { "$ref": "#/$defs/map" }
+      ]
+    },
+    "canvasLine": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "line" },
+        "x1": { "type": "number" },
+        "y1": { "type": "number" },
+        "x2": { "type": "number" },
+        "y2": { "type": "number" },
+        "color": { "$ref": "#/$defs/color", "default": { "type": "reset" } }
+      },
+      "required": ["type", "x1", "y1", "x2", "y2"],
+      "additionalProperties": true
+    },
+    "rectangle": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "rectangle" },
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "width": { "type": "number", "minimum": 0 },
+        "height": { "type": "number", "minimum": 0 },
+        "color": { "$ref": "#/$defs/color", "default": { "type": "reset" } }
+      },
+      "required": ["type", "x", "y", "width", "height"],
+      "additionalProperties": true
+    },
+    "circle": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "circle" },
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "radius": { "type": "number", "minimum": 0 },
+        "color": { "$ref": "#/$defs/color", "default": { "type": "reset" } }
+      },
+      "required": ["type", "x", "y", "radius"],
+      "additionalProperties": true
+    },
+    "points": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "points" },
+        "coords": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "prefixItems": [{ "type": "number" }, { "type": "number" }],
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "default": []
+        },
+        "color": { "$ref": "#/$defs/color", "default": { "type": "reset" } }
+      },
+      "required": ["type"],
+      "additionalProperties": true
+    },
+    "map": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "map" },
+        "resolution": { "$ref": "#/$defs/mapResolution", "default": "low" },
+        "color": { "$ref": "#/$defs/color", "default": { "type": "reset" } }
+      },
+      "required": ["type"],
+      "additionalProperties": true
+    },
+    "mapResolution": {
+      "enum": ["low", "high"]
+    },
+    "label": {
+      "type": "object",
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "line": { "$ref": "#/$defs/line" }
+      },
+      "required": ["x", "y", "line"],
+      "additionalProperties": true
+    },
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "u8": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 255
+    },
+    "u16": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65535
+    },
+    "u32": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    }
+  }
+}

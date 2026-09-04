@@ -1,0 +1,26 @@
+# Unpeel Host service, one workspace — Linux systemd user template unit.
+#
+# The scoped single-workspace shape (`unpeel --workspace NAME serve`) for
+# containers and explicitly scoped units. Most machines want the plain
+# unpeel-serve.service instead, which supervises every registered workspace.
+#
+#   cp unpeel-serve@.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now unpeel-serve@NAME.service
+#
+# Requires `unpeel` at /usr/local/bin/unpeel (the install.sh default) and a
+# registered workspace NAME (`unpeel workspaces add NAME`). Headless boxes
+# need `sudo loginctl enable-linger <user>`. Do not run the plain machine
+# unit and a scoped unit for the same workspace at once; the workspace lease
+# makes the second owner report it as external rather than compete.
+
+[Unit]
+Description=Unpeel Host service (workspace %i)
+
+[Service]
+ExecStart=/usr/local/bin/unpeel --workspace %i serve
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

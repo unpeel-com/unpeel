@@ -1,0 +1,17 @@
+{
+  "name": "unpeel-workspace",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "test:release": "node --test scripts/release-*.test.mjs",
+    "generate:runtimes": "bun scripts/generate-runtime-client-catalog.mjs",
+    "check:runtimes": "bun scripts/generate-runtime-client-catalog.mjs --check && bun scripts/generate-runtime-client-catalog.mjs --check --out generated/GeneratedRuntimeCatalog.swift",
+    "validate:runtimes": "bun run check:runtimes && cargo test --manifest-path crates/Cargo.toml -p unpeel-core runtime_catalog",
+    "release:cli": "node scripts/release-cli.mjs",
+    "release:app": "node scripts/release-app.mjs",
+    "release:cli:linux": "scripts/build-cli-linux.sh"
+  },
+  "devDependencies": {
+    "wrangler": "^4.110.0"
+  }
+}

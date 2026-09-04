@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Unpeel Host service — macOS per-user LaunchAgent.
+
+  Usable verbatim when `unpeel` is installed at /usr/local/bin/unpeel
+  (the install.sh default):
+
+    cp com.unpeel.serve.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.unpeel.serve.plist
+
+  `unpeel serve install` writes this same file with the resolved binary
+  path (it rewrites the /usr/local/bin/unpeel line, and for a scoped
+  workspace unit the label plus the ProgramArguments serve line).
+
+  This must stay a per-user LaunchAgent, never a root LaunchDaemon: the
+  service owns ~/.unpeel state, the user Keychain, and the per-user machine
+  lease. A headless Mac therefore needs automatic login for the hosting
+  user so the gui/<uid> domain exists at boot.
+
+  Stdout/stderr are intentionally not captured: durable diagnostics go to
+  ~/.unpeel/hooks/trace.log.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.unpeel.serve</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/bin/unpeel</string>
+		<string>serve</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+	<key>ProcessType</key>
+	<string>Interactive</string>
+</dict>
+</plist>

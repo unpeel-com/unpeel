@@ -1,0 +1,47 @@
+schema_version = 1
+id = "dev.mariozechner.pi"
+slug = "pi"
+legacy_slug = "pi"
+label = "Pi"
+adapter = "builtin:pi"
+legacy_order = 5
+platforms = ["macos", "linux"]
+supports_quick_launch = true
+capabilities = ["resume", "restart_agent"]
+
+[display]
+tint = "#7C95FF"
+spinner_tint = "#7C95FF"
+icon = "pi"
+icon_asset = "assets/icon.svg"
+icon_source = "internal:legacy-unpeel-tool-icons"
+icon_license = "vendor-brand-asset"
+window_padding_x = 8
+
+[install]
+official_url = "https://github.com/badlogic/pi-mono"
+command = "npm install -g @mariozechner/pi-coding-agent"
+
+[detection]
+command_aliases = ["pi"]
+process_aliases = ["pi"]
+script_path_signatures = []
+
+[lifecycle]
+# Output remains useful terminal/recency telemetry, but it has no lifecycle
+# authority and is never promoted to an animated Busy state.
+source = "output"
+authority = "none"
+fallback = "none"
+completion_reliable = false
+attention_reliable = false
+
+[[usage.stores]]
+root = ".pi/agent/sessions"
+extensions = ["jsonl"]
+
+[[suggested_presets]]
+id = "pi"
+label = "pi"
+command = "pi"
+quick_launch = false

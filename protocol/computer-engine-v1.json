@@ -1,0 +1,36 @@
+{
+  "_comment": "Pinned Unpeel Computer Use engine (cua-driver, MIT; github.com/trycua/cua libs/cua-driver). The Host installs the platform binary into ~/.unpeel/computer/bin/cua-driver after verifying the release tarball's sha256, extracting exactly `archiveMember`, and verifying that file's `binarySha256` (unpeel_core::computer_engine). darwin-arm64 and darwin-x64 share the universal archive on purpose. Bumping the engine = update `version`, every `sha256` from the release's checksums.txt, every `binarySha256` from the extracted member, and the notice, then run `cargo test -p unpeel-core computer_engine` and scripts/verify-computer.sh.",
+  "version": "0.23.2",
+  "license": "MIT",
+  "notice": {
+    "url": "https://raw.githubusercontent.com/trycua/cua/cua-driver-rs-v0.23.2/LICENSE.md",
+    "sha256": "c0779290c1d4783169aa3dbfb55feb505e563ef8a004bbf55298ceffcfbda8d9"
+  },
+  "archiveMember": "cua-driver",
+  "sources": [
+    {
+      "platform": "darwin-arm64",
+      "url": "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.23.2/cua-driver-rs-0.23.2-darwin-universal-binary.tar.gz",
+      "sha256": "0127c82ff17922df4290931a8ebf9b4a8b21656aad24cba6f21ee50e41ed4493",
+      "binarySha256": "2cb9be8da6c91bfa6b535a0d777ca61e463996aff9cd769dace2eb840ddd0700"
+    },
+    {
+      "platform": "darwin-x64",
+      "url": "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.23.2/cua-driver-rs-0.23.2-darwin-universal-binary.tar.gz",
+      "sha256": "0127c82ff17922df4290931a8ebf9b4a8b21656aad24cba6f21ee50e41ed4493",
+      "binarySha256": "2cb9be8da6c91bfa6b535a0d777ca61e463996aff9cd769dace2eb840ddd0700"
+    },
+    {
+      "platform": "linux-x64",
+      "url": "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.23.2/cua-driver-rs-0.23.2-linux-x86_64-binary.tar.gz",
+      "sha256": "01bf8339ec129cc00f4b4b2c6056ef1a7c5b52df39ff83ad17c9b16818aec500",
+      "binarySha256": "2aaad67b996d41cd909e4b7ac2ddd705653e8c7f9958010ac051838b02f64eeb"
+    },
+    {
+      "platform": "linux-arm64",
+      "url": "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.23.2/cua-driver-rs-0.23.2-linux-arm64-binary.tar.gz",
+      "sha256": "be22768a207796a4bc1de50c52f32f9ef680b5e86e58c059e02eec2caba2e7bb",
+      "binarySha256": "1dd57a2d0abfa5301668fc1e34b58f5efcbcef9ebbdaa0c8436074ccf5ce0b34"
+    }
+  ]
+}

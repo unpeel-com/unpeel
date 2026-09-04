@@ -1,0 +1,9 @@
+{
+  // Cloudflare account + R2 bucket for the CLI/App release publishers
+  // (scripts/release-cli.mjs, scripts/release-app.mjs). Only publishing
+  // coordinates live here — no Worker, routes, or bindings; the release
+  // Worker itself is deployed from the website repo. Credentials come from
+  // the operator's wrangler login, never from this file.
+  "account_id": "abc947fba4af12bd510f8e6e7530c578",
+  "bucket": "unpeel-releases"
+}

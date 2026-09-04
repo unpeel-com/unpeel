@@ -1,0 +1,45 @@
+schema_version = 1
+id = "ai.opencode.cli"
+slug = "opencode"
+legacy_slug = "opencode"
+label = "OpenCode"
+adapter = "builtin:opencode"
+legacy_order = 6
+platforms = ["macos", "linux"]
+supports_quick_launch = true
+capabilities = ["lifecycle_hooks", "resume", "restart_agent", "transcript", "notify_when_done"]
+
+[display]
+tint = "#8F8787"
+spinner_tint = "#8F8787"
+icon = "opencode"
+icon_asset = "assets/icon.svg"
+icon_source = "internal:legacy-unpeel-tool-icons"
+icon_license = "vendor-brand-asset"
+icon_template = false
+
+[install]
+official_url = "https://opencode.ai"
+command = "npm install -g opencode-ai"
+
+[detection]
+command_aliases = ["opencode"]
+process_aliases = ["opencode", "opencode2"]
+script_path_signatures = []
+
+[lifecycle]
+source = "hooks"
+authority = "complete"
+fallback = "none"
+completion_reliable = true
+attention_reliable = true
+
+[[usage.stores]]
+root = ".local/share/opencode/storage/session"
+extensions = ["json"]
+
+[[suggested_presets]]
+id = "opencode"
+label = "opencode"
+command = "opencode"
+quick_launch = false

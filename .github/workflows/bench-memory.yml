@@ -1,0 +1,109 @@
+# Memory benchmark gate — the phys_footprint chart numbers must never
+# regress. Runs scripts/bench-memory.sh on a blank home with release
+# binaries, once with per-process hosts (core off) and once with the shared
+# PTY core (UNPEEL_PTY_CORE=1), writes each Markdown table to the job
+# summary, and fails when reclamation is not total (leftover hosts or session
+# dirs after `unpeel rm`) or a row exceeds its ceiling in
+# scripts/bench-thresholds.json.
+#
+# macOS is the chart platform (footprint(1)). Ubuntu runs the same script
+# headless with PSS from /proc/<pid>/smaps_rollup; it enforces reclamation
+# with its own ceilings (linux_core_off / linux_core_on in the thresholds
+# file). `unpeel-attach` waits with epoll + inotify on Linux, so the
+# per-client row runs there too.
+name: Memory benchmark
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/**'
+      - 'crates/unpeel-attach/**'
+      - 'scripts/bench-memory.sh'
+      - 'scripts/bench-thresholds.json'
+      - '.github/workflows/bench-memory.yml'
+  pull_request:
+    paths:
+      - 'crates/unpeel-core/src/terminal_viewport.rs'
+      - 'crates/unpeel-core/src/ghostty_vt.rs'
+      - 'crates/unpeel-core/src/session_host.rs'
+      - 'crates/unpeel-core/src/pty_core.rs'
+      - 'scripts/bench-memory.sh'
+      - 'scripts/bench-thresholds.json'
+      - '.github/workflows/bench-memory.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            profile: core_off
+            pty_core: '0'
+            clients: '10'
+          - os: macos-latest
+            profile: core_on
+            pty_core: '1'
+            clients: '10'
+          - os: ubuntu-latest
+            profile: linux_core_off
+            pty_core: '0'
+            clients: '10'
+          - os: ubuntu-latest
+            profile: linux_core_on
+            pty_core: '1'
+            clients: '10'
+    name: bench (${{ matrix.os }}, core ${{ matrix.pty_core }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install declared Rust MSRV
+        uses: dtolnay/rust-toolchain@1.88.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            crates
+            crates/unpeel-attach
+      - name: Build release binaries
+        run: |
+          cargo build --release --locked --manifest-path crates/Cargo.toml -p unpeel-cli -p unpeel-host
+          if [ "${{ matrix.clients }}" != "0" ]; then
+            cargo build --release --locked --manifest-path crates/unpeel-attach/Cargo.toml
+          fi
+      - name: Run benchmark
+        id: bench
+        env:
+          UNPEEL_PTY_CORE: ${{ matrix.pty_core }}
+          BENCH_PROFILE: ${{ matrix.profile }}
+          BENCH_CLIENTS: ${{ matrix.clients }}
+          BENCH_THRESHOLDS: ${{ github.workspace }}/scripts/bench-thresholds.json
+          BENCH_JSON: ${{ runner.temp }}/bench-${{ matrix.profile }}-${{ matrix.pty_core }}.json
+          BENCH_HOME: ${{ runner.temp }}/ub-${{ matrix.pty_core }}
+          # (g)/(h): the in-process libghostty-vt grid rows; needs cargo + the
+          # source tree, which the runner has.
+          BENCH_VT: '1'
+        run: |
+          set -o pipefail
+          scripts/bench-memory.sh | tee bench-table.md
+      - name: Publish table to the job summary
+        if: always()
+        run: |
+          {
+            echo "## ${{ matrix.os }} — PTY core ${{ matrix.pty_core == '1' && 'on' || 'off' }}"
+            cat bench-table.md 2>/dev/null || echo "_benchmark produced no table_"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload raw numbers
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ matrix.os }}-core-${{ matrix.pty_core }}
+          path: |
+            bench-table.md
+            ${{ runner.temp }}/bench-*.json
+          if-no-files-found: warn

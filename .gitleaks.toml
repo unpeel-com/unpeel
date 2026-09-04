@@ -1,0 +1,33 @@
+# Gitleaks config — the allowlist below covers the six known test-fixture
+# hits from the 2026-08-13 pre-publication tree scan, so CI runs are quiet
+# unless something NEW appears. Never allowlist a real credential; fix the
+# code instead.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known test fixtures (verified non-secrets, 2026-08-13)"
+regexes = [
+  # Fake pairing token used across TUI + Swift protocol tests.
+  '''K7ZP2Q4RSTUVWXYZABCDEFGH23''',
+  # RFC 6455's literal example Sec-WebSocket-Key ("the sample nonce").
+  '''dGhlIHNhbXBsZSBub25jZQ==''',
+  # Sequential-hex dummy encryption key in the browser verify script.
+  '''0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef''',
+  # A Swift type name the generic rule mistakes for a key.
+  '''Curve25519\.KeyAgreement\.PrivateKey''',
+  # 2026-09-03 history scan (a9a2f81..HEAD, 559 commits): the 32-hex
+  # sequential dummy platform-adapter callback token used by serve, bridge,
+  # host, and Swift adapter tests (8 hits, all test code).
+  '''0123456789abcdef0123456789abcdef''',
+  # SHA-256 of a fake paired-device token in the local gateway process test
+  # fixture (crates/unpeel-host/tests/local_gateway_process.rs); a hash of a
+  # fixture, never a credential.
+  '''80779dabc1f0099aacf8224626b3fea53386691433b405bdf15a8e122889069e''',
+  # Sequential-hex dummy project key in the browser MCP unit-test fixtures
+  # (crates/unpeel-core/src/browser_mcp.rs). Content-allowlisted here rather
+  # than in .gitleaksignore because that file's fingerprints are bound to
+  # commit hashes, which a fresh-start import (one new commit) never has.
+  '''^0123456789abcdef$''',
+]

@@ -1,0 +1,287 @@
+{
+  "schemaVersion": 1,
+  "protocol": {
+    "major": 1,
+    "minor": 14,
+    "compatibility": {
+      "major": "must-match",
+      "minor": "additive",
+      "unknownCapabilities": "ignore"
+    }
+  },
+  "capabilities": [
+    {
+      "id": "approval.answer",
+      "method": "POST",
+      "path": "/mobile/approvals/answer",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "approval.list",
+      "method": "GET",
+      "path": "/mobile/bootstrap#pendingApprovals",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "artifact.delete",
+      "method": "POST",
+      "path": "/mobile/artifact-delete",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "artifact.list",
+      "method": "GET",
+      "path": "/mobile/artifacts",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "artifact.read",
+      "method": "GET",
+      "path": "/mobile/artifact",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "artifact.request_screenshot",
+      "method": "POST",
+      "path": "/mobile/request-screenshot",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "artifact.upload",
+      "method": "POST",
+      "path": "/mobile/upload",
+      "native": true,
+      "tui": false
+    },
+    {
+      "id": "artifact.upload.resumable",
+      "method": "POST",
+      "path": "/mobile/upload-chunk",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "host.bootstrap",
+      "method": "GET",
+      "path": "/mobile/bootstrap",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "pairing.create",
+      "method": "POST",
+      "path": "/mobile/pair",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "pairing.invitation",
+      "method": "POST",
+      "path": "/mobile/pairing-invitation",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "project.organization.set",
+      "method": "POST",
+      "path": "/mobile/project-organization",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "project.pin.set",
+      "method": "POST",
+      "path": "/mobile/project-organization#pinned",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "push.register",
+      "method": "POST",
+      "path": "/mobile/push-token",
+      "native": true,
+      "tui": false
+    },
+    {
+      "id": "relay.credentials.recover",
+      "method": "GET",
+      "path": "/mobile/relay-credentials",
+      "native": true,
+      "tui": false
+    },
+    {
+      "id": "session.archive",
+      "method": "POST",
+      "path": "/mobile/session-organization#archived=true",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "session.archive.list",
+      "method": "GET",
+      "path": "/mobile/archive",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "session.create",
+      "method": "POST",
+      "path": "/mobile/sessions",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "session.input.write",
+      "method": "POST",
+      "path": "/mobile/write",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "session.mark_read",
+      "method": "POST",
+      "path": "/mobile/mark-read",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "session.metrics.read",
+      "method": "GET",
+      "path": "/mobile/metrics",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "session.notify_when_done.set",
+      "method": "POST",
+      "path": "/mobile/session-organization#notifyWhenDone",
+      "native": true,
+      "tui": false
+    },
+    {
+      "id": "session.order.set",
+      "method": "POST",
+      "path": "/mobile/session-order",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "session.output.read",
+      "method": "GET",
+      "path": "/mobile/output",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "session.output.subscribe",
+      "method": "WSS",
+      "path": "/api/sessions/{id}/stream",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "session.pin.set",
+      "method": "POST",
+      "path": "/mobile/session-organization#pinned",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "session.project.set",
+      "method": "POST",
+      "path": "/mobile/session-organization#projectID",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "session.remove",
+      "method": "POST",
+      "path": "/mobile/session-action#remove",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "session.resize",
+      "method": "POST",
+      "path": "/mobile/resize",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "session.resize_desktop",
+      "method": "POST",
+      "path": "/mobile/resize-desktop",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "session.restart",
+      "method": "POST",
+      "path": "/mobile/restart-session",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "session.restore",
+      "method": "POST",
+      "path": "/mobile/session-organization#archived=false",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "session.runtime.restart",
+      "method": "POST",
+      "path": "/mobile/session-action#restart_agent",
+      "native": false,
+      "tui": false
+    },
+    {
+      "id": "session.runtime.resume",
+      "method": "POST",
+      "path": "/mobile/session-action#resume_agent",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "session.stop",
+      "method": "POST",
+      "path": "/mobile/session-action#stop",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "session.title.set",
+      "method": "POST",
+      "path": "/mobile/session-organization#title",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "session.transcript.markdown",
+      "method": "GET",
+      "path": "/mobile/transcript-markdown",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "settings.presets.set",
+      "method": "POST",
+      "path": "/mobile/presets",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "settings.workspace.set",
+      "method": "POST",
+      "path": "/mobile/workspace-settings",
+      "native": true,
+      "tui": true
+    }
+  ]
+}

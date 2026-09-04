@@ -1,0 +1,248 @@
+{
+  "schemaVersion": 1,
+  "description": "Direct-path negotiation v1 message fixtures. Contract: unpeel-apple:docs/feature/direct-path-v1.md. Both language implementations must agree on every case; a disagreement is a protocol fork, not a test adjustment.",
+  "cases": [
+    {
+      "id": "offer.valid-minimal",
+      "message": "offer",
+      "valid": true,
+      "json": {
+        "v": 1,
+        "pathSession": "0123456789abcdef0123456789abcdef",
+        "role": "controller",
+        "candidates": [
+          { "kind": "local", "address": "192.168.1.20", "port": 40123 }
+        ]
+      }
+    },
+    {
+      "id": "offer.valid-mixed-families-and-kinds",
+      "message": "offer",
+      "valid": true,
+      "json": {
+        "v": 1,
+        "pathSession": "ffffffffffffffffffffffffffffffff",
+        "role": "host",
+        "candidates": [
+          { "kind": "local", "address": "10.1.2.3", "port": 1 },
+          { "kind": "reflexive", "address": "203.0.113.9", "port": 65535 },
+          { "kind": "local", "address": "fd00::5", "port": 40000 },
+          { "kind": "reflexive", "address": "2001:db8::7", "port": 40000 }
+        ]
+      }
+    },
+    {
+      "id": "offer.valid-cgnat-range",
+      "message": "offer",
+      "valid": true,
+      "json": {
+        "v": 1,
+        "pathSession": "0123456789abcdef0123456789abcdef",
+        "role": "controller",
+        "candidates": [
+          { "kind": "local", "address": "100.64.0.7", "port": 41641 }
+        ]
+      }
+    },
+    {
+      "id": "offer.unknown-version",
+      "message": "offer",
+      "valid": false,
+      "json": {
+        "v": 2,
+        "pathSession": "0123456789abcdef0123456789abcdef",
+        "role": "controller",
+        "candidates": [
+          { "kind": "local", "address": "192.168.1.20", "port": 40123 }
+        ]
+      }
+    },
+    {
+      "id": "offer.unknown-field",
+      "message": "offer",
+      "valid": false,
+      "json": {
+        "v": 1,
+        "pathSession": "0123456789abcdef0123456789abcdef",
+        "role": "controller",
+        "relay": "please-dial-this-instead",
+        "candidates": [
+          { "kind": "local", "address": "192.168.1.20", "port": 40123 }
+        ]
+      }
+    },
+    {
+      "id": "offer.hostname-candidate",
+      "message": "offer",
+      "valid": false,
+      "json": {
+        "v": 1,
+        "pathSession": "0123456789abcdef0123456789abcdef",
+        "role": "controller",
+        "candidates": [
+          { "kind": "local", "address": "internal.corp.example", "port": 40123 }
+        ]
+      }
+    },
+    {
+      "id": "offer.non-canonical-v4-spelling",
+      "message": "offer",
+      "valid": false,
+      "json": {
+        "v": 1,
+        "pathSession": "0123456789abcdef0123456789abcdef",
+        "role": "controller",
+        "candidates": [
+          { "kind": "local", "address": "010.0.0.1", "port": 40123 }
+        ]
+      }
+    },
+    {
+      "id": "offer.loopback-candidate",
+      "message": "offer",
+      "valid": false,
+      "json": {
+        "v": 1,
+        "pathSession": "0123456789abcdef0123456789abcdef",
+        "role": "controller",
+        "candidates": [
+          { "kind": "local", "address": "127.0.0.1", "port": 40123 }
+        ]
+      }
+    },
+    {
+      "id": "offer.v4-mapped-v6-laundering",
+      "message": "offer",
+      "valid": false,
+      "json": {
+        "v": 1,
+        "pathSession": "0123456789abcdef0123456789abcdef",
+        "role": "controller",
+        "candidates": [
+          { "kind": "local", "address": "::ffff:8.8.8.8", "port": 40123 }
+        ]
+      }
+    },
+    {
+      "id": "offer.link-local-candidate",
+      "message": "offer",
+      "valid": false,
+      "json": {
+        "v": 1,
+        "pathSession": "0123456789abcdef0123456789abcdef",
+        "role": "controller",
+        "candidates": [
+          { "kind": "local", "address": "fe80::1", "port": 40123 }
+        ]
+      }
+    },
+    {
+      "id": "offer.port-zero",
+      "message": "offer",
+      "valid": false,
+      "json": {
+        "v": 1,
+        "pathSession": "0123456789abcdef0123456789abcdef",
+        "role": "controller",
+        "candidates": [
+          { "kind": "local", "address": "192.168.1.20", "port": 0 }
+        ]
+      }
+    },
+    {
+      "id": "offer.empty-candidates",
+      "message": "offer",
+      "valid": false,
+      "json": {
+        "v": 1,
+        "pathSession": "0123456789abcdef0123456789abcdef",
+        "role": "controller",
+        "candidates": []
+      }
+    },
+    {
+      "id": "offer.duplicate-candidates",
+      "message": "offer",
+      "valid": false,
+      "json": {
+        "v": 1,
+        "pathSession": "0123456789abcdef0123456789abcdef",
+        "role": "controller",
+        "candidates": [
+          { "kind": "local", "address": "192.168.1.20", "port": 40123 },
+          { "kind": "local", "address": "192.168.1.20", "port": 40123 }
+        ]
+      }
+    },
+    {
+      "id": "offer.path-session-uppercase-hex",
+      "message": "offer",
+      "valid": false,
+      "json": {
+        "v": 1,
+        "pathSession": "0123456789ABCDEF0123456789ABCDEF",
+        "role": "controller",
+        "candidates": [
+          { "kind": "local", "address": "192.168.1.20", "port": 40123 }
+        ]
+      }
+    },
+    {
+      "id": "result.valid-established",
+      "message": "result",
+      "valid": true,
+      "json": {
+        "v": 1,
+        "pathSession": "0123456789abcdef0123456789abcdef",
+        "outcome": "established",
+        "chosen": { "kind": "reflexive", "address": "203.0.113.9", "port": 40123 }
+      }
+    },
+    {
+      "id": "result.valid-failed",
+      "message": "result",
+      "valid": true,
+      "json": {
+        "v": 1,
+        "pathSession": "0123456789abcdef0123456789abcdef",
+        "outcome": "failed",
+        "reason": "punch_timeout"
+      }
+    },
+    {
+      "id": "result.established-with-reason",
+      "message": "result",
+      "valid": false,
+      "json": {
+        "v": 1,
+        "pathSession": "0123456789abcdef0123456789abcdef",
+        "outcome": "established",
+        "chosen": { "kind": "reflexive", "address": "203.0.113.9", "port": 40123 },
+        "reason": "punch_timeout"
+      }
+    },
+    {
+      "id": "result.failed-with-chosen",
+      "message": "result",
+      "valid": false,
+      "json": {
+        "v": 1,
+        "pathSession": "0123456789abcdef0123456789abcdef",
+        "outcome": "failed",
+        "reason": "punch_timeout",
+        "chosen": { "kind": "reflexive", "address": "203.0.113.9", "port": 40123 }
+      }
+    },
+    {
+      "id": "result.unknown-reason",
+      "message": "result",
+      "valid": false,
+      "json": {
+        "v": 1,
+        "pathSession": "0123456789abcdef0123456789abcdef",
+        "outcome": "failed",
+        "reason": "cosmic_rays"
+      }
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+name: Runtime catalog
+
+# The client-safe runtime catalog (`generated/GeneratedRuntimeCatalog.swift`)
+# ships inside every CLI archive, so a runtime PR must not land with a stale
+# copy. Regenerate from `runtimes/` and fail on any difference.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "runtimes/**"
+      - "generated/**"
+      - "scripts/generate-runtime-client-catalog.mjs"
+      - ".github/workflows/runtime-catalog.yml"
+  pull_request:
+    paths:
+      - "runtimes/**"
+      - "generated/**"
+      - "scripts/generate-runtime-client-catalog.mjs"
+      - ".github/workflows/runtime-catalog.yml"
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Generated catalogs match runtimes/
+        run: bun run check:runtimes

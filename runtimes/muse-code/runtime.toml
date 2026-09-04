@@ -1,0 +1,46 @@
+schema_version = 1
+id = "ai.meta.muse-code"
+slug = "muse-code"
+legacy_slug = "muse"
+label = "Muse Code"
+adapter = "builtin:muse"
+legacy_order = 12
+platforms = ["macos", "linux"]
+supports_quick_launch = true
+capabilities = ["lifecycle_hooks", "resume", "restart_agent", "transcript", "notify_when_done"]
+
+[display]
+tint = "#0082FB"
+spinner_tint = "#0082FB"
+icon = "muse"
+icon_asset = "assets/icon.svg"
+icon_source = "internal:legacy-unpeel-tool-icons"
+icon_license = "vendor-brand-asset"
+window_padding_x = 8
+
+[install]
+official_url = "https://dev.meta.ai"
+command = "curl -fsSL https://dev.meta.ai/install.sh | bash"
+
+[detection]
+command_aliases = ["muse"]
+process_aliases = ["muse"]
+script_path_signatures = []
+
+[lifecycle]
+source = "hooks"
+authority = "complete"
+fallback = "none"
+completion_reliable = true
+attention_reliable = true
+
+[[usage.stores]]
+root = ".local/share/muse/sessions"
+extensions = ["jsonl"]
+file_name = "session.jsonl"
+
+[[suggested_presets]]
+id = "muse"
+label = "muse --yolo"
+command = "muse --yolo"
+quick_launch = false

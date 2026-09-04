@@ -1,0 +1,125 @@
+# Linux x86_64 CLI proof + artifact — the "real x86 hardware" run the local
+# Docker proof can't provide (Apple-silicon containers are arm64 or emulated,
+# and build-cli-linux.sh refuses to pretend emulation counts). GitHub's
+# ubuntu runners are real x86_64: run the PTY behavioral suite, then build
+# the release tarball in the pinned Bullseye container so newer runner GLIBC
+# symbols cannot leak into it. Keep it as a downloadable artifact for
+# `release:cli -- --linux-x86_64 <tar.gz>`.
+name: Linux CLI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/**'
+      - 'scripts/build-cli-linux.sh'
+      - 'scripts/cli-glibc.sh'
+      - 'scripts/rust-release-env.sh'
+      - 'scripts/verify-computer.sh'
+      - 'scripts/verify-computer.py'
+      - 'scripts/ci/**'
+      - '.github/workflows/linux-cli.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  linux-x86_64:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install declared Rust MSRV
+        uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            crates
+            crates/unpeel-attach
+      - name: Check workspace at declared MSRV
+        run: cargo check --manifest-path crates/Cargo.toml --workspace --all-targets --locked
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path crates/Cargo.toml --all -- --check
+      - name: Clippy (strict workspace)
+        run: cargo clippy --manifest-path crates/Cargo.toml --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Workspace tests
+        run: cargo test --manifest-path crates/Cargo.toml --workspace --all-targets --all-features --locked
+      - name: unpeel-attach (standalone crate) on Linux
+        run: |
+          cargo fmt --manifest-path crates/unpeel-attach/Cargo.toml -- --check
+          cargo clippy --manifest-path crates/unpeel-attach/Cargo.toml --all-targets --locked -- -D warnings
+          cargo test --manifest-path crates/unpeel-attach/Cargo.toml --all-targets --locked
+      - name: Portable Controller core tests
+        run: cargo test --manifest-path crates/Cargo.toml -p unpeel-core --no-default-features --features controller-core --locked
+      - name: Portable Controller core WebAssembly check
+        run: cargo clippy --manifest-path crates/Cargo.toml -p unpeel-core --target wasm32-unknown-unknown --all-targets --no-default-features --features controller-core --locked -- -D warnings
+      - name: PTY behavioral suite (headless-host slice)
+        run: |
+          cd crates && cargo build -q --locked -p unpeel-cli -p unpeel-host
+          cd unpeel-cli/tests
+          ./run.sh standalone browser_spawn mobile cli compat state_bus link_lifecycle pairing computer
+        env:
+          UNPEEL_TUI_SKIP_BUILD: '1'
+          UNPEEL_TUI_BINARY: ${{ github.workspace }}/crates/target/debug/unpeel
+      - name: Computer Use with the real engine (Xvfb + Openbox + GTK fixture)
+        # scripts/verify-computer.sh: `unpeel serve` in a headless desktop
+        # session supervising the pinned cua-driver, a hosted session driving
+        # zenity through the `computer` MCP tool, Ask answered over the
+        # approval route. The engine is the pinned copy from `unpeel computer
+        # install` (protocol/computer-engine-v1.json), so this is the same
+        # binary the archive step below verifies. Strict: a missing engine,
+        # desktop, or fixture fails the job rather than SKIPping.
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q xvfb openbox zenity dbus-x11 at-spi2-core
+          scripts/verify-computer.sh
+        env:
+          UNPEEL_VERIFY_COMPUTER_STRICT: '1'
+      - name: Build release tarball (GLIBC 2.31 ceiling)
+        run: |
+          docker run --rm --platform linux/amd64 \
+            --env CARGO_TARGET_DIR=/tmp/unpeel-cli-target \
+            --env UNPEEL_CLI_OUTPUT_DIR=/work/dist/cli \
+            --volume "$GITHUB_WORKSPACE:/work" \
+            --workdir /work \
+            rust:1.88-bullseye@sha256:b315f988b86912bafa7afd39a6ded0a497bf850ec36578ca9a3bdd6a14d5db4e \
+            sh -c 'git config --global --add safe.directory /work && scripts/build-cli-linux.sh'
+      - name: Smoke archive on Ubuntu 20.04
+        run: |
+          docker run --rm --platform linux/amd64 \
+            --volume "$GITHUB_WORKSPACE/dist/cli:/release:ro" \
+            ubuntu:20.04@sha256:8feb4d8ca5354def3d8fce243717141ce31e2c428701f6682bd2fafe15388214 \
+            sh -c 'set -eu; set -- /release/unpeel-*-linux-x86_64.tar.gz; [ "$#" -eq 1 ] && [ -f "$1" ] || { echo "error: expected exactly one x86_64 archive" >&2; exit 1; }; archive=$1; cd /release; sha256sum -c "$(basename "$archive").sha256"; stage=$(mktemp -d); tar -xzf "$archive" -C "$stage"; "$stage/unpeel" --version; "$stage/unpeel-host" __check_local_url__; "$stage/unpeel-attach" --help >/dev/null'
+      - name: Host-owned browser engine (download + verify, no Chrome)
+        # Proves the pinned agent-browser linux-x64 binary installs and runs
+        # in the same Bullseye image the archive is built in, and that
+        # --check names the missing browser explicitly on a Chrome-less Host.
+        run: |
+          docker run --rm --platform linux/amd64 \
+            --volume "$GITHUB_WORKSPACE/dist/cli:/release:ro" \
+            rust:1.88-bullseye@sha256:b315f988b86912bafa7afd39a6ded0a497bf850ec36578ca9a3bdd6a14d5db4e \
+            sh -c 'set -eu; stage=$(mktemp -d); tar -xzf /release/unpeel-*-linux-x86_64.tar.gz -C "$stage"; export HOME=/tmp/engine-home UNPEEL_HOME=/tmp/engine-home/.unpeel; mkdir -p "$UNPEEL_HOME"; set +e; "$stage/unpeel" browser install; code=$?; set -e; echo "unpeel browser install exit=$code"; [ "$code" = 4 ] || { echo "expected exit 4 (engine ready, no browser on this Host)"; exit 1; }; "$UNPEEL_HOME/browser/bin/agent-browser" --version; test -s "$UNPEEL_HOME/browser/bin/LICENSE-agent-browser.txt"; set +e; "$stage/unpeel" browser install --check; code=$?; set -e; [ "$code" = 4 ] || { echo "expected --check exit 4"; exit 1; }; "$stage/unpeel" browser install --check --json | grep -q "no Chrome/Chromium found"'
+      - name: Host-owned computer-use engine (download + verify, no display)
+        # Proves the pinned cua-driver linux-x86_64 tarball installs (archive
+        # sha256, one extracted member, member sha256) and that the extracted
+        # binary runs under the archive image's GLIBC 2.31 — the release
+        # binary is a glibc-dynamic PIE, so this is the real compatibility
+        # gate. The engine is an X11 client: in the bare image the installer
+        # must report "failed: missing shared libraries libXi.so.6" (exit 1,
+        # Lane A2's probe); after the X11 client libraries are installed the
+        # same copy must be runnable-but-no-session (exit 4). A GitHub download
+        # outage skips with a warning; a pinned-hash mismatch fails.
+        run: |
+          docker run --rm --platform linux/amd64 \
+            --volume "$GITHUB_WORKSPACE/dist/cli:/release:ro" \
+            rust:1.88-bullseye@sha256:b315f988b86912bafa7afd39a6ded0a497bf850ec36578ca9a3bdd6a14d5db4e \
+            sh -c 'set -eu; stage=$(mktemp -d); tar -xzf /release/unpeel-*-linux-x86_64.tar.gz -C "$stage"; export HOME=/tmp/engine-home UNPEEL_HOME=/tmp/engine-home/.unpeel; mkdir -p "$UNPEEL_HOME"; set +e; out=$("$stage/unpeel" computer install 2>&1); code=$?; set -e; printf "%s\n" "$out"; echo "bare image: unpeel computer install exit=$code"; if printf "%s" "$out" | grep -q "does not match the pinned sha256"; then echo "pinned cua-driver hash mismatch"; exit 1; fi; if [ "$code" != 1 ] && printf "%s" "$out" | grep -qiE "download|http|resolve|timed out"; then echo "::warning::cua-driver download unavailable (GitHub releases); engine step skipped — not a code failure"; exit 0; fi; [ "$code" = 1 ] && printf "%s" "$out" | grep -q "libXi.so.6" || { echo "expected exit 1 naming libXi.so.6 in the bare image (missing X11 client libraries)"; exit 1; }; apt-get update -q >/dev/null && apt-get install -y -q --no-install-recommends libxi6 libxtst6 libx11-6 libxext6 libxrandr2 libxinerama1 libxcursor1 libxfixes3 libxkbcommon0 libxcb1 >/dev/null; missing=$(ldd "$UNPEEL_HOME/computer/bin/cua-driver" | grep "not found" || true); [ -z "$missing" ] || { echo "cua-driver still needs:"; echo "$missing"; exit 1; }; CUA_DRIVER_RS_TELEMETRY_ENABLED=0 "$UNPEEL_HOME/computer/bin/cua-driver" --version; test -s "$UNPEEL_HOME/computer/bin/LICENSE-cua-driver.txt"; test ! -e "$UNPEEL_HOME/computer/bin/cua-cursor-theme"; set +e; "$stage/unpeel" computer install --check; code=$?; set -e; echo "after X11 libs: --check exit=$code"; [ "$code" = 4 ] || { echo "expected --check exit 4 (engine runnable, no graphical session)"; exit 1; }; "$stage/unpeel" computer install --check --json | grep -q "no graphical session"'
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: unpeel-linux-x86_64
+          path: dist/cli/
+          if-no-files-found: error

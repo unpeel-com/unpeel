@@ -1,0 +1,11 @@
+# Commit-bound fingerprints for historical findings in THIS repository's
+# history. They do not carry over to the fresh-start public import (one new
+# commit): anything the public tree still contains must be allowlisted by
+# content in .gitleaks.toml instead (scripts/oss/stage-public-import.sh
+# proves the import commit scans clean).
+ccc28a3c4a3ea106e0f76156d11da8330681d201:crates/unpeel-core/src/browser_mcp.rs:generic-api-key:2709
+65aff39451e0a94a60ccaefb4c8b5e49f287d81e:crates/unpeel-core/src/browser_mcp.rs:generic-api-key:2710
+91106fa45b8aa5b2f16e3c58e97ed99b62605406:apps/native/UnpeelNative/Tests/UnpeelNativeTests/MobilePairingStoreTests.swift:generic-api-key:586
+91106fa45b8aa5b2f16e3c58e97ed99b62605406:crates/unpeel-core/src/link_push.rs:generic-api-key:243
+91106fa45b8aa5b2f16e3c58e97ed99b62605406:crates/unpeel-core/src/link_push.rs:generic-api-key:304
+91106fa45b8aa5b2f16e3c58e97ed99b62605406:crates/unpeel-tui/tests/cases/mobile.py:generic-api-key:179

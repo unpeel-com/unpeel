@@ -1,0 +1,43 @@
+name: Release guards
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/install.sh'
+      - 'scripts/install-app.sh'
+      - 'protocol/app-registry.json'
+      - 'scripts/build-cli-linux.sh'
+      - 'scripts/cli-glibc.sh'
+      - 'scripts/release-*.mjs'
+      - '.github/workflows/release-guards.yml'
+  pull_request:
+    paths:
+      - 'scripts/install.sh'
+      - 'scripts/install-app.sh'
+      - 'protocol/app-registry.json'
+      - 'scripts/build-cli-linux.sh'
+      - 'scripts/cli-glibc.sh'
+      - 'scripts/release-*.mjs'
+      - '.github/workflows/release-guards.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  release-guards:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Release state tests
+        run: node --test scripts/release-*.test.mjs
+      - name: Script syntax
+        run: |
+          node --check scripts/release-cli.mjs
+          node --check scripts/release-source-preflight.mjs
+          sh -n scripts/cli-glibc.sh
+          sh -n scripts/build-cli-linux.sh

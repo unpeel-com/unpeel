@@ -1,0 +1,46 @@
+schema_version = 1
+id = "ai.x.grok-cli"
+slug = "grok"
+legacy_slug = "grok"
+label = "Grok"
+adapter = "builtin:grok"
+legacy_order = 9
+platforms = ["macos", "linux"]
+supports_quick_launch = true
+capabilities = ["lifecycle_hooks", "resume", "restart_agent", "transcript", "notify_when_done"]
+
+[display]
+tint = "#8F8787"
+spinner_tint = "#8F8787"
+icon = "grok"
+icon_asset = "assets/icon.svg"
+icon_source = "internal:legacy-unpeel-tool-icons"
+icon_license = "vendor-brand-asset"
+
+[install]
+official_url = "https://x.ai"
+command = "curl -fsSL https://x.ai/cli/install.sh | bash"
+
+[detection]
+command_aliases = ["grok"]
+process_aliases = ["grok", "grok-build"]
+script_path_signatures = []
+
+[lifecycle]
+source = "hooks"
+authority = "complete"
+fallback = "none"
+completion_reliable = true
+attention_reliable = true
+anchor_start_event_to_output = false
+attention_clears_on_output = false
+
+[[usage.stores]]
+root = ".grok/sessions"
+extensions = ["jsonl"]
+
+[[suggested_presets]]
+id = "grok"
+label = "grok --always-approve"
+command = "grok --always-approve"
+quick_launch = false

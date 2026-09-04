@@ -1,0 +1,45 @@
+{
+  "_comment": "Ceilings for scripts/bench-memory.sh, checked when BENCH_THRESHOLDS points here (CI does). Units: KiB. core_on re-seeded 2026-09-03 after the Round 4/5 merges (52b0a67) at ~20% above the gate run (serve+first 5.19 MiB, per empty 0.12 MiB, per filled 0.39 MiB / 0.30 after 10 s idle, per client 1 KiB, core 6.4\u20138.3 MiB after teardown across runs, ceiling 10500); core_off rows keep their Round 2 seeds. The core is the default since 0.4.4: an unset UNPEEL_PTY_CORE infers the core_on profiles. Tighten as rounds land, never loosen without a note here. 'leftover_hosts' and 'leftover_dirs' are exact: reclamation must be total. 'vt_empty_grid_kib'/'vt_filled_grid_kib' are the in-process libghostty-vt grid rows (BENCH_VT=1, CI) measured against the vendored small-page build; 'per_client_kib' is exact bytes (footprint -f bytes). 2026-09-03 evening: core_on per_filled (480\u2192650) and core_after_teardown (10500\u219221000) reseeded at ~20% above the hosted macOS CI runner's first clean run (523 KiB / 17.1 MiB) \u2014 CI-runner allocator/page behaviour, not a regression; local numbers stay 0.30\u20130.44 MiB and 6.3\u20138.3 MiB. serve_plus_first_session stays 6400 now that the engine download streams to disk and the bench opts out of the install (UNPEEL_BROWSER_ENGINE_INSTALL=0).",
+  "core_off": {
+    "serve_plus_first_session_kib": 6300,
+    "per_empty_session_kib": 3650,
+    "per_filled_session_kib": 2650,
+    "per_client_kib": 71,
+    "leftover_hosts": 0,
+    "leftover_dirs": 0
+  },
+  "core_on": {
+    "serve_plus_first_session_kib": 6400,
+    "per_empty_session_kib": 150,
+    "per_filled_session_kib": 650,
+    "per_client_kib": 16,
+    "leftover_hosts": 0,
+    "leftover_dirs": 0,
+    "core_after_teardown_kib": 21000,
+    "vt_empty_grid_kib": 100,
+    "vt_filled_grid_kib": 320
+  },
+  "linux_core_off": {
+    "_comment": "Linux rows are PSS from /proc/<pid>/smaps_rollup (shared library pages count proportionally, so (a) is ~14 MiB where macOS phys_footprint says ~5); seeded 2026-09-03 (Round 4, Lane 3) at 20% above the first real run: rust:1.88-bullseye arm64 container on Apple silicon, release binaries, small-page libghostty-vt Linux slices, unpeel-attach via epoll+inotify.",
+    "serve_plus_first_session_kib": 16900,
+    "per_empty_session_kib": 1270,
+    "per_filled_session_kib": 1050,
+    "per_client_kib": 34,
+    "leftover_hosts": 0,
+    "leftover_dirs": 0,
+    "vt_empty_grid_kib": 110,
+    "vt_filled_grid_kib": 330
+  },
+  "linux_core_on": {
+    "_comment": "Linux rows are PSS from /proc/<pid>/smaps_rollup (shared library pages count proportionally, so (a) is ~14 MiB where macOS phys_footprint says ~5); seeded 2026-09-03 (Round 4, Lane 3) at 20% above the first real run: rust:1.88-bullseye arm64 container on Apple silicon, release binaries, small-page libghostty-vt Linux slices, unpeel-attach via epoll+inotify. 2026-09-03 evening: core_after_teardown 10000\u219213500 after the first clean ubuntu-latest run settled at 10.99 MiB (container seed was 8.13 MiB); every other Linux row was inside its ceiling (per empty 0.04 MiB, per filled 0.42, per client 20 KiB). 2026-09-04: core_after_teardown 13500\u219218000 \u2014 ubuntu-latest settles anywhere from 9.3 to 15.1 MiB run to run on the same commit (glibc trim on a 2-core runner), so this row is a leak guard, not a precision gate; the per-session rows carry the precision.",
+    "serve_plus_first_session_kib": 16750,
+    "per_empty_session_kib": 300,
+    "per_filled_session_kib": 630,
+    "per_client_kib": 31,
+    "leftover_hosts": 0,
+    "leftover_dirs": 0,
+    "core_after_teardown_kib": 18000,
+    "vt_empty_grid_kib": 110,
+    "vt_filled_grid_kib": 330
+  }
+}

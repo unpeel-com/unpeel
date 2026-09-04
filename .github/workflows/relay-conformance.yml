@@ -1,0 +1,44 @@
+# Cross-language drift guard: compile the shipped Swift RelayProtocol oracle
+# and exercise it end to end against the Rust headless Host. Ubuntu validates
+# the Rust relay implementation in workspace tests and link_lifecycle; this
+# proof needs macOS because Swift is part of the contract under test.
+name: Relay conformance
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'protocol/relay-kat-vectors-v1.json'
+      - 'crates/**'
+      - '.github/workflows/relay-conformance.yml'
+  pull_request:
+    paths:
+      - 'protocol/relay-kat-vectors-v1.json'
+      - 'crates/**'
+      - '.github/workflows/relay-conformance.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  swift-rust-relay:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install declared Rust MSRV
+        uses: dtolnay/rust-toolchain@1.88.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates
+      - name: Build headless Host
+        run: cargo build --quiet --locked --manifest-path crates/Cargo.toml -p unpeel-cli -p unpeel-host
+      - name: Swift/Rust Relay conformance
+        run: |
+          command -v swiftc
+          swiftc --version
+          cd crates/unpeel-cli/tests
+          ./run.sh -v relay_conformance
+        env:
+          UNPEEL_TUI_SKIP_BUILD: '1'
+          UNPEEL_TUI_BINARY: ${{ github.workspace }}/crates/target/debug/unpeel

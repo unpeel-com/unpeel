@@ -1,0 +1,22 @@
+[workspace]
+resolver = "2"
+members = [
+    "license-notices",
+    "unpeel-core",
+    "unpeel-host",
+    "unpeel-apps",
+    "unpeel-serve",
+    "unpeel-cli",
+]
+
+[workspace.package]
+version = "0.5.0"
+edition = "2021"
+# Locked dependencies (notably plist/time/instability) require Rust 1.88.
+# Keep this honest with the MSRV check in .github/workflows/linux-cli.yml.
+rust-version = "1.88.0"
+license = "MIT"
+authors = ["Unpeel"]
+
+[profile.release]
+strip = true

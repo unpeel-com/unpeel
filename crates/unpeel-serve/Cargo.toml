@@ -1,0 +1,29 @@
+[package]
+name = "unpeel-serve"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Headless host serving stack (app-less /mobile server, relay uplink, pairing, session model) shared by the TUI and any headless host"
+
+[lib]
+name = "unpeel_serve"
+path = "src/lib.rs"
+
+[dependencies]
+unpeel-core = { path = "../unpeel-core" }
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+libc = "0.2"
+plist = "1"
+uuid = { version = "1", features = ["v4"] }
+aes-gcm = { version = "0.10.3", features = ["aes", "alloc"] }
+hkdf = "0.12.4"
+sha2 = "0.10.9"
+base64 = { version = "0.23.1", features = ["std"] }
+rand = { version = "0.9.5", features = ["std", "std_rng", "os_rng"] }
+qrcode = { version = "0.14.1", default-features = false }
+
+[dev-dependencies]
+tempfile = "3"

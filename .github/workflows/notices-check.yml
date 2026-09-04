@@ -1,0 +1,72 @@
+# Third-party notices snapshot guard. `crates/license-notices` generates the
+# license texts for the three CLI crates' resolved dependency graphs across
+# every release target; the checked-in THIRD_PARTY_NOTICES.txt must match, so
+# a dependency change cannot ship without its notice (NOTICE.md).
+name: Third-party notices
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/**/Cargo.toml'
+      - 'crates/Cargo.lock'
+      - 'crates/unpeel-attach/Cargo.lock'
+      - 'crates/license-notices/**'
+      - 'THIRD_PARTY_NOTICES.txt'
+      - 'NOTICE.md'
+      - '.github/workflows/notices-check.yml'
+  pull_request:
+    paths:
+      - 'crates/**/Cargo.toml'
+      - 'crates/Cargo.lock'
+      - 'crates/unpeel-attach/Cargo.lock'
+      - 'crates/license-notices/**'
+      - 'THIRD_PARTY_NOTICES.txt'
+      - 'NOTICE.md'
+      - '.github/workflows/notices-check.yml'
+  schedule:
+    - cron: '41 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  notices:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install declared Rust MSRV
+        uses: dtolnay/rust-toolchain@1.88.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            crates
+            crates/unpeel-attach
+      - name: Every vendored artifact carries a LICENSE
+        run: |
+          set -eu
+          status=0
+          for dir in $(find crates -type d -name vendor -not -path '*/target/*'); do
+            for artifact in "$dir"/*/; do
+              [ -d "$artifact" ] || continue
+              if [ ! -f "$artifact/LICENSE" ] && [ ! -f "$artifact/LICENSE.md" ] && [ ! -f "$artifact/LICENSE.txt" ]; then
+                echo "::error::no LICENSE next to vendored artifact $artifact"; status=1
+              fi
+            done
+          done
+          exit $status
+      - name: Regenerate the notices snapshot
+        run: |
+          cargo run --quiet --locked --manifest-path crates/Cargo.toml -p unpeel-license-notices -- \
+            --manifest-path crates/Cargo.toml --package unpeel-cli --package unpeel-host \
+            --manifest-path crates/unpeel-attach/Cargo.toml --package unpeel-attach \
+            --target aarch64-apple-darwin --target x86_64-apple-darwin \
+            --target x86_64-unknown-linux-gnu --target aarch64-unknown-linux-gnu \
+            --output /tmp/THIRD_PARTY_NOTICES.txt
+      - name: Snapshot matches the committed THIRD_PARTY_NOTICES.txt
+        run: |
+          if ! diff -u THIRD_PARTY_NOTICES.txt /tmp/THIRD_PARTY_NOTICES.txt; then
+            echo "::error::THIRD_PARTY_NOTICES.txt is stale — regenerate it with the command in NOTICE.md and commit"
+            exit 1
+          fi

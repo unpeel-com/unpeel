@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "id": "legacy-host-without-ledger",
+      "compatible": null,
+      "bootstrap": {
+        "protocolVersion": 1,
+        "folders": [],
+        "projects": [],
+        "presets": [],
+        "sessions": [],
+        "capturedAtUnixMs": 1
+      }
+    },
+    {
+      "id": "current-host",
+      "compatible": true,
+      "bootstrap": {
+        "protocolVersion": 1,
+        "hostProtocol": {
+          "majorVersion": 1,
+          "minorVersion": 2,
+          "capabilities": ["host.bootstrap"]
+        },
+        "folders": [],
+        "projects": [],
+        "presets": [],
+        "sessions": [
+          {
+            "id": "blank-shell-agent",
+            "projectID": "project-1",
+            "activeRuntimeID": "claude",
+            "title": "Shell",
+            "command": "",
+            "createdAtUnixMs": 1,
+            "status": "running",
+            "activity": "working"
+          }
+        ],
+        "capturedAtUnixMs": 1
+      }
+    },
+    {
+      "id": "future-minor-and-unknown-capability",
+      "compatible": true,
+      "bootstrap": {
+        "protocolVersion": 1,
+        "hostProtocol": {
+          "majorVersion": 1,
+          "minorVersion": 99,
+          "capabilities": ["host.bootstrap", "future.capability"],
+          "futureDescriptorField": "ignored"
+        },
+        "folders": [],
+        "projects": [],
+        "presets": [],
+        "sessions": [],
+        "capturedAtUnixMs": 1,
+        "futureBootstrapField": { "ignored": true }
+      }
+    },
+    {
+      "id": "incompatible-major",
+      "compatible": false,
+      "bootstrap": {
+        "protocolVersion": 1,
+        "hostProtocol": {
+          "majorVersion": 2,
+          "minorVersion": 0,
+          "capabilities": ["host.bootstrap"]
+        },
+        "folders": [],
+        "projects": [],
+        "presets": [],
+        "sessions": [],
+        "capturedAtUnixMs": 1
+      }
+    }
+  ]
+}

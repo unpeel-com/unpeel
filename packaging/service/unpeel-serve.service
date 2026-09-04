@@ -1,0 +1,32 @@
+# Unpeel Host service — Linux systemd user unit.
+#
+# Usable verbatim when `unpeel` is installed at /usr/local/bin/unpeel
+# (the install.sh default):
+#
+#   cp unpeel-serve.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now unpeel-serve.service
+#
+# `unpeel serve install` writes this same file with the resolved binary
+# path (it rewrites the ExecStart line; a scoped workspace unit also gets
+# `--workspace NAME` inserted and its own unit name).
+#
+# This is deliberately a --user unit, never a system unit: the service owns
+# ~/.unpeel state and the per-user machine lease. For a headless box the
+# user manager must run without an open login session:
+#
+#   sudo loginctl enable-linger <user>
+#
+# Stdout goes to the user journal; durable diagnostics also land in
+# ~/.unpeel/hooks/trace.log.
+
+[Unit]
+Description=Unpeel Host service
+
+[Service]
+ExecStart=/usr/local/bin/unpeel serve
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

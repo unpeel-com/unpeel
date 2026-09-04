@@ -1,0 +1,30 @@
+schema_version = 1
+id = "com.github.copilot-cli"
+slug = "github-copilot"
+legacy_slug = "copilot"
+label = "Copilot"
+adapter = "builtin:copilot"
+legacy_order = 7
+platforms = ["macos", "linux"]
+supports_quick_launch = true
+capabilities = ["lifecycle_hooks", "resume", "restart_agent", "notify_when_done"]
+
+[display]
+icon = "agent"
+window_padding_x = 8
+
+[install]
+official_url = "https://github.com/github/copilot-cli"
+command = "npm install -g @github/copilot"
+
+[detection]
+command_aliases = ["copilot"]
+process_aliases = ["copilot", "github-copilot", "ghcs"]
+script_path_signatures = []
+
+[lifecycle]
+source = "hooks"
+authority = "complete"
+fallback = "none"
+completion_reliable = true
+attention_reliable = true

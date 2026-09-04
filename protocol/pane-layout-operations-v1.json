@@ -1,0 +1,2035 @@
+{
+  "schemaVersion": 1,
+  "contract": [
+    "Shared pane-layout operation conformance cases. The Swift PaneLayoutState and the TUI's panes module both run every case; the fixture is the normative contract for the recursive split-tree model.",
+    "A layout is the durable projection: { version, groups: [{ id, representativePaneID, root }] }. A node is { pane: { id, sessionID } } or { split: { direction: horizontal|vertical, ratio, left, right } }.",
+    "Coordinates: (0,0) is top-left, x grows right, y grows down. A horizontal split lays left|right; a vertical split lays top/bottom with the LEFT child on top. Ratio is the left/top child's share, clamped to [0.1, 0.9] at construction, resize, migration, and restore.",
+    "version 1 initials use the flat shape { id, representativePaneID, panes: [{ id, sessionID, fraction }] } and exercise the read migration: panes fold right-leaning, node(i) = split(horizontal, clamp(f_i / (f_i + ... + f_n)), leaf(p_i), node(i+1)). Divide, then clamp. Readers must also accept the legacy Rust key spellings representativePaneId / sessionId for version 1 only.",
+    "Leaf order is preorder (left-first) traversal. It drives representative promotion, cap trimming, and expectLiveLeaves ordering. The session-leaf cap is 8; canonicalize trims trailing preorder leaves.",
+    "Insert splits the target leaf at ratio 0.5; the new leaf becomes the left child for edges left/up and the right child for edges right/down. Group-edge insert splits the root; the new leaf's share is 1/(sessionLeafCount+1), clamped.",
+    "Detach removes a leaf and collapses its parent split to the surviving sibling. A group dissolves below 2 session leaves unless exactly 1 session plus a live launcher remains.",
+    "Equalize sets each split's ratio to leftWeight/(leftWeight+rightWeight), where a child's weight is: leaf = 1, same-direction split = sum of its children's weights, perpendicular split = 1. Recurses into all splits.",
+    "swapPanes exchanges the positions of two leaves in the same group's tree; pane ids travel with their leaves, so the representative id is unaffected.",
+    "insertLauncher snapshots the group's pre-insert tree. removeLauncher restores the snapshot iff its session-leaf id set equals the launcher-stripped tree's. bindLauncher and any explicit geometry mutation (insert, resize, swap, equalize) clear the snapshot. Reconcile prunes the snapshot with the same removal algorithm and drops it below 2 leaves or on divergence.",
+    "The durable projection strips launcher leaves via the removal algorithm; while a launcher is live and a snapshot exists, the snapshot is what gets encoded. Groups with fewer than 2 session leaves are omitted. Durable writes are always version 2.",
+    "focusNeighbor is a pure query over the spatial subdivision of the group's tree using artificial grid dimensions (leaf = 1x1; horizontal split sums widths/maxes heights; vertical split sums heights/maxes widths). Candidate leaves must satisfy the edge predicate (left: candidate.maxX <= ref.minX; right: candidate.minX >= ref.maxX; up: candidate.maxY <= ref.minY; down: candidate.minY >= ref.maxY), sorted stably by Euclidean distance between top-left corners; preorder breaks ties. No candidate means null.",
+    "Harnesses decode 'initial' through the real durable codec (so canonicalize and migration run), apply 'operations' in order, then re-encode and compare structurally with ratio tolerance 1e-9. Never compare JSON strings. When 'error' is expected, all operations before the last must succeed and the last must fail with that error; the state comparison is skipped. 'expectLiveLeaves' asserts the live (pre-projection) leaves in preorder.",
+    "Pane and group ids must be canonical lowercase UUIDs (non-UUID ids are replaced at restore, which would break determinism). Session ids are opaque strings.",
+    "Zoom is process-local presentation state and deliberately absent from this contract."
+  ],
+  "cases": [
+    {
+      "id": "migrate.two-pane",
+      "description": "v1 flat pair folds into one horizontal split with ratio = first fraction.",
+      "initial": {
+        "version": 1,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "panes": [
+              { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1", "fraction": 0.6 },
+              { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2", "fraction": 0.4 }
+            ]
+          }
+        ]
+      },
+      "operations": [],
+      "expect": {
+        "layout": {
+          "version": 2,
+          "groups": [
+            {
+              "id": "11111111-0000-4000-8000-000000000001",
+              "representativePaneID": "00000000-0000-4000-8000-000000000001",
+              "root": {
+                "split": {
+                  "direction": "horizontal",
+                  "ratio": 0.6,
+                  "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                  "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "migrate.three-pane",
+      "description": "v1 triple folds right-leaning: ratios 0.5 then 0.3/0.5.",
+      "initial": {
+        "version": 1,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "panes": [
+              { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1", "fraction": 0.5 },
+              { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2", "fraction": 0.3 },
+              { "id": "00000000-0000-4000-8000-000000000003", "sessionID": "s3", "fraction": 0.2 }
+            ]
+          }
+        ]
+      },
+      "operations": [],
+      "expect": {
+        "layout": {
+          "version": 2,
+          "groups": [
+            {
+              "id": "11111111-0000-4000-8000-000000000001",
+              "representativePaneID": "00000000-0000-4000-8000-000000000001",
+              "root": {
+                "split": {
+                  "direction": "horizontal",
+                  "ratio": 0.5,
+                  "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                  "right": {
+                    "split": {
+                      "direction": "horizontal",
+                      "ratio": 0.6,
+                      "left": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } },
+                      "right": { "pane": { "id": "00000000-0000-4000-8000-000000000003", "sessionID": "s3" } }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "migrate.four-pane-even",
+      "description": "Even quarters fold to ratios 0.25, 1/3, 0.5.",
+      "initial": {
+        "version": 1,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "panes": [
+              { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1", "fraction": 0.25 },
+              { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2", "fraction": 0.25 },
+              { "id": "00000000-0000-4000-8000-000000000003", "sessionID": "s3", "fraction": 0.25 },
+              { "id": "00000000-0000-4000-8000-000000000004", "sessionID": "s4", "fraction": 0.25 }
+            ]
+          }
+        ]
+      },
+      "operations": [],
+      "expect": {
+        "layout": {
+          "version": 2,
+          "groups": [
+            {
+              "id": "11111111-0000-4000-8000-000000000001",
+              "representativePaneID": "00000000-0000-4000-8000-000000000001",
+              "root": {
+                "split": {
+                  "direction": "horizontal",
+                  "ratio": 0.25,
+                  "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                  "right": {
+                    "split": {
+                      "direction": "horizontal",
+                      "ratio": 0.3333333333333333,
+                      "left": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } },
+                      "right": {
+                        "split": {
+                          "direction": "horizontal",
+                          "ratio": 0.5,
+                          "left": { "pane": { "id": "00000000-0000-4000-8000-000000000003", "sessionID": "s3" } },
+                          "right": { "pane": { "id": "00000000-0000-4000-8000-000000000004", "sessionID": "s4" } }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "migrate.clamps-low-fraction",
+      "description": "A fraction below the floor clamps the derived ratio to 0.1.",
+      "initial": {
+        "version": 1,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "panes": [
+              { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1", "fraction": 0.05 },
+              { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2", "fraction": 0.95 }
+            ]
+          }
+        ]
+      },
+      "operations": [],
+      "expect": {
+        "layout": {
+          "version": 2,
+          "groups": [
+            {
+              "id": "11111111-0000-4000-8000-000000000001",
+              "representativePaneID": "00000000-0000-4000-8000-000000000001",
+              "root": {
+                "split": {
+                  "direction": "horizontal",
+                  "ratio": 0.1,
+                  "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                  "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "migrate.preserves-representative",
+      "description": "Migration keeps a non-first representative pane id.",
+      "initial": {
+        "version": 1,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000002",
+            "panes": [
+              { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1", "fraction": 0.4 },
+              { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2", "fraction": 0.6 }
+            ]
+          }
+        ]
+      },
+      "operations": [],
+      "expect": {
+        "layout": {
+          "version": 2,
+          "groups": [
+            {
+              "id": "11111111-0000-4000-8000-000000000001",
+              "representativePaneID": "00000000-0000-4000-8000-000000000002",
+              "root": {
+                "split": {
+                  "direction": "horizontal",
+                  "ratio": 0.4,
+                  "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                  "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "migrate.drops-single-pane-group",
+      "description": "A malformed v1 group with one pane cannot survive restore.",
+      "initial": {
+        "version": 1,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "panes": [
+              { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1", "fraction": 1.0 }
+            ]
+          }
+        ]
+      },
+      "operations": [],
+      "expect": { "layout": { "version": 2, "groups": [] } }
+    },
+    {
+      "id": "canonicalize.duplicate-session-across-groups",
+      "description": "A session may appear once per layout; the later occurrence's leaf is dropped and its group dissolves below 2 leaves.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "horizontal",
+                "ratio": 0.6,
+                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+              }
+            }
+          },
+          {
+            "id": "11111111-0000-4000-8000-000000000002",
+            "representativePaneID": "00000000-0000-4000-8000-000000000003",
+            "root": {
+              "split": {
+                "direction": "horizontal",
+                "ratio": 0.5,
+                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000003", "sessionID": "s2" } },
+                "right": { "pane": { "id": "00000000-0000-4000-8000-000000000004", "sessionID": "s3" } }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [],
+      "expect": {
+        "layout": {
+          "version": 2,
+          "groups": [
+            {
+              "id": "11111111-0000-4000-8000-000000000001",
+              "representativePaneID": "00000000-0000-4000-8000-000000000001",
+              "root": {
+                "split": {
+                  "direction": "horizontal",
+                  "ratio": 0.6,
+                  "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                  "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "canonicalize.clamps-ratios",
+      "description": "Out-of-range ratios in stored trees clamp to [0.1, 0.9] on restore.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "horizontal",
+                "ratio": 0.03,
+                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                "right": {
+                  "split": {
+                    "direction": "vertical",
+                    "ratio": 0.97,
+                    "left": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } },
+                    "right": { "pane": { "id": "00000000-0000-4000-8000-000000000003", "sessionID": "s3" } }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [],
+      "expect": {
+        "layout": {
+          "version": 2,
+          "groups": [
+            {
+              "id": "11111111-0000-4000-8000-000000000001",
+              "representativePaneID": "00000000-0000-4000-8000-000000000001",
+              "root": {
+                "split": {
+                  "direction": "horizontal",
+                  "ratio": 0.1,
+                  "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                  "right": {
+                    "split": {
+                      "direction": "vertical",
+                      "ratio": 0.9,
+                      "left": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } },
+                      "right": { "pane": { "id": "00000000-0000-4000-8000-000000000003", "sessionID": "s3" } }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "canonicalize.trims-to-leaf-cap",
+      "description": "A 9-leaf group trims trailing preorder leaves down to the 8-leaf cap, collapsing as it goes.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "horizontal",
+                "ratio": 0.5,
+                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                "right": {
+                  "split": {
+                    "direction": "horizontal",
+                    "ratio": 0.5,
+                    "left": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } },
+                    "right": {
+                      "split": {
+                        "direction": "horizontal",
+                        "ratio": 0.5,
+                        "left": { "pane": { "id": "00000000-0000-4000-8000-000000000003", "sessionID": "s3" } },
+                        "right": {
+                          "split": {
+                            "direction": "horizontal",
+                            "ratio": 0.5,
+                            "left": { "pane": { "id": "00000000-0000-4000-8000-000000000004", "sessionID": "s4" } },
+                            "right": {
+                              "split": {
+                                "direction": "horizontal",
+                                "ratio": 0.5,
+                                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000005", "sessionID": "s5" } },
+                                "right": {
+                                  "split": {
+                                    "direction": "horizontal",
+                                    "ratio": 0.5,
+                                    "left": { "pane": { "id": "00000000-0000-4000-8000-000000000006", "sessionID": "s6" } },
+                                    "right": {
+                                      "split": {
+                                        "direction": "horizontal",
+                                        "ratio": 0.5,
+                                        "left": { "pane": { "id": "00000000-0000-4000-8000-000000000007", "sessionID": "s7" } },
+                                        "right": {
+                                          "split": {
+                                            "direction": "horizontal",
+                                            "ratio": 0.5,
+                                            "left": { "pane": { "id": "00000000-0000-4000-8000-000000000008", "sessionID": "s8" } },
+                                            "right": { "pane": { "id": "00000000-0000-4000-8000-000000000009", "sessionID": "s9" } }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [],
+      "expect": {
+        "layout": {
+          "version": 2,
+          "groups": [
+            {
+              "id": "11111111-0000-4000-8000-000000000001",
+              "representativePaneID": "00000000-0000-4000-8000-000000000001",
+              "root": {
+                "split": {
+                  "direction": "horizontal",
+                  "ratio": 0.5,
+                  "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                  "right": {
+                    "split": {
+                      "direction": "horizontal",
+                      "ratio": 0.5,
+                      "left": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } },
+                      "right": {
+                        "split": {
+                          "direction": "horizontal",
+                          "ratio": 0.5,
+                          "left": { "pane": { "id": "00000000-0000-4000-8000-000000000003", "sessionID": "s3" } },
+                          "right": {
+                            "split": {
+                              "direction": "horizontal",
+                              "ratio": 0.5,
+                              "left": { "pane": { "id": "00000000-0000-4000-8000-000000000004", "sessionID": "s4" } },
+                              "right": {
+                                "split": {
+                                  "direction": "horizontal",
+                                  "ratio": 0.5,
+                                  "left": { "pane": { "id": "00000000-0000-4000-8000-000000000005", "sessionID": "s5" } },
+                                  "right": {
+                                    "split": {
+                                      "direction": "horizontal",
+                                      "ratio": 0.5,
+                                      "left": { "pane": { "id": "00000000-0000-4000-8000-000000000006", "sessionID": "s6" } },
+                                      "right": {
+                                        "split": {
+                                          "direction": "horizontal",
+                                          "ratio": 0.5,
+                                          "left": { "pane": { "id": "00000000-0000-4000-8000-000000000007", "sessionID": "s7" } },
+                                          "right": { "pane": { "id": "00000000-0000-4000-8000-000000000008", "sessionID": "s8" } }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "insert.split-right",
+      "description": "Splitting a leaf on its right edge wraps it in a horizontal split with the new leaf on the right.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "horizontal",
+                "ratio": 0.6,
+                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [
+        { "op": "insertSession", "sessionID": "s3", "targetPaneID": "00000000-0000-4000-8000-000000000002", "edge": "right", "newPaneID": "aaaaaaaa-0000-4000-8000-000000000001" }
+      ],
+      "expect": {
+        "layout": {
+          "version": 2,
+          "groups": [
+            {
+              "id": "11111111-0000-4000-8000-000000000001",
+              "representativePaneID": "00000000-0000-4000-8000-000000000001",
+              "root": {
+                "split": {
+                  "direction": "horizontal",
+                  "ratio": 0.6,
+                  "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                  "right": {
+                    "split": {
+                      "direction": "horizontal",
+                      "ratio": 0.5,
+                      "left": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } },
+                      "right": { "pane": { "id": "aaaaaaaa-0000-4000-8000-000000000001", "sessionID": "s3" } }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "insert.split-left",
+      "description": "Edge left places the new leaf as the left child.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "horizontal",
+                "ratio": 0.6,
+                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [
+        { "op": "insertSession", "sessionID": "s3", "targetPaneID": "00000000-0000-4000-8000-000000000001", "edge": "left", "newPaneID": "aaaaaaaa-0000-4000-8000-000000000001" }
+      ],
+      "expect": {
+        "layout": {
+          "version": 2,
+          "groups": [
+            {
+              "id": "11111111-0000-4000-8000-000000000001",
+              "representativePaneID": "00000000-0000-4000-8000-000000000001",
+              "root": {
+                "split": {
+                  "direction": "horizontal",
+                  "ratio": 0.6,
+                  "left": {
+                    "split": {
+                      "direction": "horizontal",
+                      "ratio": 0.5,
+                      "left": { "pane": { "id": "aaaaaaaa-0000-4000-8000-000000000001", "sessionID": "s3" } },
+                      "right": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } }
+                    }
+                  },
+                  "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "insert.split-down",
+      "description": "Edge down creates a vertical split with the target on top.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "horizontal",
+                "ratio": 0.6,
+                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [
+        { "op": "insertSession", "sessionID": "s3", "targetPaneID": "00000000-0000-4000-8000-000000000001", "edge": "down", "newPaneID": "aaaaaaaa-0000-4000-8000-000000000001" }
+      ],
+      "expect": {
+        "layout": {
+          "version": 2,
+          "groups": [
+            {
+              "id": "11111111-0000-4000-8000-000000000001",
+              "representativePaneID": "00000000-0000-4000-8000-000000000001",
+              "root": {
+                "split": {
+                  "direction": "horizontal",
+                  "ratio": 0.6,
+                  "left": {
+                    "split": {
+                      "direction": "vertical",
+                      "ratio": 0.5,
+                      "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                      "right": { "pane": { "id": "aaaaaaaa-0000-4000-8000-000000000001", "sessionID": "s3" } }
+                    }
+                  },
+                  "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "insert.split-up",
+      "description": "Edge up creates a vertical split with the new leaf on top.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "horizontal",
+                "ratio": 0.6,
+                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [
+        { "op": "insertSession", "sessionID": "s3", "targetPaneID": "00000000-0000-4000-8000-000000000002", "edge": "up", "newPaneID": "aaaaaaaa-0000-4000-8000-000000000001" }
+      ],
+      "expect": {
+        "layout": {
+          "version": 2,
+          "groups": [
+            {
+              "id": "11111111-0000-4000-8000-000000000001",
+              "representativePaneID": "00000000-0000-4000-8000-000000000001",
+              "root": {
+                "split": {
+                  "direction": "horizontal",
+                  "ratio": 0.6,
+                  "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                  "right": {
+                    "split": {
+                      "direction": "vertical",
+                      "ratio": 0.5,
+                      "left": { "pane": { "id": "aaaaaaaa-0000-4000-8000-000000000001", "sessionID": "s3" } },
+                      "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "insert.group-edge-right",
+      "description": "A group-edge insert splits the root; the new leaf's share is 1/(leafCount+1).",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "horizontal",
+                "ratio": 0.6,
+                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [
+        { "op": "insertSession", "sessionID": "s3", "groupID": "11111111-0000-4000-8000-000000000001", "groupEdge": "right", "newPaneID": "aaaaaaaa-0000-4000-8000-000000000001" }
+      ],
+      "expect": {
+        "layout": {
+          "version": 2,
+          "groups": [
+            {
+              "id": "11111111-0000-4000-8000-000000000001",
+              "representativePaneID": "00000000-0000-4000-8000-000000000001",
+              "root": {
+                "split": {
+                  "direction": "horizontal",
+                  "ratio": 0.6666666666666666,
+                  "left": {
+                    "split": {
+                      "direction": "horizontal",
+                      "ratio": 0.6,
+                      "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                      "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+                    }
+                  },
+                  "right": { "pane": { "id": "aaaaaaaa-0000-4000-8000-000000000001", "sessionID": "s3" } }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "insert.creates-group-beside-solo",
+      "description": "Inserting beside a solo session creates a fresh 0.5/0.5 group.",
+      "initial": { "version": 2, "groups": [] },
+      "operations": [
+        {
+          "op": "insertSession",
+          "sessionID": "s2",
+          "besideSessionID": "s1",
+          "edge": "right",
+          "newPaneID": "aaaaaaaa-0000-4000-8000-000000000001",
+          "newGroupID": "33333333-0000-4000-8000-000000000001",
+          "newRepresentativePaneID": "aaaaaaaa-0000-4000-8000-000000000003"
+        }
+      ],
+      "expect": {
+        "layout": {
+          "version": 2,
+          "groups": [
+            {
+              "id": "33333333-0000-4000-8000-000000000001",
+              "representativePaneID": "aaaaaaaa-0000-4000-8000-000000000003",
+              "root": {
+                "split": {
+                  "direction": "horizontal",
+                  "ratio": 0.5,
+                  "left": { "pane": { "id": "aaaaaaaa-0000-4000-8000-000000000003", "sessionID": "s1" } },
+                  "right": { "pane": { "id": "aaaaaaaa-0000-4000-8000-000000000001", "sessionID": "s2" } }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "insert.duplicate-session-errors",
+      "description": "A session already in the layout cannot be inserted again.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "horizontal",
+                "ratio": 0.6,
+                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [
+        { "op": "insertSession", "sessionID": "s2", "targetPaneID": "00000000-0000-4000-8000-000000000001", "edge": "right", "newPaneID": "aaaaaaaa-0000-4000-8000-000000000001" }
+      ],
+      "expect": { "error": "duplicateSession" }
+    },
+    {
+      "id": "insert.capacity-errors",
+      "description": "An 8-leaf group refuses a ninth session.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "horizontal",
+                "ratio": 0.5,
+                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                "right": {
+                  "split": {
+                    "direction": "horizontal",
+                    "ratio": 0.5,
+                    "left": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } },
+                    "right": {
+                      "split": {
+                        "direction": "horizontal",
+                        "ratio": 0.5,
+                        "left": { "pane": { "id": "00000000-0000-4000-8000-000000000003", "sessionID": "s3" } },
+                        "right": {
+                          "split": {
+                            "direction": "horizontal",
+                            "ratio": 0.5,
+                            "left": { "pane": { "id": "00000000-0000-4000-8000-000000000004", "sessionID": "s4" } },
+                            "right": {
+                              "split": {
+                                "direction": "horizontal",
+                                "ratio": 0.5,
+                                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000005", "sessionID": "s5" } },
+                                "right": {
+                                  "split": {
+                                    "direction": "horizontal",
+                                    "ratio": 0.5,
+                                    "left": { "pane": { "id": "00000000-0000-4000-8000-000000000006", "sessionID": "s6" } },
+                                    "right": {
+                                      "split": {
+                                        "direction": "horizontal",
+                                        "ratio": 0.5,
+                                        "left": { "pane": { "id": "00000000-0000-4000-8000-000000000007", "sessionID": "s7" } },
+                                        "right": { "pane": { "id": "00000000-0000-4000-8000-000000000008", "sessionID": "s8" } }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [
+        { "op": "insertSession", "sessionID": "s9", "targetPaneID": "00000000-0000-4000-8000-000000000008", "edge": "right", "newPaneID": "aaaaaaaa-0000-4000-8000-000000000001" }
+      ],
+      "expect": { "error": "capacityReached" }
+    },
+    {
+      "id": "detach.collapses-parent-split",
+      "description": "Removing a leaf collapses its parent split to the surviving sibling.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "horizontal",
+                "ratio": 0.5,
+                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                "right": {
+                  "split": {
+                    "direction": "vertical",
+                    "ratio": 0.5,
+                    "left": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } },
+                    "right": { "pane": { "id": "00000000-0000-4000-8000-000000000003", "sessionID": "s3" } }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [
+        { "op": "detachPane", "paneID": "00000000-0000-4000-8000-000000000002" }
+      ],
+      "expect": {
+        "layout": {
+          "version": 2,
+          "groups": [
+            {
+              "id": "11111111-0000-4000-8000-000000000001",
+              "representativePaneID": "00000000-0000-4000-8000-000000000001",
+              "root": {
+                "split": {
+                  "direction": "horizontal",
+                  "ratio": 0.5,
+                  "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                  "right": { "pane": { "id": "00000000-0000-4000-8000-000000000003", "sessionID": "s3" } }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "detach.promotes-representative",
+      "description": "Detaching the representative promotes the first remaining session leaf in preorder.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "horizontal",
+                "ratio": 0.5,
+                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                "right": {
+                  "split": {
+                    "direction": "vertical",
+                    "ratio": 0.5,
+                    "left": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } },
+                    "right": { "pane": { "id": "00000000-0000-4000-8000-000000000003", "sessionID": "s3" } }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [
+        { "op": "detachPane", "paneID": "00000000-0000-4000-8000-000000000001" }
+      ],
+      "expect": {
+        "layout": {
+          "version": 2,
+          "groups": [
+            {
+              "id": "11111111-0000-4000-8000-000000000001",
+              "representativePaneID": "00000000-0000-4000-8000-000000000002",
+              "root": {
+                "split": {
+                  "direction": "vertical",
+                  "ratio": 0.5,
+                  "left": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } },
+                  "right": { "pane": { "id": "00000000-0000-4000-8000-000000000003", "sessionID": "s3" } }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "detach.dissolves-two-pane-group",
+      "description": "Detaching from a two-leaf group dissolves it.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "horizontal",
+                "ratio": 0.6,
+                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [
+        { "op": "detachPane", "paneID": "00000000-0000-4000-8000-000000000002" }
+      ],
+      "expect": { "layout": { "version": 2, "groups": [] } }
+    },
+    {
+      "id": "detach.unknown-pane-errors",
+      "description": "Detaching a pane id absent from every group fails.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "horizontal",
+                "ratio": 0.6,
+                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [
+        { "op": "detachPane", "paneID": "aaaaaaaa-0000-4000-8000-000000000001" }
+      ],
+      "expect": { "error": "paneNotFound" }
+    },
+    {
+      "id": "close.group",
+      "description": "Closing a group removes it entirely.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "horizontal",
+                "ratio": 0.6,
+                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [
+        { "op": "closeGroup", "groupID": "11111111-0000-4000-8000-000000000001" }
+      ],
+      "expect": { "layout": { "version": 2, "groups": [] } }
+    },
+    {
+      "id": "resize.root-split",
+      "description": "An empty path addresses the root split.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "horizontal",
+                "ratio": 0.6,
+                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [
+        { "op": "resizeSplit", "groupID": "11111111-0000-4000-8000-000000000001", "path": [], "ratio": 0.3 }
+      ],
+      "expect": {
+        "layout": {
+          "version": 2,
+          "groups": [
+            {
+              "id": "11111111-0000-4000-8000-000000000001",
+              "representativePaneID": "00000000-0000-4000-8000-000000000001",
+              "root": {
+                "split": {
+                  "direction": "horizontal",
+                  "ratio": 0.3,
+                  "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                  "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "resize.clamps-nested",
+      "description": "A nested split addressed by path clamps its ratio to 0.9.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "horizontal",
+                "ratio": 0.5,
+                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                "right": {
+                  "split": {
+                    "direction": "vertical",
+                    "ratio": 0.5,
+                    "left": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } },
+                    "right": { "pane": { "id": "00000000-0000-4000-8000-000000000003", "sessionID": "s3" } }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [
+        { "op": "resizeSplit", "groupID": "11111111-0000-4000-8000-000000000001", "path": ["right"], "ratio": 0.95 }
+      ],
+      "expect": {
+        "layout": {
+          "version": 2,
+          "groups": [
+            {
+              "id": "11111111-0000-4000-8000-000000000001",
+              "representativePaneID": "00000000-0000-4000-8000-000000000001",
+              "root": {
+                "split": {
+                  "direction": "horizontal",
+                  "ratio": 0.5,
+                  "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                  "right": {
+                    "split": {
+                      "direction": "vertical",
+                      "ratio": 0.9,
+                      "left": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } },
+                      "right": { "pane": { "id": "00000000-0000-4000-8000-000000000003", "sessionID": "s3" } }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "resize.bad-path-errors",
+      "description": "A path landing on a leaf is not a split.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "horizontal",
+                "ratio": 0.6,
+                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [
+        { "op": "resizeSplit", "groupID": "11111111-0000-4000-8000-000000000001", "path": ["left"], "ratio": 0.5 }
+      ],
+      "expect": { "error": "splitNotFound" }
+    },
+    {
+      "id": "equalize.horizontal-chain",
+      "description": "A right-leaning chain of three equalizes to 1/3 then 1/2.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "horizontal",
+                "ratio": 0.6,
+                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                "right": {
+                  "split": {
+                    "direction": "horizontal",
+                    "ratio": 0.7,
+                    "left": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } },
+                    "right": { "pane": { "id": "00000000-0000-4000-8000-000000000003", "sessionID": "s3" } }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [
+        { "op": "equalize", "groupID": "11111111-0000-4000-8000-000000000001" }
+      ],
+      "expect": {
+        "layout": {
+          "version": 2,
+          "groups": [
+            {
+              "id": "11111111-0000-4000-8000-000000000001",
+              "representativePaneID": "00000000-0000-4000-8000-000000000001",
+              "root": {
+                "split": {
+                  "direction": "horizontal",
+                  "ratio": 0.3333333333333333,
+                  "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                  "right": {
+                    "split": {
+                      "direction": "horizontal",
+                      "ratio": 0.5,
+                      "left": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } },
+                      "right": { "pane": { "id": "00000000-0000-4000-8000-000000000003", "sessionID": "s3" } }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "equalize.mixed-directions",
+      "description": "A perpendicular child counts as weight 1, so the outer split equalizes to 0.5.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "horizontal",
+                "ratio": 0.8,
+                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                "right": {
+                  "split": {
+                    "direction": "vertical",
+                    "ratio": 0.3,
+                    "left": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } },
+                    "right": { "pane": { "id": "00000000-0000-4000-8000-000000000003", "sessionID": "s3" } }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [
+        { "op": "equalize", "groupID": "11111111-0000-4000-8000-000000000001" }
+      ],
+      "expect": {
+        "layout": {
+          "version": 2,
+          "groups": [
+            {
+              "id": "11111111-0000-4000-8000-000000000001",
+              "representativePaneID": "00000000-0000-4000-8000-000000000001",
+              "root": {
+                "split": {
+                  "direction": "horizontal",
+                  "ratio": 0.5,
+                  "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                  "right": {
+                    "split": {
+                      "direction": "vertical",
+                      "ratio": 0.5,
+                      "left": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } },
+                      "right": { "pane": { "id": "00000000-0000-4000-8000-000000000003", "sessionID": "s3" } }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "equalize.nested-same-direction",
+      "description": "Same-direction children sum their weights: 2 vs 2 leaves gives 0.5 at the root.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "horizontal",
+                "ratio": 0.8,
+                "left": {
+                  "split": {
+                    "direction": "horizontal",
+                    "ratio": 0.7,
+                    "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                    "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+                  }
+                },
+                "right": {
+                  "split": {
+                    "direction": "horizontal",
+                    "ratio": 0.2,
+                    "left": { "pane": { "id": "00000000-0000-4000-8000-000000000003", "sessionID": "s3" } },
+                    "right": { "pane": { "id": "00000000-0000-4000-8000-000000000004", "sessionID": "s4" } }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [
+        { "op": "equalize", "groupID": "11111111-0000-4000-8000-000000000001" }
+      ],
+      "expect": {
+        "layout": {
+          "version": 2,
+          "groups": [
+            {
+              "id": "11111111-0000-4000-8000-000000000001",
+              "representativePaneID": "00000000-0000-4000-8000-000000000001",
+              "root": {
+                "split": {
+                  "direction": "horizontal",
+                  "ratio": 0.5,
+                  "left": {
+                    "split": {
+                      "direction": "horizontal",
+                      "ratio": 0.5,
+                      "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                      "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+                    }
+                  },
+                  "right": {
+                    "split": {
+                      "direction": "horizontal",
+                      "ratio": 0.5,
+                      "left": { "pane": { "id": "00000000-0000-4000-8000-000000000003", "sessionID": "s3" } },
+                      "right": { "pane": { "id": "00000000-0000-4000-8000-000000000004", "sessionID": "s4" } }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "swap.across-subtrees",
+      "description": "Swapping exchanges leaf positions anywhere in the tree; the representative id follows its pane.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "vertical",
+                "ratio": 0.5,
+                "left": {
+                  "split": {
+                    "direction": "horizontal",
+                    "ratio": 0.5,
+                    "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                    "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+                  }
+                },
+                "right": {
+                  "split": {
+                    "direction": "horizontal",
+                    "ratio": 0.5,
+                    "left": { "pane": { "id": "00000000-0000-4000-8000-000000000003", "sessionID": "s3" } },
+                    "right": { "pane": { "id": "00000000-0000-4000-8000-000000000004", "sessionID": "s4" } }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [
+        { "op": "swapPanes", "paneID": "00000000-0000-4000-8000-000000000001", "otherPaneID": "00000000-0000-4000-8000-000000000004" }
+      ],
+      "expect": {
+        "layout": {
+          "version": 2,
+          "groups": [
+            {
+              "id": "11111111-0000-4000-8000-000000000001",
+              "representativePaneID": "00000000-0000-4000-8000-000000000001",
+              "root": {
+                "split": {
+                  "direction": "vertical",
+                  "ratio": 0.5,
+                  "left": {
+                    "split": {
+                      "direction": "horizontal",
+                      "ratio": 0.5,
+                      "left": { "pane": { "id": "00000000-0000-4000-8000-000000000004", "sessionID": "s4" } },
+                      "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+                    }
+                  },
+                  "right": {
+                    "split": {
+                      "direction": "horizontal",
+                      "ratio": 0.5,
+                      "left": { "pane": { "id": "00000000-0000-4000-8000-000000000003", "sessionID": "s3" } },
+                      "right": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "swap.cross-group-errors",
+      "description": "Panes in different groups cannot swap.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "horizontal",
+                "ratio": 0.5,
+                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+              }
+            }
+          },
+          {
+            "id": "11111111-0000-4000-8000-000000000002",
+            "representativePaneID": "00000000-0000-4000-8000-000000000003",
+            "root": {
+              "split": {
+                "direction": "horizontal",
+                "ratio": 0.5,
+                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000003", "sessionID": "s3" } },
+                "right": { "pane": { "id": "00000000-0000-4000-8000-000000000004", "sessionID": "s4" } }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [
+        { "op": "swapPanes", "paneID": "00000000-0000-4000-8000-000000000001", "otherPaneID": "00000000-0000-4000-8000-000000000003" }
+      ],
+      "expect": { "error": "panesBelongToDifferentGroups" }
+    },
+    {
+      "id": "reconcile.removes-and-collapses",
+      "description": "An ineligible session's leaf is removed and the tree collapses around it.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "horizontal",
+                "ratio": 0.5,
+                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                "right": {
+                  "split": {
+                    "direction": "vertical",
+                    "ratio": 0.5,
+                    "left": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } },
+                    "right": { "pane": { "id": "00000000-0000-4000-8000-000000000003", "sessionID": "s3" } }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [
+        { "op": "reconcile", "eligibleSessionIDs": ["s1", "s3"] }
+      ],
+      "expect": {
+        "layout": {
+          "version": 2,
+          "groups": [
+            {
+              "id": "11111111-0000-4000-8000-000000000001",
+              "representativePaneID": "00000000-0000-4000-8000-000000000001",
+              "root": {
+                "split": {
+                  "direction": "horizontal",
+                  "ratio": 0.5,
+                  "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                  "right": { "pane": { "id": "00000000-0000-4000-8000-000000000003", "sessionID": "s3" } }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "reconcile.promotes-representative",
+      "description": "Losing the representative promotes the first surviving session leaf in preorder.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "horizontal",
+                "ratio": 0.5,
+                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                "right": {
+                  "split": {
+                    "direction": "vertical",
+                    "ratio": 0.5,
+                    "left": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } },
+                    "right": { "pane": { "id": "00000000-0000-4000-8000-000000000003", "sessionID": "s3" } }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [
+        { "op": "reconcile", "eligibleSessionIDs": ["s2", "s3"] }
+      ],
+      "expect": {
+        "layout": {
+          "version": 2,
+          "groups": [
+            {
+              "id": "11111111-0000-4000-8000-000000000001",
+              "representativePaneID": "00000000-0000-4000-8000-000000000002",
+              "root": {
+                "split": {
+                  "direction": "vertical",
+                  "ratio": 0.5,
+                  "left": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } },
+                  "right": { "pane": { "id": "00000000-0000-4000-8000-000000000003", "sessionID": "s3" } }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "reconcile.dissolves-group",
+      "description": "A group left with one session and no launcher dissolves.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "horizontal",
+                "ratio": 0.6,
+                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [
+        { "op": "reconcile", "eligibleSessionIDs": ["s1"] }
+      ],
+      "expect": { "layout": { "version": 2, "groups": [] } }
+    },
+    {
+      "id": "reconcile.keeps-session-with-launcher",
+      "description": "One session plus a live launcher survives reconcile; the pruned snapshot is dropped and the durable projection omits the under-2 group.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "horizontal",
+                "ratio": 0.6,
+                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [
+        { "op": "insertLauncher", "projectID": "proj-a", "targetPaneID": "00000000-0000-4000-8000-000000000002", "edge": "right", "newPaneID": "22222222-0000-4000-8000-000000000001" },
+        { "op": "reconcile", "eligibleSessionIDs": ["s1"] }
+      ],
+      "expect": {
+        "layout": { "version": 2, "groups": [] },
+        "expectLiveLeaves": [
+          { "paneID": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" },
+          { "paneID": "22222222-0000-4000-8000-000000000001", "launcherProjectID": "proj-a" }
+        ]
+      }
+    },
+    {
+      "id": "reconcile.no-change",
+      "description": "A fully eligible layout is untouched.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "horizontal",
+                "ratio": 0.6,
+                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [
+        { "op": "reconcile", "eligibleSessionIDs": ["s1", "s2"] }
+      ],
+      "expect": {
+        "layout": {
+          "version": 2,
+          "groups": [
+            {
+              "id": "11111111-0000-4000-8000-000000000001",
+              "representativePaneID": "00000000-0000-4000-8000-000000000001",
+              "root": {
+                "split": {
+                  "direction": "horizontal",
+                  "ratio": 0.6,
+                  "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                  "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "launcher.cancel-restores-geometry",
+      "description": "Canceling a launcher restores the exact pre-insert tree.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "horizontal",
+                "ratio": 0.6,
+                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [
+        { "op": "insertLauncher", "projectID": "proj-a", "targetPaneID": "00000000-0000-4000-8000-000000000002", "edge": "down", "newPaneID": "22222222-0000-4000-8000-000000000001" },
+        { "op": "removeLauncher", "paneID": "22222222-0000-4000-8000-000000000001" }
+      ],
+      "expect": {
+        "layout": {
+          "version": 2,
+          "groups": [
+            {
+              "id": "11111111-0000-4000-8000-000000000001",
+              "representativePaneID": "00000000-0000-4000-8000-000000000001",
+              "root": {
+                "split": {
+                  "direction": "horizontal",
+                  "ratio": 0.6,
+                  "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                  "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "launcher.resize-drops-restore",
+      "description": "An explicit resize while the launcher is open clears the snapshot; cancel keeps the resized geometry.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "horizontal",
+                "ratio": 0.6,
+                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [
+        { "op": "insertLauncher", "projectID": "proj-a", "targetPaneID": "00000000-0000-4000-8000-000000000002", "edge": "down", "newPaneID": "22222222-0000-4000-8000-000000000001" },
+        { "op": "resizeSplit", "groupID": "11111111-0000-4000-8000-000000000001", "path": [], "ratio": 0.3 },
+        { "op": "removeLauncher", "paneID": "22222222-0000-4000-8000-000000000001" }
+      ],
+      "expect": {
+        "layout": {
+          "version": 2,
+          "groups": [
+            {
+              "id": "11111111-0000-4000-8000-000000000001",
+              "representativePaneID": "00000000-0000-4000-8000-000000000001",
+              "root": {
+                "split": {
+                  "direction": "horizontal",
+                  "ratio": 0.3,
+                  "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                  "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "launcher.bind-keeps-pane-id",
+      "description": "Binding a launcher swaps its content in place; the pane id and geometry survive.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "horizontal",
+                "ratio": 0.6,
+                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [
+        { "op": "insertLauncher", "projectID": "proj-a", "targetPaneID": "00000000-0000-4000-8000-000000000002", "edge": "right", "newPaneID": "22222222-0000-4000-8000-000000000001" },
+        { "op": "bindLauncher", "paneID": "22222222-0000-4000-8000-000000000001", "sessionID": "s3" }
+      ],
+      "expect": {
+        "layout": {
+          "version": 2,
+          "groups": [
+            {
+              "id": "11111111-0000-4000-8000-000000000001",
+              "representativePaneID": "00000000-0000-4000-8000-000000000001",
+              "root": {
+                "split": {
+                  "direction": "horizontal",
+                  "ratio": 0.6,
+                  "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                  "right": {
+                    "split": {
+                      "direction": "horizontal",
+                      "ratio": 0.5,
+                      "left": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } },
+                      "right": { "pane": { "id": "22222222-0000-4000-8000-000000000001", "sessionID": "s3" } }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "launcher.projection-uses-snapshot",
+      "description": "While a launcher is open the durable projection encodes the pre-launcher snapshot, not the live tree.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "horizontal",
+                "ratio": 0.6,
+                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [
+        { "op": "insertLauncher", "projectID": "proj-a", "targetPaneID": "00000000-0000-4000-8000-000000000002", "edge": "right", "newPaneID": "22222222-0000-4000-8000-000000000001" }
+      ],
+      "expect": {
+        "layout": {
+          "version": 2,
+          "groups": [
+            {
+              "id": "11111111-0000-4000-8000-000000000001",
+              "representativePaneID": "00000000-0000-4000-8000-000000000001",
+              "root": {
+                "split": {
+                  "direction": "horizontal",
+                  "ratio": 0.6,
+                  "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                  "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+                }
+              }
+            }
+          ]
+        },
+        "expectLiveLeaves": [
+          { "paneID": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" },
+          { "paneID": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" },
+          { "paneID": "22222222-0000-4000-8000-000000000001", "launcherProjectID": "proj-a" }
+        ]
+      }
+    },
+    {
+      "id": "focus.grid-right",
+      "description": "In a 2x2 grid, right of the top-left pane is the top-right pane.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "vertical",
+                "ratio": 0.5,
+                "left": {
+                  "split": {
+                    "direction": "horizontal",
+                    "ratio": 0.5,
+                    "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                    "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+                  }
+                },
+                "right": {
+                  "split": {
+                    "direction": "horizontal",
+                    "ratio": 0.5,
+                    "left": { "pane": { "id": "00000000-0000-4000-8000-000000000003", "sessionID": "s3" } },
+                    "right": { "pane": { "id": "00000000-0000-4000-8000-000000000004", "sessionID": "s4" } }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [
+        { "op": "focusNeighbor", "paneID": "00000000-0000-4000-8000-000000000001", "direction": "right" }
+      ],
+      "expect": { "focusPaneID": "00000000-0000-4000-8000-000000000002" }
+    },
+    {
+      "id": "focus.grid-down",
+      "description": "Down from the top-left pane is the bottom-left pane (nearest by top-left distance).",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "vertical",
+                "ratio": 0.5,
+                "left": {
+                  "split": {
+                    "direction": "horizontal",
+                    "ratio": 0.5,
+                    "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                    "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+                  }
+                },
+                "right": {
+                  "split": {
+                    "direction": "horizontal",
+                    "ratio": 0.5,
+                    "left": { "pane": { "id": "00000000-0000-4000-8000-000000000003", "sessionID": "s3" } },
+                    "right": { "pane": { "id": "00000000-0000-4000-8000-000000000004", "sessionID": "s4" } }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [
+        { "op": "focusNeighbor", "paneID": "00000000-0000-4000-8000-000000000001", "direction": "down" }
+      ],
+      "expect": { "focusPaneID": "00000000-0000-4000-8000-000000000003" }
+    },
+    {
+      "id": "focus.diagonal-up",
+      "description": "Up from the bottom-right pane prefers the top-right pane over the farther top-left.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "vertical",
+                "ratio": 0.5,
+                "left": {
+                  "split": {
+                    "direction": "horizontal",
+                    "ratio": 0.5,
+                    "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                    "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+                  }
+                },
+                "right": {
+                  "split": {
+                    "direction": "horizontal",
+                    "ratio": 0.5,
+                    "left": { "pane": { "id": "00000000-0000-4000-8000-000000000003", "sessionID": "s3" } },
+                    "right": { "pane": { "id": "00000000-0000-4000-8000-000000000004", "sessionID": "s4" } }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [
+        { "op": "focusNeighbor", "paneID": "00000000-0000-4000-8000-000000000004", "direction": "up" }
+      ],
+      "expect": { "focusPaneID": "00000000-0000-4000-8000-000000000002" }
+    },
+    {
+      "id": "focus.edge-returns-null",
+      "description": "There is nothing left of the top-left pane.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "vertical",
+                "ratio": 0.5,
+                "left": {
+                  "split": {
+                    "direction": "horizontal",
+                    "ratio": 0.5,
+                    "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                    "right": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } }
+                  }
+                },
+                "right": {
+                  "split": {
+                    "direction": "horizontal",
+                    "ratio": 0.5,
+                    "left": { "pane": { "id": "00000000-0000-4000-8000-000000000003", "sessionID": "s3" } },
+                    "right": { "pane": { "id": "00000000-0000-4000-8000-000000000004", "sessionID": "s4" } }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [
+        { "op": "focusNeighbor", "paneID": "00000000-0000-4000-8000-000000000001", "direction": "left" }
+      ],
+      "expect": { "focusPaneID": null }
+    },
+    {
+      "id": "focus.uneven-left",
+      "description": "From the bottom-right leaf of a mixed tree, left crosses to the tall left pane; the top-right pane does not qualify.",
+      "initial": {
+        "version": 2,
+        "groups": [
+          {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "representativePaneID": "00000000-0000-4000-8000-000000000001",
+            "root": {
+              "split": {
+                "direction": "horizontal",
+                "ratio": 0.5,
+                "left": { "pane": { "id": "00000000-0000-4000-8000-000000000001", "sessionID": "s1" } },
+                "right": {
+                  "split": {
+                    "direction": "vertical",
+                    "ratio": 0.5,
+                    "left": { "pane": { "id": "00000000-0000-4000-8000-000000000002", "sessionID": "s2" } },
+                    "right": { "pane": { "id": "00000000-0000-4000-8000-000000000003", "sessionID": "s3" } }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "operations": [
+        { "op": "focusNeighbor", "paneID": "00000000-0000-4000-8000-000000000003", "direction": "left" }
+      ],
+      "expect": { "focusPaneID": "00000000-0000-4000-8000-000000000001" }
+    }
+  ]
+}

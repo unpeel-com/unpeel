@@ -1,0 +1,28 @@
+# A desktop-session target for hand-rolled sessions — Linux systemd --user.
+#
+# systemd's graphical-session.target refuses manual start on purpose: a
+# session manager (GNOME, KDE, sway) pulls it in from its own session target
+# with BindsTo=. A session that has no such manager — an Xvfb script, a
+# streamed Xorg desktop such as a Box, a kiosk — needs one of its own so that
+# units bound to graphical-session.target (the unit `unpeel serve install
+# --graphical` writes) start and stop with the session. This is that target.
+#
+# Once the display is up, in the session's own script:
+#
+#   cp unpeel-desktop-session.target ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user import-environment DISPLAY XAUTHORITY   # or WAYLAND_DISPLAY
+#   systemctl --user start unpeel-desktop-session.target
+#
+# and when the session ends:
+#
+#   systemctl --user stop unpeel-desktop-session.target
+#
+# Stopping it stops graphical-session.target and everything bound to it.
+# A machine with a real session manager does not need this file.
+
+[Unit]
+Description=Unpeel desktop session (hand-rolled: Xvfb, streamed Xorg, kiosk)
+BindsTo=graphical-session.target
+Wants=graphical-session-pre.target
+After=graphical-session-pre.target

@@ -1,0 +1,49 @@
+schema_version = 1
+id = "com.openai.codex"
+slug = "codex"
+legacy_slug = "codex"
+label = "Codex"
+adapter = "builtin:codex"
+legacy_order = 1
+platforms = ["macos", "linux"]
+supports_quick_launch = true
+capabilities = ["lifecycle_hooks", "resume", "restart_agent", "mcp_sessions", "mcp_browser", "mcp_computer", "transcript", "notify_when_done"]
+
+[display]
+tint = "#C292FE"
+spinner_tint = "#C292FE"
+icon = "codex"
+icon_asset = "assets/icon.svg"
+icon_source = "internal:legacy-unpeel-tool-icons"
+icon_license = "vendor-brand-asset"
+window_padding_x = 8
+
+[install]
+official_url = "https://openai.com/codex"
+command = "npm install -g @openai/codex"
+
+[detection]
+command_aliases = ["codex"]
+process_aliases = ["codex"]
+script_path_signatures = [{ components = ["@openai", "codex"] }]
+
+[environment]
+strip_inherited = ["CODEX_CI", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE", "CODEX_SHELL", "CODEX_THREAD_ID", "CODEX_TUI_RECORD_SESSION", "CODEX_TUI_SESSION_LOG_PATH"]
+
+[lifecycle]
+source = "hooks"
+authority = "complete"
+fallback = "none"
+completion_reliable = true
+attention_reliable = true
+distrust_stops_while_output_grows = true
+
+[[usage.stores]]
+root = ".codex/sessions"
+extensions = ["jsonl"]
+
+[[suggested_presets]]
+id = "codex"
+label = "codex --dangerously-bypass-approvals-and-sandbox"
+command = "codex --dangerously-bypass-approvals-and-sandbox"
+quick_launch = true

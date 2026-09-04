@@ -1,0 +1,47 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+.vite
+packages/*/node_modules
+dist
+dist-ssr
+packages/*/dist
+packages/*/.svelte-kit
+*.local
+/.env
+
+# Tauri
+src-tauri/target
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Rust (standalone attach client crate, not a crates/ workspace member)
+crates/unpeel-attach/target
+scripts/tools/ht
+
+# Swift/Xcode build outputs
+
+# Python bytecode
+__pycache__
+.claude/settings.local.json
+.claude/worktrees/
+
+
+# Operator-local agent context (points at the private unpeel-apple map)
+CLAUDE.local.md

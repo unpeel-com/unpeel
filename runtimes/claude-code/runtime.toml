@@ -1,0 +1,48 @@
+schema_version = 1
+id = "com.anthropic.claude-code"
+slug = "claude-code"
+legacy_slug = "claude"
+label = "Claude"
+adapter = "builtin:claude"
+legacy_order = 0
+platforms = ["macos", "linux"]
+supports_quick_launch = true
+capabilities = ["lifecycle_hooks", "resume", "restart_agent", "mcp_sessions", "mcp_browser", "mcp_computer", "transcript", "notify_when_done", "semantic_terminal_title"]
+
+[display]
+tint = "#D97757"
+spinner_tint = "#D97757"
+icon = "claude"
+icon_asset = "assets/icon.svg"
+icon_source = "internal:legacy-unpeel-tool-icons"
+icon_license = "vendor-brand-asset"
+window_padding_x = 8
+
+[install]
+official_url = "https://claude.com/claude-code"
+command = "npm install -g @anthropic-ai/claude-code"
+
+[detection]
+command_aliases = ["claude"]
+process_aliases = ["claude", "claude-code"]
+script_path_signatures = [{ components = ["@anthropic-ai", "claude-code"] }]
+
+[environment]
+strip_inherited = ["CLAUDE_CODE_CHILD_SESSION", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PID"]
+
+[lifecycle]
+source = "hooks"
+authority = "complete"
+fallback = "none"
+completion_reliable = true
+attention_reliable = true
+
+[[usage.stores]]
+root = ".claude/projects"
+extensions = ["jsonl"]
+
+[[suggested_presets]]
+id = "claude"
+label = "claude"
+command = "claude"
+quick_launch = true

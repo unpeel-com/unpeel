@@ -1,0 +1,29 @@
+[package]
+name = "unpeel-host"
+description = "Standalone Unpeel session host, Host-service launcher, and unified Unpeel MCP server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "unpeel-host"
+path = "src/main.rs"
+
+[features]
+# Allocator spike (Round 3, Lane 2): swap the global allocator for mimalloc.
+# Default-off; adoption is a coordinator decision from paired bench numbers.
+mimalloc = ["dep:mimalloc", "unpeel-core/mimalloc"]
+
+[dependencies]
+unpeel-core = { path = "../unpeel-core" }
+unpeel-serve = { path = "../unpeel-serve" }
+# MIT (crate and the Microsoft C library it vendors); compiled via `cc`, so
+# it builds for the gnu Linux targets in .github/workflows/linux-cli.yml.
+mimalloc = { version = "0.1", optional = true, default-features = false }
+
+[dev-dependencies]
+base64 = "0.22"
+libc = "0.2"
+serde_json = "1"

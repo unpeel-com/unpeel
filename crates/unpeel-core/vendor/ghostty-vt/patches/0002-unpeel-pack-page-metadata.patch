@@ -1,0 +1,83 @@
+Unpeel: pack page metadata ahead of the cell array (lazy-resident cells).
+
+Why: docs/plans/pty-core.md, 'Round 4, Lane 2'. Page memory comes from
+mmap (zeroed, unresident) and only the bytes init WRITES become resident.
+Init writes the row headers and every metadata region (style set table
+and items, grapheme/string allocator bitmaps, map metadata, hyperlink set)
+but never the cells. Upstream lays out rows, then the 55 KiB cell array,
+then the metadata, so on macOS (16 KiB pages) those init writes touch
+OS pages far apart and an EMPTY 80x24 terminal committed 81 KiB in its
+first page alone. With metadata first and cells last the init writes
+share one or two OS pages and the untouched cell array stays unresident
+until output arrives. Offsets are only ever read from Page.Layout, so no
+consumer changes; availableBitsForGrid uses the equivalent front-of-page
+formula. Applied only when building the vendored libghostty-vt.a for
+unpeel-host (build.sh); the app's GhosttyKit build is untouched.
+
+diff --git a/src/terminal/page.zig b/src/terminal/page.zig
+index 6edba68..982e98a 100644
+--- a/src/terminal/page.zig
++++ b/src/terminal/page.zig
+@@ -1702,16 +1702,18 @@ pub const Page = struct {
+     /// The memory layout for a page given a desired minimum cols
+     /// and rows size.
+     pub inline fn layout(cap: Capacity) Layout {
+-        const rows_count: usize = @intCast(cap.rows);
+-        const rows_start = 0;
+-        const rows_end: usize = rows_start + (rows_count * @sizeOf(Row));
+-
+-        const cells_count: usize = @as(usize, cap.cols) * @as(usize, cap.rows);
+-        const cells_start = alignForward(usize, rows_end, @alignOf(Cell));
+-        const cells_end = cells_start + (cells_count * @sizeOf(Cell));
+-
++        // Unpeel: metadata regions (styles, graphemes, strings, hyperlinks)
++        // are laid out FIRST and the cell array LAST. Every metadata region
++        // is written at init (set tables and items are zeroed, allocator
++        // bitmaps are filled, map metadata is cleared) while cells are only
++        // ever touched as rows get content. With cells in the middle those
++        // init writes landed on OS pages far apart from the row headers, so
++        // an empty terminal committed one 16 KiB page per region on macOS.
++        // Packed together they share one or two pages, and the untouched
++        // cell array stays unresident until output arrives. Offsets are
++        // only ever read from this Layout, so consumers are unaffected.
+         const styles_layout: StyleSet.Layout = .init(cap.styles);
+-        const styles_start = alignForward(usize, cells_end, StyleSet.base_align.toByteUnits());
++        const styles_start = 0;
+         const styles_end = styles_start + styles_layout.total_size;
+ 
+         const grapheme_alloc_layout = GraphemeAlloc.layout(cap.grapheme_bytes);
+@@ -1750,7 +1752,15 @@ pub const Page = struct {
+         const hyperlink_map_start = alignForward(usize, hyperlink_set_end, hyperlink.Map.base_align.toByteUnits());
+         const hyperlink_map_end = hyperlink_map_start + hyperlink_map_layout.total_size;
+ 
+-        const total_size = alignForward(usize, hyperlink_map_end, std.heap.page_size_min);
++        const rows_count: usize = @intCast(cap.rows);
++        const rows_start = alignForward(usize, hyperlink_map_end, @alignOf(Row));
++        const rows_end: usize = rows_start + (rows_count * @sizeOf(Row));
++
++        const cells_count: usize = @as(usize, cap.cols) * @as(usize, cap.rows);
++        const cells_start = alignForward(usize, rows_end, @alignOf(Cell));
++        const cells_end = cells_start + (cells_count * @sizeOf(Cell));
++
++        const total_size = alignForward(usize, cells_end, std.heap.page_size_min);
+ 
+         return .{
+             .total_size = total_size,
+@@ -1898,13 +1908,10 @@ pub const Capacity = struct {
+ 
+         const l = Page.layout(self);
+ 
+-        // Layout meta members from the end to find styles_start
+-        const hyperlink_map_start = alignBackward(usize, l.total_size - l.hyperlink_map_layout.total_size, hyperlink.Map.base_align.toByteUnits());
+-        const hyperlink_set_start = alignBackward(usize, hyperlink_map_start - l.hyperlink_set_layout.total_size, hyperlink.Set.base_align.toByteUnits());
+-        const string_alloc_start = alignBackward(usize, hyperlink_set_start - l.string_alloc_layout.total_size, StringAlloc.base_align.toByteUnits());
+-        const grapheme_map_start = alignBackward(usize, string_alloc_start - l.grapheme_map_layout.total_size, GraphemeMap.base_align.toByteUnits());
+-        const grapheme_alloc_start = alignBackward(usize, grapheme_map_start - l.grapheme_alloc_layout.total_size, GraphemeAlloc.base_align.toByteUnits());
+-        const styles_start = alignBackward(usize, grapheme_alloc_start - l.styles_layout.total_size, StyleSet.base_align.toByteUnits());
++        // Unpeel: the meta members are laid out at the FRONT of the page
++        // (see layout()), so the grid gets everything from the end of the
++        // last meta member to the end of the page.
++        const styles_start = l.total_size - l.rows_start;
+ 
+         // Multiply by 8 to convert bytes to bits
+         return styles_start * 8;

@@ -1,0 +1,876 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "id": "bootstrap.valid",
+      "method": "GET",
+      "path": "/mobile/bootstrap",
+      "expected": {
+        "native": 200,
+        "tui": 200
+      }
+    },
+    {
+      "id": "bootstrap.unsupported-method",
+      "method": "DELETE",
+      "path": "/mobile/bootstrap",
+      "expected": {
+        "native": 405,
+        "tui": 405
+      }
+    },
+    {
+      "id": "pairing-invitation.invalid-action",
+      "method": "POST",
+      "path": "/mobile/pairing-invitation",
+      "body": {
+        "action": "invalid"
+      },
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "pairing-invitation.create",
+      "method": "POST",
+      "path": "/mobile/pairing-invitation",
+      "body": {
+        "action": "create",
+        "endpoint": "http://127.0.0.1:41000/mobile/pairing-proxy/CONFORMANCE"
+      },
+      "expected": {
+        "native": 200,
+        "tui": 200
+      }
+    },
+    {
+      "id": "output.missing-session",
+      "method": "GET",
+      "path": "/mobile/output",
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "metrics.missing-session",
+      "method": "GET",
+      "path": "/mobile/metrics",
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "write.missing-session",
+      "method": "POST",
+      "path": "/mobile/write",
+      "body": {
+        "data": "hello"
+      },
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "resize.missing-session",
+      "method": "POST",
+      "path": "/mobile/resize",
+      "body": {
+        "columns": 80,
+        "rows": 24
+      },
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "resize-desktop.clear-valid",
+      "method": "POST",
+      "path": "/mobile/resize-desktop",
+      "body": {
+        "sessionID": "conformance-session",
+        "clear": true
+      },
+      "expected": {
+        "native": 200,
+        "tui": 200
+      }
+    },
+    {
+      "id": "organization.missing-session-id",
+      "method": "POST",
+      "path": "/mobile/session-organization",
+      "body": {
+        "title": "Conformance"
+      },
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "organization.empty-noop",
+      "method": "POST",
+      "path": "/mobile/session-organization",
+      "body": {
+        "sessionID": "conformance-session"
+      },
+      "expected": {
+        "native": 200,
+        "tui": 200
+      }
+    },
+    {
+      "id": "organization.whitespace-title-noop",
+      "method": "POST",
+      "path": "/mobile/session-organization",
+      "body": {
+        "sessionID": "conformance-session",
+        "title": "   \n  "
+      },
+      "expected": {
+        "native": 200,
+        "tui": 200
+      }
+    },
+    {
+      "id": "organization.unknown-empty-noop",
+      "method": "POST",
+      "path": "/mobile/session-organization",
+      "body": {
+        "sessionID": "conformance-unknown"
+      },
+      "expected": {
+        "native": 404,
+        "tui": 404
+      }
+    },
+    {
+      "id": "organization.project.unknown-target",
+      "method": "POST",
+      "path": "/mobile/session-organization",
+      "body": {
+        "sessionID": "conformance-session",
+        "projectID": "conformance-no-such-project"
+      },
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "organization.malformed-pin",
+      "method": "POST",
+      "path": "/mobile/session-organization",
+      "body": {
+        "sessionID": "conformance-session",
+        "pinned": "yes"
+      },
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "organization.notify-unsupported-headless",
+      "method": "POST",
+      "path": "/mobile/session-organization",
+      "body": {
+        "sessionID": "conformance-session",
+        "notifyWhenDone": true
+      },
+      "expected": {
+        "native": 200,
+        "tui": 501
+      }
+    },
+    {
+      "id": "organization.unknown-notify-resolves-session-first",
+      "method": "POST",
+      "path": "/mobile/session-organization",
+      "body": {
+        "sessionID": "conformance-unknown",
+        "notifyWhenDone": true
+      },
+      "expected": {
+        "native": 404,
+        "tui": 404
+      }
+    },
+    {
+      "id": "order.missing-project-id",
+      "method": "POST",
+      "path": "/mobile/session-order",
+      "body": {
+        "orderedSessionIDs": [
+          "conformance-session"
+        ]
+      },
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "project-organization.missing-project-id",
+      "method": "POST",
+      "path": "/mobile/project-organization",
+      "body": {
+        "sortOrder": 0
+      },
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "project-organization.unknown-project",
+      "method": "POST",
+      "path": "/mobile/project-organization",
+      "body": {
+        "projectID": "conformance-unknown",
+        "sortOrder": 0
+      },
+      "expected": {
+        "native": 404,
+        "tui": 404
+      }
+    },
+    {
+      "id": "project-organization.empty-noop",
+      "method": "POST",
+      "path": "/mobile/project-organization",
+      "body": {
+        "projectID": "conformance-project"
+      },
+      "expected": {
+        "native": 200,
+        "tui": 200
+      }
+    },
+    {
+      "id": "project-organization.malformed-sort-order",
+      "method": "POST",
+      "path": "/mobile/project-organization",
+      "body": {
+        "projectID": "conformance-project",
+        "sortOrder": "first"
+      },
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "project-organization.sort-order-noop",
+      "method": "POST",
+      "path": "/mobile/project-organization",
+      "body": {
+        "projectID": "conformance-project",
+        "sortOrder": 0
+      },
+      "expected": {
+        "native": 200,
+        "tui": 200
+      }
+    },
+    {
+      "id": "project-organization.folder-move-unsupported",
+      "method": "POST",
+      "path": "/mobile/project-organization",
+      "body": {
+        "projectID": "conformance-project",
+        "folderID": "conformance-folder"
+      },
+      "expected": {
+        "native": 501,
+        "tui": 501
+      }
+    },
+    {
+      "id": "order.malformed-ids",
+      "method": "POST",
+      "path": "/mobile/session-order",
+      "body": {
+        "projectID": "conformance-project",
+        "orderedSessionIDs": "conformance-session"
+      },
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "restart.missing-session",
+      "method": "POST",
+      "path": "/mobile/restart-session",
+      "body": {},
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "restart.success",
+      "method": "POST",
+      "path": "/mobile/restart-session",
+      "body": {
+        "sessionID": "conformance-restart"
+      },
+      "expected": {
+        "native": 200,
+        "tui": 200
+      }
+    },
+    {
+      "id": "restart.unknown-session",
+      "method": "POST",
+      "path": "/mobile/restart-session",
+      "body": {
+        "sessionID": "conformance-unknown"
+      },
+      "expected": {
+        "native": 404,
+        "tui": 404
+      }
+    },
+    {
+      "id": "session-action.unknown-action",
+      "method": "POST",
+      "path": "/mobile/session-action",
+      "body": {
+        "sessionID": "conformance-session",
+        "action": "unknown"
+      },
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "session-action.stop-success",
+      "method": "POST",
+      "path": "/mobile/session-action",
+      "body": {
+        "sessionID": "conformance-stop-live",
+        "action": "stop"
+      },
+      "expected": {
+        "native": 200,
+        "tui": 200
+      }
+    },
+    {
+      "id": "session-action.stop-exited",
+      "method": "POST",
+      "path": "/mobile/session-action",
+      "body": {
+        "sessionID": "conformance-stop-exited",
+        "action": "stop"
+      },
+      "expected": {
+        "native": 409,
+        "tui": 409
+      }
+    },
+    {
+      "id": "session-action.restart-success",
+      "method": "POST",
+      "path": "/mobile/session-action",
+      "body": {
+        "sessionID": "conformance-action-restart",
+        "action": "restart"
+      },
+      "expected": {
+        "native": 200,
+        "tui": 200
+      }
+    },
+    {
+      "id": "session-action.restart-agent-success",
+      "method": "POST",
+      "path": "/mobile/session-action",
+      "body": {
+        "sessionID": "conformance-action-restart-agent",
+        "action": "restart_agent"
+      },
+      "expected": {
+        "native": 200,
+        "tui": 200
+      }
+    },
+    {
+      "id": "session-action.restart-agent-exited",
+      "method": "POST",
+      "path": "/mobile/session-action",
+      "body": {
+        "sessionID": "conformance-restart-agent-exited",
+        "action": "restart_agent"
+      },
+      "expected": {
+        "native": 409,
+        "tui": 409
+      }
+    },
+    {
+      "id": "session-action.resume-agent-success",
+      "method": "POST",
+      "path": "/mobile/session-action",
+      "body": {
+        "sessionID": "conformance-action-resume-agent",
+        "action": "resume_agent"
+      },
+      "expected": {
+        "native": 200,
+        "tui": 200
+      }
+    },
+    {
+      "id": "session-action.resume-agent-exited",
+      "method": "POST",
+      "path": "/mobile/session-action",
+      "body": {
+        "sessionID": "conformance-resume-agent-exited",
+        "action": "resume_agent"
+      },
+      "expected": {
+        "native": 409,
+        "tui": 409
+      }
+    },
+    {
+      "id": "session-action.remove-success",
+      "method": "POST",
+      "path": "/mobile/session-action",
+      "body": {
+        "sessionID": "conformance-remove",
+        "action": "remove"
+      },
+      "expected": {
+        "native": 200,
+        "tui": 200
+      }
+    },
+    {
+      "id": "session-action.effect-failure",
+      "method": "POST",
+      "path": "/mobile/session-action",
+      "body": {
+        "sessionID": "conformance-broken",
+        "action": "remove"
+      },
+      "expected": {
+        "native": 500,
+        "tui": 500
+      }
+    },
+    {
+      "id": "session-action.unknown-session",
+      "method": "POST",
+      "path": "/mobile/session-action",
+      "body": {
+        "sessionID": "conformance-unknown",
+        "action": "stop"
+      },
+      "expected": {
+        "native": 404,
+        "tui": 404
+      }
+    },
+    {
+      "id": "approval.unknown",
+      "method": "POST",
+      "path": "/mobile/approvals/answer",
+      "body": {
+        "id": "missing-approval",
+        "approved": false
+      },
+      "expected": {
+        "native": 409,
+        "tui": 409
+      }
+    },
+    {
+      "id": "mark-read.missing-session",
+      "method": "POST",
+      "path": "/mobile/mark-read",
+      "body": {},
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "archive.missing-project",
+      "method": "GET",
+      "path": "/mobile/archive",
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "archive.unknown-project",
+      "method": "GET",
+      "path": "/mobile/archive",
+      "query": {
+        "project_id": "conformance-unknown"
+      },
+      "expected": {
+        "native": 404,
+        "tui": 404
+      }
+    },
+    {
+      "id": "archive.known-empty",
+      "method": "GET",
+      "path": "/mobile/archive",
+      "query": {
+        "project_id": "conformance-project"
+      },
+      "expected": {
+        "native": 200,
+        "tui": 200
+      }
+    },
+    {
+      "id": "transcript.missing-session",
+      "method": "GET",
+      "path": "/mobile/transcript-markdown",
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "artifacts.missing-session",
+      "method": "GET",
+      "path": "/mobile/artifacts",
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "artifacts.valid-empty",
+      "method": "GET",
+      "path": "/mobile/artifacts",
+      "query": {
+        "session_id": "conformance-session"
+      },
+      "expected": {
+        "native": 200,
+        "tui": 200
+      }
+    },
+    {
+      "id": "artifact-delete.missing-path",
+      "method": "POST",
+      "path": "/mobile/artifact-delete",
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "artifact-delete.unknown-kind",
+      "method": "POST",
+      "path": "/mobile/artifact-delete",
+      "query": {
+        "session_id": "conformance-session",
+        "kind": "unknown",
+        "name": "x"
+      },
+      "expected": {
+        "native": 404,
+        "tui": 404
+      }
+    },
+    {
+      "id": "artifact.missing-path",
+      "method": "GET",
+      "path": "/mobile/artifact",
+      "query": {
+        "session_id": "conformance-session"
+      },
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "artifact.unknown-kind",
+      "method": "GET",
+      "path": "/mobile/artifact",
+      "query": {
+        "session_id": "conformance-session",
+        "kind": "unknown",
+        "name": "x"
+      },
+      "expected": {
+        "native": 404,
+        "tui": 404
+      }
+    },
+    {
+      "id": "upload.missing-session",
+      "method": "POST",
+      "path": "/mobile/upload",
+      "expected": {
+        "native": 400,
+        "tui": 404
+      }
+    },
+    {
+      "id": "upload-chunk.missing-session",
+      "method": "POST",
+      "path": "/mobile/upload-chunk",
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "push.invalid-token",
+      "method": "POST",
+      "path": "/mobile/push-token",
+      "body": {
+        "apnsToken": "no",
+        "environment": "sandbox"
+      },
+      "expected": {
+        "native": 400,
+        "tui": 404
+      }
+    },
+    {
+      "id": "request-screenshot.missing-session",
+      "method": "POST",
+      "path": "/mobile/request-screenshot",
+      "body": {},
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "create.invalid-body",
+      "method": "POST",
+      "path": "/mobile/sessions",
+      "body": {},
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "presets.create-missing-command",
+      "method": "POST",
+      "path": "/mobile/presets",
+      "body": {},
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "presets.removed-requires-preset-id",
+      "method": "POST",
+      "path": "/mobile/presets",
+      "body": {
+        "removed": true
+      },
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "presets.unknown-preset",
+      "method": "POST",
+      "path": "/mobile/presets",
+      "body": {
+        "presetID": "conformance-unknown"
+      },
+      "expected": {
+        "native": 404,
+        "tui": 404
+      }
+    },
+    {
+      "id": "presets.empty-noop",
+      "method": "POST",
+      "path": "/mobile/presets",
+      "body": {
+        "presetID": "conformance-preset"
+      },
+      "expected": {
+        "native": 200,
+        "tui": 200
+      }
+    },
+    {
+      "id": "presets.sort-order-noop",
+      "method": "POST",
+      "path": "/mobile/presets",
+      "body": {
+        "presetID": "conformance-preset",
+        "sortOrder": 0
+      },
+      "expected": {
+        "native": 200,
+        "tui": 200
+      }
+    },
+    {
+      "id": "presets.malformed-quick-launch",
+      "method": "POST",
+      "path": "/mobile/presets",
+      "body": {
+        "presetID": "conformance-preset",
+        "quickLaunch": "yes"
+      },
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "presets.removed-not-combinable",
+      "method": "POST",
+      "path": "/mobile/presets",
+      "body": {
+        "presetID": "conformance-preset",
+        "removed": true,
+        "command": "x"
+      },
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "workspace-settings.empty-noop",
+      "method": "POST",
+      "path": "/mobile/workspace-settings",
+      "body": {},
+      "expected": {
+        "native": 200,
+        "tui": 200
+      }
+    },
+    {
+      "id": "workspace-settings.malformed-cutoff",
+      "method": "POST",
+      "path": "/mobile/workspace-settings",
+      "body": {
+        "autoStopArchiveMinutes": 45
+      },
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "workspace-settings.malformed-access",
+      "method": "POST",
+      "path": "/mobile/workspace-settings",
+      "body": {
+        "browserDefaultAccess": "maybe"
+      },
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "workspace-settings.compound-never-half-applies",
+      "method": "POST",
+      "path": "/mobile/workspace-settings",
+      "body": {
+        "computerAccess": "allow",
+        "sidebarStoppedLimit": 7
+      },
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "workspace-settings.malformed-appearance",
+      "method": "POST",
+      "path": "/mobile/workspace-settings",
+      "body": {
+        "appearanceSettings": {
+          "backgroundOpacity": 1.5
+        }
+      },
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "workspace-settings.malformed-notifications",
+      "method": "POST",
+      "path": "/mobile/workspace-settings",
+      "body": {
+        "notificationSettings": {
+          "menuAttentionDetection": "yes"
+        }
+      },
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "workspace-settings.malformed-experimental",
+      "method": "POST",
+      "path": "/mobile/workspace-settings",
+      "body": {
+        "experimentalSettings": {
+          "sessionsMcp": "yes"
+        }
+      },
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "unknown-route",
+      "method": "GET",
+      "path": "/mobile/definitely-not-a-route",
+      "expected": {
+        "native": 404,
+        "tui": 404
+      }
+    }
+  ],
+  "additiveBootstrapFields": [
+    {
+      "field": "hostIsolationTier",
+      "required": true,
+      "values": [
+        "vm",
+        "container",
+        "host"
+      ],
+      "note": "Router-owned, data only. Both Host kinds always publish it; macOS is host. Controllers treat an absent value as unknown (compatibility with pre-0.5.0 Hosts)."
+    },
+    {
+      "field": "hostEnvironment",
+      "required": false,
+      "shape": {
+        "kind": "box",
+        "id": "<string>"
+      },
+      "note": "Present only when the Host detects it runs inside a Box (kind box). Additive/optional; no policy in 0.5.0."
+    }
+  ]
+}

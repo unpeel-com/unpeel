@@ -1,0 +1,54 @@
+schema_version = 1
+id = "com.vercel.fx"
+slug = "fx"
+legacy_slug = "fx"
+label = "fx"
+adapter = "builtin:fx"
+legacy_order = 13
+platforms = ["macos", "linux"]
+supports_quick_launch = true
+capabilities = ["resume", "restart_agent", "mcp_sessions", "mcp_browser"]
+
+[display]
+tint = "#EDEDED"
+spinner_tint = "#EDEDED"
+icon = "fx"
+icon_asset = "assets/icon.svg"
+icon_source = "https://fx.sh"
+icon_license = "vendor-brand-asset"
+window_padding_x = 8
+
+[install]
+official_url = "https://fx.sh"
+command = "curl -fsSL https://fx.sh/setup.sh | bash"
+
+# `fx` is also the name of a popular JSON viewer (antonmedv/fx). Detection is
+# alias-based and cannot tell them apart; either binary only gains foreground
+# presentation. Neither output nor screen changes assert lifecycle state.
+[detection]
+command_aliases = ["fx"]
+process_aliases = ["fx"]
+script_path_signatures = []
+
+# fx has no lifecycle hook/notify mechanism (verified against vercel-labs/fx
+# and fx.sh docs, 2026-08). Output remains terminal/recency telemetry, but it
+# has no lifecycle authority and never starts an animated Busy state.
+[lifecycle]
+source = "output"
+authority = "none"
+fallback = "none"
+completion_reliable = false
+attention_reliable = false
+
+# Sessions live in ~/.fx/sessions/<id>/ with the conversation in events.jsonl
+# (session_log.zig); counting that one file counts sessions.
+[[usage.stores]]
+root = ".fx/sessions"
+extensions = ["jsonl"]
+file_name = "events.jsonl"
+
+[[suggested_presets]]
+id = "fx"
+label = "fx"
+command = "fx"
+quick_launch = false

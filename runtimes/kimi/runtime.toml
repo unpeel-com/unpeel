@@ -1,0 +1,52 @@
+schema_version = 1
+id = "com.moonshot.kimi-code"
+slug = "kimi"
+legacy_slug = "kimi"
+label = "Kimi"
+adapter = "builtin:kimi"
+legacy_order = 10
+platforms = ["macos", "linux"]
+supports_quick_launch = true
+capabilities = ["lifecycle_hooks", "resume", "restart_agent", "mcp_sessions", "mcp_browser", "mcp_computer", "transcript", "notify_when_done"]
+
+[display]
+tint = "#8B7CFF"
+spinner_tint = "#B88A2A"
+icon = "kimi"
+icon_asset = "assets/icon.svg"
+icon_source = "internal:legacy-unpeel-tool-icons"
+icon_license = "vendor-brand-asset"
+window_padding_x = 8
+
+[install]
+official_url = "https://kimi.com"
+
+[detection]
+command_aliases = ["kimi"]
+process_aliases = ["kimi", "kimi-code"]
+search_path_suffixes = [".kimi-code/bin"]
+script_path_signatures = []
+
+[lifecycle]
+source = "hooks"
+authority = "complete"
+fallback = "none"
+completion_reliable = true
+attention_reliable = true
+
+[[usage.stores]]
+root = ".kimi-code/sessions"
+extensions = ["jsonl"]
+file_name = "wire.jsonl"
+parent_dir_name = "main"
+
+[[usage.stores]]
+root = ".kimi/sessions"
+extensions = ["jsonl"]
+file_name = "context.jsonl"
+
+[[suggested_presets]]
+id = "kimi"
+label = "kimi --yolo"
+command = "kimi --yolo"
+quick_launch = false

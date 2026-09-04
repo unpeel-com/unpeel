@@ -1,0 +1,44 @@
+schema_version = 1
+id = "dev.kiro.cli"
+slug = "kiro"
+legacy_slug = "kiro-cli"
+label = "Kiro"
+adapter = "builtin:kiro-cli"
+legacy_order = 11
+platforms = ["macos", "linux"]
+supports_quick_launch = true
+capabilities = ["lifecycle_hooks", "resume", "restart_agent", "mcp_sessions", "mcp_browser", "transcript", "notify_when_done"]
+
+[display]
+tint = "#A78BFA"
+spinner_tint = "#A78BFA"
+icon = "kiro"
+icon_asset = "assets/icon.svg"
+icon_source = "internal:legacy-unpeel-tool-icons"
+icon_license = "vendor-brand-asset"
+window_padding_x = 8
+
+[install]
+official_url = "https://kiro.dev"
+
+[detection]
+command_aliases = ["kiro-cli"]
+process_aliases = ["kiro", "kiro-cli"]
+script_path_signatures = []
+
+[lifecycle]
+source = "hooks"
+authority = "complete"
+fallback = "none"
+completion_reliable = true
+attention_reliable = true
+
+[[usage.stores]]
+root = ".kiro/sessions"
+extensions = ["jsonl"]
+
+[[suggested_presets]]
+id = "kiro-cli"
+label = "kiro-cli --v3"
+command = "kiro-cli --v3"
+quick_launch = false

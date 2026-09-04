@@ -1,0 +1,31 @@
+{
+  "_comment": "Pinned Unpeel Browser MCP engine (agent-browser, Apache-2.0). The Host installs the platform binary into ~/.unpeel/browser/bin/agent-browser after verifying sha256 (unpeel_core::browser_engine); the Mac app build reads the same darwin hashes. Bumping the engine = update every hash here from the real release assets, then run scripts/verify-browser.sh.",
+  "version": "0.34.0",
+  "license": "Apache-2.0",
+  "notice": {
+    "url": "https://raw.githubusercontent.com/vercel-labs/agent-browser/v0.34.0/LICENSE",
+    "sha256": "014bb31e83d5c2e76aea1cc6e82217346ab41362f32cb355ad0f5c10aa0aeaff"
+  },
+  "sources": [
+    {
+      "platform": "darwin-arm64",
+      "url": "https://github.com/vercel-labs/agent-browser/releases/download/v0.34.0/agent-browser-darwin-arm64",
+      "sha256": "d680a7a96ab86e9ab9d2b571b12919b761e93682ad1de714bbd5ac849c8d7c9c"
+    },
+    {
+      "platform": "darwin-x64",
+      "url": "https://github.com/vercel-labs/agent-browser/releases/download/v0.34.0/agent-browser-darwin-x64",
+      "sha256": "dad3c9f9e67791a44a768a98847510c61a7b568a0499c602632b8aee411101e7"
+    },
+    {
+      "platform": "linux-x64",
+      "url": "https://github.com/vercel-labs/agent-browser/releases/download/v0.34.0/agent-browser-linux-x64",
+      "sha256": "69eadf5d8d6003a06a5cd2f914ebb261c7754fe1335a9190122c334e91909789"
+    },
+    {
+      "platform": "linux-arm64",
+      "url": "https://github.com/vercel-labs/agent-browser/releases/download/v0.34.0/agent-browser-linux-arm64",
+      "sha256": "ca70bf7c2d269a152b3824cbb65befb7b8258b8aa1cf34767c64ada2abc3d7c8"
+    }
+  ]
+}

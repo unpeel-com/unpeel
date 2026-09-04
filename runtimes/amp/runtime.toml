@@ -1,0 +1,41 @@
+schema_version = 1
+id = "com.sourcegraph.amp"
+slug = "amp"
+legacy_slug = "amp"
+label = "Amp"
+adapter = "builtin:amp"
+legacy_order = 3
+platforms = ["macos", "linux"]
+supports_quick_launch = true
+capabilities = ["lifecycle_hooks", "resume", "restart_agent", "notify_when_done"]
+
+[display]
+tint = "#F97316"
+spinner_tint = "#F97316"
+icon = "amp"
+icon_asset = "assets/icon.svg"
+icon_source = "internal:legacy-unpeel-tool-icons"
+icon_license = "vendor-brand-asset"
+window_padding_x = 8
+
+[install]
+official_url = "https://ampcode.com"
+command = "npm install -g @sourcegraph/amp"
+
+[detection]
+command_aliases = ["amp"]
+process_aliases = ["amp", "amp-local"]
+script_path_signatures = []
+
+[lifecycle]
+source = "hooks"
+authority = "partial"
+fallback = "none"
+completion_reliable = true
+attention_reliable = false
+
+[[suggested_presets]]
+id = "amp"
+label = "amp"
+command = "amp"
+quick_launch = false
