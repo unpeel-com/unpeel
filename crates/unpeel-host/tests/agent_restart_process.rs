@@ -1385,12 +1385,20 @@ fn same_pid_pgid_shell_exec_command_is_not_the_owned_interactive_shell() {
         )["ok"],
         true
     );
-    assert!(wait_until(Duration::from_secs(30), || exec_pid_path.exists()));
-    let exec_pid: u32 = fs::read_to_string(&exec_pid_path)
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
+    // `printf '%s' "$$" > file` creates the file before the write lands:
+    // wait for a parseable pid, not for the file to exist.
+    let mut exec_pid_parsed: Option<u32> = None;
+    assert!(
+        wait_until(Duration::from_secs(30), || {
+            exec_pid_parsed = fs::read_to_string(&exec_pid_path)
+                .ok()
+                .and_then(|raw| raw.trim().parse::<u32>().ok());
+            exec_pid_parsed.is_some()
+        }),
+        "exec pid file never held a pid: {}",
+        exec_pid_path.display()
+    );
+    let exec_pid = exec_pid_parsed.unwrap();
     assert_eq!(
         manifest(&home, session_id)["pid"].as_u64(),
         Some(u64::from(exec_pid)),
