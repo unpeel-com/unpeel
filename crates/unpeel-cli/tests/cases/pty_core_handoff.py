@@ -439,9 +439,17 @@ def body(case):
     case.check("the older core's own session still echoes", wait_for(lambda: screen(home, drain_session).count("drain-core-text") >= 2))
 
     run_cli(home, ["rm", drain_session], timeout=45)
+
+    def replaced():
+        # The drained core is this test's child: reap it as soon as it exits,
+        # or its zombie keeps the pid alive and the supervisor cannot prove
+        # it gone (in production the core is detached and launchd reaps it).
+        drain_core.poll()
+        return serve_json().get("ptyCore", {}).get("state") == "live" and record_pid() not in (None, drain_core.pid)
+
     case.check(
         "once empty, the older core exits and a current-build core takes its place",
-        wait_for(lambda: serve_json().get("ptyCore", {}).get("state") == "live" and record_pid() not in (None, drain_core.pid), timeout=45),
+        wait_for(replaced, timeout=45),
         f"ptyCore={serve_json().get('ptyCore')} record_pid={record_pid()} trace={core_trace()}",
     )
     try:
