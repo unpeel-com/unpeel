@@ -187,18 +187,20 @@ socket, and record untouched; the restarted worker re-adopts).
 only when ALL hold: status Idle, `archive_available` (a resumable
 conversation: `session_ops::can_archive_manifest` — a provider session id
 plus transcript resume data or a real lifecycle hook; plain shells and an
-agent that has not completed a turn never qualify), not pinned / archived /
-unread, no attempt pending, and idle for the whole cutoff as observed by
+agent that has not completed a turn never qualify), not pinned / archived,
+not **unread attention** (a Session waiting on the user who has not seen
+the question is never archived unseen; a merely unread idle Session DOES
+archive after the cutoff — decided 2026-09-04 for headless Hosts, where
+nobody views anything, ships in 0.5.1; archive is non-destructive and the
+unread badge survives it), no attempt pending, and idle for the whole cutoff as observed by
 THIS worker (the clock starts at the later of the row's idle start and the
 worker's start, so a Host restart is never a mass archive). The cutoff is
 `auto_stop_archive_minutes` and accepts only 0/30/60/120/240/480/1440 —
 any other value reads as off. Since 2026-09-03 the sweep traces the FIRST
 blocking condition per row, once per reason change (`host-worker
-auto-archive skips <id>: unread (nobody has viewed it since its last
-activity)` / `no resumable conversation …` / `idle for less than the
-cutoff` / `pinned` / …), so "why did this never archive" is one grep. Note
-the headless consequence: a Session nobody ever views stays unread and is
-therefore never auto-archived (product question, 2026-09-03).
+auto-archive skips <id>: unread attention (waiting on the user; never
+auto-archived unseen)` / `no resumable conversation …` / `idle for less than the
+cutoff` / `pinned` / …), so "why did this never archive" is one grep.
 
 ### Browser engine install (`serve.json.browserEngine`)
 

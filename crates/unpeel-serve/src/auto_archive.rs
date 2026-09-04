@@ -6,10 +6,17 @@
 //! `session_ops::archive_session` locking path.
 //!
 //! Rules carried over unchanged: the idle clock is anchored to the canonical
-//! hook lifecycle stamp (raw repaints never postpone it), pinned/archived/
-//! unread rows are never touched, only one archive is in flight at a time,
-//! a failed attempt backs off for a minute, and a stopped Session whose
-//! archive marker failed is retried without ever running again.
+//! hook lifecycle stamp (raw repaints never postpone it), pinned/archived
+//! rows are never touched, only one archive is in flight at a time, a failed
+//! attempt backs off for a minute, and a stopped Session whose archive
+//! marker failed is retried without ever running again.
+//!
+//! Unread (decided 2026-09-04, ships in 0.5.1): an unread Session is NOT a
+//! blocker by itself. On a headless Host nobody views anything, so "unread"
+//! meant "never archive"; archive is non-destructive and the unread badge
+//! survives it. What still blocks is unread ATTENTION — a Session that is
+//! waiting on the user (needs-input/menu prompt) — because archiving would
+//! silently abandon a question the user has not seen.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc;
@@ -199,7 +206,10 @@ impl Sweeper {
             if !row.running {
                 continue;
             }
-            let reason = if row.status != Status::Idle {
+            let unread = row.unread || unread.contains(&row.id);
+            let reason = if row.status == Status::Attention && unread {
+                "unread attention (waiting on the user; never auto-archived unseen)"
+            } else if row.status != Status::Idle {
                 "not idle"
             } else if !row.archive_available {
                 "no resumable conversation (plain shells are never auto-archived)"
@@ -207,8 +217,6 @@ impl Sweeper {
                 "pinned"
             } else if row.archived {
                 "already archived"
-            } else if row.unread || unread.contains(&row.id) {
-                "unread (nobody has viewed it since its last activity)"
             } else if attempt_blocked(&self.issued, &self.retry_after_ms, &row.id, now_ms) {
                 "archive attempt pending or in retry backoff"
             } else if let Some(&idle_since) = self.idle_since_ms.get(&row.id) {
@@ -452,13 +460,102 @@ mod tests {
         }
     }
 
+    /// Unread alone no longer blocks: an idle Session nobody viewed
+    /// archives after the cutoff exactly like a read one (headless Hosts).
+    #[test]
+    fn unread_idle_session_archives_after_the_cutoff() {
+        let now = 90_000_000_000;
+        let started = now - 3 * 60 * 60_000;
+        let mut row = idle_row("unseen", started);
+        row.unread = true;
+        let sweeper = Sweeper::starting_at(started);
+        let mut sweeper = sweeper;
+        // Prime the idle clock, then ask past the cutoff.
+        sweeper.step(std::slice::from_ref(&row), &HashSet::new(), 60, started);
+        let (due, skips) = sweeper.next_due(
+            std::slice::from_ref(&row),
+            &HashSet::new(),
+            60 * 60_000,
+            now,
+        );
+        assert_eq!(due, Some("unseen".to_string()), "skips: {skips:?}");
+        // The worker's own unread set is treated the same as the row flag.
+        row.unread = false;
+        let (due, _) = sweeper.next_due(
+            std::slice::from_ref(&row),
+            &HashSet::from(["unseen".to_string()]),
+            60 * 60_000,
+            now,
+        );
+        assert_eq!(due, Some("unseen".to_string()));
+    }
+
+    /// Unread ATTENTION still blocks, with its own reason: the Session is
+    /// waiting on a user who has not seen the question.
+    #[test]
+    fn unread_attention_session_is_skipped_with_its_own_reason() {
+        let now = 90_000_000_000;
+        let started = now - 3 * 60 * 60_000;
+        let mut row = idle_row("asking", started);
+        row.status = Status::Attention;
+        row.unread = true;
+        let mut sweeper = Sweeper::starting_at(started);
+        let events = sweeper.step(std::slice::from_ref(&row), &HashSet::new(), 60, now);
+        assert!(
+            matches!(
+                events.as_slice(),
+                [SweepEvent::Skipped { session_id, reason }]
+                    if session_id == "asking" && reason.starts_with("unread attention")
+            ),
+            "{events:?}"
+        );
+        // Once read, an Attention row is simply "not idle" (and still not archived).
+        row.unread = false;
+        let events = sweeper.step(std::slice::from_ref(&row), &HashSet::new(), 60, now + 1_000);
+        assert!(
+            matches!(
+                events.as_slice(),
+                [SweepEvent::Skipped {
+                    reason: "not idle",
+                    ..
+                }]
+            ),
+            "{events:?}"
+        );
+    }
+
+    /// A read, idle Session behaves exactly as before: due once it has been
+    /// idle for the whole cutoff, not before.
+    #[test]
+    fn read_idle_session_rule_is_unchanged() {
+        let now = 90_000_000_000;
+        let started = now - 3 * 60 * 60_000;
+        let row = idle_row("seen", started);
+        let mut sweeper = Sweeper::starting_at(started);
+        sweeper.step(std::slice::from_ref(&row), &HashSet::new(), 60, started);
+        let (early, _) = sweeper.next_due(
+            std::slice::from_ref(&row),
+            &HashSet::new(),
+            60 * 60_000,
+            started + 59 * 60_000,
+        );
+        assert_eq!(early, None);
+        let (due, _) = sweeper.next_due(
+            std::slice::from_ref(&row),
+            &HashSet::new(),
+            60 * 60_000,
+            started + 60 * 60_000,
+        );
+        assert_eq!(due, Some("seen".to_string()));
+    }
+
     /// The first blocking condition is reported once per row per reason
-    /// change — an unviewed (unread) Session is the headless case that
-    /// otherwise never archives and never says why.
+    /// change.
     #[test]
     fn skipped_rows_report_their_first_blocking_reason_once() {
         let now = 90_000_000_000;
         let mut row = idle_row("quiet", now - 3 * 60 * 60_000);
+        row.status = Status::Attention;
         row.unread = true;
         let mut sweeper = Sweeper::starting_at(now - 3 * 60 * 60_000);
         let first = sweeper.step(std::slice::from_ref(&row), &HashSet::new(), 60, now);
@@ -466,12 +563,13 @@ mod tests {
             matches!(
                 first.as_slice(),
                 [SweepEvent::Skipped { session_id, reason }]
-                    if session_id == "quiet" && reason.starts_with("unread")
+                    if session_id == "quiet" && reason.starts_with("unread attention")
             ),
             "{first:?}"
         );
         let again = sweeper.step(std::slice::from_ref(&row), &HashSet::new(), 60, now + 1_000);
         assert!(again.is_empty(), "same reason must not repeat: {again:?}");
+        row.status = Status::Idle;
         row.unread = false;
         row.pinned = true;
         let changed = sweeper.step(std::slice::from_ref(&row), &HashSet::new(), 60, now + 2_000);
