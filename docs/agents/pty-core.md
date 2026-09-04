@@ -129,21 +129,64 @@ short-lived thread per request; the reactor reads the JSON line, then hands
 the socket over. The `session.sock` protocol, `output.bin` semantics, hook
 env, and manifest fields are unchanged.
 
-The PTY master is `O_NONBLOCK`. `HostRuntime.writer` is a `PtyWriter` that
-restores blocking `write_all` for the transient-thread paths by waiting for
-`POLLOUT`; the reactor's `StreamInput` path writes what fits and queues the
-rest for the PTY's writable event (bounded at 1 MiB, then the input client
-is dropped).
+**Per-session input isolation.** The PTY master is `O_NONBLOCK` and the
+reactor is the only thread that writes it, always through that Session's
+bounded input queue (`SessionIo::drain_pending_input`: write what the
+kernel takes now, arm the writable event for the rest, 1 MiB cap per
+Session). `StreamInput` frames, one-shot `Write` commands
+(`Control::Input`, submitted from the command's transient thread and
+answered once queued), and the Host's own terminal-query answers (DA1,
+CPR, OSC colour) all go through it; nothing on the reactor thread ever
+blocks on a PTY, and no transient thread holds a lock the reactor needs
+across a blocking write (the reactor never takes `HostRuntime`'s lock for
+input). A terminal that stops reading fills only its own queue: further
+`Write`s to it are refused with `terminal is not accepting input`, a
+flooding stream client is dropped, query answers that do not fit are
+logged and dropped, and every sibling's `session.sock` keeps answering.
+The one remaining direct writer, the in-place agent relaunch, uses
+`PtyWriter` with a 5 s bound and holds `agent_restart_lock` meanwhile;
+input queued for that Session during the relaunch is deferred (never
+written between the stop and the new command) and drained on the
+relaunch's wake or the next idle tick. The `Write` idempotency ledger
+(`recent_write_ids`) lives on the reactor-owned `SessionIo`, so check →
+queue → record is one thread's sequence.
 
-Session end (PTY EOF/error, or Kill followed by a final drain) detaches the
-fds on the reactor and runs the old epilogue on a `session-exit` thread:
-journal flushed and closed, timer jobs retired, exit code, exited manifest
-under the manifest lock, sockets removed, then the owner's `on_exit`. The
-per-process `__session_host__` runs the same services with N = 1 and just
-blocks its main thread on that callback. After a teardown the reactor's
-next idle tick hands freed heap back to the OS
+**Slot identity.** A hosted Session is addressed by a `SlotRef` (slot +
+monotonic generation). Every cross-thread message about a Session
+(`Wake`, `Input`, `JournalDrained`, `JournalFailed`, `SessionEnded`,
+`TimerMsg::Add`/`Remove`) carries one, and the reactor and timer drop any
+whose generation is not the slot's current one. A slot leaves `sessions`
+at `end_session` but returns to `free_slots` only when the teardown
+thread reports `SessionEnded`, so a late timer retirement or journal
+failure from a Session that already left can never reach the slot's next
+occupant.
+
+Session end (PTY EOF/error, Kill followed by a final drain, or the child's
+exit observed by the reactor's process watch) detaches the fds on the
+reactor and runs the old epilogue on a `session-exit` thread: journal
+flushed and closed, timer jobs retired, **the child reaped**
+(`reap_hosted_child`: `try_wait`, then SIGTERM, a 1.5 s grace, SIGKILL, a
+bounded wait — signals only to a pid whose kernel start time matches the
+recorded one), the real exit code and exited manifest under the manifest
+lock, sockets removed, then the owner's `on_exit`. The core therefore never
+accumulates `<defunct>` children, however a Session ended. Every child is
+watched for exit at registration (`EVFILT_PROC` on macOS; no watch on
+Linux yet, where the exit shows as PTY EOF), so a shell that exits while a
+background job still holds the slave ends its Session instead of lingering
+with a zombie. The per-process `__session_host__` runs the same services
+with N = 1 and just blocks its main thread on that callback. After a
+teardown the reactor's next idle tick hands freed heap back to the OS
 (`malloc_zone_pressure_relief` / `malloc_trim`), so the core shrinks again
 after `unpeel rm`.
+
+Gates for the isolation and identity rules: `cargo test -p unpeel-core
+core_reactor` (bounded queue that never blocks, generation-checked timer
+and control messages with the slot held until the teardown reports, reaping
+of a live child, child exit observed without EOF) and the PTY case
+`pty_core_isolation` (a query-flooding terminal and a raw-mode child that
+never reads next to a healthy sibling whose socket must answer within its
+timeout; write-id dedup; kill and child-exit paths leaving no zombie and a
+real exit code).
 
 Measured 2026-09-02 (release, this Mac, `scripts/bench-memory.sh` with
 `UNPEEL_PTY_CORE=1`): per empty `sh` Session 0.42 MiB (0.56 before), per

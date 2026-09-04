@@ -771,7 +771,6 @@ pub(crate) struct HostRuntime {
     /// then execing or renaming itself. Resume Agent uses its PID/start/PGID
     /// until a complete session scan proves the old job is gone.
     last_runtime_observation: Option<ActiveRuntimeObservation>,
-    recent_write_ids: RecentWriteIds,
 }
 
 #[cfg(unix)]
@@ -3452,21 +3451,27 @@ fn validate_write_id(write_id: Option<&str>) -> Result<Option<&str>, &'static st
 }
 
 #[derive(Default)]
-struct RecentWriteIds {
+pub(crate) struct RecentWriteIds {
     order: VecDeque<String>,
     seen: HashSet<String>,
 }
 
 impl RecentWriteIds {
-    fn contains(&self, write_id: &str) -> bool {
+    pub(crate) fn contains(&self, write_id: &str) -> bool {
         self.seen.contains(write_id)
     }
 
-    /// Record only after the PTY write succeeds. Keeping this history inside
-    /// `HostRuntime` lets the caller serialize check → write → record under
-    /// the same runtime lock; a failed first delivery therefore remains
-    /// retryable, and two racing transports cannot both apply the bytes.
-    fn record_applied(&mut self, write_id: &str) {
+    /// The ledger oldest first.
+    #[cfg(test)]
+    pub(crate) fn snapshot(&self) -> Vec<String> {
+        self.order.iter().cloned().collect()
+    }
+
+    /// Record only after the reactor has queued the bytes. The ledger lives
+    /// on the reactor-owned `SessionIo`, so check → queue → record is one
+    /// thread's sequence; a refused delivery therefore remains retryable,
+    /// and two racing transports cannot both apply the bytes.
+    pub(crate) fn record_applied(&mut self, write_id: &str) {
         if !self.seen.insert(write_id.to_string()) {
             return;
         }
@@ -6016,7 +6021,6 @@ pub(crate) fn start_host(
             pty_rows: initial_rows,
             shell_executable: PathBuf::from(&shell),
             last_runtime_observation: None,
-            recent_write_ids: RecentWriteIds::default(),
         }));
         // Raw local socket clients can bypass the lifecycle-file lock used by
         // `session_ops`; serialize in-place relaunches here as the final
@@ -6107,6 +6111,7 @@ pub(crate) fn start_host(
             pending_runtime_generation: Arc::clone(&pending_runtime_generation),
             reactor: services.reactor.clone(),
             slot: AtomicUsize::new(usize::MAX),
+            generation: AtomicU64::new(0),
         });
         let pressure = Arc::new(session_io::JournalBackpressure::default());
         let journal_id = session_io::next_journal_id();

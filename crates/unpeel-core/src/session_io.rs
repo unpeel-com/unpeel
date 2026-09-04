@@ -15,7 +15,7 @@
 //! scanners, broadcaster, and manifest helpers without widening their
 //! visibility.
 
-use super::core_reactor::{JournalMsg, ReactorHandle, Registry, TimerMsg};
+use super::core_reactor::{JournalMsg, ReactorHandle, Registry, SlotRef, TimerMsg};
 use super::*;
 use std::collections::HashMap;
 use std::io::ErrorKind;
@@ -34,7 +34,7 @@ const CLIENT_HANDSHAKE_MAX_BYTES: usize = 64 * 1024;
 /// Input frames wait here while the PTY's input queue is full (a stopped or
 /// non-reading foreground). Beyond this the input client is dropped rather
 /// than letting one wedged terminal grow the core without bound.
-const PENDING_PTY_INPUT_MAX_BYTES: usize = 1024 * 1024;
+pub(crate) const PENDING_PTY_INPUT_MAX_BYTES: usize = 1024 * 1024;
 
 /// Everything a control-socket command handler needs, previously threaded
 /// through `handle_client` as a dozen `Arc` parameters.
@@ -51,23 +51,46 @@ pub(crate) struct SessionShared {
     pub runtime_generation: Arc<AtomicU64>,
     pub pending_runtime_generation: Arc<AtomicU64>,
     /// Set by the reactor at registration; lets a handler running on a
-    /// transient thread (Kill) poke the reactor about this Session.
+    /// transient thread (Kill, Write) address the reactor about this
+    /// Session. Both halves of the `SlotRef` are stored before the reactor
+    /// acks the registration, so no other thread can observe a torn pair.
     pub reactor: ReactorHandle,
     pub slot: AtomicUsize,
+    pub generation: AtomicU64,
 }
 
 impl SessionShared {
-    /// Ask the reactor to revisit this Session (after `running` flipped).
+    /// Ask the reactor to revisit this Session (after `running` flipped, or
+    /// once an agent restart released the input queue).
     pub(crate) fn wake(&self) {
-        self.reactor.wake_session(self.slot.load(Ordering::Acquire));
+        self.reactor.wake_session(self.slot_ref());
+    }
+
+    pub(crate) fn slot_ref(&self) -> SlotRef {
+        SlotRef {
+            slot: self.slot.load(Ordering::Acquire),
+            generation: self.generation.load(Ordering::Acquire),
+        }
+    }
+
+    fn set_slot_ref(&self, slot: SlotRef) {
+        self.slot.store(slot.slot, Ordering::Release);
+        self.generation.store(slot.generation, Ordering::Release);
     }
 }
 
-/// The PTY master writer. Every write path (client Write, StreamInput,
-/// query answers, resume-in-place) goes through `HostRuntime.writer`; the
-/// master fd is non-blocking so the reactor can never stall on it, and this
-/// wrapper restores blocking `write_all` semantics for the transient-thread
-/// paths by waiting for `POLLOUT` between attempts.
+/// Longest a transient thread may sit in a blocking PTY write. The reactor
+/// never uses this path (it writes through the bounded input queue); the
+/// in-place agent relaunch does, and a terminal that has stopped reading
+/// must fail that relaunch instead of pinning its lock forever.
+const PTY_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The PTY master writer held by `HostRuntime`. The master fd is
+/// non-blocking; this wrapper restores bounded blocking `write_all`
+/// semantics for the transient-thread paths that still write directly
+/// (resume-in-place) by waiting for `POLLOUT` between attempts, up to
+/// `PTY_WRITE_TIMEOUT`. Client input and query answers never come through
+/// here: the reactor queues them (`SessionIo::drain_pending_input`).
 pub(crate) struct PtyWriter {
     inner: Box<dyn Write + Send>,
     fd: RawFd,
@@ -76,11 +99,6 @@ pub(crate) struct PtyWriter {
 impl PtyWriter {
     pub(crate) fn new(inner: Box<dyn Write + Send>, fd: RawFd) -> Self {
         Self { inner, fd }
-    }
-
-    /// One non-blocking attempt; the reactor queues the remainder.
-    pub(crate) fn try_write(&mut self, data: &[u8]) -> std::io::Result<usize> {
-        self.inner.write(data)
     }
 
     /// Detach the underlying writer without running its destructor.
@@ -105,9 +123,18 @@ impl PtyWriter {
 
 impl Write for PtyWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let deadline = Instant::now() + PTY_WRITE_TIMEOUT;
         loop {
             match self.inner.write(buf) {
-                Err(error) if error.kind() == ErrorKind::WouldBlock => self.wait_writable(250),
+                Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        return Err(std::io::Error::new(
+                            ErrorKind::TimedOut,
+                            "terminal is not accepting input",
+                        ));
+                    }
+                    self.wait_writable(250);
+                }
                 Err(error) if error.kind() == ErrorKind::Interrupted => continue,
                 result => return result,
             }
@@ -151,9 +178,20 @@ pub(crate) struct SessionExitPlan {
 pub(crate) struct JournalBackpressure {
     pub backlog: AtomicUsize,
     pub paused: AtomicBool,
-    /// Reactor slot, set at registration so the writer can address the
-    /// Session in `Control` messages.
+    /// Reactor identity, set at registration so the writer can address
+    /// the Session in `Control` messages (and only this occupant of the
+    /// slot: see `SlotRef`).
     pub slot: AtomicUsize,
+    pub generation: AtomicU64,
+}
+
+impl JournalBackpressure {
+    pub(crate) fn slot_ref(&self) -> SlotRef {
+        SlotRef {
+            slot: self.slot.load(Ordering::Acquire),
+            generation: self.generation.load(Ordering::Acquire),
+        }
+    }
 }
 
 static NEXT_JOURNAL_ID: AtomicU64 = AtomicU64::new(1);
@@ -234,6 +272,15 @@ pub(crate) struct SessionIo {
     handing_off: bool,
     /// Last PTY output; idle buffers are released a tick after this.
     last_output_at: Instant,
+    /// Write-id ledger for one-shot `Write` commands. Reactor-owned so the
+    /// check → queue → record sequence is trivially atomic (one thread).
+    recent_write_ids: RecentWriteIds,
+    /// The child to watch for exit (pid, where its status lands). An owned
+    /// child's status also comes from `waitpid` at teardown; a handed-over
+    /// child's only from here.
+    child_watch: Option<(u32, Arc<Mutex<Option<portable_pty::ExitStatus>>>)>,
+    /// The reactor's token for that watch while it is armed.
+    child_watch_token: Option<u64>,
 }
 
 /// A Session with no PTY output for this long releases its recent ring,
@@ -282,11 +329,49 @@ impl SessionIo {
             timer_jobs: Some(timer_jobs),
             exit: Some(exit),
             ended: false,
+            child_watch: job_seed.pid.map(|pid| (pid, Arc::new(Mutex::new(None)))),
             job_seed,
             adopted_clients: Vec::new(),
             handing_off: false,
             last_output_at: Instant::now(),
+            recent_write_ids: RecentWriteIds::default(),
+            child_watch_token: None,
         }
+    }
+
+    pub(crate) fn slot_ref(&self) -> SlotRef {
+        self.shared.slot_ref()
+    }
+
+    /// The child the reactor should watch for exit, if any.
+    pub(crate) fn child_watch(
+        &self,
+    ) -> Option<(u32, Arc<Mutex<Option<portable_pty::ExitStatus>>>)> {
+        self.child_watch
+            .as_ref()
+            .map(|(pid, slot)| (*pid, Arc::clone(slot)))
+    }
+
+    /// A handed-over child: its status slot is the `HandedOverChild`'s.
+    pub(crate) fn set_child_watch(
+        &mut self,
+        pid: u32,
+        exit_slot: Arc<Mutex<Option<portable_pty::ExitStatus>>>,
+    ) {
+        self.child_watch = Some((pid, exit_slot));
+    }
+
+    pub(crate) fn set_child_watch_token(&mut self, token: u64) {
+        self.child_watch_token = Some(token);
+    }
+
+    pub(crate) fn child_watch_token(&self) -> Option<u64> {
+        self.child_watch_token
+    }
+
+    /// The watch fired (one-shot); nothing to unregister at teardown.
+    pub(crate) fn clear_child_watch(&mut self) {
+        self.child_watch_token = None;
     }
 
     /// Idle-tick diet: a quiet Session keeps only its state, no buffers. The
@@ -338,9 +423,18 @@ impl SessionIo {
     // ───────────────────────── registration ─────────────────────────
 
     /// Register the PTY master and the listener with the reactor's poller.
-    pub(crate) fn register(&mut self, registry: &mut Registry, slot: usize) -> Result<(), String> {
-        self.shared.slot.store(slot, Ordering::Release);
+    pub(crate) fn register(
+        &mut self,
+        registry: &mut Registry,
+        slot_ref: SlotRef,
+    ) -> Result<(), String> {
+        let slot = slot_ref.slot;
+        self.shared.set_slot_ref(slot_ref);
         self.journal.pressure.slot.store(slot, Ordering::Release);
+        self.journal
+            .pressure
+            .generation
+            .store(slot_ref.generation, Ordering::Release);
         self.pty_token = registry.add(self.pty_fd, slot, TokenKind::Pty, true, false)?;
         self.pty_read_interest = true;
         if let Some(listener) = &self.listener {
@@ -442,7 +536,7 @@ impl SessionIo {
         let outcome = match read {
             Ok(0) => ReadOutcome::Ended,
             Ok(n) => {
-                self.process_pty_bytes(&scratch[..n]);
+                self.process_pty_bytes(registry, &scratch[..n]);
                 self.apply_journal_backpressure(registry);
                 ReadOutcome::Continue
             }
@@ -487,7 +581,7 @@ impl SessionIo {
         ReadOutcome::Continue
     }
 
-    fn process_pty_bytes(&mut self, bytes: &[u8]) {
+    fn process_pty_bytes(&mut self, registry: &mut Registry, bytes: &[u8]) {
         let shared = Arc::clone(&self.shared);
         // Answer terminal queries at the host and excise them from the
         // stream: DA1 always, and the wider probe set whenever no answering
@@ -500,16 +594,16 @@ impl SessionIo {
         let (chunk, host_queries) = self.query_scanner.scan(bytes, intercept_probes);
         if !host_queries.is_empty() {
             let cursor = shared.viewport.lock().unwrap().cursor_position();
-            let mut guard = shared.runtime.lock().unwrap();
+            let mut answers: Vec<u8> = Vec::new();
             for query in &host_queries {
-                let _ = match query {
+                match query {
                     HostAnsweredQuery::Da1 => {
-                        guard.writer.write_all(PRIMARY_DEVICE_ATTRIBUTES_RESPONSE)
+                        answers.extend_from_slice(PRIMARY_DEVICE_ATTRIBUTES_RESPONSE)
                     }
-                    HostAnsweredQuery::CursorPosition => guard
-                        .writer
-                        .write_all(format!("\x1b[{};{}R", cursor.0 + 1, cursor.1 + 1).as_bytes()),
-                    HostAnsweredQuery::KittyFlags => guard.writer.write_all(b"\x1b[?0u"),
+                    HostAnsweredQuery::CursorPosition => answers.extend_from_slice(
+                        format!("\x1b[{};{}R", cursor.0 + 1, cursor.1 + 1).as_bytes(),
+                    ),
+                    HostAnsweredQuery::KittyFlags => answers.extend_from_slice(b"\x1b[?0u"),
                     HostAnsweredQuery::OscColor { code } => {
                         let rgb = match (code, self.dark_mode) {
                             (10, true) => "f3f3/f5f5/fbfb",
@@ -517,22 +611,30 @@ impl SessionIo {
                             (_, true) => "1a1a/1a1a/1f1f",
                             (_, false) => "ffff/ffff/ffff",
                         };
-                        guard
-                            .writer
-                            .write_all(format!("\x1b]{code};rgb:{rgb}\x07").as_bytes())
+                        answers.extend_from_slice(format!("\x1b]{code};rgb:{rgb}\x07").as_bytes())
                     }
                     HostAnsweredQuery::OscPalette { index } => {
                         let (r, g, b) = xterm_palette_rgb(*index);
-                        guard.writer.write_all(
+                        answers.extend_from_slice(
                             format!(
                                 "\x1b]4;{index};rgb:{r:02x}{r:02x}/{g:02x}{g:02x}/{b:02x}{b:02x}\x07"
                             )
                             .as_bytes(),
                         )
                     }
-                };
+                }
             }
-            let _ = guard.writer.flush();
+            // Answers are input like any other: through this Session's
+            // bounded queue, never a blocking write on the reactor. A child
+            // that floods queries without reading its replies fills only
+            // its own queue (the overflow is logged and dropped) and never
+            // stalls a sibling.
+            if let Err(error) = self.queue_pty_input(registry, &answers) {
+                log::warn!(
+                    "{}: dropping terminal query answers: {error}",
+                    shared.session_id
+                );
+            }
         }
         if chunk.is_empty() {
             return;
@@ -589,52 +691,124 @@ impl SessionIo {
     // ───────────────────────── PTY input ─────────────────────────
 
     /// Queue bytes for the PTY, writing what fits right now. Order between
-    /// queued bytes and later frames is preserved by always appending.
-    fn write_pty_input(&mut self, registry: &mut Registry, data: &[u8]) -> Result<(), String> {
+    /// queued bytes and later frames is preserved by always appending. The
+    /// queue is bounded per Session (`PENDING_PTY_INPUT_MAX_BYTES`): bytes
+    /// that do not fit are refused with an error and nothing already
+    /// queued is lost, so a terminal that stopped reading costs at most
+    /// that much memory and only its own writers are told to back off.
+    fn queue_pty_input(&mut self, registry: &mut Registry, data: &[u8]) -> Result<(), String> {
+        if data.is_empty() {
+            return Ok(());
+        }
+        if self.pending_input.len() + data.len() > PENDING_PTY_INPUT_MAX_BYTES {
+            // Make room if the PTY has drained meanwhile, then re-check.
+            self.drain_pending_input(registry)?;
+            if self.pending_input.len() + data.len() > PENDING_PTY_INPUT_MAX_BYTES {
+                return Err(format!(
+                    "Write error: terminal is not accepting input ({} bytes still queued)",
+                    self.pending_input.len()
+                ));
+            }
+        }
         self.pending_input.extend(data);
         self.drain_pending_input(registry)
     }
 
+    /// Streaming-client input: queue, or drop the client when its terminal
+    /// has stopped reading and the queue is full (as before).
+    fn write_pty_input(&mut self, registry: &mut Registry, data: &[u8]) -> Result<(), String> {
+        self.queue_pty_input(registry, data)
+    }
+
+    /// A one-shot `Write` command arriving via the reactor. Duplicate ids
+    /// (a retried delivery) are answered `Ok(false)` without queueing;
+    /// otherwise the bytes are queued and the id recorded, so a retry of a
+    /// write the reactor accepted is never applied twice, even if the
+    /// caller's reply was lost.
+    pub(crate) fn submit_input(
+        &mut self,
+        registry: &mut Registry,
+        data: Vec<u8>,
+        write_id: Option<&str>,
+    ) -> Result<bool, String> {
+        if !self.shared.running.load(Ordering::Relaxed) || self.ended {
+            return Err("Write error: session has stopped".into());
+        }
+        if let Some(id) = write_id {
+            if self.recent_write_ids.contains(id) {
+                return Ok(false);
+            }
+        }
+        self.queue_pty_input(registry, &data)?;
+        if let Some(id) = write_id {
+            self.recent_write_ids.record_applied(id);
+        }
+        Ok(true)
+    }
+
+    /// Write queued input straight to the master fd, as much as the kernel
+    /// takes right now, and arm the writable event for the rest. Never
+    /// blocks and never takes `HostRuntime`'s lock: a transient command
+    /// thread holding that lock across a slow operation cannot stop the
+    /// reactor. An in-place agent relaunch holds `agent_restart_lock` for
+    /// its duration; input queued meanwhile stays queued (the relaunch
+    /// wakes this Session when it is done, and the idle tick retries too)
+    /// so it can never land between the stop and the new command.
     pub(crate) fn drain_pending_input(&mut self, registry: &mut Registry) -> Result<(), String> {
         if self.pending_input.is_empty() {
+            let read = self.pty_read_interest;
+            self.set_pty_interest(registry, read, false);
             return Ok(());
         }
         let shared = Arc::clone(&self.shared);
+        let restart_guard = match shared.agent_restart_lock.try_lock() {
+            Ok(guard) => guard,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                // Deferred, not blocked: no writable interest (level-triggered
+                // POLLOUT would spin), the restart's wake or the idle tick
+                // brings us back.
+                let read = self.pty_read_interest;
+                self.set_pty_interest(registry, read, false);
+                return Ok(());
+            }
+        };
         let mut wrote_any = false;
-        let blocked = {
-            let _restart_guard = shared
-                .agent_restart_lock
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let mut guard = shared.runtime.lock().unwrap();
-            let mut blocked = false;
-            while !self.pending_input.is_empty() {
-                let (head, _) = self.pending_input.as_slices();
-                match guard.writer.try_write(head) {
-                    Ok(0) => {
-                        blocked = true;
-                        break;
-                    }
-                    Ok(n) => {
-                        self.pending_input.drain(..n);
-                        wrote_any = true;
-                    }
-                    Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                        blocked = true;
-                        break;
-                    }
-                    Err(error) if error.kind() == ErrorKind::Interrupted => continue,
-                    Err(error) => return Err(format!("Write error: {error}")),
+        let mut blocked = false;
+        while !self.pending_input.is_empty() {
+            let (head, _) = self.pending_input.as_slices();
+            let n = unsafe {
+                libc::write(
+                    self.pty_fd,
+                    head.as_ptr() as *const libc::c_void,
+                    head.len(),
+                )
+            };
+            if n > 0 {
+                self.pending_input.drain(..n as usize);
+                wrote_any = true;
+                continue;
+            }
+            if n == 0 {
+                blocked = true;
+                break;
+            }
+            let error = std::io::Error::last_os_error();
+            match error.kind() {
+                ErrorKind::WouldBlock => {
+                    blocked = true;
+                    break;
+                }
+                ErrorKind::Interrupted => continue,
+                _ => {
+                    drop(restart_guard);
+                    return Err(format!("Write error: {error}"));
                 }
             }
-            blocked
-        };
+        }
+        drop(restart_guard);
         if wrote_any {
             mark_input_written(&shared.session_id, &shared.has_been_written_to);
-        }
-        if blocked && self.pending_input.len() > PENDING_PTY_INPUT_MAX_BYTES {
-            self.pending_input.clear();
-            return Err("PTY input queue stalled; dropping buffered input".into());
         }
         let read = self.pty_read_interest;
         self.set_pty_interest(registry, read, blocked);
@@ -1092,13 +1266,17 @@ impl SessionIo {
         for client in clients {
             self.close_client(registry, client);
         }
-        let slot = self.shared.slot.load(Ordering::Acquire);
+        let slot = self.shared.slot_ref();
         SessionTeardown {
             shared: Arc::clone(&self.shared),
             slot,
             journal_tx: self.journal.tx.clone(),
             journal_id: self.journal.id,
             exit: self.exit.take(),
+            child_exit: self
+                .child_watch
+                .as_ref()
+                .map(|(_, exit_slot)| Arc::clone(exit_slot)),
             // Dropping the reader/master dups here; the runtime keeps the
             // master for try_wait/kill until the teardown thread is done.
             _pty_reader: self.pty_reader,
@@ -1118,17 +1296,91 @@ pub(crate) enum TokenKind {
 
 pub(crate) struct SessionTeardown {
     pub shared: Arc<SessionShared>,
-    pub slot: usize,
+    pub slot: SlotRef,
     pub journal_tx: mpsc::Sender<JournalMsg>,
     pub journal_id: u64,
     pub exit: Option<SessionExitPlan>,
+    /// Where the reactor's process watch put the child's status, if it
+    /// fired before the teardown.
+    pub child_exit: Option<Arc<Mutex<Option<portable_pty::ExitStatus>>>>,
     _pty_reader: Box<dyn Read + Send>,
+}
+
+/// Grace between SIGTERM and SIGKILL when reaping a child that outlived
+/// its Session.
+const CHILD_REAP_TERM_GRACE: Duration = Duration::from_millis(1500);
+/// Longest the teardown waits for a SIGKILLed child to be reapable (a
+/// process stuck in an uninterruptible kernel wait can exceed this; the
+/// exit code is then recorded as unknown, never a made-up number).
+const CHILD_REAP_KILL_WAIT: Duration = Duration::from_secs(5);
+const CHILD_REAP_POLL: Duration = Duration::from_millis(20);
+
+/// Reap the Session's child at teardown. A child that is already gone is
+/// waited on right away; one still alive is asked to leave (SIGTERM), then
+/// forced (SIGKILL), and waited on within a bound. Signals go only to a
+/// pid whose kernel start time matches what the Session recorded (`pid` is
+/// an unreaped child here, so it cannot have been recycled, but a
+/// handed-over child is not ours and is checked exactly like every other
+/// recorded pid). Returns the exit status, or `None` when the child could
+/// not be observed exiting in time.
+pub(crate) fn reap_hosted_child(
+    child: &mut dyn portable_pty::Child,
+    pid_started_at: Option<u64>,
+) -> Option<portable_pty::ExitStatus> {
+    if let Ok(Some(status)) = child.try_wait() {
+        return Some(status);
+    }
+    let pid = child.process_id()?;
+    let signal = |child: &mut dyn portable_pty::Child, signal: libc::c_int| {
+        match recorded_pid_identity(pid, pid_started_at) {
+            PidIdentity::Matches => {
+                let _ = unsafe { libc::kill(pid as libc::pid_t, signal) };
+            }
+            // No recorded start time to prove the pid: let the handle use
+            // its own notion of ownership (portable-pty's SIGHUP to a child
+            // that is unreaped and therefore still ours; a handed-over
+            // child's identity-checked kill).
+            PidIdentity::Unknown => {
+                let _ = child.kill();
+            }
+            PidIdentity::NotOurs => {}
+        }
+    };
+    let wait_until = |child: &mut dyn portable_pty::Child, budget: Duration| {
+        let deadline = Instant::now() + budget;
+        loop {
+            if let Ok(Some(status)) = child.try_wait() {
+                return Some(status);
+            }
+            if recorded_pid_identity(pid, pid_started_at) == PidIdentity::NotOurs {
+                // Gone (a handed-over child that was never ours to wait on,
+                // or a stranger in a recycled pid): nothing left to reap.
+                return None;
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+            thread::sleep(CHILD_REAP_POLL);
+        }
+    };
+    signal(child, libc::SIGTERM);
+    if let Some(status) = wait_until(child, CHILD_REAP_TERM_GRACE) {
+        return Some(status);
+    }
+    if recorded_pid_identity(pid, pid_started_at) == PidIdentity::NotOurs {
+        return None;
+    }
+    signal(child, libc::SIGKILL);
+    wait_until(child, CHILD_REAP_KILL_WAIT)
 }
 
 impl SessionTeardown {
     /// The old epilogue after the reader loop: journal flushed and closed
-    /// BEFORE the exited manifest, timer jobs retired BEFORE it too, then the
-    /// exit edge merged under the manifest lock and the sockets removed.
+    /// BEFORE the exited manifest, timer jobs retired BEFORE it too, the
+    /// child reaped (so the core never accumulates zombies and the exit
+    /// code is the real one), then the exit edge merged under the manifest
+    /// lock and the sockets removed. Always ends by telling the reactor the
+    /// slot is free.
     pub(crate) fn run(self, timer_tx: &mpsc::Sender<TimerMsg>, outcome: Result<(), String>) {
         let SessionTeardown {
             shared,
@@ -1136,8 +1388,38 @@ impl SessionTeardown {
             journal_tx,
             journal_id,
             exit,
+            child_exit,
             _pty_reader,
         } = self;
+        let reactor = shared.reactor.clone();
+        Self::run_epilogue(
+            shared,
+            slot,
+            journal_tx,
+            journal_id,
+            exit,
+            child_exit,
+            _pty_reader,
+            timer_tx,
+            outcome,
+        );
+        // Everything this Session owned is freed now; the reactor may
+        // reuse the slot and hand the pages back on its next idle tick.
+        reactor.session_ended(slot);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_epilogue(
+        shared: Arc<SessionShared>,
+        slot: SlotRef,
+        journal_tx: mpsc::Sender<JournalMsg>,
+        journal_id: u64,
+        exit: Option<SessionExitPlan>,
+        child_exit: Option<Arc<Mutex<Option<portable_pty::ExitStatus>>>>,
+        pty_reader: Box<dyn Read + Send>,
+        timer_tx: &mpsc::Sender<TimerMsg>,
+        outcome: Result<(), String>,
+    ) {
         let mut result = outcome;
 
         let (ack_tx, ack_rx) = mpsc::channel();
@@ -1168,17 +1450,18 @@ impl SessionTeardown {
         }
 
         let Some(exit) = exit else {
+            drop(pty_reader);
             return;
         };
-        let exit_code = shared
-            .runtime
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .child
-            .try_wait()
-            .ok()
-            .flatten()
-            .map(|status| status.exit_code() as i32);
+        let exit_code = {
+            let mut runtime = shared
+                .runtime
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            reap_hosted_child(runtime.child.as_mut(), exit.pid_started_at)
+                .or_else(|| child_exit.and_then(|slot| slot.lock().ok()?.clone()))
+                .map(|status| status.exit_code() as i32)
+        };
         let input_was_written = shared.has_been_written_to.load(Ordering::Relaxed);
         let host_build_id = exit.host_build_id.clone();
         let _ = update_manifest_session(&shared.session_id, |manifest| {
@@ -1201,14 +1484,10 @@ impl SessionTeardown {
         let _ = fs::remove_file(&exit.session_socket_path);
         // Release the PTY master and child handle now that the exit edge is
         // published; the runtime Arc may still be held by a late one-shot
-        // command thread, which then finds a closed child.
+        // command thread, which then finds a reaped child.
         (exit.on_exit)(result);
-        let reactor = shared.reactor.clone();
         drop(shared);
-        drop(_pty_reader);
-        // Everything this Session owned is freed now; let the reactor hand
-        // the pages back once its next idle tick finds no teardown racing.
-        reactor.session_ended();
+        drop(pty_reader);
     }
 }
 
@@ -1309,45 +1588,50 @@ pub(crate) fn dispatch_client_command(
                     viewport: None,
                 },
                 Ok(write_id) => {
-                    // Serialize idempotency check → PTY write → history
-                    // commit. A failed write is deliberately not recorded, so
-                    // an HTTP retry can still deliver it; a racing retry waits
-                    // on this same lock and observes the committed id after
-                    // the first successful write.
-                    let applied = {
-                        let _restart_guard = agent_restart_lock
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner());
-                        let mut guard = runtime.lock().unwrap();
-                        if write_id.is_some_and(|id| guard.recent_write_ids.contains(id)) {
-                            false
-                        } else {
-                            guard
-                                .writer
-                                .write_all(data.as_bytes())
-                                .map_err(|e| format!("Write error: {e}"))?;
-                            if let Some(write_id) = write_id {
-                                guard.recent_write_ids.record_applied(write_id);
+                    // The reactor owns the PTY: it checks the id, queues the
+                    // bytes into this Session's bounded input queue, and
+                    // records the id, all on its own thread (so a racing
+                    // retry observes the committed id). A refused write (queue
+                    // full, Session gone) is not recorded and stays
+                    // retryable. This thread holds no lock the reactor needs
+                    // while it waits, and a wedged terminal answers with an
+                    // error instead of parking the caller and the core.
+                    // A refusal (queue full, Session gone) is an answer,
+                    // not a dropped connection: the caller reads the error
+                    // and decides whether to retry.
+                    match shared.reactor.submit_input(
+                        shared.slot_ref(),
+                        data.as_bytes().to_vec(),
+                        write_id.map(|id| id.to_string()),
+                    ) {
+                        Err(error) => SessionHostResponse {
+                            ok: false,
+                            error: Some(if error.starts_with("Write error") {
+                                error
+                            } else {
+                                format!("Write error: {error}")
+                            }),
+                            viewport: None,
+                        },
+                        Ok(applied) => {
+                            if applied {
+                                mark_input_written(session_id, &shared.has_been_written_to);
+                                // Auto-title from the first submitted prompt
+                                // for clients that write straight to the
+                                // control socket (native attach, MCP).
+                                maybe_auto_title_from_input(
+                                    session_id,
+                                    data.as_bytes(),
+                                    &shared.title_buffer,
+                                    &shared.title_done,
+                                );
                             }
-                            true
+                            SessionHostResponse {
+                                ok: true,
+                                error: None,
+                                viewport: None,
+                            }
                         }
-                    };
-                    if applied {
-                        mark_input_written(session_id, &shared.has_been_written_to);
-                        // Auto-title from the first submitted prompt for
-                        // clients that write straight to the control socket
-                        // (native attach, MCP).
-                        maybe_auto_title_from_input(
-                            session_id,
-                            data.as_bytes(),
-                            &shared.title_buffer,
-                            &shared.title_done,
-                        );
-                    }
-                    SessionHostResponse {
-                        ok: true,
-                        error: None,
-                        viewport: None,
                     }
                 }
             }
@@ -1424,6 +1708,9 @@ pub(crate) fn dispatch_client_command(
                     Err("An agent restart is already in progress".into())
                 }
             };
+            // Input queued while the restart held `agent_restart_lock` was
+            // deferred by the reactor; deliver it now.
+            shared.wake();
             match result {
                 Ok(()) => SessionHostResponse {
                     ok: true,
@@ -1949,7 +2236,6 @@ pub(crate) fn rebuild_from_handoff(
         pty_rows: meta.pty_rows,
         shell_executable: PathBuf::from(&meta.shell),
         last_runtime_observation: None,
-        recent_write_ids: RecentWriteIds::default(),
     }));
 
     let mut viewport_state = TerminalViewportState::new(meta.snapshot_cols, meta.snapshot_rows);
@@ -1999,6 +2285,7 @@ pub(crate) fn rebuild_from_handoff(
         pending_runtime_generation: Arc::new(AtomicU64::new(meta.pending_runtime_generation)),
         reactor: services.reactor.clone(),
         slot: AtomicUsize::new(usize::MAX),
+        generation: AtomicU64::new(0),
     });
     let pressure = Arc::new(JournalBackpressure::default());
     let journal_id = next_journal_id();
@@ -2057,6 +2344,10 @@ pub(crate) fn rebuild_from_handoff(
     );
     session.agent_title_settled = meta.agent_title_settled;
     session.pending_input = meta.pending_pty_input.iter().copied().collect();
+    // The reactor's process watch feeds the `HandedOverChild`'s status slot.
+    if let Some(pid) = child_pid {
+        session.set_child_watch(pid, Arc::clone(&exit_slot));
+    }
     let clients: Vec<(UnixStream, ClientHandoff)> = client_fds
         .into_iter()
         .zip(meta.clients)
@@ -2099,4 +2390,203 @@ pub(crate) fn record_child_exit(
         _ => portable_pty::ExitStatus::with_exit_code(0),
     };
     *slot.lock().unwrap() = Some(status);
+}
+
+#[cfg(test)]
+impl SessionIo {
+    pub(crate) fn pending_input_len(&self) -> usize {
+        self.pending_input.len()
+    }
+
+    pub(crate) fn write_id_snapshot(&self) -> Vec<String> {
+        self.recent_write_ids.snapshot()
+    }
+
+    pub(crate) fn pty_fd_for_test(&self) -> RawFd {
+        self.pty_fd
+    }
+}
+
+/// A hosted Session built the way `run_host` builds one, minus the launch,
+/// manifest, and hook steps: a real PTY with a real child, a real control
+/// socket in a short temp dir, and a journal on the given writer thread.
+/// `has_been_written_to` and `title_done` start true so nothing here ever
+/// reaches a manifest through the input paths.
+#[cfg(all(test, unix))]
+pub(crate) mod test_support {
+    use super::*;
+    use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+
+    pub(crate) struct TestSession {
+        /// `None` once handed to a reactor (`session_take`).
+        pub session: Option<SessionIo>,
+        pub shared: Arc<SessionShared>,
+        pub child_pid: u32,
+        pub child_started_at: Option<u64>,
+        pub output_path: PathBuf,
+        /// The `on_exit` outcome, sent from the teardown thread.
+        pub exited: mpsc::Receiver<Result<(), String>>,
+    }
+
+    impl TestSession {
+        pub(crate) fn session_take(&mut self) -> SessionIo {
+            self.session.take().expect("session not yet handed over")
+        }
+
+        pub(crate) fn session_mut(&mut self) -> &mut SessionIo {
+            self.session.as_mut().expect("session not yet handed over")
+        }
+    }
+
+    /// Unix socket paths are capped near 104 bytes; keep the dir short.
+    pub(crate) fn short_dir(tag: &str) -> PathBuf {
+        let dir = PathBuf::from(format!("/tmp/uio-{}-{tag}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    pub(crate) fn spawn_session(
+        dir: &Path,
+        id: &str,
+        command: &[&str],
+        reactor: ReactorHandle,
+        journal_tx: mpsc::Sender<JournalMsg>,
+        timer_jobs: Vec<HostTimerJob>,
+    ) -> TestSession {
+        let pty = native_pty_system();
+        let pair = pty
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty");
+        let mut cmd = CommandBuilder::new(command[0]);
+        cmd.args(&command[1..]);
+        let child = pair.slave.spawn_command(cmd).expect("spawn child");
+        drop(pair.slave);
+        let writer = pair.master.take_writer().expect("writer");
+        let pty_fd = pair.master.as_raw_fd().expect("master fd");
+        let reader = pair.master.try_clone_reader().expect("reader");
+        set_nonblocking(pty_fd, true).expect("non-blocking master");
+        let writer = PtyWriter::new(writer, pty_fd);
+        let child_pid = child.process_id().expect("child pid");
+        let child_started_at = process_start_time_ms(child_pid);
+        let runtime = Arc::new(Mutex::new(HostRuntime {
+            master: pair.master,
+            writer,
+            child,
+            pty_cols: 80,
+            pty_rows: 24,
+            shell_executable: PathBuf::from(command[0]),
+            last_runtime_observation: None,
+        }));
+        let viewport = Arc::new(Mutex::new(TerminalViewportState::new(80, 24)));
+        let broadcaster = Arc::new(Mutex::new(OutputBroadcaster::at_offset(0)));
+        let socket = dir.join(format!("{id}.sock"));
+        let listener = UnixListener::bind(&socket).expect("bind session socket");
+        listener.set_nonblocking(true).unwrap();
+        let shared = Arc::new(SessionShared {
+            session_id: id.to_string(),
+            runtime: Arc::clone(&runtime),
+            viewport,
+            running: Arc::new(AtomicBool::new(true)),
+            broadcaster,
+            title_buffer: Arc::new(Mutex::new(String::new())),
+            title_done: Arc::new(AtomicBool::new(true)),
+            has_been_written_to: Arc::new(AtomicBool::new(true)),
+            agent_restart_lock: Arc::new(Mutex::new(())),
+            runtime_generation: Arc::new(AtomicU64::new(0)),
+            pending_runtime_generation: Arc::new(AtomicU64::new(0)),
+            reactor,
+            slot: AtomicUsize::new(usize::MAX),
+            generation: AtomicU64::new(0),
+        });
+        let output_path = dir.join(format!("{id}.output.bin"));
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(true)
+            .open(&output_path)
+            .unwrap();
+        let retained =
+            RetainedOutputWriter::new(file, output_path.clone(), 0, 1 << 20, 1 << 20).unwrap();
+        let pressure = Arc::new(JournalBackpressure::default());
+        let journal_id = next_journal_id();
+        journal_tx
+            .send(JournalMsg::Open {
+                id: journal_id,
+                writer: retained,
+                pressure: Arc::clone(&pressure),
+            })
+            .expect("journal writer is running");
+        let journal = JournalHandle {
+            id: journal_id,
+            tx: journal_tx,
+            pressure,
+            failed: Arc::new(AtomicBool::new(false)),
+        };
+        let (exit_tx, exited) = mpsc::channel();
+        let exit = SessionExitPlan {
+            pid: Some(child_pid),
+            pid_started_at: child_started_at,
+            host_build_id: None,
+            session_socket_path: socket,
+            on_exit: Box::new(move |result| {
+                let _ = exit_tx.send(result);
+            }),
+        };
+        let session = SessionIo::new(
+            Arc::clone(&shared),
+            pty_fd,
+            reader,
+            listener,
+            true,
+            journal,
+            timer_jobs,
+            exit,
+            JobSeed {
+                command: command.join(" "),
+                shell: command[0].to_string(),
+                pid: Some(child_pid),
+                pid_started_at: child_started_at,
+            },
+        );
+        TestSession {
+            session: Some(session),
+            shared,
+            child_pid,
+            child_started_at,
+            output_path,
+            exited,
+        }
+    }
+
+    pub(crate) fn wait_until(what: &str, timeout: Duration, mut predicate: impl FnMut() -> bool) {
+        let deadline = Instant::now() + timeout;
+        while !predicate() {
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Whether a child this process spawned has been waited on: the kernel
+    /// then no longer knows the pid as our child (`ECHILD`). A zombie
+    /// answers with its status instead, which reaps it here and returns
+    /// `false` — the teardown did not.
+    pub(crate) fn child_is_reaped(pid: u32) -> bool {
+        let mut status = 0;
+        let rc = unsafe { libc::waitpid(pid as libc::pid_t, &mut status, libc::WNOHANG) };
+        rc == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD)
+    }
+
+    /// Whether the slave behind `master_fd` is in raw mode (no ICANON).
+    pub(crate) fn pty_is_raw(master_fd: RawFd) -> bool {
+        let mut termios: libc::termios = unsafe { std::mem::zeroed() };
+        let ok = unsafe { libc::tcgetattr(master_fd, &mut termios) } == 0;
+        ok && (termios.c_lflag & libc::ICANON) == 0
+    }
 }
