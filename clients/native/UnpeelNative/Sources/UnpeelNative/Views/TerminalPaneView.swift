@@ -1108,7 +1108,14 @@ struct TerminalPaneContainer: View {
                                 : nil,
                             cache: cache,
                             isActive: effectiveActivePaneID == pane.paneID,
-                            onActivate: { activatePane(pane.paneID) }
+                            onActivate: { activatePane(pane.paneID) },
+                            onCommandClick: { match, path in
+                                store.openClickedFile(
+                                    match,
+                                    path: path,
+                                    fromSessionID: entry.id
+                                )
+                            }
                         )
                     }
                 }

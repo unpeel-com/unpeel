@@ -10565,6 +10565,160 @@ final class UnpeelStore: ObservableObject {
         openInEditor(editor: preferredCodeEditor(), path: path, line: line, column: column)
     }
 
+    /// Route a cmd-click through the selected Host's typed opener table.
+    /// Returning false lets Ghostty keep its ordinary URL/selection behavior.
+    @discardableResult
+    func openClickedFile(
+        _ match: ClickablePath.Match,
+        path: String,
+        fromSessionID sessionID: String
+    ) -> Bool {
+        let snapshot = remoteHostRuntime.snapshot
+        let apps = snapshot?.availableApps ?? []
+        guard let mediaType = RemoteAppSummary.mediaType(forPath: path, in: apps) else {
+            return false
+        }
+        let selector = "file:\(mediaType)"
+        let installed = Set((snapshot?.installedApps ?? []).map(\.id))
+        let handlers = apps.filter { $0.handles(selector: selector) }
+        let handler = handlers.first { $0.defaultFor.contains(selector) }
+            ?? (handlers.count == 1 ? handlers[0] : nil)
+        let configured = snapshot?.openers?[selector]
+        let opener = configured
+            ?? handler.map { "app:\($0.id)" }
+            ?? "editor"
+
+        switch opener {
+        case "editor":
+            openClickedFileInEditor(match, path: path)
+        case "system":
+            openClickedFileWithSystem(path)
+        default:
+            guard opener.hasPrefix("app:") else {
+                openClickedFileInEditor(match, path: path)
+                return true
+            }
+            let appID = String(opener.dropFirst(4))
+            guard
+                  let app = snapshot?.availableApps?.first(where: { $0.id == appID }),
+                  app.handles(selector: selector)
+            else {
+                openClickedFileInEditor(match, path: path)
+                return true
+            }
+            if installed.contains(app.id) || app.installed {
+                launchAppPane(
+                    app,
+                    mediaType: mediaType,
+                    path: path,
+                    fromSessionID: sessionID
+                )
+            } else {
+                promptToInstallApp(
+                    app,
+                    selector: selector,
+                    mediaType: mediaType,
+                    path: path,
+                    match: match,
+                    fromSessionID: sessionID
+                )
+            }
+        }
+        return true
+    }
+
+    private func openClickedFileInEditor(_ match: ClickablePath.Match, path: String) {
+        guard selectedHostScope.isLocalMachine else {
+            Self.showRemoteVerbFailure(
+                title: "The file is on the Host",
+                message: "Choose an Unpeel App for this file type to open it from a remote workspace."
+            )
+            return
+        }
+        Self.openFileInPreferredEditor(path: path, line: match.line, column: match.column)
+    }
+
+    private func openClickedFileWithSystem(_ path: String) {
+        guard selectedHostScope.isLocalMachine else {
+            Self.showRemoteVerbFailure(
+                title: "The file is on the Host",
+                message: "The system opener is available only for workspaces on this Mac."
+            )
+            return
+        }
+        if !NSWorkspace.shared.open(URL(fileURLWithPath: path)) {
+            Self.showRemoteVerbFailure(
+                title: "Couldn't open the file",
+                message: path
+            )
+        }
+    }
+
+    private func promptToInstallApp(
+        _ app: RemoteAppSummary,
+        selector: String,
+        mediaType: String,
+        path: String,
+        match: ClickablePath.Match,
+        fromSessionID sessionID: String
+    ) {
+        guard remoteHostRuntime.supportsHostOperation(
+            RemoteHostRuntime.HostOperation.appsInstall
+        ) else {
+            openClickedFileInEditor(match, path: path)
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "Open this file in \(app.name)?"
+        alert.informativeText = "\(app.name) is not installed on this Host yet."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Install")
+        alert.addButton(withTitle: "Use Editor")
+        alert.addButton(withTitle: "Always Use Editor")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            performRemoteVerb("Couldn't install \(app.name)") { [weak self] runtime in
+                try await runtime.installApp(app.id)
+                try await runtime.setOpener(
+                    selector: selector,
+                    opener: "app:\(app.id)"
+                )
+                runtime.requestImmediateRefresh()
+                self?.launchAppPane(
+                    app,
+                    mediaType: mediaType,
+                    path: path,
+                    fromSessionID: sessionID
+                )
+            }
+        case .alertThirdButtonReturn:
+            performRemoteVerb("Couldn't save the resource opener") { [weak self] runtime in
+                try await runtime.setOpener(selector: selector, opener: "editor")
+                self?.openClickedFileInEditor(match, path: path)
+            }
+        default:
+            openClickedFileInEditor(match, path: path)
+        }
+    }
+
+    private func launchAppPane(
+        _ app: RemoteAppSummary,
+        mediaType: String,
+        path: String,
+        fromSessionID sessionID: String
+    ) {
+        guard displaySessionsByID[sessionID] != nil else { return }
+        performRemoteVerb("Couldn't open \(app.name)") { runtime in
+            try await runtime.openApp(
+                app.id,
+                resourceKind: "file",
+                mediaType: mediaType,
+                resourceID: path,
+                callerSessionID: sessionID
+            )
+        }
+    }
+
     private nonisolated static func openInEditor(
         editor: String,
         path: String,
@@ -11712,7 +11866,7 @@ final class UnpeelStore: ObservableObject {
     /// or width; the desktop convention is simply a trailing/right split on
     /// first reveal. Existing user placement is respected on later reveals.
     private func reconcileAppPresentations(_ envelope: AppPresentationsFile?) {
-        guard selectedHostScope == .local,
+        guard selectedHostScope.supportsSessionPanes,
               let envelope,
               envelope.version == 1
         else { return }
@@ -11727,12 +11881,12 @@ final class UnpeelStore: ObservableObject {
                 presentationID: presentation.id
             ),
             let instance = instances[presentation.instanceID],
-            let caller = sessionsByID[presentation.callerSessionID],
-            let companion = sessionsByID[instance.companionSessionID],
+            let caller = displaySessionsByID[presentation.callerSessionID],
+            let companion = displaySessionsByID[instance.companionSessionID],
             caller.isAttachable,
             companion.isAttachable,
-            !archivedSessionIDs.contains(caller.id),
-            !archivedSessionIDs.contains(companion.id)
+            !isHiddenArchived(caller.id),
+            !isHiddenArchived(companion.id)
             else { continue }
 
             let location: PaneLocation?
@@ -15550,6 +15704,7 @@ extension UnpeelStore {
                     return session.id
                 }
             ))
+            reconcileAppPresentations(snapshot.appPresentations)
         }
 
         // Entering a non-local Host: swap the expansion set to the Host's own

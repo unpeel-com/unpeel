@@ -1066,6 +1066,17 @@ struct ChevronGlyph: View {
 
 // MARK: - Project node (project row + sessions + worktree children)
 
+extension ProjectNode {
+    /// Whether this folder owns the selected Session directly or through a
+    /// nested group/worktree. Inline folder shells use this to retain their
+    /// hover wash while one of their descendants is active.
+    func containsSidebarSession(_ sessionID: String?) -> Bool {
+        guard let sessionID else { return false }
+        return sessions.contains { $0.id == sessionID }
+            || worktrees.contains { $0.containsSidebarSession(sessionID) }
+    }
+}
+
 /// A destination in the session context menu's "Move to" flyout.
 struct SessionMoveTarget: Identifiable, Equatable {
     let id: String
@@ -1270,13 +1281,11 @@ struct ProjectNodeView: View {
             }
         }
         .background {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(groupHovering ? Theme.hoverRow.opacity(0.5) : .clear)
-                // Child-group layout is already inset by its parent list.
-                // Expand the wash back toward the Session-row bounds. Its
-                // natural height gives the shell one extra point above and
-                // below compared with the previous vertically-inset shape.
-                .padding(.trailing, -1)
+            GroupClusterBackground(
+                selection: store.sessionSelection,
+                node: node,
+                isHovering: groupHovering
+            )
         }
         .background {
             // Drop-target frame lives on its OWN stable layer, not on the
@@ -1291,7 +1300,6 @@ struct ProjectNodeView: View {
                 kind: .groupShell(projectID: node.id)
             )
         }
-        .animation(.easeOut(duration: 0.12), value: groupHovering)
         .onHover { groupHovering = $0 }
     }
 
@@ -1859,6 +1867,30 @@ struct EmptySessionsPlaceholderRow: View {
             bottom: 4,
             trailing: 0
         ))
+    }
+}
+
+/// A selection switch publishes through `SessionSelectionState`, not the
+/// whole store. Keeping this observer in the background leaf lets ancestor
+/// group/worktree washes follow selection without rebuilding their rows.
+private struct GroupClusterBackground: View {
+    @ObservedObject var selection: SessionSelectionState
+    let node: ProjectNode
+    let isHovering: Bool
+
+    private var isHighlighted: Bool {
+        isHovering || node.containsSidebarSession(selection.sessionID)
+    }
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(isHighlighted ? Theme.hoverRow.opacity(0.5) : .clear)
+            // Child-group layout is already inset by its parent list. Expand
+            // the wash back toward the Session-row bounds. Its natural height
+            // gives the shell one extra point above and below compared with
+            // the previous vertically-inset shape.
+            .padding(.trailing, -1)
+            .animation(.easeOut(duration: 0.12), value: isHighlighted)
     }
 }
 

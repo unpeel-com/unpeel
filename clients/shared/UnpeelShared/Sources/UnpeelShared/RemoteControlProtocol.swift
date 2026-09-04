@@ -5,7 +5,7 @@ import Security
 public enum RemoteControlProtocol {
     public static let version = 1
     public static let hostMajorVersion = 1
-    public static let hostMinorVersion = 14
+    public static let hostMinorVersion = 15
     public static let resumableArtifactUploadCapability = "artifact.upload.resumable"
     public static let sessionOrderCapability = "session.order.set"
     public static let sessionRuntimeRestartCapability = "session.runtime.restart"
@@ -21,6 +21,9 @@ public enum RemoteControlProtocol {
     public static let mobileTLSCapability = "host.mobile.tls"
     /// First server release that serves TLS on the `/mobile` port.
     public static let mobileTLSMinimumServerVersion = "0.5.3"
+    public static let openersSetCapability = "settings.openers.set"
+    public static let appsInstallCapability = "apps.install"
+    public static let appsOpenCapability = "apps.open"
 }
 
 /// Additive Host-level capability contract carried by bootstrap.
@@ -1053,6 +1056,172 @@ public struct RemotePaneGroupSummary: Codable, Equatable, Identifiable, Sendable
     }
 }
 
+/// One official App advertised by the Host. The complete catalog is present
+/// before installation, so Controllers do not duplicate App names, commands,
+/// tints, or media-type declarations.
+public struct RemoteAppSummary: Codable, Equatable, Identifiable, Sendable {
+    public let id: String
+    public let name: String
+    public let description: String
+    public let tint: String?
+    public let command: String
+    public let mediaTypes: [String]
+    public let fileExtensions: [String: String]
+    public let resourceKinds: [String]
+    public let defaultFor: [String]
+    public let installed: Bool
+
+    public init(
+        id: String,
+        name: String,
+        description: String = "",
+        tint: String? = nil,
+        command: String,
+        mediaTypes: [String] = [],
+        fileExtensions: [String: String] = [:],
+        resourceKinds: [String] = [],
+        defaultFor: [String] = [],
+        installed: Bool = false
+    ) {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.tint = tint
+        self.command = command
+        self.mediaTypes = mediaTypes
+        self.fileExtensions = fileExtensions
+        self.resourceKinds = resourceKinds
+        self.defaultFor = defaultFor
+        self.installed = installed
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, description, tint, command, mediaTypes
+        case fileExtensions, resourceKinds, defaultFor, installed
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        description = try container.decodeIfPresent(String.self, forKey: .description) ?? ""
+        tint = try container.decodeIfPresent(String.self, forKey: .tint)
+        command = try container.decode(String.self, forKey: .command)
+        mediaTypes = try container.decodeIfPresent([String].self, forKey: .mediaTypes) ?? []
+        fileExtensions = try container.decodeIfPresent(
+            [String: String].self,
+            forKey: .fileExtensions
+        ) ?? [:]
+        resourceKinds = try container.decodeIfPresent([String].self, forKey: .resourceKinds) ?? []
+        defaultFor = try container.decodeIfPresent([String].self, forKey: .defaultFor) ?? []
+        installed = try container.decodeIfPresent(Bool.self, forKey: .installed) ?? false
+    }
+
+    public func handles(selector: String) -> Bool {
+        if let mediaType = selector.removingPrefix("file:") {
+            return mediaTypes.contains { $0.caseInsensitiveCompare(mediaType) == .orderedSame }
+        }
+        if let kind = selector.removingPrefix("resource:") {
+            return resourceKinds.contains { $0.caseInsensitiveCompare(kind) == .orderedSame }
+        }
+        return false
+    }
+
+    public static func mediaType(forPath path: String, in apps: [RemoteAppSummary]) -> String? {
+        let fileExtension = URL(fileURLWithPath: path).pathExtension.lowercased()
+        guard !fileExtension.isEmpty else { return nil }
+        return apps.lazy.compactMap { $0.fileExtensions[fileExtension] }.first
+    }
+}
+
+private extension String {
+    func removingPrefix(_ prefix: String) -> String? {
+        guard hasPrefix(prefix) else { return nil }
+        let suffix = dropFirst(prefix.count)
+        return suffix.isEmpty ? nil : String(suffix)
+    }
+}
+
+/// Host-owned semantic App companions and their caller-relative reveal
+/// intents. The nested coding keys match the existing app-state envelope so
+/// a native Controller reconciles the same shape from disk and bootstrap.
+public struct RemoteAppPresentationsFile: Codable, Equatable, Sendable {
+    public struct Instance: Codable, Equatable, Sendable {
+        public let id: String
+        public let appID: String
+        public let companionSessionID: String
+
+        enum CodingKeys: String, CodingKey {
+            case id
+            case appID = "app_id"
+            case companionSessionID = "companion_session_id"
+        }
+
+        public init(id: String, appID: String, companionSessionID: String) {
+            self.id = id
+            self.appID = appID
+            self.companionSessionID = companionSessionID
+        }
+    }
+
+    public struct Presentation: Codable, Equatable, Sendable {
+        public let id: String
+        public let callerSessionID: String
+        public let instanceID: String
+        public let target: String
+        public let revealRevision: UInt64
+
+        enum CodingKeys: String, CodingKey {
+            case id
+            case callerSessionID = "caller_session_id"
+            case instanceID = "instance_id"
+            case target
+            case revealRevision = "reveal_revision"
+        }
+
+        public init(
+            id: String,
+            callerSessionID: String,
+            instanceID: String,
+            target: String,
+            revealRevision: UInt64
+        ) {
+            self.id = id
+            self.callerSessionID = callerSessionID
+            self.instanceID = instanceID
+            self.target = target
+            self.revealRevision = revealRevision
+        }
+    }
+
+    public let version: Int
+    public let instances: [Instance]
+    public let presentations: [Presentation]
+
+    public init(
+        version: Int,
+        instances: [Instance],
+        presentations: [Presentation]
+    ) {
+        self.version = version
+        self.instances = instances
+        self.presentations = presentations
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = (try? container.decode(Int.self, forKey: .version)) ?? 0
+        instances = (try? container.decode([Instance].self, forKey: .instances)) ?? []
+        presentations = (try? container.decode(
+            [Presentation].self, forKey: .presentations
+        )) ?? []
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case version, instances, presentations
+    }
+}
+
 public struct RemoteBootstrapSnapshot: Codable, Equatable, Sendable {
     public let protocolVersion: Int
     /// Versioned Host operation set. Optional so bootstrap remains decodable
@@ -1067,6 +1236,15 @@ public struct RemoteBootstrapSnapshot: Codable, Equatable, Sendable {
     /// Controller can show them before editing through
     /// `settings.workspace.set`. Absent on older Hosts.
     public let workspaceSettings: RemoteWorkspaceSettings?
+    /// Additive (minor 15): complete official catalog, including missing Apps.
+    public let availableApps: [RemoteAppSummary]?
+    /// Additive (minor 15): live installed subset.
+    public let installedApps: [RemoteAppSummary]?
+    /// Additive (minor 15): typed resource selector -> App/editor/system.
+    public let openers: [String: String]?
+    /// Additive (minor 15): the same semantic App/pane envelope native reads
+    /// locally, now available to scoped and remote Controllers too.
+    public let appPresentations: RemoteAppPresentationsFile?
     public let sessions: [RemoteSessionSummary]
     /// Sidebar-only pane membership published by the Controller serving this
     /// snapshot. Optional for backward compatibility; nil means render every
@@ -1154,6 +1332,10 @@ public struct RemoteBootstrapSnapshot: Codable, Equatable, Sendable {
         projects: [RemoteProjectSummary],
         presets: [RemotePresetSummary],
         workspaceSettings: RemoteWorkspaceSettings? = nil,
+        availableApps: [RemoteAppSummary]? = nil,
+        installedApps: [RemoteAppSummary]? = nil,
+        openers: [String: String]? = nil,
+        appPresentations: RemoteAppPresentationsFile? = nil,
         sessions: [RemoteSessionSummary],
         capturedAtUnixMs: Int64,
         paneGroups: [RemotePaneGroupSummary]? = nil,
@@ -1179,6 +1361,10 @@ public struct RemoteBootstrapSnapshot: Codable, Equatable, Sendable {
         self.projects = projects
         self.presets = presets
         self.workspaceSettings = workspaceSettings
+        self.availableApps = availableApps
+        self.installedApps = installedApps
+        self.openers = openers
+        self.appPresentations = appPresentations
         self.sessions = sessions
         self.paneGroups = paneGroups
         self.capturedAtUnixMs = capturedAtUnixMs

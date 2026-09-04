@@ -1002,7 +1002,9 @@ final class RemoteHostRuntime: ObservableObject {
     /// the UI owns only attaching/presenting the returned NSView.
     func terminalPane(
         for sessionID: String,
-        style: TerminalPaneStyle = .resolved()
+        style: TerminalPaneStyle = .resolved(),
+        workingDirectory: String? = nil,
+        onCommandClick: ((ClickablePath.Match, String) -> Bool)? = nil
     ) -> RemoteGhosttyTerminalPane? {
         guard snapshot?.sessions.contains(where: { $0.id == sessionID }) == true,
               let paneHostKey
@@ -1034,7 +1036,9 @@ final class RemoteHostRuntime: ObservableObject {
                 sessionID: sessionID,
                 paneKey: key,
                 connectionEpoch: connection.epoch
-            )
+            ),
+            workingDirectory: workingDirectory,
+            onCommandClick: onCommandClick
         )
         if existingPane == nil || existingPane !== pane {
             paneCursorReady.removeValue(forKey: key)
@@ -2145,6 +2149,10 @@ final class RemoteHostRuntime: ObservableObject {
             projects: snapshot.projects,
             presets: snapshot.presets,
             workspaceSettings: snapshot.workspaceSettings,
+            availableApps: snapshot.availableApps,
+            installedApps: snapshot.installedApps,
+            openers: snapshot.openers,
+            appPresentations: snapshot.appPresentations,
             // Host bootstrap order is newest-first. A correlated create is
             // necessarily newer than the snapshot it raced, so keep that
             // invariant while the real manifest catches up.
@@ -3304,6 +3312,10 @@ final class RemoteHostRuntime: ObservableObject {
             && lhs.remoteServerCertificateFingerprint
                 == rhs.remoteServerCertificateFingerprint
             && lhs.workspaceSettings == rhs.workspaceSettings
+            && lhs.availableApps == rhs.availableApps
+            && lhs.installedApps == rhs.installedApps
+            && lhs.openers == rhs.openers
+            && lhs.appPresentations == rhs.appPresentations
             && lhs.experimentalWorktreesEnabled == rhs.experimentalWorktreesEnabled
             && lhs.proEntitled == rhs.proEntitled
             && lhs.pendingApprovals == rhs.pendingApprovals
@@ -3385,6 +3397,9 @@ extension RemoteHostRuntime {
         static let projectPinSet = "project.pin.set"
         static let presetsSet = RemoteControlProtocol.presetsSetCapability
         static let workspaceSettingsSet = RemoteControlProtocol.workspaceSettingsSetCapability
+        static let openersSet = RemoteControlProtocol.openersSetCapability
+        static let appsInstall = RemoteControlProtocol.appsInstallCapability
+        static let appsOpen = RemoteControlProtocol.appsOpenCapability
         static let archiveList = "session.archive.list"
         static let transcriptMarkdown = "session.transcript.markdown"
         static let pairingInvitation = "pairing.invitation"
@@ -3689,6 +3704,47 @@ extension RemoteHostRuntime {
             operation: "workspace settings"
         ) { backend in
             _ = try await backend.setWorkspaceSettings(patch: patch)
+        }
+    }
+
+    func setOpener(selector: String, opener: String) async throws {
+        try await performOrganizationVerb(
+            capability: HostOperation.openersSet,
+            operation: "resource opener"
+        ) { backend in
+            _ = try await backend.setOpener(selector: selector, opener: opener)
+        }
+    }
+
+    func installApp(_ appID: String) async throws {
+        try await performOrganizationVerb(
+            capability: HostOperation.appsInstall,
+            operation: "App install"
+        ) { backend in
+            _ = try await backend.installApp(appID: appID)
+        }
+    }
+
+    func openApp(
+        _ appID: String,
+        resourceKind: String,
+        mediaType: String?,
+        resourceID: String,
+        callerSessionID: String
+    ) async throws {
+        let requestID = UUID().uuidString.lowercased()
+        try await performOrganizationVerb(
+            capability: HostOperation.appsOpen,
+            operation: "App open"
+        ) { backend in
+            _ = try await backend.openApp(
+                callerSessionID: callerSessionID,
+                appID: appID,
+                resourceKind: resourceKind,
+                mediaType: mediaType,
+                resourceID: resourceID,
+                requestID: requestID
+            )
         }
     }
 

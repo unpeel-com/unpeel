@@ -351,54 +351,8 @@ private struct McpGrantFile: Decodable {
     }
 }
 
-/// Host-owned semantic App/panel associations. Controllers read this additive
-/// envelope but never write pane geometry back into it.
-struct AppPresentationsFile: Decodable {
-    struct Instance: Decodable {
-        let id: String
-        let appID: String
-        let companionSessionID: String
-
-        enum CodingKeys: String, CodingKey {
-            case id
-            case appID = "app_id"
-            case companionSessionID = "companion_session_id"
-        }
-    }
-
-    struct Presentation: Decodable {
-        let id: String
-        let callerSessionID: String
-        let instanceID: String
-        let target: String
-        let revealRevision: UInt64
-
-        enum CodingKeys: String, CodingKey {
-            case id
-            case callerSessionID = "caller_session_id"
-            case instanceID = "instance_id"
-            case target
-            case revealRevision = "reveal_revision"
-        }
-    }
-
-    let version: Int
-    let instances: [Instance]
-    let presentations: [Presentation]
-
-    enum CodingKeys: String, CodingKey {
-        case version, instances, presentations
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        version = (try? container.decode(Int.self, forKey: .version)) ?? 0
-        instances = (try? container.decode([Instance].self, forKey: .instances)) ?? []
-        presentations = (try? container.decode(
-            [Presentation].self, forKey: .presentations
-        )) ?? []
-    }
-}
+/// Disk and bootstrap intentionally share one semantic App/pane envelope.
+typealias AppPresentationsFile = RemoteAppPresentationsFile
 
 /// What drives a session's automatic title — `session_title_mode` in
 /// app-state.json (state.rs `SessionTitleMode`). A user rename permanently

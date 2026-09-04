@@ -1096,6 +1096,11 @@ public final class RemotePreviewStore {
             folders: source.folders,
             projects: source.projects,
             presets: source.presets,
+            workspaceSettings: source.workspaceSettings,
+            availableApps: source.availableApps,
+            installedApps: source.installedApps,
+            openers: source.openers,
+            appPresentations: source.appPresentations,
             sessions: sessions,
             capturedAtUnixMs: capturedAtUnixMs ?? source.capturedAtUnixMs,
             paneGroups: source.paneGroups,
@@ -1215,6 +1220,11 @@ public final class RemotePreviewStore {
             folders: snapshot.folders,
             projects: projects,
             presets: snapshot.presets,
+            workspaceSettings: snapshot.workspaceSettings,
+            availableApps: snapshot.availableApps,
+            installedApps: snapshot.installedApps,
+            openers: snapshot.openers,
+            appPresentations: snapshot.appPresentations,
             sessions: sessions,
             capturedAtUnixMs: snapshot.capturedAtUnixMs,
             paneGroups: snapshot.paneGroups,
@@ -1772,6 +1782,10 @@ public final class RemotePreviewStore {
             && a.folders == b.folders
             && a.projects == b.projects
             && a.presets == b.presets
+            && a.availableApps == b.availableApps
+            && a.installedApps == b.installedApps
+            && a.openers == b.openers
+            && a.appPresentations == b.appPresentations
             && a.paneGroups == b.paneGroups
             && a.pendingApprovals == b.pendingApprovals
             // Chrome-wide tint — must publish so a Mac-side App color change
