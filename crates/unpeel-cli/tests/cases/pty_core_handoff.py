@@ -351,6 +351,14 @@ def body(case):
     run_cli(home, ["rm", stale_session], timeout=45)
     serve.close()
 
+    # The record disappears between the drained core's exit and the fresh core's
+    # start; read it leniently while waiting on that transition.
+    def record_pid():
+        try:
+            return core_record(home).get("pid")
+        except (FileNotFoundError, ValueError):
+            return None
+
     # Default policy since 0.5.2 (no UNPEEL_PTY_CORE_TAKEOVER): the supervisor
     # never takes an older-build core over in place. It keeps serving its
     # Sessions, new Sessions run one process each, and once it is empty it is
@@ -374,7 +382,7 @@ def body(case):
     time.sleep(3.0)
     case.check(
         "no takeover is started while the older core holds Sessions",
-        serve_json().get("ptyCore", {}).get("state") == "adopted" and core_record(home)["pid"] == drain_core.pid,
+        serve_json().get("ptyCore", {}).get("state") == "adopted" and record_pid() == drain_core.pid,
         str(serve_json().get("ptyCore")),
     )
     fresh_session = new_session(case, home, "session spawned while the older core drains")
@@ -396,8 +404,8 @@ def body(case):
     run_cli(home, ["rm", drain_session], timeout=45)
     case.check(
         "once empty, the older core exits and a current-build core takes its place",
-        wait_for(lambda: serve_json().get("ptyCore", {}).get("state") == "live" and core_record(home)["pid"] != drain_core.pid, timeout=45),
-        f"ptyCore={serve_json().get('ptyCore')} record={core_record(home)}",
+        wait_for(lambda: serve_json().get("ptyCore", {}).get("state") == "live" and record_pid() not in (None, drain_core.pid), timeout=45),
+        f"ptyCore={serve_json().get('ptyCore')} record_pid={record_pid()}",
     )
     try:
         drain_core.wait(timeout=20)
@@ -410,8 +418,8 @@ def body(case):
     case.check(
         "a Session created afterwards lands in the current-build core and runs",
         wait_for(lambda: screen(home, after_session).count("fresh-core-text") >= 2)
-        and home.manifests().get(after_session, {}).get("host_pid") == core_record(home)["pid"],
-        f"host_pid={home.manifests().get(after_session, {}).get('host_pid')} core={core_record(home)['pid']}",
+        and home.manifests().get(after_session, {}).get("host_pid") == record_pid(),
+        f"host_pid={home.manifests().get(after_session, {}).get('host_pid')} core={record_pid()}",
     )
     for session_id in (fresh_session, after_session):
         run_cli(home, ["rm", session_id], timeout=45)
