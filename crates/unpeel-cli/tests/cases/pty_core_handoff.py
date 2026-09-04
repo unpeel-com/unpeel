@@ -323,7 +323,12 @@ def body(case):
     stopper.cores.append(stale_core)
     stale_record = core_record(home)
     case.check("a core from the stale binary is up", stale_core.poll() is None and stale_record["pid"] == stale_core.pid)
-    stale_session = new_session(case, home, "session under the stale core")
+    stale_session = new_session(case, home, "session under the stale core", env={"UNPEEL_HOST_CMD": stale_bin})
+    case.check(
+        "that Session lives in the stale core",
+        home.manifests().get(stale_session, {}).get("host_pid") == stale_core.pid,
+        f"host_pid={home.manifests().get(stale_session, {}).get('host_pid')} core={stale_core.pid}",
+    )
     run_cli(home, ["send", stale_session, "stale-core-text", "--enter"])
     case.check("the stale core's session echoes", wait_for(lambda: screen(home, stale_session).count("stale-core-text") >= 2))
     time.sleep(1.0)
