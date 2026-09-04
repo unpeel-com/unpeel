@@ -115,6 +115,15 @@ for case_file in "$here"/cases/*.py; do
     | grep -F "$home/" \
     | awk '{print $1}' \
     | xargs -r kill -9 2>/dev/null || true
+  # `__mcp__` sidecars carry no home in argv (home is in their env), so match
+  # them by an open file under the home, the same way cores are found.
+  real="$(cd "$home" 2>/dev/null && pwd -P)" || real="$home"
+  for pid in $(pgrep -f "__mcp__" 2>/dev/null); do
+    if lsof -p "$pid" 2>/dev/null | awk -v a="$home/" -v b="$real/" \
+        '(index($NF, a) == 1 || index($NF, b) == 1) { found = 1 } END { exit(found ? 0 : 1) }'; then
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+  done
   # A shared PTY core (`__pty_core__`) carries no home in its argv, but it
   # holds <home>/pty-core.lock open for its lifetime: sweep by that.
   sweep_cores_under "$home"

@@ -61,6 +61,7 @@ unpeel — run and steer CLI agent sessions
   unpeel add [PATH] [--name N] [--here] [--json]
                                   add a folder (default: here) as a project
   unpeel projects [list | add <name> <path> | remove <name|path>]
+  unpeel hosts prune [--json]    reap leftover hosts of filed sessions
   unpeel help
   unpeel --version
 ";
@@ -683,6 +684,51 @@ fn serve() -> Result<(), String> {
     })
 }
 
+const HOSTS_USAGE: &str = "usage: unpeel hosts prune [--json]
+
+Terminate leftover per-process session hosts in this workspace whose session
+is already filed (exited or archived) but whose host process never exited.
+Runs the same reap the Host service performs at startup and on a slow timer.
+Only a provably-identical recorded host process (pid + start time) is signaled,
+never the shared PTY core, never by name match. Prints what it reaped.";
+
+/// `unpeel hosts prune` — user-only on-demand reap of orphaned session hosts.
+fn hosts_prune(json: bool) -> Result<(), String> {
+    let reaped = unpeel_core::session_host::reap_orphan_session_hosts();
+    if json {
+        let rows: Vec<serde_json::Value> = reaped
+            .iter()
+            .map(|host| {
+                serde_json::json!({
+                    "session_id": host.session_id,
+                    "host_pid": host.host_pid,
+                    "reason": host.reason.as_str(),
+                })
+            })
+            .collect();
+        println!("{}", serde_json::Value::Array(rows));
+        return Ok(());
+    }
+    if reaped.is_empty() {
+        println!("no leftover session hosts to prune");
+    } else {
+        for host in &reaped {
+            println!(
+                "reaped session host pid {} ({} session {})",
+                host.host_pid,
+                host.reason.as_str(),
+                host.session_id
+            );
+        }
+        let count = reaped.len();
+        println!(
+            "pruned {count} leftover session host{}",
+            if count == 1 { "" } else { "s" }
+        );
+    }
+    Ok(())
+}
+
 const SERVE_USAGE: &str = "usage: unpeel serve [install [--graphical] | uninstall | status]
 
 Run the UI-free Host service for the default and registered workspaces until
@@ -901,6 +947,19 @@ pub fn run(args: &[String]) -> i32 {
             crate::workspaces::cli(&parsed.positional[1..], parsed.has("json")).map(|_| 0)
         }
         "profiles" | "profile" => Err("`profiles` was renamed; use `unpeel workspaces`".into()),
+        "hosts" => match args.get(1).map(String::as_str) {
+            Some("prune")
+                if parsed.positional.len() == 2
+                    && parsed.flags.keys().all(|flag| flag == "json") =>
+            {
+                hosts_prune(parsed.has("json")).map(|_| 0)
+            }
+            Some("--help" | "-h" | "help") if parsed.positional.len() == 2 => {
+                println!("{HOSTS_USAGE}");
+                Ok(0)
+            }
+            _ => Err(HOSTS_USAGE.into()),
+        },
         "projects" => projects(&args[1..]).map(|_| 0),
         "serve" => match args.get(1).map(String::as_str) {
             None => serve().map(|_| 0),

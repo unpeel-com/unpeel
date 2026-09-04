@@ -205,6 +205,87 @@ def squeeze(text: str) -> str:
 # ─────────────────────────── fixture home ───────────────────────────
 
 
+# Leftover-process hygiene: a case must not leave `unpeel-host __session_host__`
+# or `__mcp__` sidecars running against its home. A leaked host keeps writing
+# to an unlinked output.bin (filling the disk) and re-runs the login-shell
+# PATH probe every tick (the load-average blowup). We detect them by open home
+# path so an untracked stray is caught, fail the case, then kill them so the
+# next case starts clean. The shared `__pty_core__` is NOT a leak here: it is
+# legitimate during a case and run.sh sweeps it by its lock file.
+def _pids_with_arg(arg):
+    try:
+        out = subprocess.run(
+            ["pgrep", "-f", arg], capture_output=True, text=True, check=False
+        ).stdout
+    except Exception:
+        return []
+    pids = []
+    for line in out.split():
+        try:
+            pids.append(int(line))
+        except ValueError:
+            pass
+    return pids
+
+
+def _process_references_home(pid, home_real):
+    # argv mentions the home (covers __session_host__ launch files)…
+    try:
+        cmd = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True, text=True, check=False,
+        ).stdout
+        if home_real in cmd:
+            return True
+    except Exception:
+        pass
+    # …or its UNPEEL_HOME env points at the home (covers __mcp__ sidecars,
+    # which carry no home in argv)…
+    try:
+        env = subprocess.run(
+            ["ps", "eww", "-p", str(pid), "-o", "command="],
+            capture_output=True, text=True, check=False,
+        ).stdout
+        if f"UNPEEL_HOME={home_real}" in env or f"UNPEEL_HOME={home_real}/" in env:
+            return True
+    except Exception:
+        pass
+    # …or it holds any file open under the home (covers a core by its lock).
+    try:
+        lsof = subprocess.run(
+            ["lsof", "-p", str(pid)], capture_output=True, text=True, check=False
+        ).stdout
+        for line in lsof.splitlines():
+            field = line.split()[-1] if line.split() else ""
+            if field.startswith(home_real + "/") or field == home_real:
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def leftover_host_processes(home_root):
+    """(pid, command) for host/sidecar/core processes still bound to this home."""
+    home_real = os.path.realpath(home_root)
+    seen = set()
+    leftovers = []
+    # The shared __pty_core__ is a legitimate detached process during a case
+    # (core-hosted sessions run inside it) and run.sh sweeps it by its lock
+    # file; only stray per-process hosts and mcp sidecars are a leak here.
+    for arg in ("__session_host__", "__mcp__"):
+        for pid in _pids_with_arg(arg):
+            if pid in seen:
+                continue
+            if _process_references_home(pid, home_real):
+                seen.add(pid)
+                cmd = subprocess.run(
+                    ["ps", "-p", str(pid), "-o", "command="],
+                    capture_output=True, text=True, check=False,
+                ).stdout.strip()
+                leftovers.append((pid, cmd))
+    return leftovers
+
+
 class Home:
     """A private `~/.unpeel` built from scratch."""
 
@@ -1343,6 +1424,20 @@ class Case:
         subprocess.run(
             ["pkill", "-f", "dns-sd -R"], capture_output=True, check=False
         )
+        # After the case's own tracked cleanup, no host/sidecar/core may still
+        # be bound to this home. A stray one is a leak: fail the case, then
+        # kill it so it cannot poison the next case's home.
+        leftovers = leftover_host_processes(self.home.root)
+        self.check(
+            "no leftover session hosts / mcp sidecars under the home",
+            not leftovers,
+            "; ".join(f"pid {pid}: {cmd}" for pid, cmd in leftovers),
+        )
+        for pid, _cmd in leftovers:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
         failed = 0
         for name, passed, detail, elapsed in self.checks:
             suffix = f"  [{detail}]" if detail and not passed else ""

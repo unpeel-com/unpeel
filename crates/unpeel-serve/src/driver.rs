@@ -33,6 +33,10 @@ const NATIVE_PROBE_INTERVAL: Duration = Duration::from_secs(1);
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(600);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const LINK_RETRY_DELAY: Duration = Duration::from_secs(60);
+/// How often the worker sweeps leftover per-process session hosts whose
+/// session is already filed (see reap_orphan_session_hosts). Kept slow: the
+/// first sweep runs at startup, and steady state has nothing to reap.
+const REAP_INTERVAL: Duration = Duration::from_secs(60);
 const LINK_REJECTED_RETRY_DELAY: Duration = Duration::from_secs(15 * 60);
 const STATUS_VERSION: u64 = 1;
 
@@ -654,6 +658,10 @@ pub struct HostRuntime {
     link_refresh_rx: Option<mpsc::Receiver<LinkRefreshResult>>,
     link_refresh_retry_at: Instant,
     last_scan: Instant,
+    last_reap: Instant,
+    /// Set while a background reaper thread is running, so a slow sweep never
+    /// stacks another on the next tick.
+    reap_in_flight: Arc<AtomicBool>,
     status_dirty: bool,
 }
 
@@ -769,6 +777,8 @@ impl HostRuntime {
             link_refresh_rx: None,
             link_refresh_retry_at: Instant::now(),
             last_scan: Instant::now() - RESCAN_INTERVAL,
+            last_reap: Instant::now() - REAP_INTERVAL,
+            reap_in_flight: Arc::new(AtomicBool::new(false)),
             status_dirty: true,
         };
         let mut emitted = vec![
@@ -886,6 +896,10 @@ impl HostRuntime {
         self.reconcile_link(&mut emitted);
         self.supervise_streamer(&mut emitted);
         self.supervise_pty_core(&mut emitted);
+        if self.last_reap.elapsed() >= REAP_INTERVAL {
+            self.last_reap = Instant::now();
+            self.spawn_reap();
+        }
         if self.status_dirty {
             if let Err(error) = self.publish_status() {
                 emitted.push(ServeEvent::Warning(error));
@@ -1333,6 +1347,35 @@ impl HostRuntime {
 
     /// Every tick: step the PTY core supervisor and republish `serve.json`
     /// when its published state moves. The supervisor never stops a core.
+    /// Reap leftover per-process session hosts on a background thread. The
+    /// kill path waits up to ~2s per orphan, so it must never run inline in
+    /// the worker tick; `reap_in_flight` keeps at most one sweep going.
+    fn spawn_reap(&self) {
+        if self.reap_in_flight.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let flag = Arc::clone(&self.reap_in_flight);
+        let spawned = std::thread::Builder::new()
+            .name("unpeel-host-reaper".into())
+            .spawn(move || {
+                for reaped in unpeel_core::session_host::reap_orphan_session_hosts() {
+                    crate::tracelog::trace(
+                        "reaper",
+                        &format!(
+                            "terminated leftover session host pid {} ({} session {})",
+                            reaped.host_pid,
+                            reaped.reason.as_str(),
+                            reaped.session_id
+                        ),
+                    );
+                }
+                flag.store(false, Ordering::SeqCst);
+            });
+        if spawned.is_err() {
+            self.reap_in_flight.store(false, Ordering::SeqCst);
+        }
+    }
+
     fn supervise_pty_core(&mut self, emitted: &mut Vec<ServeEvent>) {
         for event in self.pty_core.poll() {
             emitted.push(ServeEvent::PtyCore(event));

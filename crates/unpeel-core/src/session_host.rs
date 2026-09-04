@@ -4488,6 +4488,136 @@ pub(crate) fn mark_manifest_exited(session_id: &str) {
     });
 }
 
+/// Why a leftover per-process session host was reaped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReapReason {
+    /// The session's manifest is already `exited`.
+    Exited,
+    /// The session has been archived (an `archived.json` marker is present).
+    Archived,
+}
+
+impl ReapReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReapReason::Exited => "exited",
+            ReapReason::Archived => "archived",
+        }
+    }
+}
+
+/// A per-process `__session_host__` that was still running after its session
+/// was filed, and the reaper terminated it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReapedHost {
+    pub session_id: String,
+    pub host_pid: u32,
+    pub reason: ReapReason,
+}
+
+/// Terminate per-process session hosts that are STILL ALIVE even though their
+/// session is filed — manifest `exited`, or an `archived.json` marker present.
+///
+/// This is the leak behind the load-average blowup: a per-process host that
+/// never exited keeps running its observer / login-shell PATH-probe loop
+/// forever, one interactive shell per timer tick. `reap_dead_sessions` only
+/// normalizes *Running* manifests and garbage-collects dead *directories*; it
+/// never kills a live host whose session already finished. This does.
+///
+/// Kill discipline (mirrors `reap_dead_sessions`, never a name match):
+///   - only the additive `host_pid` is ever signaled — the `__session_host__`
+///     process, which `setsid`s at spawn, so `kill(-host_pid)` hits exactly
+///     that host's own process group (host + its PTY child), never the
+///     worker's;
+///   - only when `recorded_pid_identity(host_pid, host_pid_started_at)` is
+///     `Matches` (a recycled pid is `NotOurs`, an unverifiable one `Unknown` —
+///     both left untouched);
+///   - never the shared PTY core (`host_pid == core pid`, or an argv that
+///     mentions `__pty_core__`);
+///   - and only when the live argv actually contains `__session_host__`.
+///
+/// Returns what it reaped, newest logic first, for the trace log and the
+/// `unpeel hosts prune` verb. Safe to run repeatedly.
+pub fn reap_orphan_session_hosts() -> Vec<ReapedHost> {
+    let core_pid = crate::pty_core::load_record().map(|record| record.pid);
+    let mut reaped = Vec::new();
+
+    for manifest in list_manifests() {
+        let session_id = manifest.session.id.clone();
+
+        // Filed = the session is done and no host should still be running for
+        // it: an `exited` manifest, or an `archived.json` marker beside it
+        // (session_ops::ARCHIVE_MARKER; referenced by literal to avoid a
+        // session_ops -> session_host -> session_ops dependency cycle).
+        let archived = session_dir(&session_id).join("archived.json").exists();
+        let reason = match manifest.state {
+            HostedSessionState::Exited => ReapReason::Exited,
+            HostedSessionState::Running if archived => ReapReason::Archived,
+            _ => continue,
+        };
+
+        // Only modern per-process hosts recorded a host pid. Without one there
+        // is nothing safe to signal (the child shell pid is not the host).
+        let Some(host_pid) = manifest.host_pid else {
+            continue;
+        };
+        if host_pid <= 1 {
+            continue;
+        }
+        // Never signal the shared PTY core: it hosts many Sessions.
+        if Some(host_pid) == core_pid {
+            continue;
+        }
+        // Provably the same process we recorded, or leave it alone.
+        if recorded_pid_identity(host_pid, manifest.host_pid_started_at) != PidIdentity::Matches {
+            continue;
+        }
+        // Defense in depth against a pid recycled within tolerance onto the
+        // core or something unrelated: it must actually be a session host and
+        // must not be the core.
+        if process_argv_mentions(host_pid, SESSION_HOST_ARG) != Some(true) {
+            continue;
+        }
+        if process_argv_mentions(host_pid, crate::pty_core::PTY_CORE_ARG) == Some(true) {
+            continue;
+        }
+
+        // Signal both the process group (production hosts `setsid`, so
+        // `-host_pid` is their own group — never the worker's) and the pid
+        // itself (a host spawned without that pre_exec is not a group leader;
+        // a positive kill of a pid we just proved is ours is still safe). The
+        // group send is a harmless ESRCH when there is no such group. Mirrors
+        // the HostGuard reap in the process tests.
+        #[cfg(unix)]
+        unsafe {
+            libc::kill(-(host_pid as i32), libc::SIGTERM);
+            libc::kill(host_pid as i32, libc::SIGTERM);
+        }
+        for _ in 0..20 {
+            thread::sleep(Duration::from_millis(100));
+            if !process_exists(host_pid) {
+                break;
+            }
+        }
+        #[cfg(unix)]
+        if process_exists(host_pid) {
+            unsafe {
+                libc::kill(-(host_pid as i32), libc::SIGKILL);
+                libc::kill(host_pid as i32, libc::SIGKILL);
+            }
+        }
+
+        mark_manifest_exited(&session_id);
+        reaped.push(ReapedHost {
+            session_id,
+            host_pid,
+            reason,
+        });
+    }
+
+    reaped
+}
+
 pub fn write_launch_file(launch: &SessionHostLaunch) -> Result<PathBuf, String> {
     ensure_session_dir(&launch.session.id)?;
     let path = launch_path(&launch.session.id);
