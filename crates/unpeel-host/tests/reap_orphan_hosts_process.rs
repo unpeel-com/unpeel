@@ -53,8 +53,35 @@ fn write_launch(home: &Path, session_id: &str, command: &str) -> PathBuf {
     path
 }
 
-fn spawn_host(home: &Path, launch: &Path) -> Child {
-    Command::new(env!("CARGO_BIN_EXE_unpeel-host"))
+/// A spawned `__session_host__` that is always torn down, even if the test
+/// panics before its explicit cleanup. Both hosts this test spawns are held
+/// in `HostProc`s so a failed assertion cannot leak a running host — the leak
+/// class Lane 23 fixed, seen again under load on 2026-09-04.
+struct HostProc {
+    child: Child,
+    pid: u32,
+}
+
+impl HostProc {
+    fn wait(&mut self) {
+        let _ = self.child.wait();
+    }
+}
+
+impl Drop for HostProc {
+    fn drop(&mut self) {
+        // The host `setsid`s at spawn, so `-pid` is its own group and never
+        // the test runner's. Both sends are harmless (ESRCH) once it is gone.
+        unsafe {
+            libc::kill(-(self.pid as i32), libc::SIGKILL);
+            libc::kill(self.pid as i32, libc::SIGKILL);
+        }
+        let _ = self.child.wait();
+    }
+}
+
+fn spawn_host(home: &Path, launch: &Path) -> HostProc {
+    let child = Command::new(env!("CARGO_BIN_EXE_unpeel-host"))
         .arg("__session_host__")
         .arg(launch)
         .env("UNPEEL_HOME", home)
@@ -65,7 +92,9 @@ fn spawn_host(home: &Path, launch: &Path) -> Child {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .unwrap()
+        .unwrap();
+    let pid = child.id();
+    HostProc { child, pid }
 }
 
 fn manifest(home: &Path, id: &str) -> Option<Value> {
@@ -95,7 +124,7 @@ fn reaps_a_filed_host_and_leaves_a_running_one() {
     let filed_launch = write_launch(&home, "filed", "sleep 600");
     let mut filed_host = spawn_host(&home, &filed_launch);
     let running_launch = write_launch(&home, "running", "sleep 600");
-    let mut running_host = spawn_host(&home, &running_launch);
+    let running_host = spawn_host(&home, &running_launch);
 
     // Both hosts record their host_pid and come up running.
     assert!(
@@ -136,7 +165,7 @@ fn reaps_a_filed_host_and_leaves_a_running_one() {
     );
     // The reaper SIGKILLed the host; reap the zombie so kill(pid, 0) stops
     // reporting the defunct entry as alive.
-    let _ = filed_host.wait();
+    filed_host.wait();
     assert!(
         wait_until(Duration::from_secs(10), || !alive(filed_pid)),
         "the filed host {filed_pid} is still alive after the reap"
@@ -153,12 +182,10 @@ fn reaps_a_filed_host_and_leaves_a_running_one() {
         Some("running".to_string())
     );
 
-    // Cleanup: stop the running host and reap the (already-dead) filed child.
-    unsafe {
-        libc::kill(-(running_pid as i32), libc::SIGKILL);
-        libc::kill(running_pid as i32, libc::SIGKILL);
-    }
-    let _ = running_host.wait();
-    let _ = filed_host.wait();
+    // Cleanup: both hosts are `HostProc`s, so they are SIGKILLed and reaped
+    // by their `Drop` at end of scope (also on any panic above). Just remove
+    // the throwaway home; the process teardown is guaranteed.
+    drop(running_host);
+    drop(filed_host);
     let _ = fs::remove_dir_all(&home);
 }
