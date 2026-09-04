@@ -73,18 +73,91 @@ pub fn resolved_user_shell() -> String {
 /// new session's first PTY output, making heavy-startup agents (codex) appear
 /// to die instantly on launch. `OnceLock::get_or_init` also serializes racing
 /// callers to a single probe.
+/// How long a probed PATH is trusted across processes before a re-probe. The
+/// login shell's PATH barely changes; a workspace-wide cache means many hosts
+/// and observers share ONE probe per 10 minutes instead of each spawning
+/// `zsh -i` on its own timer — the interactive-shell storm that drove the load
+/// average to triple digits with leftover hosts.
+const PATH_CACHE_TTL_MS: u64 = 10 * 60 * 1000;
+
+fn path_cache_file() -> PathBuf {
+    crate::app_paths::unpeel_home().join("path-probe-cache.json")
+}
+
+fn now_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// A fresh cached PATH for this workspace, or None when absent/stale/unreadable.
+fn read_cached_shell_path_dirs() -> Option<Vec<PathBuf>> {
+    let raw = std::fs::read(path_cache_file()).ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&raw).ok()?;
+    parse_cached_dirs(&value, now_unix_ms())
+}
+
+/// Pure cache-entry parse: `Some(dirs)` only when the entry carries a
+/// `probed_at_unix_ms` within the TTL of `now_ms`; stale or malformed → None.
+fn parse_cached_dirs(value: &serde_json::Value, now_ms: u64) -> Option<Vec<PathBuf>> {
+    let probed_at = value.get("probed_at_unix_ms").and_then(|v| v.as_u64())?;
+    if now_ms.saturating_sub(probed_at) >= PATH_CACHE_TTL_MS {
+        return None;
+    }
+    let dirs = value
+        .get("dirs")?
+        .as_array()?
+        .iter()
+        .filter_map(|v| v.as_str())
+        .map(PathBuf::from)
+        .collect();
+    Some(dirs)
+}
+
+/// Persist the probe result for the workspace. Empty results are cached too:
+/// the point is to throttle re-probes, and a leftover/misconfigured host that
+/// probes empty must not re-storm every tick. A best-effort atomic write.
+fn write_cached_shell_path_dirs(dirs: &[PathBuf]) {
+    let value = serde_json::json!({
+        "dirs": dirs.iter().map(|d| d.to_string_lossy()).collect::<Vec<_>>(),
+        "probed_at_unix_ms": now_unix_ms(),
+    });
+    let Ok(body) = serde_json::to_vec(&value) else {
+        return;
+    };
+    let path = path_cache_file();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let tmp = path.with_extension("json.tmp");
+    if std::fs::write(&tmp, &body).is_ok() {
+        let _ = std::fs::rename(&tmp, &path);
+    }
+}
+
 fn shell_path_dirs() -> Vec<PathBuf> {
+    // 1. Process-local: probe at most once per process (cheapest path).
     static CACHE: std::sync::OnceLock<Vec<PathBuf>> = std::sync::OnceLock::new();
     if let Some(dirs) = CACHE.get() {
         return dirs.clone();
     }
-    let dirs = probe_shell_path_dirs();
-    // A failed/empty probe must not poison the cache for the life of a
-    // long-running host; leave it uncached so the next call retries.
-    if dirs.is_empty() {
+    // 2. Workspace-wide disk cache shared across every host/observer process:
+    //    a fresh entry (probed < 10 min ago) is reused without spawning a
+    //    shell, so a fleet of hosts pays one probe per workspace per TTL.
+    if let Some(dirs) = read_cached_shell_path_dirs() {
+        if !dirs.is_empty() {
+            let _ = CACHE.set(dirs.clone());
+        }
         return dirs;
     }
-    CACHE.get_or_init(|| dirs).clone()
+    // 3. Miss/stale: probe once, then record it (even when empty) to throttle.
+    let dirs = probe_shell_path_dirs();
+    write_cached_shell_path_dirs(&dirs);
+    if !dirs.is_empty() {
+        let _ = CACHE.set(dirs.clone());
+    }
+    dirs
 }
 
 fn probe_shell_path_dirs() -> Vec<PathBuf> {
@@ -256,10 +329,44 @@ pub fn dependency_report() -> DependencyReport {
 #[cfg(test)]
 mod tests {
     use super::{
-        common_bin_dirs, extract_marked, find_command_path, platform_default_shell,
-        runtime_command_names,
+        common_bin_dirs, extract_marked, find_command_path, parse_cached_dirs,
+        platform_default_shell, runtime_command_names, PATH_CACHE_TTL_MS,
     };
     use std::path::PathBuf;
+
+    #[test]
+    fn path_cache_entry_is_reused_while_fresh_and_dropped_when_stale() {
+        let now = 1_000_000_000u64;
+        let fresh = serde_json::json!({
+            "dirs": ["/opt/homebrew/bin", "/usr/bin"],
+            "probed_at_unix_ms": now - 1_000,
+        });
+        assert_eq!(
+            parse_cached_dirs(&fresh, now),
+            Some(vec![
+                PathBuf::from("/opt/homebrew/bin"),
+                PathBuf::from("/usr/bin")
+            ])
+        );
+        // Exactly at the TTL boundary and beyond it is stale (re-probe).
+        let stale = serde_json::json!({
+            "dirs": ["/usr/bin"],
+            "probed_at_unix_ms": now - PATH_CACHE_TTL_MS,
+        });
+        assert_eq!(parse_cached_dirs(&stale, now), None);
+        // An empty-but-fresh entry is honored (it throttles a re-probe storm).
+        let empty_fresh = serde_json::json!({ "dirs": [], "probed_at_unix_ms": now });
+        assert_eq!(parse_cached_dirs(&empty_fresh, now), Some(Vec::new()));
+        // Malformed entries never parse.
+        assert_eq!(
+            parse_cached_dirs(&serde_json::json!({ "dirs": ["/x"] }), now),
+            None
+        );
+        assert_eq!(
+            parse_cached_dirs(&serde_json::json!({ "probed_at_unix_ms": now }), now),
+            None
+        );
+    }
 
     #[test]
     fn extract_marked_handles_shell_noise() {
