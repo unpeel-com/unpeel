@@ -424,6 +424,10 @@ impl PairingWindow {
         }
 
         let (remote_port, fingerprint) = crate::mobile::remote_server_advertisement();
+        // The direct `/mobile` listener serves the same Host certificate as
+        // the WSS streamer, so a freshly paired device always receives the
+        // pin — even while the streamer is down.
+        let fingerprint = fingerprint.or_else(crate::mobile::direct_certificate_fingerprint);
         let engine = base64::engine::general_purpose::STANDARD;
         let mut response = serde_json::json!({
             "protocolVersion": 1,
@@ -433,6 +437,9 @@ impl PairingWindow {
             "deviceID": device_id,
             "authToken": auth_token,
             "pairedAtUnixMs": now_ms(),
+            // Additive: the Host version, the phone's fallback TLS signal
+            // (`>= 0.5.3` serves the direct endpoint over TLS).
+            "serverVersion": env!("CARGO_PKG_VERSION"),
             // Required by the phone's decoder even on LAN-only pairings.
             "relayCredentials": {
                 "relayURL": relay_url(),
@@ -445,6 +452,9 @@ impl PairingWindow {
             response["directEndpoint"] = active.direct_endpoint.clone().into();
         }
         if let Some(obj) = response.as_object_mut() {
+            // Additive: the direct endpoint above is served over TLS with the
+            // certificate named by `remoteServerCertificateFingerprint`.
+            obj.insert("directTLS".into(), true.into());
             if let Some(port) = remote_port {
                 obj.insert("remoteServerPort".into(), port.into());
             }

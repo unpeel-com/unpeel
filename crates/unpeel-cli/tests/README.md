@@ -76,7 +76,7 @@ Useful pieces:
 | `home.session(...)` | a hosted-session dir; `running=True` parks a real pid and binds a socket |
 | `home.marker(...)` | shared markers (`archived.json`, `title.json`, `read.json`) |
 | `home.pair_device()` / `home.reserve_mobile_port()` | a paired phone token and the published phone endpoint |
-| `mobile_request(port, path, token)` | an authenticated `/mobile/*` call |
+| `mobile_request(port, path, token)` | an authenticated `/mobile/*` call over TLS, pinned to the Host certificate the way a phone pins (`host_certificate_pin(home)`); `plaintext_mobile_request` is the cleartext shape the Host must refuse with 426 |
 | `McpClient(home, session_id)` | a `unpeel-host __mcp__` child speaking JSON-RPC for one caller Session (`tool_names`, `call`, `McpClient.text`) |
 
 Name checks as the behaviour a user would recognise ("archive falls back to

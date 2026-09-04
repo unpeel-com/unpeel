@@ -1,8 +1,17 @@
 //! App-less `/mobile/*` server: the same wire contract as the native
 //! `MobileRemoteServer.swift`, so an already-paired phone keeps working when
-//! only the TUI runs. Plain HTTP/1.1, Bearer auth against the shared
-//! `~/.unpeel/mobile/devices.json` token hashes, JSON keys in the Swift
-//! dialect (camelCase with capital-ID suffixes, optionals omitted).
+//! only the TUI runs. HTTP/1.1 over TLS with the Host certificate (the same
+//! pinned certificate the `__remote__` WSS streamer serves), Bearer auth
+//! against the shared `~/.unpeel/mobile/devices.json` token hashes, JSON keys
+//! in the Swift dialect (camelCase with capital-ID suffixes, optionals
+//! omitted).
+//!
+//! Transport rule: one port, TLS by default, plaintext tolerated only for the
+//! pairing exchange, which is sealed at the application layer. A connection is
+//! classified by its first byte (`0x16` is a TLS ClientHello). A plaintext
+//! request that presents any credential is refused with `426 Upgrade Required`
+//! and `"use https"` *before* the token is looked up: a paired device's
+//! long-lived bearer never authenticates over a cleartext connection.
 //!
 //! Single-owner rule: the exact persisted listener is the phone + Link lease.
 //! A TUI yields that lease only to a validated native sidebar, then retries it
@@ -28,10 +37,153 @@ use unpeel_core::controller_api::{
     ControllerEffects, ControllerPrincipal, ControllerRequest, HostBootstrapContext,
     HostCreateContext, HostCreateProject, HostRouteContext,
 };
+use unpeel_core::rustls;
 
 use crate::platform_adapter::{PlatformAdapterError, PlatformAdapterHub};
 
 const IO_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How a connection reached the listener, decided from its first byte.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Transport {
+    /// A TLS ClientHello: served over the Host certificate.
+    Tls,
+    /// Cleartext HTTP/1.1: only the sealed pairing exchange belongs here.
+    Plaintext,
+}
+
+/// The first byte of a TLS record is its content type; a ClientHello is a
+/// handshake record (`0x16`). No HTTP method token starts with that byte.
+pub(crate) fn transport_for_first_byte(first: u8) -> Transport {
+    if first == 0x16 {
+        Transport::Tls
+    } else {
+        Transport::Plaintext
+    }
+}
+
+/// The plaintext gate, evaluated before any credential is looked up. A
+/// cleartext request that presents an `Authorization` header ends here with
+/// `426 Upgrade Required` and a body naming the fix; the token is never
+/// hashed, compared, or authenticated. TLS requests pass through untouched.
+pub(crate) fn plaintext_credential_rejection(
+    transport: Transport,
+    request: &Request,
+) -> Option<(u16, String)> {
+    if transport == Transport::Tls || !request.headers.contains_key("authorization") {
+        return None;
+    }
+    Some((
+        426,
+        serde_json::json!({
+            "error": "use https",
+            "detail": "the direct /mobile endpoint serves TLS with the Host \
+                       certificate; a bearer token is never accepted over \
+                       plaintext",
+        })
+        .to_string(),
+    ))
+}
+
+/// One accepted socket, wrapped for its transport. Both arms are blocking
+/// `std` streams, so the request loop is transport-agnostic.
+enum MobileStream {
+    Plaintext(TcpStream),
+    Tls(Box<rustls::StreamOwned<rustls::ServerConnection, TcpStream>>),
+}
+
+impl Read for MobileStream {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            MobileStream::Plaintext(stream) => stream.read(buf),
+            MobileStream::Tls(stream) => stream.read(buf),
+        }
+    }
+}
+
+impl Write for MobileStream {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            MobileStream::Plaintext(stream) => stream.write(buf),
+            MobileStream::Tls(stream) => stream.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            MobileStream::Plaintext(stream) => stream.flush(),
+            MobileStream::Tls(stream) => stream.flush(),
+        }
+    }
+}
+
+/// Classify an accepted socket by peeking (`MSG_PEEK`) its first byte, so the
+/// TLS layer still reads the whole ClientHello itself. `None` when the peer
+/// hung up or the read timeout elapsed before sending anything.
+fn accept_transport(
+    stream: TcpStream,
+    tls: &Arc<rustls::ServerConfig>,
+) -> Option<(Transport, MobileStream)> {
+    let mut first = [0u8; 1];
+    if !matches!(stream.peek(&mut first), Ok(1)) {
+        return None;
+    }
+    match transport_for_first_byte(first[0]) {
+        Transport::Tls => {
+            let connection = rustls::ServerConnection::new(Arc::clone(tls)).ok()?;
+            Some((
+                Transport::Tls,
+                MobileStream::Tls(Box::new(rustls::StreamOwned::new(connection, stream))),
+            ))
+        }
+        Transport::Plaintext => Some((Transport::Plaintext, MobileStream::Plaintext(stream))),
+    }
+}
+
+/// The Host certificate this listener serves, as loaded by `start_impl`.
+/// Bootstrap and the sealed pairing response advertise it so a Controller
+/// pins one fingerprint for `/mobile` and the WSS streamer alike.
+static DIRECT_CERTIFICATE_FINGERPRINT: std::sync::OnceLock<Mutex<Option<String>>> =
+    std::sync::OnceLock::new();
+
+fn remember_direct_certificate_fingerprint(fingerprint: &str) {
+    if let Ok(mut guard) = DIRECT_CERTIFICATE_FINGERPRINT
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+    {
+        *guard = Some(fingerprint.to_owned());
+    }
+}
+
+/// Lowercase hex SHA-256 of the certificate the direct listener serves, once
+/// a listener has started in this process.
+pub(crate) fn direct_certificate_fingerprint() -> Option<String> {
+    DIRECT_CERTIFICATE_FINGERPRINT
+        .get()
+        .and_then(|cell| cell.lock().ok())
+        .and_then(|guard| guard.clone())
+}
+
+/// Load the Host certificate and build the listener's TLS config. Failing
+/// closed here (no listener) beats a cleartext-only listener that would refuse
+/// every paired device anyway.
+fn direct_tls_config() -> Option<(Arc<rustls::ServerConfig>, String)> {
+    let material = match unpeel_core::remote_server::ensure_tls_material() {
+        Ok(material) => material,
+        Err(error) => {
+            crate::tracelog::trace("mobile-tls", &format!("certificate unavailable: {error}"));
+            return None;
+        }
+    };
+    let fingerprint = material.fingerprint.clone();
+    match unpeel_core::remote_server::build_tls_config(material) {
+        Ok(config) => Some((config, fingerprint)),
+        Err(error) => {
+            crate::tracelog::trace("mobile-tls", &format!("tls config failed: {error}"));
+            None
+        }
+    }
+}
 const MAX_BODY: usize = 4 * 1024 * 1024;
 /// Wall-clock budget for a connection to authenticate, measured from accept.
 /// The per-read `IO_TIMEOUT` alone lets a slow sender hold a worker thread
@@ -125,6 +277,9 @@ fn valid_native_artifact_chunk(value: &serde_json::Value, query: &HashMap<String
 
 pub struct MobileServer {
     pub port: u16,
+    /// Lowercase hex SHA-256 of the Host certificate this listener serves;
+    /// the pin a Controller holds for `/mobile` and the WSS streamer alike.
+    pub certificate_fingerprint: String,
     shutdown: Arc<std::sync::atomic::AtomicBool>,
     bonjour: Arc<Mutex<Option<std::process::Child>>>,
     remote: Arc<Mutex<crate::remote_streamer::RemoteStreamer>>,
@@ -810,7 +965,7 @@ pub(crate) struct Request {
     pub(crate) keep_alive: bool,
 }
 
-fn read_request(stream: &mut TcpStream, pending: &mut Vec<u8>) -> Option<Request> {
+fn read_request<S: Read>(stream: &mut S, pending: &mut Vec<u8>) -> Option<Request> {
     let header_end = loop {
         if let Some(pos) = pending.windows(4).position(|w| w == b"\r\n\r\n") {
             break pos + 4;
@@ -912,7 +1067,18 @@ fn urldecode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-fn respond(stream: &mut TcpStream, status: u16, body: &str, keep_alive: bool) -> bool {
+fn respond<S: Write>(stream: &mut S, status: u16, body: &str, keep_alive: bool) -> bool {
+    respond_with(stream, status, "", body, keep_alive)
+}
+
+/// `respond` with extra raw header lines (each `\r\n`-terminated).
+fn respond_with<S: Write>(
+    stream: &mut S,
+    status: u16,
+    extra_headers: &str,
+    body: &str,
+    keep_alive: bool,
+) -> bool {
     let reason = match status {
         200 => "OK",
         400 => "Bad Request",
@@ -920,6 +1086,7 @@ fn respond(stream: &mut TcpStream, status: u16, body: &str, keep_alive: bool) ->
         404 => "Not Found",
         409 => "Conflict",
         405 => "Method Not Allowed",
+        426 => "Upgrade Required",
         500 => "Internal Server Error",
         501 => "Not Implemented",
         503 => "Service Unavailable",
@@ -929,11 +1096,17 @@ fn respond(stream: &mut TcpStream, status: u16, body: &str, keep_alive: bool) ->
     let connection = if keep_alive { "keep-alive" } else { "close" };
     write!(
         stream,
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: {connection}\r\n\r\n{body}",
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nCache-Control: no-store\r\n{extra_headers}Content-Length: {}\r\nConnection: {connection}\r\n\r\n{body}",
         body.len()
     )
     .and_then(|_| stream.flush())
     .is_ok()
+}
+
+/// The plaintext-credential refusal: `426` names TLS as the upgrade and closes
+/// the connection so a client cannot keep streaming its token in the clear.
+fn respond_upgrade_required<S: Write>(stream: &mut S, body: &str) -> bool {
+    respond_with(stream, 426, "Upgrade: TLS/1.3, HTTP/1.1\r\n", body, false)
 }
 
 fn error_body(message: &str) -> String {
@@ -1292,7 +1465,11 @@ fn handle_with_effects(
             .map(|value| value.trim().to_owned())
             .ok();
         context.remote_server_port = port.and_then(|value| u16::try_from(value).ok());
-        context.remote_server_certificate_fingerprint = fingerprint;
+        // One certificate serves both pinned transports, so the fingerprint
+        // is advertised whenever the direct listener has it — a Controller
+        // pins `/mobile` even while the streamer is down.
+        context.remote_server_certificate_fingerprint =
+            fingerprint.or_else(direct_certificate_fingerprint);
         context.pending_approvals = approvals.list_json();
         platform_adapters.decorate_protocol(&mut context.protocol);
         Some(HostRouteContext {
@@ -2136,7 +2313,8 @@ fn cut_expired_connections(
 
 #[allow(clippy::too_many_arguments)]
 fn handle_connection(
-    mut stream: TcpStream,
+    stream: TcpStream,
+    tls: Arc<rustls::ServerConfig>,
     snapshot: SharedSnapshot,
     mark_read: Sender<String>,
     hook_port: Option<u16>,
@@ -2151,6 +2329,11 @@ fn handle_connection(
 ) {
     let _ = stream.set_read_timeout(Some(IO_TIMEOUT));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
+    // The first byte decides the transport; the TLS handshake itself happens
+    // on the first read of the wrapped stream.
+    let Some((transport, mut stream)) = accept_transport(stream, &tls) else {
+        return;
+    };
     let mut pending = Vec::new();
     for _ in 0..1000 {
         if shutdown.load(std::sync::atomic::Ordering::Relaxed) {
@@ -2160,6 +2343,12 @@ fn handle_connection(
             return;
         };
         let keep = request.keep_alive;
+        // Before routing, before any token lookup: cleartext never carries a
+        // credential past this point.
+        if let Some((_, body)) = plaintext_credential_rejection(transport, &request) {
+            respond_upgrade_required(&mut stream, &body);
+            return;
+        }
         if !request.path.starts_with("/mobile/") {
             respond(&mut stream, 404, &error_body("not found"), keep);
         } else if request.path == "/mobile/pair" {
@@ -2366,6 +2555,12 @@ fn start_impl(
         headless_persisted,
     )?;
     let port = listener.local_addr().ok()?.port();
+    // The Host certificate is the same material the `__remote__` streamer
+    // serves, so a Controller's existing pin covers this listener. Without it
+    // there is no listener: a cleartext-only server would refuse every paired
+    // device anyway (see `plaintext_credential_rejection`).
+    let (tls, certificate_fingerprint) = direct_tls_config()?;
+    remember_direct_certificate_fingerprint(&certificate_fingerprint);
     let direct_endpoint: Arc<str> =
         format!("http://{}:{port}/mobile", preferred_lan_address()).into();
     if handoff.is_none()
@@ -2481,6 +2676,7 @@ fn start_impl(
                     refuse_overloaded(stream);
                     continue;
                 };
+                let tls = Arc::clone(&tls);
                 let snapshot = Arc::clone(&snapshot);
                 let mark_read = mark_read.clone();
                 let resizes = Arc::clone(&resizes);
@@ -2500,6 +2696,7 @@ fn start_impl(
                 let worker = std::thread::spawn(move || {
                     handle_connection(
                         stream,
+                        tls,
                         snapshot,
                         mark_read,
                         hook_port,
@@ -2540,6 +2737,7 @@ fn start_impl(
     });
     Some(MobileServer {
         port,
+        certificate_fingerprint,
         shutdown,
         bonjour,
         remote,
@@ -2717,6 +2915,7 @@ mod tests {
                             let (mark_read, _receiver) = std::sync::mpsc::channel();
                             handle_connection(
                                 stream,
+                                test_tls_config(),
                                 Arc::new(Mutex::new(crate::sessions::MobileSnapshot::default())),
                                 mark_read,
                                 None,
@@ -2754,12 +2953,20 @@ mod tests {
                 .unwrap();
             client
         };
-        // N slow senders: a partial request head, then silence.
+        // N slow senders, then silence: half a partial plaintext request
+        // head, half the first bytes of a TLS ClientHello — a stalled TLS
+        // handshake sits under the same pre-auth deadline as a stalled
+        // request.
         let opened_at = Instant::now();
         let mut slow: Vec<TcpStream> = (0..CAP)
-            .map(|_| {
+            .map(|index| {
                 let mut client = connect();
-                client.write_all(b"GET /mob").unwrap();
+                let partial: &[u8] = if index % 2 == 0 {
+                    b"GET /mob"
+                } else {
+                    b"\x16\x03\x01\x00"
+                };
+                client.write_all(partial).unwrap();
                 client
             })
             .collect();
@@ -2822,6 +3029,248 @@ mod tests {
 
         shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
         accept_thread.join().unwrap();
+    }
+
+    /// A Host certificate generated into a scratch directory through the real
+    /// material loader — never this process's `~/.unpeel`. Returns the server
+    /// config and the fingerprint a Controller would pin.
+    fn test_tls_material() -> (Arc<rustls::ServerConfig>, String) {
+        let dir = scratch_dir("tls");
+        let material = unpeel_core::remote_server::ensure_tls_material_in(&dir)
+            .expect("scratch Host certificate");
+        let fingerprint = material.fingerprint.clone();
+        let config =
+            unpeel_core::remote_server::build_tls_config(material).expect("scratch TLS config");
+        let _ = std::fs::remove_dir_all(dir);
+        (config, fingerprint)
+    }
+
+    fn test_tls_config() -> Arc<rustls::ServerConfig> {
+        test_tls_material().0
+    }
+
+    /// Accept one connection and run it through the production handler.
+    fn serve_one_connection(
+        listener: TcpListener,
+        tls: Arc<rustls::ServerConfig>,
+    ) -> std::thread::JoinHandle<()> {
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let snapshot = Arc::new(Mutex::new(crate::sessions::MobileSnapshot::default()));
+            let (mark_read, _receiver) = std::sync::mpsc::channel();
+            handle_connection(
+                stream,
+                tls,
+                snapshot,
+                mark_read,
+                None,
+                Arc::new(Mutex::new(HashMap::new())),
+                Arc::new(crate::approvals::ApprovalHub::default()),
+                Arc::new(crate::pairing::PairingWindow::default()),
+                Arc::new(PlatformAdapterHub::default()),
+                None,
+                "http://127.0.0.1:17661/mobile".into(),
+                Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            );
+        })
+    }
+
+    /// A Controller-side TLS stream pinned the way the phone pins: to the
+    /// certificate fingerprint, not a CA chain.
+    fn tls_client(
+        port: u16,
+        fingerprint: Option<String>,
+    ) -> rustls::StreamOwned<rustls::ClientConnection, TcpStream> {
+        let config = Arc::new(unpeel_core::remote_attach::pinned_client_config(
+            fingerprint,
+        ));
+        let name = rustls::pki_types::ServerName::try_from("localhost").unwrap();
+        let connection = rustls::ClientConnection::new(config, name).unwrap();
+        let tcp = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        tcp.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        rustls::StreamOwned::new(connection, tcp)
+    }
+
+    /// Send one request, read until the server closes: (status, head, body).
+    fn http_exchange<S: Read + Write>(stream: &mut S, request: &str) -> (u16, String, String) {
+        // A refused certificate surfaces here: the handshake runs on the
+        // first write and fails before any HTTP byte crosses.
+        if let Err(error) = stream
+            .write_all(request.as_bytes())
+            .and_then(|_| stream.flush())
+        {
+            return (0, String::new(), format!("write failed: {error}"));
+        }
+        let mut raw = Vec::new();
+        let mut chunk = [0u8; 4096];
+        loop {
+            match stream.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => raw.extend_from_slice(&chunk[..n]),
+            }
+        }
+        let text = String::from_utf8_lossy(&raw).into_owned();
+        let (head, body) = text.split_once("\r\n\r\n").unwrap_or((text.as_str(), ""));
+        let status = head
+            .split_whitespace()
+            .nth(1)
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0);
+        (status, head.to_owned(), body.to_owned())
+    }
+
+    fn request_with_headers(path: &str, headers: &[(&str, &str)]) -> Request {
+        Request {
+            request_id: None,
+            method: "GET".into(),
+            path: path.into(),
+            query: HashMap::new(),
+            headers: headers
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect(),
+            body: Vec::new(),
+            keep_alive: true,
+        }
+    }
+
+    #[test]
+    fn first_byte_classifies_the_transport() {
+        assert_eq!(transport_for_first_byte(0x16), Transport::Tls);
+        for byte in [b'G', b'P', b'H', b'O', b'D', 0x00, 0xff] {
+            assert_eq!(transport_for_first_byte(byte), Transport::Plaintext);
+        }
+    }
+
+    #[test]
+    fn plaintext_gate_refuses_credentials_and_passes_tls_through() {
+        let bearer = [("authorization", "Bearer phone-token-1")];
+        let (status, body) = plaintext_credential_rejection(
+            Transport::Plaintext,
+            &request_with_headers("/mobile/bootstrap", &bearer),
+        )
+        .expect("plaintext + bearer is refused");
+        assert_eq!(status, 426);
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["error"], "use https");
+
+        // Any credential shape, any route — even pairing — is refused in the
+        // clear; the pairing exchange itself carries no Authorization header.
+        assert!(plaintext_credential_rejection(
+            Transport::Plaintext,
+            &request_with_headers("/mobile/pair", &[("authorization", "Basic abc")]),
+        )
+        .is_some());
+
+        // TLS carries the bearer on to authentication.
+        assert!(plaintext_credential_rejection(
+            Transport::Tls,
+            &request_with_headers("/mobile/bootstrap", &bearer),
+        )
+        .is_none());
+        // Unauthenticated plaintext requests keep their existing answers
+        // (the pairing route, or 401/404 further down).
+        assert!(plaintext_credential_rejection(
+            Transport::Plaintext,
+            &request_with_headers("/mobile/pair", &[]),
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn plaintext_bearer_is_refused_before_authentication() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handler = serve_one_connection(listener, test_tls_config());
+
+        let mut client = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let (status, head, body) = http_exchange(
+            &mut client,
+            "GET /mobile/bootstrap HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer phone-token-1\r\nConnection: keep-alive\r\n\r\n",
+        );
+        handler.join().unwrap();
+
+        // 426, never 401: the token was refused for its transport, not looked
+        // up and found unknown.
+        assert_eq!(status, 426, "{head}\n{body}");
+        assert!(head.contains("Upgrade: TLS/1.3"), "{head}");
+        assert!(head.contains("Connection: close"), "{head}");
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["error"], "use https");
+    }
+
+    #[test]
+    fn tls_carries_the_bearer_past_the_plaintext_gate() {
+        let (tls, fingerprint) = test_tls_material();
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handler = serve_one_connection(listener, tls);
+
+        // Pinned to the served certificate, exactly as a paired phone pins.
+        // A non-/mobile path answers 404 only after the gate let the bearer
+        // through; the same request in the clear ends in 426 above. (The
+        // paired-token lookup itself is exercised by the process tests with
+        // a private UNPEEL_HOME.)
+        let mut client = tls_client(port, Some(fingerprint));
+        let (status, head, body) = http_exchange(
+            &mut client,
+            "GET /not-mobile HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer phone-token-1\r\nConnection: close\r\n\r\n",
+        );
+        handler.join().unwrap();
+        assert_eq!(status, 404, "{head}\n{body}");
+        assert!(body.contains("not found"), "{body}");
+    }
+
+    #[test]
+    fn pairing_route_answers_on_both_transports() {
+        let (tls, fingerprint) = test_tls_material();
+        let pair = "POST /mobile/pair HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}";
+
+        // Over TLS: the sealed exchange reaches the pairing window.
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handler = serve_one_connection(listener, Arc::clone(&tls));
+        let mut client = tls_client(port, Some(fingerprint));
+        let (status, _, body) = http_exchange(&mut client, pair);
+        handler.join().unwrap();
+        assert_eq!(status, 401, "{body}");
+        assert!(body.contains("pairing is not active"), "{body}");
+
+        // In the clear: the QR-code pairing client still reaches it, since
+        // the exchange is sealed at the application layer.
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handler = serve_one_connection(listener, tls);
+        let mut client = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let (status, _, body) = http_exchange(&mut client, pair);
+        handler.join().unwrap();
+        assert_eq!(status, 401, "{body}");
+        assert!(body.contains("pairing is not active"), "{body}");
+    }
+
+    #[test]
+    fn a_wrong_pin_never_completes_the_handshake() {
+        let (tls, _) = test_tls_material();
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handler = serve_one_connection(listener, tls);
+        let mut client = tls_client(port, Some("00".repeat(32)));
+        let (status, _, body) = http_exchange(
+            &mut client,
+            "GET /mobile/pair HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        );
+        handler.join().unwrap();
+        assert_eq!(
+            status, 0,
+            "no HTTP answer crosses a rejected certificate: {body}"
+        );
     }
 
     #[derive(serde::Deserialize)]
@@ -3177,6 +3626,7 @@ non-ephemeral ports — a product regression, not a port race. Attempts: {failur
                     let (mark_read, _receiver) = std::sync::mpsc::channel();
                     handle_connection(
                         stream,
+                        test_tls_config(),
                         snapshot,
                         mark_read,
                         None,
@@ -3237,6 +3687,7 @@ non-ephemeral ports — a product regression, not a port race. Attempts: {failur
                 });
                 let server = MobileServer {
                     port,
+                    certificate_fingerprint: String::new(),
                     shutdown,
                     bonjour: Arc::new(Mutex::new(None)),
                     remote: Arc::new(Mutex::new(
@@ -3635,6 +4086,15 @@ non-ephemeral ports — a product regression, not a port race. Attempts: {failur
                         .expect("descriptor json")
                     )
                 );
+                // Both TLS signals the phone reads: the capability id, and
+                // the Host version as the fallback (`>= 0.5.3` means TLS).
+                assert!(
+                    response["hostProtocol"]["capabilities"]
+                        .as_array()
+                        .is_some_and(|ids| ids.iter().any(|id| id == "host.mobile.tls")),
+                    "bootstrap advertises host.mobile.tls"
+                );
+                assert_eq!(response["serverVersion"], env!("CARGO_PKG_VERSION"));
                 // Lane D additive fields: the isolation tier is always
                 // present and one of the three values; the environment is
                 // optional and, when present, a Box descriptor.

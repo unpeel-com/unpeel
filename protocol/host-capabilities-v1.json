@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "protocol": {
     "major": 1,
-    "minor": 14,
+    "minor": 15,
     "compatibility": {
       "major": "must-match",
       "minor": "additive",
@@ -70,6 +70,13 @@
       "id": "host.bootstrap",
       "method": "GET",
       "path": "/mobile/bootstrap",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "host.mobile.tls",
+      "method": "TLS",
+      "path": "/mobile",
       "native": true,
       "tui": true
     },

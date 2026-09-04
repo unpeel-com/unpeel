@@ -16,6 +16,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 struct ServeProcess {
@@ -253,10 +254,11 @@ fn process_alive(pid: u32) -> bool {
 /// bound it (and a respawned streamer/worker rebinds it): connect with a
 /// bounded wait for the listener instead of an immediate `connect().unwrap()`
 /// that once failed in a solo staging run.
-fn bootstrap(port: u16, token: &str) -> (u16, serde_json::Value) {
+fn bootstrap(home: &Path, port: u16, token: &str) -> (u16, serde_json::Value) {
+    use unpeel_core::rustls;
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut last_error = None;
-    let mut stream = loop {
+    let tcp = loop {
         match TcpStream::connect(("127.0.0.1", port)) {
             Ok(stream) => break stream,
             Err(error) if Instant::now() < deadline => {
@@ -268,16 +270,28 @@ fn bootstrap(port: u16, token: &str) -> (u16, serde_json::Value) {
             ),
         }
     };
-    stream
-        .set_read_timeout(Some(Duration::from_secs(30)))
-        .unwrap();
+    tcp.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+    // The direct endpoint is TLS, pinned to the workspace's Host certificate
+    // — the same file the worker's streamer serves.
+    let fingerprint =
+        unpeel_core::remote_server::ensure_tls_material_in(&home.join("remote").join("tls"))
+            .expect("workspace Host certificate")
+            .fingerprint;
+    let config = Arc::new(unpeel_core::remote_attach::pinned_client_config(Some(
+        fingerprint,
+    )));
+    let name = rustls::pki_types::ServerName::try_from("localhost").unwrap();
+    let connection = rustls::ClientConnection::new(config, name).unwrap();
+    let mut stream = rustls::StreamOwned::new(connection, tcp);
     write!(
         stream,
         "GET /mobile/bootstrap HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nConnection: close\r\n\r\n"
     )
     .unwrap();
+    stream.flush().unwrap();
     let mut raw = Vec::new();
-    stream.read_to_end(&mut raw).unwrap();
+    // The server closes without a TLS close_notify; keep what arrived.
+    let _ = stream.read_to_end(&mut raw);
     let response = String::from_utf8(raw).unwrap();
     let (head, body) = response.split_once("\r\n\r\n").unwrap();
     let status = head
@@ -289,8 +303,8 @@ fn bootstrap(port: u16, token: &str) -> (u16, serde_json::Value) {
     (status, serde_json::from_str(body).unwrap())
 }
 
-fn advertised_remote_port(port: u16, token: &str) -> Option<u64> {
-    let (status, body) = bootstrap(port, token);
+fn advertised_remote_port(home: &Path, port: u16, token: &str) -> Option<u64> {
+    let (status, body) = bootstrap(home, port, token);
     assert_eq!(status, 200, "bootstrap failed: {body}");
     body.get("remoteServerPort").and_then(|v| v.as_u64())
 }
@@ -326,7 +340,7 @@ fn worker_respawns_a_killed_streamer_without_a_service_restart() {
     assert_ne!(first_pid, process.child.id());
     assert!(
         wait_until(Duration::from_secs(60), || {
-            advertised_remote_port(port, token) == Some(u64::from(first_port))
+            advertised_remote_port(&home, port, token) == Some(u64::from(first_port))
         }),
         "bootstrap never advertised the first streamer"
     );
@@ -371,7 +385,7 @@ fn worker_respawns_a_killed_streamer_without_a_service_restart() {
     );
     assert!(
         wait_until(Duration::from_secs(60), || {
-            advertised_remote_port(port, token) == Some(u64::from(second_port))
+            advertised_remote_port(&home, port, token) == Some(u64::from(second_port))
         }),
         "bootstrap never advertised the respawned streamer"
     );
@@ -461,7 +475,7 @@ fn crash_looping_streamer_hits_the_ceiling_and_retries_on_pairing_change() {
     assert_eq!(launch_count(&counter), launches_at_ceiling);
     assert_eq!(streamer_state(&home).as_deref(), Some("gaveUp"));
     assert!(
-        advertised_remote_port(port, token).is_none(),
+        advertised_remote_port(&home, port, token).is_none(),
         "a dead streamer must not be advertised"
     );
     assert!(trace_log(&home).contains("giving up until pairing changes"));
