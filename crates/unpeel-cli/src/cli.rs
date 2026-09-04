@@ -44,7 +44,9 @@ unpeel — run and steer CLI agent sessions
   unpeel resume <id>               returned agent: resume in place; stopped: resume terminal
   unpeel stop|archive|restore|rm <id>
   unpeel transcript <id> [--entries N] [--markdown]
+  unpeel open <path|resource> [--with APP] [--kind KIND] [--json]
   unpeel settings list|get <key>|set <key> <value> [--json]
+  unpeel apps list|install <app-id> [--check] [--json]
                                   MCP gates apply to Sessions launched afterward
   unpeel presets [list | add <label> <command> | remove <label>]
   unpeel presets star|unstar|enable|disable <label|id>
@@ -880,6 +882,7 @@ pub fn run(args: &[String]) -> i32 {
             .and_then(|reference| resolve(&reference))
             .and_then(|row| unpeel_core::session_ops::remove_session(&row.id).map(|_| 0)),
         "transcript" => transcript(&parsed).map(|_| 0),
+        "open" => Ok(crate::open_cli::run(&args[1..])),
         "settings" => match args.get(1).map(String::as_str) {
             Some("--help" | "-h" | "help") if args.len() == 2 => {
                 println!("{}", crate::settings_cli::HELP);
@@ -887,6 +890,7 @@ pub fn run(args: &[String]) -> i32 {
             }
             _ => crate::settings_cli::run(&parsed.positional[1..], parsed.has("json")).map(|_| 0),
         },
+        "apps" => Ok(crate::apps_cli::run(&args[1..])),
         // Lane 5 (2026-09-03): the one Browser MCP engine verb; the logic
         // lives in unpeel_core::browser_engine, this is only the dispatch.
         "browser" => Ok(crate::browser_cli::run(&args[1..])),

@@ -86,7 +86,8 @@ pub struct AppPresentation {
 
 /// Internal Host input. The MCP adapter must derive `caller_session_id` and
 /// `project_id` from the calling manifest; they are not agent arguments.
-/// Likewise, the registry mints the instance and companion Session ids.
+/// Likewise, only a direct-user Host path may mint the instance and companion
+/// Session ids; the MCP adapter can attach to an existing instance only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnsureAppPresentation {
     pub caller_session_id: String,
@@ -562,6 +563,7 @@ fn ensure_in_root(
     root: &mut Map<String, Value>,
     request: &EnsureAppPresentation,
     now_ms: u64,
+    allow_create_instance: bool,
 ) -> Result<EnsureAppPresentationResult, String> {
     validate_ensure(request)?;
     let mut envelope = validated_envelope_from_root(root)?;
@@ -623,6 +625,12 @@ fn ensure_in_root(
 
     let (instance_index, instance, created_instance) = match existing_instance {
         Some((index, stored)) => (index, stored, false),
+        None if !allow_create_instance => {
+            return Err(format!(
+                "No existing App instance matches '{}' in this project. Agents cannot create App Sessions; ask the user to open it first.",
+                request.app_id
+            ));
+        }
         None => {
             let stored = StoredAppInstance {
                 value: AppInstance {
@@ -747,7 +755,18 @@ pub fn ensure_app_presentation(
     request: &EnsureAppPresentation,
 ) -> Result<EnsureAppPresentationResult, String> {
     let now_ms = crate::state::current_timestamp_ms();
-    crate::app_state::edit(|root| ensure_in_root(root, request, now_ms))
+    crate::app_state::edit(|root| ensure_in_root(root, request, now_ms, true))
+}
+
+/// Attach/reveal an App instance that a user-created Controller or CLI flow
+/// already established. This is the agent boundary: MCP may add a semantic
+/// binding to an existing instance, but it never mints the companion Session
+/// identity that would allow a later launch.
+pub fn ensure_existing_app_presentation(
+    request: &EnsureAppPresentation,
+) -> Result<EnsureAppPresentationResult, String> {
+    let now_ms = crate::state::current_timestamp_ms();
+    crate::app_state::edit(|root| ensure_in_root(root, request, now_ms, false))
 }
 
 #[cfg(test)]
@@ -756,7 +775,7 @@ fn ensure_app_presentation_at(
     request: &EnsureAppPresentation,
     now_ms: u64,
 ) -> Result<EnsureAppPresentationResult, String> {
-    crate::app_state::edit_at(path, |root| ensure_in_root(root, request, now_ms))
+    crate::app_state::edit_at(path, |root| ensure_in_root(root, request, now_ms, true))
 }
 
 fn context_from_root(
@@ -847,6 +866,51 @@ pub fn controller_app_presentations() -> Result<Vec<ControllerAppPresentation>, 
     let value = crate::app_state::load()?;
     let root = value.as_object().ok_or("app-state.json is not an object")?;
     controller_app_presentations_from_root(root)
+}
+
+/// Compact, validated bootstrap projection for trusted Controllers. This is
+/// deliberately the same semantic envelope the local native client already
+/// reads from app-state.json, so local, scoped, SSH, and paired Controllers
+/// reconcile one shape and one reveal-revision contract.
+pub fn controller_app_presentations_wire() -> Result<Value, String> {
+    let bindings = controller_app_presentations()?;
+    let mut instances = bindings
+        .iter()
+        .map(|binding| {
+            (
+                binding.instance_id.clone(),
+                serde_json::json!({
+                    "id": binding.instance_id,
+                    "app_id": binding.app_id,
+                    "companion_session_id": binding.companion_session_id,
+                }),
+            )
+        })
+        .collect::<HashMap<_, _>>()
+        .into_values()
+        .collect::<Vec<_>>();
+    instances.sort_by(|left, right| {
+        left.get("id")
+            .and_then(Value::as_str)
+            .cmp(&right.get("id").and_then(Value::as_str))
+    });
+    let presentations = bindings
+        .into_iter()
+        .map(|binding| {
+            serde_json::json!({
+                "id": binding.presentation_id,
+                "caller_session_id": binding.caller_session_id,
+                "instance_id": binding.instance_id,
+                "target": binding.target,
+                "reveal_revision": binding.reveal_revision,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(serde_json::json!({
+        "version": APP_PRESENTATIONS_STATE_VERSION,
+        "instances": instances,
+        "presentations": presentations,
+    }))
 }
 
 fn controller_app_presentations_from_root(
@@ -1074,6 +1138,33 @@ mod tests {
             result.instance.companion_session_id
         );
         assert_eq!(controller[0].reveal_revision, 1);
+    }
+
+    #[test]
+    fn agent_ensure_reuses_an_instance_and_never_mints_a_companion_session() {
+        let mut root = Map::new();
+        let first_request = request("user-caller", "project-1", Some("user-open"));
+
+        let error = ensure_in_root(&mut root, &first_request, 100, false).unwrap_err();
+        assert!(
+            error.contains("Agents cannot create App Sessions"),
+            "{error}"
+        );
+        assert!(
+            root.is_empty(),
+            "a refused agent open must not mutate state"
+        );
+
+        let user_created = ensure_in_root(&mut root, &first_request, 100, true).unwrap();
+        assert!(user_created.created_instance);
+        let companion_id = user_created.instance.companion_session_id.clone();
+
+        let agent_request = request("agent-caller", "project-1", Some("agent-open"));
+        let agent_attached = ensure_in_root(&mut root, &agent_request, 200, false).unwrap();
+        assert!(!agent_attached.created_instance);
+        assert!(agent_attached.created_presentation);
+        assert_eq!(agent_attached.instance.id, user_created.instance.id);
+        assert_eq!(agent_attached.instance.companion_session_id, companion_id);
     }
 
     #[test]

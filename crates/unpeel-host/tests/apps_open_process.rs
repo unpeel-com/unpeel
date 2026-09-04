@@ -200,11 +200,11 @@ fn install_fixture_app(home: &Path) -> &'static str {
 }
 
 #[test]
-fn apps_open_approves_once_spawns_one_companion_and_deduplicates_retry() {
+fn apps_open_approves_once_but_never_creates_a_companion_session() {
     let home = temp_home();
     fs::create_dir_all(home.join("mcp")).unwrap();
     fs::write(home.join("mcp/auth-token"), "fixture-token\n").unwrap();
-    let app_command = install_fixture_app(&home);
+    install_fixture_app(&home);
     let (port, approval) = start_approval_bridge(home.clone());
 
     let caller_id = "caller";
@@ -258,7 +258,7 @@ fn apps_open_approves_once_spawns_one_companion_and_deduplicates_retry() {
         .collect::<Vec<_>>();
     assert_eq!(responses.len(), 2);
     let tool_text = |response: &Value| {
-        assert_eq!(response["result"]["isError"], false);
+        assert_eq!(response["result"]["isError"], true);
         response["result"]["content"][0]["text"]
             .as_str()
             .unwrap()
@@ -266,19 +266,14 @@ fn apps_open_approves_once_spawns_one_companion_and_deduplicates_retry() {
     };
     let first_text = tool_text(&responses[0]);
     let second_text = tool_text(&responses[1]);
-    assert!(!first_text.contains("companion_session_id"));
-    assert!(!second_text.contains("companion_session_id"));
-    let first: Value = serde_json::from_str(&first_text).unwrap();
-    let second: Value = serde_json::from_str(&second_text).unwrap();
-    assert_eq!(first["app"]["id"], "unpeel.app.design");
-    assert_eq!(first["presentation"]["created_instance"], true);
-    assert_eq!(first["presentation"]["created_presentation"], true);
-    assert_eq!(first["presentation"]["deduplicated_request"], false);
-    assert_eq!(second["presentation"]["deduplicated_request"], true);
-    assert_eq!(
-        first["presentation"]["presentation_id"],
-        second["presentation"]["presentation_id"]
-    );
+    for error in [&first_text, &second_text] {
+        assert!(
+            error.contains("Agents cannot create App Sessions"),
+            "{error}"
+        );
+        assert!(error.contains("ask the user to open it first"), "{error}");
+        assert!(!error.contains("companion_session_id"));
+    }
 
     let approval_body = approval.join().unwrap();
     assert_eq!(approval_body["app_id"], "unpeel.app.design");
@@ -289,53 +284,12 @@ fn apps_open_approves_once_spawns_one_companion_and_deduplicates_retry() {
         state["mcp_app_open_approvals"]["caller"],
         json!(["unpeel.app.design"])
     );
-    assert_eq!(
-        state["app_presentations"]["instances"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
-    assert_eq!(
-        state["app_presentations"]["presentations"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
-    assert_eq!(
-        state["app_presentations"]["presentations"][0]["reveal_revision"],
-        1
-    );
-    let companion_id = state["app_presentations"]["instances"][0]["companion_session_id"]
-        .as_str()
+    assert!(state.get("app_presentations").is_none());
+    let session_ids = fs::read_dir(home.join("app-sessions"))
         .unwrap()
-        .to_string();
-    let companion_manifest_path = home
-        .join("app-sessions")
-        .join(&companion_id)
-        .join("manifest.json");
-    let companion_socket_path = home
-        .join("app-sessions")
-        .join(&companion_id)
-        .join("session.sock");
-    assert!(wait_until(Duration::from_secs(10), || {
-        companion_manifest_path.exists() && companion_socket_path.exists()
-    }));
-    let companion: Value =
-        serde_json::from_slice(&fs::read(&companion_manifest_path).unwrap()).unwrap();
-    assert_eq!(companion["state"], "running");
-    assert_eq!(companion["session"]["role"], "app-panel");
-    assert_eq!(companion["session"]["spawned_by"], caller_id);
-    assert_eq!(companion["session"]["command"], app_command);
-
-    let _ = socket_command(&home, &companion_id, json!({ "type": "kill" }));
-    assert!(wait_until(Duration::from_secs(5), || {
-        fs::read(&companion_manifest_path)
-            .ok()
-            .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
-            .is_some_and(|manifest| manifest["state"] == "exited")
-    }));
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(session_ids, vec![caller_id]);
     stop_and_reap(&home, caller_id, &mut caller);
     let _ = fs::remove_dir_all(home);
 }

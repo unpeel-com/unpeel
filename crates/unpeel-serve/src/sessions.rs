@@ -2098,6 +2098,11 @@ pub fn mobile_snapshot(
     let workspace_state = unpeel_core::app_state::load().unwrap_or_else(|_| serde_json::json!({}));
     let workspace_settings =
         unpeel_core::controller_host::wire_workspace_settings(&workspace_state);
+    let openers = unpeel_core::controller_host::wire_openers(&workspace_state);
+    let app_presentations = unpeel_core::app_presentations::controller_app_presentations_wire()
+        .unwrap_or_else(
+            |_| serde_json::json!({ "version": 1, "instances": [], "presentations": [] }),
+        );
     let experimental_worktrees_enabled = workspace_settings
         .get("experimentalSettings")
         .and_then(|settings| settings.get("worktrees"))
@@ -2127,6 +2132,10 @@ pub fn mobile_snapshot(
             // Additive: current behavior knobs so Controllers can show them
             // before editing through `settings.workspace.set`.
             "workspaceSettings": workspace_settings,
+            "availableApps": unpeel_core::app_installer::catalog_wire(),
+            "installedApps": unpeel_core::app_installer::installed_wire(),
+            "openers": openers,
+            "appPresentations": app_presentations,
             "experimentalWorktreesEnabled": experimental_worktrees_enabled,
             "hostTintHue": host_tint_hue,
             "hostDeviceKind": if cfg!(target_os = "linux") { "linux" } else { "unknown" },

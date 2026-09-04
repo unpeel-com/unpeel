@@ -168,6 +168,9 @@ curl -fsSL https://unpeel.com/install.sh | sh
   `~/Dev/unpeel-surface`), lipos/ad-hoc signs/tars it, and uploads
   versioned + `-latest` tarballs and sha256 sidecars under
   `<channel>/<app>/`. Linux tarballs attach with `--linux-*` like the CLI.
+  Hosts may install the same assets directly with
+  `unpeel apps install <unpeel.app.id>`; those managed copies live in
+  `~/.unpeel/apps/bin`, which precedes ordinary PATH discovery.
   Publishing and serving are deliberately two explicit steps. Simpler than
   release:cli by design: no latest.json manifest or provenance yet — add
   them when apps get an update check. `release:design` remains an alias

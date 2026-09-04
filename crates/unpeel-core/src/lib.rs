@@ -13,6 +13,10 @@
 #[cfg(feature = "native-host")]
 pub mod activity_log;
 #[cfg(feature = "native-host")]
+pub mod app_installer;
+#[cfg(feature = "native-host")]
+pub mod app_open;
+#[cfg(feature = "native-host")]
 pub mod app_paths;
 #[cfg(feature = "native-host")]
 pub mod app_presentations;

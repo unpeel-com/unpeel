@@ -183,6 +183,9 @@ impl ControllerHostRuntime {
                 preset_patch_response(&request.body, &presets)
             }
             ("POST", "/mobile/workspace-settings") => workspace_settings_response(&request.body),
+            ("POST", "/mobile/openers") => opener_response(&request.body),
+            ("POST", "/mobile/apps/install") => app_install_response(&request.body),
+            ("POST", "/mobile/apps/open") => app_open_response(&request.body, self.hook_port),
             ("POST", "/mobile/resize-desktop") => resize_desktop(request),
             // Approval queues live inside the native app or TUI. This
             // disk-only adapter must not invent an empty queue or accept a
@@ -400,6 +403,9 @@ impl DiskCatalog {
             sort_wire_sessions(archived, &wire_projects, &session_orders);
         }
         let workspace_settings = wire_workspace_settings(&state);
+        let openers = wire_openers(&state);
+        let app_presentations = crate::app_presentations::controller_app_presentations_wire()
+            .unwrap_or_else(|_| json!({ "version": 1, "instances": [], "presentations": [] }));
         let experimental_worktrees_enabled = workspace_settings
             .get("experimentalSettings")
             .and_then(|settings| settings.get("worktrees"))
@@ -431,6 +437,10 @@ impl DiskCatalog {
                 // can SHOW current values before editing them through
                 // `settings.workspace.set`.
                 "workspaceSettings": workspace_settings,
+                "availableApps": crate::app_installer::catalog_wire(),
+                "installedApps": crate::app_installer::installed_wire(),
+                "openers": openers,
+                "appPresentations": app_presentations,
                 "experimentalWorktreesEnabled": experimental_worktrees_enabled,
                 "hostTintHue": host_tint_hue,
                 "hostDeviceKind": if cfg!(target_os = "linux") { "linux" } else { "unknown" },
@@ -462,6 +472,197 @@ impl DiskCatalog {
                 crate::controller_api::execute_headless_session_create(request, hook_port)
             }),
         )
+    }
+}
+
+/// Host-owned typed-resource opener preferences. Unknown or malformed stored
+/// entries are omitted so an older/newer writer costs only that row.
+pub fn wire_openers(state: &Value) -> Value {
+    let mut openers = serde_json::Map::new();
+    let stored = state
+        .get("openers")
+        .or_else(|| state.get("file_openers"))
+        .and_then(Value::as_object);
+    if let Some(stored) = stored {
+        for (stored_selector, opener) in stored {
+            let Some(opener) = opener.as_str() else {
+                continue;
+            };
+            let selector = if stored_selector.contains(':') {
+                stored_selector.clone()
+            } else {
+                format!("file:{stored_selector}")
+            };
+            if valid_opener(&selector, opener) {
+                openers.insert(selector, opener.into());
+            }
+        }
+    }
+    Value::Object(openers)
+}
+
+fn valid_opener(selector: &str, opener: &str) -> bool {
+    let Some((resource_kind, media_type)) = crate::apps_mcp::parse_resource_selector(selector)
+    else {
+        return false;
+    };
+    let catalog = crate::apps_mcp::catalog_apps();
+    let known = catalog
+        .iter()
+        .any(|app| crate::apps_mcp::catalog_app_handles(app, resource_kind, media_type));
+    if !known {
+        return false;
+    }
+    if matches!(opener, "editor" | "system") {
+        return resource_kind == "file";
+    }
+    let Some(app_id) = opener.strip_prefix("app:") else {
+        return false;
+    };
+    crate::apps_mcp::catalog_app(app_id)
+        .is_some_and(|app| crate::apps_mcp::catalog_app_handles(&app, resource_kind, media_type))
+}
+
+/// Shared Host semantics for `settings.openers.set`.
+pub fn opener_response(body: &Value) -> (u16, Value) {
+    let Some(selector) = body.get("selector").and_then(Value::as_str) else {
+        return (400, json!({ "error": "selector must be a string" }));
+    };
+    let Some(opener) = body.get("opener").and_then(Value::as_str) else {
+        return (400, json!({ "error": "opener must be a string" }));
+    };
+    if !valid_opener(selector, opener) {
+        return (
+            400,
+            json!({ "error": "opener must be an official App that declares this selector; editor/system are also valid for files" }),
+        );
+    }
+    match crate::app_state::edit(|state| {
+        let openers = state
+            .entry("openers")
+            .or_insert_with(|| Value::Object(serde_json::Map::new()))
+            .as_object_mut()
+            .ok_or_else(|| "openers must be an object".to_string())?;
+        openers.insert(selector.to_owned(), opener.into());
+        state.remove("file_openers");
+        Ok(())
+    }) {
+        Ok(()) => (200, json!({ "ok": true })),
+        Err(error) => (500, json!({ "error": error })),
+    }
+}
+
+/// Shared Host semantics for `apps.install`. The id is resolved only through
+/// the embedded allowlist; no caller-provided download or path is accepted.
+pub fn app_install_response(body: &Value) -> (u16, Value) {
+    let Some(app_id) = body.get("appID").and_then(Value::as_str) else {
+        return (400, json!({ "error": "appID must be a string" }));
+    };
+    match crate::app_installer::install(&crate::app_paths::unpeel_home(), app_id) {
+        Ok(path) => (200, json!({ "ok": true, "path": path })),
+        Err(error) => (502, json!({ "error": error })),
+    }
+}
+
+/// User-initiated counterpart to MCP `apps.open`. Selection/install prompting
+/// stays in the Controller. Both paths share resolution and presentation
+/// state, but only this direct-user path may create or restart the companion.
+pub fn app_open_response(body: &Value, hook_port: Option<u16>) -> (u16, Value) {
+    let Some(caller_session_id) = body
+        .get("callerSessionID")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return (400, json!({ "error": "callerSessionID is required" }));
+    };
+    if let Err(error) = crate::app_presentations::validate_app_presentation_session_id(
+        "callerSessionID",
+        caller_session_id,
+    ) {
+        return (400, json!({ "error": error }));
+    }
+    let Some(app_id) = body
+        .get("appID")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return (400, json!({ "error": "appID is required" }));
+    };
+    let media_type = body
+        .get("mediaType")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let Some(resource) = body.get("resource").and_then(Value::as_object) else {
+        return (400, json!({ "error": "resource is required" }));
+    };
+    let Some(kind) = resource
+        .get("kind")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| crate::apps_mcp::valid_resource_kind(value))
+    else {
+        return (400, json!({ "error": "resource.kind is invalid" }));
+    };
+    if kind == "file" && media_type.is_none() {
+        return (
+            400,
+            json!({ "error": "mediaType is required for a file resource" }),
+        );
+    }
+    if !crate::apps_mcp::catalog_app(app_id)
+        .is_some_and(|app| crate::apps_mcp::catalog_app_handles(&app, kind, media_type))
+    {
+        return (
+            400,
+            json!({ "error": "appID does not declare a handler for this resource" }),
+        );
+    }
+    let Some(resource_id) = resource
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return (400, json!({ "error": "resource.id is required" }));
+    };
+    if matches!(kind, "file" | "folder" | "git.working-tree")
+        && !std::path::Path::new(resource_id).is_absolute()
+    {
+        return (
+            400,
+            json!({ "error": "path-backed resource.id must be an absolute Host path" }),
+        );
+    }
+
+    let mut request = crate::app_open::OpenAppRequest::panel(
+        caller_session_id,
+        app_id,
+        Some(crate::app_presentations::AppResourceRef {
+            kind: kind.to_string(),
+            id: resource_id.to_string(),
+        }),
+        media_type.map(str::to_string),
+    );
+    request.request_id = body
+        .get("requestID")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    match crate::app_open::open_app(&request, hook_port) {
+        Ok(result) => (
+            200,
+            json!({
+                "ok": true,
+                "app": { "id": result.app_id, "name": result.app_name },
+                "presentation": result.presentation.agent_receipt(),
+                "processState": result.process_state,
+            }),
+        ),
+        Err(error) => (422, json!({ "error": error })),
     }
 }
 
@@ -2979,6 +3180,29 @@ mod tests {
         assert_eq!(wire["experimentalSettings"]["browserMcp"], false);
         assert_eq!(wire["experimentalSettings"]["computerUse"], false);
         assert_eq!(wire["experimentalSettings"]["workspaces"], true);
+    }
+
+    #[test]
+    fn opener_projection_migrates_legacy_file_keys_and_keeps_typed_resources() {
+        let wire = wire_openers(&json!({
+            "file_openers": {
+                "text/markdown": "app:unpeel.app.markdown",
+                "text/html": "system",
+                "text/unknown": "editor"
+            }
+        }));
+        assert_eq!(wire["file:text/markdown"], "app:unpeel.app.markdown");
+        assert_eq!(wire["file:text/html"], "system");
+        assert!(wire.get("file:text/unknown").is_none());
+
+        let typed = wire_openers(&json!({
+            "openers": {
+                "resource:git.working-tree": "app:unpeel.app.diffs",
+                "resource:folder": "editor"
+            }
+        }));
+        assert_eq!(typed["resource:git.working-tree"], "app:unpeel.app.diffs");
+        assert!(typed.get("resource:folder").is_none());
     }
 
     /// Validation and no-op paths only — nothing here may touch shared

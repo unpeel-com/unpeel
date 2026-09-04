@@ -10,7 +10,7 @@
 use serde::{Deserialize, Serialize};
 
 pub const HOST_PROTOCOL_MAJOR: u16 = 1;
-pub const HOST_PROTOCOL_MINOR: u16 = 14;
+pub const HOST_PROTOCOL_MINOR: u16 = 15;
 
 pub const NATIVE_HOST_CAPABILITIES: &[&str] = &[
     "approval.answer",
@@ -21,6 +21,8 @@ pub const NATIVE_HOST_CAPABILITIES: &[&str] = &[
     "artifact.request_screenshot",
     "artifact.upload",
     "artifact.upload.resumable",
+    "apps.install",
+    "apps.open",
     "host.bootstrap",
     "pairing.create",
     "pairing.invitation",
@@ -50,6 +52,7 @@ pub const NATIVE_HOST_CAPABILITIES: &[&str] = &[
     "session.title.set",
     "session.transcript.markdown",
     "settings.presets.set",
+    "settings.openers.set",
     "settings.workspace.set",
 ];
 
@@ -61,6 +64,8 @@ pub const HEADLESS_HOST_CAPABILITIES: &[&str] = &[
     "artifact.read",
     "artifact.request_screenshot",
     "artifact.upload.resumable",
+    "apps.install",
+    "apps.open",
     "host.bootstrap",
     "pairing.create",
     "pairing.invitation",
@@ -87,6 +92,7 @@ pub const HEADLESS_HOST_CAPABILITIES: &[&str] = &[
     "session.title.set",
     "session.transcript.markdown",
     "settings.presets.set",
+    "settings.openers.set",
     "settings.workspace.set",
 ];
 
