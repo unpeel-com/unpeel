@@ -80,6 +80,17 @@ pub fn resolved_user_shell() -> String {
 /// average to triple digits with leftover hosts.
 const PATH_CACHE_TTL_MS: u64 = 10 * 60 * 1000;
 
+/// A probe that came back EMPTY is trusted for only this long, not the full
+/// `PATH_CACHE_TTL_MS`. An empty result is almost always transient: a shell
+/// that failed to answer under load, a half-set-up profile, or a leftover host
+/// with a stripped environment. Caching it for ten minutes lets one bad probe
+/// poison every host in the workspace — 0.5.0 deliberately never cached an
+/// empty probe at all ("must not poison the cache for the life of a
+/// long-running host"). A short TTL keeps the storm throttle (a genuinely
+/// empty PATH re-probes at most every few seconds, not every tick) without the
+/// workspace-wide poisoning window.
+const EMPTY_PATH_CACHE_TTL_MS: u64 = 5 * 1000;
+
 fn path_cache_file() -> PathBuf {
     crate::app_paths::unpeel_home().join("path-probe-cache.json")
 }
@@ -99,25 +110,34 @@ fn read_cached_shell_path_dirs() -> Option<Vec<PathBuf>> {
 }
 
 /// Pure cache-entry parse: `Some(dirs)` only when the entry carries a
-/// `probed_at_unix_ms` within the TTL of `now_ms`; stale or malformed → None.
+/// `probed_at_unix_ms` within its TTL of `now_ms`; stale or malformed → None.
+/// An empty entry uses the much shorter `EMPTY_PATH_CACHE_TTL_MS` so a
+/// transient empty probe cannot poison the workspace for the full window.
 fn parse_cached_dirs(value: &serde_json::Value, now_ms: u64) -> Option<Vec<PathBuf>> {
     let probed_at = value.get("probed_at_unix_ms").and_then(|v| v.as_u64())?;
-    if now_ms.saturating_sub(probed_at) >= PATH_CACHE_TTL_MS {
-        return None;
-    }
-    let dirs = value
+    let dirs: Vec<PathBuf> = value
         .get("dirs")?
         .as_array()?
         .iter()
         .filter_map(|v| v.as_str())
         .map(PathBuf::from)
         .collect();
+    let ttl = if dirs.is_empty() {
+        EMPTY_PATH_CACHE_TTL_MS
+    } else {
+        PATH_CACHE_TTL_MS
+    };
+    if now_ms.saturating_sub(probed_at) >= ttl {
+        return None;
+    }
     Some(dirs)
 }
 
-/// Persist the probe result for the workspace. Empty results are cached too:
-/// the point is to throttle re-probes, and a leftover/misconfigured host that
-/// probes empty must not re-storm every tick. A best-effort atomic write.
+/// Persist the probe result for the workspace. Empty results are cached too,
+/// but read back under a much shorter TTL (see `EMPTY_PATH_CACHE_TTL_MS`): the
+/// point is to throttle a re-probe storm from a leftover/misconfigured host
+/// without letting one transient empty probe poison the workspace for ten
+/// minutes. A best-effort atomic write.
 fn write_cached_shell_path_dirs(dirs: &[PathBuf]) {
     let value = serde_json::json!({
         "dirs": dirs.iter().map(|d| d.to_string_lossy()).collect::<Vec<_>>(),
@@ -330,7 +350,7 @@ pub fn dependency_report() -> DependencyReport {
 mod tests {
     use super::{
         common_bin_dirs, extract_marked, find_command_path, parse_cached_dirs,
-        platform_default_shell, runtime_command_names, PATH_CACHE_TTL_MS,
+        platform_default_shell, runtime_command_names, EMPTY_PATH_CACHE_TTL_MS, PATH_CACHE_TTL_MS,
     };
     use std::path::PathBuf;
 
@@ -354,9 +374,24 @@ mod tests {
             "probed_at_unix_ms": now - PATH_CACHE_TTL_MS,
         });
         assert_eq!(parse_cached_dirs(&stale, now), None);
-        // An empty-but-fresh entry is honored (it throttles a re-probe storm).
+        // A very-fresh empty entry is honored (it throttles a re-probe storm).
         let empty_fresh = serde_json::json!({ "dirs": [], "probed_at_unix_ms": now });
         assert_eq!(parse_cached_dirs(&empty_fresh, now), Some(Vec::new()));
+        // But an empty entry uses the SHORT TTL: past it the probe repeats,
+        // so a transient empty result cannot poison the workspace for the full
+        // ten minutes (the 0.5.1 → 0.5.2 fix for the takeover-under-load storm).
+        let empty_short_stale =
+            serde_json::json!({ "dirs": [], "probed_at_unix_ms": now - EMPTY_PATH_CACHE_TTL_MS });
+        assert_eq!(parse_cached_dirs(&empty_short_stale, now), None);
+        // A non-empty entry of the same age is still fresh (long TTL).
+        let full_same_age = serde_json::json!({
+            "dirs": ["/usr/bin"],
+            "probed_at_unix_ms": now - EMPTY_PATH_CACHE_TTL_MS,
+        });
+        assert_eq!(
+            parse_cached_dirs(&full_same_age, now),
+            Some(vec![PathBuf::from("/usr/bin")])
+        );
         // Malformed entries never parse.
         assert_eq!(
             parse_cached_dirs(&serde_json::json!({ "dirs": ["/x"] }), now),
