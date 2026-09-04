@@ -328,6 +328,10 @@ pub struct PtyCoreSupervisor {
     allow_takeover: bool,
     /// The older-build core pid we already announced as draining.
     drain_announced: Option<u32>,
+    /// Kernel start time of the adopted core, remembered from its record:
+    /// a core removes `pty-core.json` when it exits, and the lost check must
+    /// still be able to prove that pid gone afterwards.
+    adopted_started_at: Option<u64>,
 }
 
 /// `UNPEEL_PTY_CORE_TAKEOVER=1` opts back into in-place takeovers.
@@ -358,6 +362,7 @@ impl PtyCoreSupervisor {
             takeover_attempted: None,
             allow_takeover: takeover_enabled(),
             drain_announced: None,
+            adopted_started_at: None,
         }
     }
 
@@ -643,12 +648,20 @@ impl PtyCoreSupervisor {
         match alive {
             Some(reply) => {
                 self.sessions = reply.sessions;
+                if let Some(started) = record.as_ref().and_then(|record| record.pid_started_at) {
+                    self.adopted_started_at = Some(started);
+                }
                 self.check_build_skew(events);
             }
             None => {
                 // Only a provably gone process counts as lost; an unanswered
                 // ping on a live pid is left alone (the core may be busy).
-                let started_at = record.as_ref().and_then(|record| record.pid_started_at);
+                // A core that exited removed its record, so fall back to the
+                // start time remembered while it was live.
+                let started_at = record
+                    .as_ref()
+                    .and_then(|record| record.pid_started_at)
+                    .or(self.adopted_started_at);
                 if recorded_pid_identity(pid, started_at) == PidIdentity::NotOurs {
                     self.pid = None;
                     self.sessions = None;

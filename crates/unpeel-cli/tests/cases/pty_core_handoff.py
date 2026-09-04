@@ -124,8 +124,8 @@ class StreamClient:
             pass
 
 
-def new_session(case, home, label, preset="cat"):
-    started = run_cli(home, ["new", "--preset", preset, "--project", "p"], timeout=45)
+def new_session(case, home, label, preset="cat", env=None):
+    started = run_cli(home, ["new", "--preset", preset, "--project", "p"], timeout=45, env=env)
     session_id = ""
     for token in started.stdout.split():
         if len(token) == 36 and token.count("-") == 4:
@@ -368,7 +368,14 @@ def body(case):
     drain_core = start_core(home, binary=stale_bin)
     stopper.cores.append(drain_core)
     case.check("a second stale-build core is up", drain_core.poll() is None and core_record(home)["pid"] == drain_core.pid)
-    drain_session = new_session(case, home, "session under the draining core")
+    # Spawn routing refuses a core built from another binary, so place this
+    # Session in the stale core by launching as that binary's own build.
+    drain_session = new_session(case, home, "session under the draining core", env={"UNPEEL_HOST_CMD": stale_bin})
+    case.check(
+        "that Session lives in the stale core",
+        home.manifests().get(drain_session, {}).get("host_pid") == drain_core.pid,
+        f"host_pid={home.manifests().get(drain_session, {}).get('host_pid')} core={drain_core.pid}",
+    )
     run_cli(home, ["send", drain_session, "drain-core-text", "--enter"])
     case.check("the draining core's session echoes", wait_for(lambda: screen(home, drain_session).count("drain-core-text") >= 2))
 
