@@ -1845,8 +1845,14 @@ impl HandedOverChild {
 }
 
 impl portable_pty::ChildKiller for HandedOverChild {
+    /// Signals only a positively identified child (pid + recorded kernel
+    /// start time). A handoff without a start time still reports liveness
+    /// through the bare probe above, but it must never be a kill target: the
+    /// pid may have been recycled onto a stranger since the old core spawned
+    /// it. Worst case an orphaned shell lingers, which beats killing an
+    /// unrelated process.
     fn kill(&mut self) -> std::io::Result<()> {
-        if !self.alive() {
+        if recorded_pid_identity(self.pid, self.started_at) != PidIdentity::Matches {
             return Ok(());
         }
         if unsafe { libc::kill(self.pid as i32, libc::SIGKILL) } != 0 {
@@ -2099,4 +2105,48 @@ pub(crate) fn record_child_exit(
         _ => portable_pty::ExitStatus::with_exit_code(0),
     };
     *slot.lock().unwrap() = Some(status);
+}
+
+#[cfg(test)]
+mod handed_over_child_tests {
+    use super::*;
+    use portable_pty::ChildKiller;
+
+    /// A live process that is NOT the handed-over child, standing in for
+    /// whatever the OS recycled the recorded pid onto.
+    fn unrelated_live_process() -> std::process::Child {
+        std::process::Command::new("sleep")
+            .arg("30")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn sleep")
+    }
+
+    #[test]
+    fn kill_never_signals_a_recycled_or_unproven_pid() {
+        let mut stranger = unrelated_live_process();
+        let pid = stranger.id();
+        let actual_start = process_start_time_ms(pid).expect("start time of a live child");
+
+        // Recorded an hour before the live process started: recycled pid.
+        let mut recycled = HandedOverChild::new(pid, Some(actual_start - 3_600_000));
+        assert!(recycled.kill().is_ok());
+        // Legacy handoff without a start time: liveness is reported, but
+        // identity is unproven, so no signal.
+        let mut unproven = HandedOverChild::new(pid, None);
+        assert!(unproven.kill().is_ok());
+        thread::sleep(Duration::from_millis(100));
+        assert!(
+            stranger.try_wait().unwrap().is_none(),
+            "an unrelated process under the recorded pid must survive kill()"
+        );
+
+        // The genuine child (matching start time) is signaled.
+        let mut ours = HandedOverChild::new(pid, Some(actual_start));
+        assert!(ours.kill().is_ok());
+        let status = stranger.wait().unwrap();
+        assert!(!status.success(), "SIGKILL reached the verified child");
+    }
 }

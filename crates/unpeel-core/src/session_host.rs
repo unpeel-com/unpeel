@@ -3614,8 +3614,12 @@ pub enum PidIdentity {
     Unknown,
 }
 
+/// Kernel-reported start time of `pid` in ms since the epoch — the half of a
+/// process identity that a bare pid lacks. Record it next to every pid you
+/// persist (`pid_started_at`) so `recorded_pid_identity` can verify the
+/// process later. `None` when the process is gone or the kernel query failed.
 #[cfg(target_os = "macos")]
-pub(crate) fn process_start_time_ms(pid: u32) -> Option<u64> {
+pub fn process_start_time_ms(pid: u32) -> Option<u64> {
     let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::uninit();
     let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
     let rc = unsafe {
@@ -3635,7 +3639,7 @@ pub(crate) fn process_start_time_ms(pid: u32) -> Option<u64> {
 }
 
 #[cfg(target_os = "linux")]
-pub(crate) fn process_start_time_ms(pid: u32) -> Option<u64> {
+pub fn process_start_time_ms(pid: u32) -> Option<u64> {
     // /proc/<pid>/stat: field 22 is starttime in clock ticks since boot; the
     // comm field can contain spaces, so parse from after the closing paren.
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
@@ -3656,7 +3660,7 @@ pub(crate) fn process_start_time_ms(pid: u32) -> Option<u64> {
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-pub(crate) fn process_start_time_ms(_pid: u32) -> Option<u64> {
+pub fn process_start_time_ms(_pid: u32) -> Option<u64> {
     None
 }
 

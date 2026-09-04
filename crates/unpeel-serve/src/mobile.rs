@@ -33,6 +33,20 @@ use crate::platform_adapter::{PlatformAdapterError, PlatformAdapterHub};
 
 const IO_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_BODY: usize = 4 * 1024 * 1024;
+/// Wall-clock budget for a connection to authenticate, measured from accept.
+/// The per-read `IO_TIMEOUT` alone lets a slow sender hold a worker thread
+/// indefinitely by pacing one byte per read; the accept loop shuts down any
+/// connection still unauthenticated past this deadline, which interrupts
+/// the worker's blocking read regardless of how the bytes were paced.
+const PRE_AUTH_DEADLINE: Duration = Duration::from_secs(5);
+/// Ceiling on concurrently served connections. The excess is answered 503
+/// and closed on the accept thread, so it never earns a worker thread.
+const MAX_CONNECTIONS: usize = 64;
+/// Per-peer-address share of `MAX_CONNECTIONS`, so one client (a phone opens
+/// a handful of URLSession connections, never more) cannot fill the pool.
+const MAX_CONNECTIONS_PER_PEER: usize = 16;
+/// How often the accept loop looks for expired unauthenticated connections.
+const LEDGER_SWEEP_INTERVAL: Duration = Duration::from_millis(100);
 /// The TUI main loop publishes the phone-facing snapshot here every rescan:
 /// pre-built bootstrap arrays plus the project-scoped archive catalog, all in
 /// the Swift wire dialect and desktop sidebar order.
@@ -908,6 +922,7 @@ fn respond(stream: &mut TcpStream, status: u16, body: &str, keep_alive: bool) ->
         405 => "Method Not Allowed",
         500 => "Internal Server Error",
         501 => "Not Implemented",
+        503 => "Service Unavailable",
         504 => "Gateway Timeout",
         _ => "Error",
     };
@@ -936,15 +951,31 @@ fn session_dir(id: &str) -> std::path::PathBuf {
 /// Live `__remote__` advertisement (port + TLS fingerprint) when that server
 /// runs — the app or a future TUI supervisor spawns it; we just relay state.
 pub(crate) fn remote_server_advertisement() -> (Option<u64>, Option<String>) {
-    let Ok(raw) = std::fs::read(app_paths::unpeel_home().join("remote.json")) else {
+    remote_server_advertisement_at(&app_paths::unpeel_home())
+}
+
+/// The record names its own pid and kernel start time (`pid_started_at`,
+/// written by `__remote__` at startup). Only a pid that provably started
+/// when the record says is the streamer: a bare liveness probe would relay
+/// a dead streamer's port and fingerprint whenever the pid was recycled onto
+/// an unrelated process, and a record without a start time proves nothing.
+fn remote_server_advertisement_at(home: &std::path::Path) -> (Option<u64>, Option<String>) {
+    let Ok(raw) = std::fs::read(home.join("remote.json")) else {
         return (None, None);
     };
     let Ok(value) = serde_json::from_slice::<serde_json::Value>(&raw) else {
         return (None, None);
     };
-    let pid = value.get("pid").and_then(|v| v.as_u64());
-    let alive = pid.is_some_and(|p| unsafe { libc::kill(p as libc::pid_t, 0) == 0 });
-    if !alive {
+    let pid = value
+        .get("pid")
+        .and_then(|v| v.as_u64())
+        .and_then(|pid| u32::try_from(pid).ok());
+    let started_at = value.get("pid_started_at").and_then(|v| v.as_u64());
+    let is_streamer = pid.is_some_and(|pid| {
+        unpeel_core::session_host::recorded_pid_identity(pid, started_at)
+            == unpeel_core::session_host::PidIdentity::Matches
+    });
+    if !is_streamer {
         return (None, None);
     }
     (
@@ -1962,6 +1993,147 @@ fn handle_pairing_invitation(
     }
 }
 
+/// One admitted connection as the accept loop tracks it: who it came from,
+/// when, and whether its worker has seen a valid bearer token yet.
+struct ConnectionSlot {
+    peer: std::net::IpAddr,
+    accepted_at: Instant,
+    authenticated: Arc<std::sync::atomic::AtomicBool>,
+    /// Set once the sweep has cut this connection, so a slow worker that
+    /// has not yet released the slot is not shut down on every tick.
+    expired: bool,
+}
+
+/// Connection accounting for the accept loop: a global cap, a per-peer cap,
+/// and a pre-authentication deadline. Pure bookkeeping — it never touches a
+/// socket itself — so the policy is testable without a listener.
+pub(crate) struct ConnectionLedger {
+    max_total: usize,
+    max_per_peer: usize,
+    pre_auth_deadline: Duration,
+    slots: HashMap<u64, ConnectionSlot>,
+    per_peer: HashMap<std::net::IpAddr, usize>,
+    last_sweep: Instant,
+}
+
+impl ConnectionLedger {
+    pub(crate) fn new(max_total: usize, max_per_peer: usize, pre_auth_deadline: Duration) -> Self {
+        Self {
+            max_total,
+            max_per_peer,
+            pre_auth_deadline,
+            slots: HashMap::new(),
+            per_peer: HashMap::new(),
+            last_sweep: Instant::now(),
+        }
+    }
+
+    fn with_defaults() -> Self {
+        Self::new(MAX_CONNECTIONS, MAX_CONNECTIONS_PER_PEER, PRE_AUTH_DEADLINE)
+    }
+
+    /// Admit `id` from `peer` at `now`, returning the flag the worker flips
+    /// once the connection authenticates; `None` means the caps refuse it.
+    pub(crate) fn admit(
+        &mut self,
+        id: u64,
+        peer: std::net::IpAddr,
+        now: Instant,
+    ) -> Option<Arc<std::sync::atomic::AtomicBool>> {
+        let peer_count = self.per_peer.get(&peer).copied().unwrap_or(0);
+        if self.slots.len() >= self.max_total || peer_count >= self.max_per_peer {
+            return None;
+        }
+        let authenticated = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.slots.insert(
+            id,
+            ConnectionSlot {
+                peer,
+                accepted_at: now,
+                authenticated: Arc::clone(&authenticated),
+                expired: false,
+            },
+        );
+        self.per_peer.insert(peer, peer_count + 1);
+        Some(authenticated)
+    }
+
+    /// The worker for `id` exited; free its global and per-peer share.
+    pub(crate) fn release(&mut self, id: u64) {
+        let Some(slot) = self.slots.remove(&id) else {
+            return;
+        };
+        if let Some(count) = self.per_peer.get_mut(&slot.peer) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                self.per_peer.remove(&slot.peer);
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.slots.len()
+    }
+
+    /// Connections still unauthenticated past the deadline as of `now`, each
+    /// reported once. Rate-limited to `LEDGER_SWEEP_INTERVAL` so a flood of
+    /// accepts does not turn every iteration into a full scan.
+    pub(crate) fn expired(&mut self, now: Instant) -> Vec<u64> {
+        if now.saturating_duration_since(self.last_sweep) < LEDGER_SWEEP_INTERVAL {
+            return Vec::new();
+        }
+        self.last_sweep = now;
+        let deadline = self.pre_auth_deadline;
+        self.slots
+            .iter_mut()
+            .filter(|(_, slot)| {
+                !slot.expired
+                    && !slot
+                        .authenticated
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                    && now.saturating_duration_since(slot.accepted_at) >= deadline
+            })
+            .map(|(id, slot)| {
+                slot.expired = true;
+                *id
+            })
+            .collect()
+    }
+}
+
+/// Refuse a connection the ledger would not admit: a one-line 503 written
+/// on the accept thread (a fresh socket's send buffer is empty, so this does
+/// not block), then the stream drops and closes. Never spawns a worker.
+fn refuse_overloaded(mut stream: TcpStream) {
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(1)));
+    respond(&mut stream, 503, &error_body("too many connections"), false);
+    let _ = stream.shutdown(std::net::Shutdown::Both);
+}
+
+/// Cut every connection the ledger reports as expired: `shutdown(Both)` on
+/// the control clone interrupts the worker's blocking read, so the worker
+/// exits and releases its slot through the normal path.
+fn cut_expired_connections(
+    ledger: &Mutex<ConnectionLedger>,
+    connections: &Mutex<HashMap<u64, TcpStream>>,
+) {
+    let expired = ledger
+        .lock()
+        .map(|mut ledger| ledger.expired(Instant::now()))
+        .unwrap_or_default();
+    if expired.is_empty() {
+        return;
+    }
+    if let Ok(connections) = connections.lock() {
+        for id in expired {
+            if let Some(stream) = connections.get(&id) {
+                let _ = stream.shutdown(std::net::Shutdown::Both);
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn handle_connection(
     mut stream: TcpStream,
@@ -1975,6 +2147,7 @@ fn handle_connection(
     presence: Option<Arc<crate::presence::PresenceHub>>,
     direct_endpoint: Arc<str>,
     shutdown: Arc<std::sync::atomic::AtomicBool>,
+    authenticated: Arc<std::sync::atomic::AtomicBool>,
 ) {
     let _ = stream.set_read_timeout(Some(IO_TIMEOUT));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
@@ -2014,6 +2187,7 @@ fn handle_connection(
                     respond(&mut stream, 401, &error_body("unauthorized"), keep);
                 }
                 Some(principal) => {
+                    authenticated.store(true, std::sync::atomic::Ordering::Relaxed);
                     let (status, body) = handle_authenticated(
                         &request,
                         &principal,
@@ -2281,13 +2455,32 @@ fn start_impl(
     let accept_shutdown = Arc::clone(&shutdown);
     let accept_connections = Arc::clone(&active_connections);
     let accept_workers = Arc::clone(&worker_threads);
+    // Connection accounting: the global and per-peer caps refuse the excess
+    // with a 503 before it earns a thread, and the sweep cuts connections
+    // that are still unauthenticated past `PRE_AUTH_DEADLINE` however slowly
+    // they paced their bytes.
+    let ledger = Arc::new(Mutex::new(ConnectionLedger::with_defaults()));
     let accept_thread = std::thread::spawn(move || loop {
         if accept_shutdown.load(std::sync::atomic::Ordering::Relaxed) {
             return; // listener drops here, releasing the port
         }
+        cut_expired_connections(&ledger, &accept_connections);
         match listener.accept() {
-            Ok((stream, _)) => {
+            Ok((stream, peer)) => {
                 let _ = stream.set_nonblocking(false);
+                let connection_id = {
+                    static NEXT_CONNECTION_ID: std::sync::atomic::AtomicU64 =
+                        std::sync::atomic::AtomicU64::new(1);
+                    NEXT_CONNECTION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                };
+                let admitted = ledger
+                    .lock()
+                    .ok()
+                    .and_then(|mut ledger| ledger.admit(connection_id, peer.ip(), Instant::now()));
+                let Some(authenticated) = admitted else {
+                    refuse_overloaded(stream);
+                    continue;
+                };
                 let snapshot = Arc::clone(&snapshot);
                 let mark_read = mark_read.clone();
                 let resizes = Arc::clone(&resizes);
@@ -2298,11 +2491,7 @@ fn start_impl(
                 let direct_endpoint = Arc::clone(&direct_endpoint);
                 let connection_shutdown = Arc::clone(&accept_shutdown);
                 let connections = Arc::clone(&accept_connections);
-                let connection_id = {
-                    static NEXT_CONNECTION_ID: std::sync::atomic::AtomicU64 =
-                        std::sync::atomic::AtomicU64::new(1);
-                    NEXT_CONNECTION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                };
+                let worker_ledger = Arc::clone(&ledger);
                 if let Ok(control) = stream.try_clone() {
                     if let Ok(mut guard) = connections.lock() {
                         guard.insert(connection_id, control);
@@ -2321,9 +2510,13 @@ fn start_impl(
                         presence,
                         direct_endpoint,
                         connection_shutdown,
+                        authenticated,
                     );
                     if let Ok(mut guard) = connections.lock() {
                         guard.remove(&connection_id);
+                    }
+                    if let Ok(mut ledger) = worker_ledger.lock() {
+                        ledger.release(connection_id);
                     }
                 });
                 if let Ok(mut workers) = accept_workers.lock() {
@@ -2374,6 +2567,261 @@ mod tests {
 
     fn scratch_dir(label: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("unpeel-mobile-{label}-{}", uuid::Uuid::new_v4()))
+    }
+
+    /// A live process that is NOT the `__remote__` streamer, standing in for
+    /// whatever the OS recycled a dead streamer's pid onto.
+    fn unrelated_live_process() -> std::process::Child {
+        std::process::Command::new("sleep")
+            .arg("30")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn sleep")
+    }
+
+    #[test]
+    fn remote_advertisement_requires_the_recorded_streamer_identity() {
+        let mut stranger = unrelated_live_process();
+        let pid = stranger.id();
+        let actual_start = unpeel_core::session_host::process_start_time_ms(pid)
+            .expect("start time of a live child");
+        let home = scratch_dir("remote-advertisement");
+        std::fs::create_dir_all(&home).unwrap();
+        let write = |pid_started_at: Option<u64>| {
+            let mut record = serde_json::json!({
+                "pid": pid,
+                "port": 45_123,
+                "fingerprint": "ab:cd",
+            });
+            if let Some(started) = pid_started_at {
+                record["pid_started_at"] = serde_json::json!(started);
+            }
+            std::fs::write(home.join("remote.json"), record.to_string()).unwrap();
+        };
+
+        // The recorded streamer died and its pid was recycled: nothing to
+        // advertise, even though `kill(pid, 0)` would succeed.
+        write(Some(actual_start - 3_600_000));
+        assert_eq!(remote_server_advertisement_at(&home), (None, None));
+        // A record without a start time proves nothing either.
+        write(None);
+        assert_eq!(remote_server_advertisement_at(&home), (None, None));
+        // The live process is the recorded streamer: relay its endpoint.
+        write(Some(actual_start));
+        assert_eq!(
+            remote_server_advertisement_at(&home),
+            (Some(45_123), Some("ab:cd".to_string()))
+        );
+
+        let _ = stranger.kill();
+        let _ = stranger.wait();
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn connection_ledger_enforces_caps_and_pre_auth_deadline() {
+        let deadline = Duration::from_millis(500);
+        let mut ledger = ConnectionLedger::new(3, 2, deadline);
+        let t0 = Instant::now();
+        let a: std::net::IpAddr = "10.0.0.1".parse().unwrap();
+        let b: std::net::IpAddr = "10.0.0.2".parse().unwrap();
+
+        let a1 = ledger.admit(1, a, t0).expect("first from a");
+        assert!(ledger.admit(2, a, t0).is_some(), "second from a");
+        assert!(
+            ledger.admit(3, a, t0).is_none(),
+            "per-peer cap refuses a third"
+        );
+        assert!(ledger.admit(4, b, t0).is_some(), "b still has room");
+        assert!(
+            ledger.admit(5, b, t0).is_none(),
+            "global cap refuses the fourth"
+        );
+        assert_eq!(ledger.len(), 3);
+
+        // Nothing has expired before the deadline; the first sweep runs.
+        assert!(ledger.expired(t0 + Duration::from_millis(200)).is_empty());
+        // An authenticated connection outlives the pre-auth deadline.
+        a1.store(true, std::sync::atomic::Ordering::Relaxed);
+        let mut expired = ledger.expired(t0 + deadline + LEDGER_SWEEP_INTERVAL);
+        expired.sort_unstable();
+        assert_eq!(expired, vec![2, 4]);
+        // Each expiry is reported once.
+        assert!(ledger
+            .expired(t0 + deadline + 2 * LEDGER_SWEEP_INTERVAL)
+            .is_empty());
+
+        // Releasing frees the per-peer and global share.
+        ledger.release(2);
+        ledger.release(4);
+        assert_eq!(ledger.len(), 1);
+        assert!(ledger.admit(6, a, t0).is_some());
+        assert!(ledger.admit(7, b, t0).is_some());
+        assert!(
+            ledger.admit(8, b, t0).is_none(),
+            "global cap holds after reuse"
+        );
+    }
+
+    /// End to end on a real listener: N slow unauthenticated clients are
+    /// admitted, the (N+1)th is refused with a 503 immediately, and the slow
+    /// ones are cut at the pre-auth deadline — after which a new client is
+    /// admitted again. Mirrors the production accept loop in `start_impl`
+    /// (ledger admit → worker → release, expiry sweep on every iteration).
+    #[test]
+    fn slow_unauthenticated_connections_are_capped_and_cut_at_the_deadline() {
+        const CAP: usize = 4;
+        let deadline = Duration::from_millis(500);
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(true).unwrap();
+        let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let ledger = Arc::new(Mutex::new(ConnectionLedger::new(CAP, CAP, deadline)));
+        let connections = Arc::new(Mutex::new(HashMap::<u64, TcpStream>::new()));
+
+        let accept_shutdown = Arc::clone(&shutdown);
+        let accept_ledger = Arc::clone(&ledger);
+        let accept_connections = Arc::clone(&connections);
+        let accept_thread = std::thread::spawn(move || {
+            let mut workers = Vec::new();
+            let mut next_id = 1u64;
+            loop {
+                if accept_shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
+                cut_expired_connections(&accept_ledger, &accept_connections);
+                match listener.accept() {
+                    Ok((stream, peer)) => {
+                        stream.set_nonblocking(false).unwrap();
+                        let id = next_id;
+                        next_id += 1;
+                        let admitted =
+                            accept_ledger
+                                .lock()
+                                .unwrap()
+                                .admit(id, peer.ip(), Instant::now());
+                        let Some(authenticated) = admitted else {
+                            refuse_overloaded(stream);
+                            continue;
+                        };
+                        accept_connections
+                            .lock()
+                            .unwrap()
+                            .insert(id, stream.try_clone().unwrap());
+                        let worker_ledger = Arc::clone(&accept_ledger);
+                        let worker_connections = Arc::clone(&accept_connections);
+                        let worker_shutdown = Arc::clone(&accept_shutdown);
+                        workers.push(std::thread::spawn(move || {
+                            let (mark_read, _receiver) = std::sync::mpsc::channel();
+                            handle_connection(
+                                stream,
+                                Arc::new(Mutex::new(crate::sessions::MobileSnapshot::default())),
+                                mark_read,
+                                None,
+                                Arc::new(Mutex::new(HashMap::new())),
+                                Arc::new(crate::approvals::ApprovalHub::default()),
+                                Arc::new(crate::pairing::PairingWindow::default()),
+                                Arc::new(PlatformAdapterHub::default()),
+                                None,
+                                "http://127.0.0.1:17661/mobile".into(),
+                                worker_shutdown,
+                                authenticated,
+                            );
+                            worker_connections.lock().unwrap().remove(&id);
+                            worker_ledger.lock().unwrap().release(id);
+                        }));
+                    }
+                    Err(ref error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(_) => break,
+                }
+            }
+            for stream in accept_connections.lock().unwrap().values() {
+                let _ = stream.shutdown(std::net::Shutdown::Both);
+            }
+            for worker in workers {
+                let _ = worker.join();
+            }
+        });
+
+        let connect = || {
+            let client = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            client
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            client
+        };
+        // N slow senders: a partial request head, then silence.
+        let opened_at = Instant::now();
+        let mut slow: Vec<TcpStream> = (0..CAP)
+            .map(|_| {
+                let mut client = connect();
+                client.write_all(b"GET /mob").unwrap();
+                client
+            })
+            .collect();
+        let admitted_deadline = Instant::now() + Duration::from_secs(5);
+        while ledger.lock().unwrap().len() < CAP {
+            assert!(
+                Instant::now() < admitted_deadline,
+                "slow clients were admitted"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        // The (N+1)th is refused promptly, before any slow client expires.
+        let refused_at = Instant::now();
+        let mut refused = connect();
+        let mut response = Vec::new();
+        refused.read_to_end(&mut response).unwrap();
+        let response = String::from_utf8(response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 503 "), "{response}");
+        assert!(response.contains("Connection: close"), "{response}");
+        assert!(
+            refused_at.elapsed() < Duration::from_secs(2),
+            "refusal was immediate, not queued behind the slow clients"
+        );
+
+        // The slow ones are cut at the deadline: each read ends (EOF or
+        // reset) well before the 30 s per-read timeout would.
+        for client in &mut slow {
+            let mut buffer = [0u8; 64];
+            match client.read(&mut buffer) {
+                Ok(0) | Err(_) => {}
+                Ok(n) => panic!("unexpected bytes for a slow client: {:?}", &buffer[..n]),
+            }
+        }
+        let cut_after = opened_at.elapsed();
+        assert!(
+            cut_after >= deadline,
+            "slow clients were not cut before the deadline ({cut_after:?})"
+        );
+        assert!(
+            cut_after < Duration::from_secs(4),
+            "slow clients were cut near the deadline, not the read timeout ({cut_after:?})"
+        );
+
+        // Their workers exit and release their share: a new client is served.
+        let released_deadline = Instant::now() + Duration::from_secs(5);
+        while ledger.lock().unwrap().len() > 0 {
+            assert!(Instant::now() < released_deadline, "slots were released");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let mut fresh = connect();
+        fresh
+            .write_all(b"GET /elsewhere HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .unwrap();
+        let mut response = Vec::new();
+        fresh.read_to_end(&mut response).unwrap();
+        assert!(String::from_utf8(response)
+            .unwrap()
+            .starts_with("HTTP/1.1 404 "));
+
+        shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+        accept_thread.join().unwrap();
     }
 
     #[derive(serde::Deserialize)]
@@ -2738,6 +3186,7 @@ non-ephemeral ports — a product regression, not a port race. Attempts: {failur
                         Arc::new(PlatformAdapterHub::default()),
                         None,
                         "http://127.0.0.1:17661/mobile".into(),
+                        Arc::new(std::sync::atomic::AtomicBool::new(false)),
                         Arc::new(std::sync::atomic::AtomicBool::new(false)),
                     );
                 });
