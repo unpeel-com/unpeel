@@ -154,12 +154,34 @@ impl std::fmt::Display for CoreLaunchError {
     }
 }
 
+/// `true` when the published core record carries a `host_build_id` that
+/// differs from the `unpeel-host` binary this process would launch. Records
+/// without a build id, or an unresolvable binary, are treated as matching.
+pub fn core_runs_other_build() -> bool {
+    let Some(record) = load_record() else {
+        return false;
+    };
+    let Some(current) = record.host_build_id else {
+        return false;
+    };
+    let expected = crate::session_ops::resolve_host_binary()
+        .ok()
+        .and_then(|binary| crate::session_host::host_build_id_for(&binary));
+    matches!(expected, Some(expected) if expected != current)
+}
+
 /// Ask the running core (if any) to host the Session described by
 /// `launch_file`. `Ok` carries the Session id once its preliminary manifest
 /// is on disk. The launch file is consumed by the core exactly as a
 /// per-process Host consumes it.
 pub fn try_launch_via_core(launch_file: &Path) -> Result<String, CoreLaunchError> {
     if !routing_enabled() {
+        return Err(CoreLaunchError::Unavailable);
+    }
+    if core_runs_other_build() {
+        // The running core was built from another binary (an older build
+        // left serving its Sessions after an update). Never hand it a new
+        // Session: the caller hosts it one-process until that core drains.
         return Err(CoreLaunchError::Unavailable);
     }
     let socket = socket_path();
