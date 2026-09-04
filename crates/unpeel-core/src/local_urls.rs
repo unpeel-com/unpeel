@@ -172,6 +172,10 @@ pub fn dedupe_by_origin(urls: &[String]) -> Vec<String> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LocalSiteServer {
     pub pid: u32,
+    /// Kernel start time of `pid` when it was resolved. A Stop revalidates
+    /// against it immediately before signaling, so a pid recycled between
+    /// resolve and signal is never the target.
+    pub pid_started_at: Option<u64>,
     /// Short command name, for display ("node", "python3").
     pub command: String,
     /// The hosted session whose process tree contains the server — the only
@@ -185,18 +189,23 @@ pub struct LocalSiteServer {
 pub fn server_for_url(url: &str) -> Option<LocalSiteServer> {
     let (port, _) = extract_local_urls(url).into_iter().next()?;
     let pid = listening_pid(port)?;
+    let pid_started_at = crate::session_host::process_start_time_ms(pid);
     let command = process_command(pid).unwrap_or_default();
     Some(LocalSiteServer {
         pid,
+        pid_started_at,
         command,
-        session_id: owning_session(pid),
+        session_id: owning_session_in(&crate::app_paths::app_sessions_root(), pid),
     })
 }
 
 /// Stop the server behind `url`, but only when it still resolves to a
 /// session-owned process at this very moment — resolve-and-kill in one
 /// step, so a stale pid can never be signaled (kill paths here follow the
-/// same identity discipline as the session-host kill paths).
+/// same identity discipline as the session-host kill paths). The target's
+/// identity is pid + kernel start time, re-verified right before the signal:
+/// a pid recycled after resolve, or one whose start time the kernel would
+/// not report, is never signaled.
 pub fn stop_server_for_url(url: &str) -> Result<LocalSiteServer, String> {
     let server = server_for_url(url).ok_or("no server is listening on that port")?;
     if server.session_id.is_none() {
@@ -205,11 +214,30 @@ pub fn stop_server_for_url(url: &str) -> Result<LocalSiteServer, String> {
             server.command, server.pid
         ));
     }
+    verify_stop_target(&server)?;
     let rc = unsafe { libc::kill(server.pid as i32, libc::SIGTERM) };
     if rc == 0 {
         Ok(server)
     } else {
         Err(format!("failed to signal pid {}", server.pid))
+    }
+}
+
+/// The last check before a signal: the live process under `server.pid` must
+/// still be the one resolved (same kernel start time). A recycled pid, a
+/// resolve that could not read a start time, or a kernel query failure now
+/// all refuse — never a bare-pid signal.
+fn verify_stop_target(server: &LocalSiteServer) -> Result<(), String> {
+    let verified = server.pid_started_at.is_some()
+        && crate::session_host::recorded_pid_identity(server.pid, server.pid_started_at)
+            == crate::session_host::PidIdentity::Matches;
+    if verified {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} (pid {}) could not be verified as the same process; not signaled",
+            server.command, server.pid
+        ))
     }
 }
 
@@ -247,13 +275,17 @@ fn parent_pid(pid: u32) -> Option<u32> {
     String::from_utf8_lossy(&output.stdout).trim().parse().ok()
 }
 
-/// Walk the server's ancestry against the running session manifests: any
-/// ancestor matching a manifest's recorded host pid ties the server to
-/// that session.
-fn owning_session(pid: u32) -> Option<String> {
+/// Walk the server's ancestry against the running session manifests under
+/// `sessions_root`: any ancestor matching a manifest's recorded child pid
+/// ties the server to that session. A manifest counts only when its pid is
+/// positively identified as the session's own child (`PidIdentity::Matches`,
+/// pid + recorded kernel start time): a Running record whose child died and
+/// whose pid the OS recycled onto an unrelated process must not claim that
+/// process's descendants as session-owned, because the answer here is what
+/// authorizes a Stop signal. `Unknown` is treated as not ours too.
+fn owning_session_in(sessions_root: &std::path::Path, pid: u32) -> Option<String> {
     let mut session_by_pid = std::collections::HashMap::new();
-    let root = crate::app_paths::app_sessions_root();
-    for entry in std::fs::read_dir(root).ok()?.flatten() {
+    for entry in std::fs::read_dir(sessions_root).ok()?.flatten() {
         let bytes = match std::fs::read(entry.path().join("manifest.json")) {
             Ok(bytes) => bytes,
             Err(_) => continue,
@@ -263,11 +295,18 @@ fn owning_session(pid: u32) -> Option<String> {
         else {
             continue;
         };
-        if manifest.state == crate::session_host::HostedSessionState::Running {
-            if let Some(host_pid) = manifest.pid {
-                session_by_pid.insert(host_pid, manifest.session.id.clone());
-            }
+        if manifest.state != crate::session_host::HostedSessionState::Running {
+            continue;
         }
+        let Some(child_pid) = manifest.pid else {
+            continue;
+        };
+        if crate::session_host::manifest_pid_identity(&manifest)
+            != crate::session_host::PidIdentity::Matches
+        {
+            continue;
+        }
+        session_by_pid.insert(child_pid, manifest.session.id.clone());
     }
     let mut current = pid;
     for _ in 0..12 {
@@ -479,6 +518,130 @@ fn path_length(after_port: &str) -> usize {
 mod tests {
     use super::*;
     use std::net::TcpListener;
+
+    /// A live process that is NOT a session child, standing in for whatever
+    /// the OS recycled a dead session's pid onto.
+    fn unrelated_live_process() -> std::process::Child {
+        std::process::Command::new("sleep")
+            .arg("30")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn sleep")
+    }
+
+    fn write_running_manifest(
+        root: &std::path::Path,
+        session_id: &str,
+        pid: u32,
+        pid_started_at: Option<u64>,
+    ) {
+        let dir = root.join(session_id);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut manifest = serde_json::json!({
+            "session": {
+                "id": session_id,
+                "project_id": "p1",
+                "label": "stale",
+                "command": "bash",
+            },
+            "cwd": "/tmp",
+            "state": "running",
+            "pid": pid,
+            "exit_code": null,
+        });
+        if let Some(started) = pid_started_at {
+            manifest["pid_started_at"] = serde_json::json!(started);
+        }
+        std::fs::write(
+            dir.join("manifest.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn scratch_sessions_root(label: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "unpeel-local-urls-{label}-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn recycled_pid_in_running_manifest_does_not_own_a_web_server() {
+        let mut stranger = unrelated_live_process();
+        let pid = stranger.id();
+        let actual_start = crate::session_host::process_start_time_ms(pid)
+            .expect("kernel reports the start time of a live child");
+        let root = scratch_sessions_root("recycled");
+        // The session's child died and the OS handed its pid to `stranger`:
+        // the manifest still says Running, but its recorded start time is an
+        // hour off the live process's.
+        write_running_manifest(&root, "stale-record", pid, Some(actual_start - 3_600_000));
+        assert_eq!(
+            crate::session_host::recorded_pid_identity(pid, Some(actual_start - 3_600_000)),
+            crate::session_host::PidIdentity::NotOurs
+        );
+
+        assert_eq!(owning_session_in(&root, pid), None);
+
+        // Control: the same manifest with the true start time is the child.
+        write_running_manifest(&root, "stale-record", pid, Some(actual_start));
+        assert_eq!(
+            owning_session_in(&root, pid),
+            Some("stale-record".to_string())
+        );
+
+        let _ = stranger.kill();
+        let _ = stranger.wait();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn legacy_manifest_without_start_time_does_not_own_a_web_server() {
+        let mut stranger = unrelated_live_process();
+        let pid = stranger.id();
+        let root = scratch_sessions_root("legacy");
+        // No `pid_started_at` and an argv that never mentions the session:
+        // identity is Unknown, which is not ownership.
+        write_running_manifest(&root, "legacy-record", pid, None);
+
+        assert_eq!(owning_session_in(&root, pid), None);
+
+        let _ = stranger.kill();
+        let _ = stranger.wait();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn stop_target_is_refused_when_the_pid_was_recycled_after_resolve() {
+        let mut stranger = unrelated_live_process();
+        let pid = stranger.id();
+        let actual_start = crate::session_host::process_start_time_ms(pid).unwrap();
+        let resolved = |pid_started_at: Option<u64>| LocalSiteServer {
+            pid,
+            pid_started_at,
+            command: "sleep".into(),
+            session_id: Some("owner".into()),
+        };
+
+        // Resolved against a process that has since been replaced.
+        assert!(verify_stop_target(&resolved(Some(actual_start - 3_600_000))).is_err());
+        // Resolved without a start time: nothing to verify against.
+        assert!(verify_stop_target(&resolved(None)).is_err());
+        // The same process: allowed.
+        assert!(verify_stop_target(&resolved(Some(actual_start))).is_ok());
+        // Neither refusal signaled the stranger.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(stranger.try_wait().unwrap().is_none(), "stranger survived");
+
+        let _ = stranger.kill();
+        let _ = stranger.wait();
+    }
 
     #[test]
     fn extracts_plain_localhost_url() {
