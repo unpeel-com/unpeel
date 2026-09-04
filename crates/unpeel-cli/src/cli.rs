@@ -227,7 +227,26 @@ fn print_sessions(args: &Args) {
     }
 }
 
+const NEW_USAGE: &str = "usage: unpeel new [--command C | --preset LABEL] [--cwd DIR] [--project ID] [--cols N] [--rows N] [--json]
+
+Create a new Session in this workspace. With no --command or --preset, opens a
+plain terminal. Prints the new session id (or {\"id\":...} with --json).";
+
 fn new_session(args: &Args) -> Result<(), String> {
+    // `--help`/`-h`/`help` must print usage and create nothing. Without this
+    // guard `unpeel new --help` fell through to "plain terminal" and spawned a
+    // stray Session (the 0.4-era hazard; regressed on old CLIs probed by the
+    // upgrade harness).
+    if args.has("help")
+        || args
+            .positional
+            .iter()
+            .skip(1)
+            .any(|arg| arg == "-h" || arg == "help")
+    {
+        println!("{NEW_USAGE}");
+        return Ok(());
+    }
     let command = match (args.value("preset"), args.value("command")) {
         (Some(label), _) => {
             let overlay = unpeel_serve::overlay::load();
