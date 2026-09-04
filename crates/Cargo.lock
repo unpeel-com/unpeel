@@ -1125,7 +1125,7 @@ dependencies = [
 
 [[package]]
 name = "unpeel-apps"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "base64 0.22.1",
  "serde_json",
@@ -1133,7 +1133,7 @@ dependencies = [
 
 [[package]]
 name = "unpeel-cli"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "libc",
  "serde",
@@ -1145,7 +1145,7 @@ dependencies = [
 
 [[package]]
 name = "unpeel-core"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1170,7 +1170,7 @@ dependencies = [
 
 [[package]]
 name = "unpeel-host"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "base64 0.22.1",
  "libc",
@@ -1182,7 +1182,7 @@ dependencies = [
 
 [[package]]
 name = "unpeel-license-notices"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "serde_json",
  "sha2",
@@ -1190,7 +1190,7 @@ dependencies = [
 
 [[package]]
 name = "unpeel-serve"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "aes-gcm",
  "base64 0.23.1",
