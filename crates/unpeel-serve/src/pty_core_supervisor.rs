@@ -318,6 +318,25 @@ pub struct PtyCoreSupervisor {
     /// One takeover attempt per (old pid, expected build): a takeover that
     /// leaves the ids mismatched must not loop.
     takeover_attempted: Option<(u32, String)>,
+    /// Whether an older-build core may be taken over in place. Off by
+    /// default since 0.5.2: the 0.5.0 -> 0.5.1 in-place takeover left the new
+    /// core unable to host new Sessions (children died at spawn and were
+    /// never reaped). Instead the older core keeps serving its Sessions, new
+    /// Sessions run one process each, and once the old core is empty it is
+    /// asked to exit so a current-build core starts. `UNPEEL_PTY_CORE_TAKEOVER=1`
+    /// re-enables the in-place path (tests, and once it is proven).
+    allow_takeover: bool,
+    /// The older-build core pid we already announced as draining.
+    drain_announced: Option<u32>,
+    /// Kernel start time of the adopted core, remembered from its record:
+    /// a core removes `pty-core.json` when it exits, and the lost check must
+    /// still be able to prove that pid gone afterwards.
+    adopted_started_at: Option<u64>,
+}
+
+/// `UNPEEL_PTY_CORE_TAKEOVER=1` opts back into in-place takeovers.
+pub fn takeover_enabled() -> bool {
+    std::env::var("UNPEEL_PTY_CORE_TAKEOVER").is_ok_and(|value| value.trim() == "1")
 }
 
 impl PtyCoreSupervisor {
@@ -341,10 +360,18 @@ impl PtyCoreSupervisor {
             takeover_from: None,
             takeover_started_at: Instant::now(),
             takeover_attempted: None,
+            allow_takeover: takeover_enabled(),
+            drain_announced: None,
+            adopted_started_at: None,
         }
     }
 
     /// Pin the build id takeovers are measured against (tests).
+    /// Tests pin the in-place takeover policy explicitly.
+    pub fn set_allow_takeover(&mut self, allow: bool) {
+        self.allow_takeover = allow;
+    }
+
     pub fn set_expected_build_id(&mut self, build_id: Option<String>) {
         self.expected_build_id = build_id;
         self.probe_expected_build_id = false;
@@ -422,6 +449,10 @@ impl PtyCoreSupervisor {
         if current == expected {
             return;
         }
+        if !self.allow_takeover {
+            self.drain_older_core(old_pid, &record.socket, events);
+            return;
+        }
         if self.takeover_attempted.as_ref() == Some(&(old_pid, expected.clone())) {
             return;
         }
@@ -439,6 +470,33 @@ impl PtyCoreSupervisor {
             Err(error) => events.push(CoreEvent::Warning(format!(
                 "could not start a takeover core: {error}"
             ))),
+        }
+    }
+
+    /// An adopted core runs an older build and in-place takeover is off:
+    /// leave it serving its Sessions (spawn routing already refuses it, so
+    /// new Sessions run one process each) and, once it holds none, ask it to
+    /// exit so the normal lost-core path starts a current-build core. Never
+    /// signals anything.
+    fn drain_older_core(&mut self, old_pid: u32, socket: &Path, events: &mut Vec<CoreEvent>) {
+        let sessions = self.sessions.unwrap_or(u64::MAX);
+        if sessions == 0 {
+            match unpeel_core::pty_core::shutdown_at(socket, HEALTH_INTERVAL) {
+                Ok(()) => events.push(CoreEvent::Warning(format!(
+                    "PTY core pid {old_pid} runs an older build and holds no Sessions; asked it to exit so a current-build core can start"
+                ))),
+                Err(error) => events.push(CoreEvent::Warning(format!(
+                    "PTY core pid {old_pid} runs an older build and holds no Sessions, but did not accept shutdown: {error}"
+                ))),
+            }
+            self.drain_announced = None;
+            return;
+        }
+        if self.drain_announced != Some(old_pid) {
+            self.drain_announced = Some(old_pid);
+            events.push(CoreEvent::Warning(format!(
+                "PTY core pid {old_pid} runs an older build; it keeps serving its {sessions} Session(s) and new terminals run one process each until it drains (in-place takeover is off)"
+            )));
         }
     }
 
@@ -590,12 +648,20 @@ impl PtyCoreSupervisor {
         match alive {
             Some(reply) => {
                 self.sessions = reply.sessions;
+                if let Some(started) = record.as_ref().and_then(|record| record.pid_started_at) {
+                    self.adopted_started_at = Some(started);
+                }
                 self.check_build_skew(events);
             }
             None => {
                 // Only a provably gone process counts as lost; an unanswered
                 // ping on a live pid is left alone (the core may be busy).
-                let started_at = record.as_ref().and_then(|record| record.pid_started_at);
+                // A core that exited removed its record, so fall back to the
+                // start time remembered while it was live.
+                let started_at = record
+                    .as_ref()
+                    .and_then(|record| record.pid_started_at)
+                    .or(self.adopted_started_at);
                 if recorded_pid_identity(pid, started_at) == PidIdentity::NotOurs {
                     self.pid = None;
                     self.sessions = None;
@@ -783,6 +849,50 @@ mod tests {
             }
             std::fs::write(record_path(home), record.to_string()).unwrap();
         }
+    }
+
+    #[test]
+    fn older_build_core_drains_instead_of_takeover() {
+        let home = short_home();
+        let mut parked = std::process::Command::new("sleep")
+            .arg("30")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let core = FakeCore::start(home.path(), parked.id(), 2);
+        core.write_record(home.path(), None);
+        let (mut supervisor, events) =
+            PtyCoreSupervisor::start(home.path().to_path_buf(), never_spawn());
+        assert!(matches!(events.as_slice(), [CoreEvent::Adopted { .. }]));
+        supervisor.set_allow_takeover(false);
+        supervisor.set_expected_build_id(Some("newer".into()));
+
+        // Holding Sessions: announced once, never taken over, never spawned.
+        let mut events = Vec::new();
+        supervisor.check_build_skew(&mut events);
+        assert!(
+            matches!(events.as_slice(), [CoreEvent::Warning(message)] if message.contains("keeps serving its 2 Session")),
+            "{events:?}"
+        );
+        assert_eq!(supervisor.state(), CoreState::Adopted);
+        let mut again = Vec::new();
+        supervisor.check_build_skew(&mut again);
+        assert!(again.is_empty(), "announced once: {again:?}");
+
+        // Empty: asked to exit (the fake refuses; the supervisor only reports).
+        supervisor.sessions = Some(0);
+        let mut events = Vec::new();
+        supervisor.check_build_skew(&mut events);
+        assert!(
+            matches!(events.as_slice(), [CoreEvent::Warning(message)] if message.contains("holds no Sessions")),
+            "{events:?}"
+        );
+        assert_eq!(supervisor.state(), CoreState::Adopted);
+        drop(core);
+        let _ = parked.kill();
+        let _ = parked.wait();
     }
 
     fn short_home() -> tempfile::TempDir {
@@ -1037,6 +1147,7 @@ mod tests {
         assert!(matches!(events.as_slice(), [CoreEvent::Adopted { .. }]));
         assert_eq!(supervisor.state(), CoreState::Adopted);
 
+        supervisor.set_allow_takeover(true);
         // Same build: no takeover.
         supervisor.set_expected_build_id(Some("test".into()));
         let mut events = Vec::new();

@@ -16,9 +16,26 @@ import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from harness import BINARY, CRATES, run, run_cli, wait_running  # noqa: E402
+from harness import (  # noqa: E402
+    BINARY,
+    CRATES,
+    leftover_host_processes,
+    run,
+    run_cli,
+    wait_running,
+)
 
 HOST_BIN = os.path.join(CRATES, "target", "debug", "unpeel-host")
+
+
+def pid_is_zombie(pid):
+    """True while `pid` is an unreaped <defunct> child. A reaped child is
+    gone entirely (empty STAT); a leaked one shows STAT 'Z'."""
+    stat = subprocess.run(
+        ["ps", "-o", "stat=", "-p", str(pid)],
+        capture_output=True, text=True, check=False,
+    ).stdout.strip()
+    return "Z" in stat
 
 
 def core_request(home, request, timeout=12.0):
@@ -124,8 +141,8 @@ class StreamClient:
             pass
 
 
-def new_session(case, home, label, preset="cat"):
-    started = run_cli(home, ["new", "--preset", preset, "--project", "p"], timeout=45)
+def new_session(case, home, label, preset="cat", env=None):
+    started = run_cli(home, ["new", "--preset", preset, "--project", "p"], timeout=45, env=env)
     session_id = ""
     for token in started.stdout.split():
         if len(token) == 36 and token.count("-") == 4:
@@ -306,13 +323,18 @@ def body(case):
     stopper.cores.append(stale_core)
     stale_record = core_record(home)
     case.check("a core from the stale binary is up", stale_core.poll() is None and stale_record["pid"] == stale_core.pid)
-    stale_session = new_session(case, home, "session under the stale core")
+    stale_session = new_session(case, home, "session under the stale core", env={"UNPEEL_HOST_CMD": stale_bin})
+    case.check(
+        "that Session lives in the stale core",
+        home.manifests().get(stale_session, {}).get("host_pid") == stale_core.pid,
+        f"host_pid={home.manifests().get(stale_session, {}).get('host_pid')} core={stale_core.pid}",
+    )
     run_cli(home, ["send", stale_session, "stale-core-text", "--enter"])
     case.check("the stale core's session echoes", wait_for(lambda: screen(home, stale_session).count("stale-core-text") >= 2))
     time.sleep(1.0)
     stale_screen = screen(home, stale_session)
 
-    serve = case.serve(env={"UNPEEL_PTY_CORE": "1"})
+    serve = case.serve(env={"UNPEEL_PTY_CORE": "1", "UNPEEL_PTY_CORE_TAKEOVER": "1"})
     serve.ready()
 
     def serve_json():
@@ -349,6 +371,122 @@ def body(case):
         f"state={home.manifests().get(stale_session, {}).get('state')} before={stale_screen[-160:]!r} after={screen(home, stale_session)[-160:]!r}",
     )
     run_cli(home, ["rm", stale_session], timeout=45)
+    serve.close()
+
+    # The record disappears between the drained core's exit and the fresh core's
+    # start; read it leniently while waiting on that transition.
+    def record_pid():
+        try:
+            return core_record(home).get("pid")
+        except (FileNotFoundError, ValueError):
+            return None
+
+    def core_trace():
+        try:
+            with open(home.path("hooks", "trace.log"), errors="replace") as handle:
+                lines = [l.strip()[-150:] for l in handle if "PTY core" in l or "pty-core" in l]
+            return " || ".join(lines[-10:])
+        except FileNotFoundError:
+            return "(no trace)"
+
+        # Default policy since 0.5.2 (no UNPEEL_PTY_CORE_TAKEOVER): the supervisor
+    # never takes an older-build core over in place. It keeps serving its
+    # Sessions, new Sessions run one process each, and once it is empty it is
+    # asked to exit so a current-build core starts.
+    core_request(home, {"op": "shutdown"})
+    time.sleep(1.0)
+    drain_core = start_core(home, binary=stale_bin)
+    stopper.cores.append(drain_core)
+    case.check("a second stale-build core is up", drain_core.poll() is None and core_record(home)["pid"] == drain_core.pid)
+    # Spawn routing refuses a core built from another binary, so place this
+    # Session in the stale core by launching as that binary's own build.
+    drain_session = new_session(case, home, "session under the draining core", env={"UNPEEL_HOST_CMD": stale_bin})
+    case.check(
+        "that Session lives in the stale core",
+        home.manifests().get(drain_session, {}).get("host_pid") == drain_core.pid,
+        f"host_pid={home.manifests().get(drain_session, {}).get('host_pid')} core={drain_core.pid}",
+    )
+    run_cli(home, ["send", drain_session, "drain-core-text", "--enter"])
+    case.check("the draining core's session echoes", wait_for(lambda: screen(home, drain_session).count("drain-core-text") >= 2))
+
+    serve = case.serve(env={"UNPEEL_PTY_CORE": "1"})
+    serve.ready()
+    case.check(
+        "serve adopts the stale-build core without taking it over",
+        wait_for(lambda: serve_json().get("ptyCore", {}).get("state") == "adopted", timeout=30),
+        str(serve_json().get("ptyCore")),
+    )
+    time.sleep(3.0)
+    case.check(
+        "no takeover is started while the older core holds Sessions",
+        serve_json().get("ptyCore", {}).get("state") == "adopted" and record_pid() == drain_core.pid,
+        str(serve_json().get("ptyCore")),
+    )
+    fresh_session = new_session(case, home, "session spawned while the older core drains")
+    run_cli(home, ["send", fresh_session, "one-process-text", "--enter"])
+    case.check(
+        "a new Session spawned meanwhile runs one process each, not in the older core",
+        wait_for(lambda: screen(home, fresh_session).count("one-process-text") >= 2)
+        and home.manifests().get(fresh_session, {}).get("host_pid") != drain_core.pid,
+        f"host_pid={home.manifests().get(fresh_session, {}).get('host_pid')} core={drain_core.pid}",
+    )
+    time.sleep(6.0)
+    case.check(
+        "that Session is still running six seconds later and its exit is not pending",
+        home.manifests().get(fresh_session, {}).get("state") == "running",
+        str(home.manifests().get(fresh_session, {}).get("state")),
+    )
+    case.check("the older core's own session still echoes", wait_for(lambda: screen(home, drain_session).count("drain-core-text") >= 2))
+
+    run_cli(home, ["rm", drain_session], timeout=45)
+
+    def replaced():
+        # The drained core is this test's child: reap it as soon as it exits,
+        # or its zombie keeps the pid alive and the supervisor cannot prove
+        # it gone (in production the core is detached and launchd reaps it).
+        drain_core.poll()
+        return serve_json().get("ptyCore", {}).get("state") == "live" and record_pid() not in (None, drain_core.pid)
+
+    case.check(
+        "once empty, the older core exits and a current-build core takes its place",
+        wait_for(replaced, timeout=45),
+        f"ptyCore={serve_json().get('ptyCore')} record_pid={record_pid()} trace={core_trace()}",
+    )
+    try:
+        drain_core.wait(timeout=20)
+        drained_exit = drain_core.returncode
+    except subprocess.TimeoutExpired:
+        drained_exit = None
+    case.check("the drained core exited 0", drained_exit == 0, str(drained_exit))
+    after_session = new_session(case, home, "session in the current-build core")
+    run_cli(home, ["send", after_session, "fresh-core-text", "--enter"])
+    case.check(
+        "a Session created afterwards lands in the current-build core and runs",
+        wait_for(lambda: screen(home, after_session).count("fresh-core-text") >= 2)
+        and home.manifests().get(after_session, {}).get("host_pid") == record_pid(),
+        f"host_pid={home.manifests().get(after_session, {}).get('host_pid')} core={record_pid()} trace={core_trace()}",
+    )
+    # 0.5.2 regression guard for the load-storm P0: a Session that exits on a
+    # core reached through the drain->fresh-core path must be REAPED — no
+    # <defunct> zombie child, no leftover per-process host. The wild failure
+    # was new spawns dying at exec and their shells never being waited on.
+    exiting_children = {
+        session_id: home.manifests()[session_id]["pid"]
+        for session_id in (fresh_session, after_session)
+    }
+    for session_id in (fresh_session, after_session):
+        run_cli(home, ["rm", session_id], timeout=45)
+    for session_id, child in exiting_children.items():
+        case.check(
+            f"{session_id[:8]} exit is reaped (no zombie child) after the drain",
+            wait_for(lambda child=child: not pid_is_zombie(child), timeout=15),
+            f"child {child} STAT still a zombie",
+        )
+    case.check(
+        "no leftover per-process host survives the drain-and-reap",
+        wait_for(lambda: not leftover_host_processes(home.root), timeout=15),
+        str(leftover_host_processes(home.root)),
+    )
     serve.close()
 
 

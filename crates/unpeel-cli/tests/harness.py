@@ -1342,9 +1342,9 @@ class McpClient:
             self.proc.kill()
 
 
-def run_cli(home, args, timeout=30, expect_ok=None):
+def run_cli(home, args, timeout=30, expect_ok=None, env=None):
     """Run `unpeel <args>` against the fixture home."""
-    env = dict(os.environ, UNPEEL_HOME=home.root, UNPEEL_TEST="1")
+    env = dict(os.environ, UNPEEL_HOME=home.root, UNPEEL_TEST="1", **(env or {}))
     result = subprocess.run(
         [BINARY, *args],
         capture_output=True,
