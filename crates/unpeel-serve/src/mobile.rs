@@ -1900,9 +1900,12 @@ pub(crate) fn handle_local_live_route(
 /// `unpeel_core::controller_host::project_organization_response` (the SSH
 /// gateway serves the same function), resolved against the published
 /// bootstrap — display-ordered, so sibling indices mean exactly what the
-/// Controller saw. The TUI adapter adds the one platform capability a bare
-/// gateway lacks: folder colors, written into the desktop app's UserDefaults
-/// on macOS with a state-bus ping so every frontend re-reads.
+/// Controller saw. Folder colors go to the live native adapter (the desktop
+/// app's UserDefaults) when one is registered, else to the default
+/// workspace's defaults domain on macOS, else to `app-state.json`'s
+/// `project_colors` — the disk carrier isolated workspaces and Linux Hosts
+/// read back in their bootstrap — with a state-bus ping so every frontend
+/// re-reads.
 fn handle_project_organization(
     body: &serde_json::Value,
     snapshot: &SharedSnapshot,
@@ -1938,12 +1941,15 @@ fn handle_project_organization(
                     .unwrap_or("native folder-color adapter rejected the write")
                     .to_owned());
             }
-        } else {
+        } else if crate::overlay::project_folder_color_supported() {
             // Released compatibility clients have no registration. Preserve
             // the historical default-workspace `defaults` writer until the
-            // client-only gate flips; isolated native workspaces reach their
-            // own UserDefaults suite only through the live adapter above.
+            // client-only gate flips.
             crate::overlay::write_project_folder_color(project_id, color)?;
+        } else {
+            // No overlay reaches this workspace (isolated `UNPEEL_HOME`, or
+            // not macOS): the file is the truth the bootstrap reads back.
+            unpeel_core::session_ops::set_project_folder_color(project_id, color)?;
         }
         // Colors live in UserDefaults, outside the app-state choke point's
         // own announce — ping peers explicitly, like the local color menu.
@@ -1953,14 +1959,7 @@ fn handle_project_organization(
         );
         Ok(())
     };
-    let color_writer: Option<ProjectColorWriter<'_>> = if platform_adapters
-        .supports("overlay.project-color.set")
-        || crate::overlay::project_folder_color_supported()
-    {
-        Some(&write_color)
-    } else {
-        None
-    };
+    let color_writer: Option<ProjectColorWriter<'_>> = Some(&write_color);
     let (status, body) =
         unpeel_core::controller_host::project_organization_response(body, &projects, color_writer);
     (status, body.to_string())

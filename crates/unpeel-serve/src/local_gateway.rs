@@ -263,6 +263,12 @@ fn serve_connection(
             };
         let had_notify_when_done = notify_when_done.is_some();
         let write_project_color = |project_id: &str, color: Option<&str>| -> Result<(), String> {
+            if !platform_adapters.supports("overlay.project-color.set") {
+                // No native overlay reaches this workspace: `app-state.json`'s
+                // `project_colors` is the carrier its bootstrap reads back
+                // (flock + announce inside `app_state::edit`).
+                return unpeel_core::session_ops::set_project_folder_color(project_id, color);
+            }
             let adapter = platform_adapters
                 .call(
                     "overlay.project-color.set",
@@ -287,9 +293,7 @@ fn serve_connection(
             Ok(())
         };
         let project_color_writer: Option<unpeel_core::controller_host::ProjectColorWriter<'_>> =
-            platform_adapters
-                .supports("overlay.project-color.set")
-                .then_some(&write_project_color);
+            Some(&write_project_color);
         let mut response = runtime.handle_tunnel_with_project_color_writer(
             &namespace,
             request,

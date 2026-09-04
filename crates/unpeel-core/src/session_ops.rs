@@ -1574,6 +1574,47 @@ pub fn set_session_date_sorted(project_id: &str, date_sorted: bool) -> Result<()
     })
 }
 
+/// Persist a project's folder color in `app-state.json` (`project_colors`):
+/// the disk carrier for workspaces without a native UserDefaults overlay.
+/// `None` clears the entry. Flock + state-bus announce through
+/// `app_state::edit`, like every other shared-state write.
+pub fn set_project_folder_color(project_id: &str, color: Option<&str>) -> Result<(), String> {
+    crate::app_state::edit(|object| apply_project_folder_color(object, project_id, color))
+}
+
+/// `set_project_folder_color` against an explicit file (tests, tooling).
+pub fn set_project_folder_color_at(
+    path: &std::path::Path,
+    project_id: &str,
+    color: Option<&str>,
+) -> Result<(), String> {
+    crate::app_state::edit_at(path, |object| {
+        apply_project_folder_color(object, project_id, color)
+    })
+}
+
+fn apply_project_folder_color(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    project_id: &str,
+    color: Option<&str>,
+) -> Result<(), String> {
+    let colors = object
+        .entry("project_colors")
+        .or_insert_with(|| serde_json::json!({}));
+    let map = colors
+        .as_object_mut()
+        .ok_or("project_colors is not an object")?;
+    match color.filter(|value| !value.is_empty()) {
+        Some(color) => {
+            map.insert(project_id.to_string(), serde_json::json!(color));
+        }
+        None => {
+            map.remove(project_id);
+        }
+    }
+    Ok(())
+}
+
 fn rewrite_string_array(
     value: &mut serde_json::Value,
     old_id: &str,
@@ -2421,6 +2462,36 @@ mod tests {
         rewrite_session_order_value, set_group_pinned_in_state,
         validate_session_order_references_at, InitialTextSubmitMode,
     };
+
+    #[test]
+    fn project_folder_color_round_trips_through_app_state() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir()
+            .join(format!("unpeel-folder-color-{}-{nonce}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("app-state.json");
+        std::fs::write(&path, r#"{"projects":[],"presets":[]}"#).unwrap();
+
+        super::set_project_folder_color_at(&path, "p1", Some("sky")).unwrap();
+        super::set_project_folder_color_at(&path, "p2", Some("moss")).unwrap();
+        let state: crate::state::AppState =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(state.project_colors.get("p1").map(String::as_str), Some("sky"));
+        assert_eq!(state.project_colors.get("p2").map(String::as_str), Some("moss"));
+        // Unmodelled keys survive the edit.
+        assert!(state.presets.is_empty());
+
+        // The empty string clears exactly like `None` (the wire's "default").
+        super::set_project_folder_color_at(&path, "p1", Some("")).unwrap();
+        super::set_project_folder_color_at(&path, "p2", None).unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(raw["project_colors"], serde_json::json!({}));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn archive_static_gate_requires_a_runtime_resume_recipe() {

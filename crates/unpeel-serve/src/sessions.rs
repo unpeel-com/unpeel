@@ -1896,6 +1896,15 @@ pub fn mobile_snapshot(
         .flat_map(|state| state.projects.iter())
         .filter_map(|project| project.pinned_at.map(|_| project.id.as_str()))
         .collect();
+    // Folder colors: the native overlay (the desktop app's UserDefaults)
+    // wins per project; `app-state.json`'s `project_colors` is the disk
+    // carrier for workspaces the overlay never reaches.
+    let project_color = |id: &str| -> Option<&str> {
+        overlay
+            .and_then(|o| o.project_colors.get(id))
+            .or_else(|| app_state.as_ref().and_then(|s| s.project_colors.get(id)))
+            .map(String::as_str)
+    };
     let mut folders = Vec::new();
     let mut projects = Vec::new();
     let mut seen_projects = std::collections::HashSet::new();
@@ -1972,8 +1981,8 @@ pub fn mobile_snapshot(
         for p in &state.projects {
             if p.is_folder && p.parent_project_id.is_none() {
                 let mut folder = serde_json::json!({"id": p.id, "name": p.name});
-                if let Some(color) = overlay.and_then(|o| o.project_colors.get(&p.id)) {
-                    folder["colorID"] = color.clone().into();
+                if let Some(color) = project_color(&p.id) {
+                    folder["colorID"] = color.into();
                 }
                 folders.push(folder);
             } else {
@@ -1994,7 +2003,7 @@ pub fn mobile_snapshot(
                     parent_project_id,
                     p.worktree_branch.as_deref(),
                     p.is_folder && parent_project_id.is_some(),
-                    overlay.and_then(|o| o.project_colors.get(&p.id).map(String::as_str)),
+                    project_color(&p.id),
                     &mut projects,
                 );
             }
@@ -2018,7 +2027,7 @@ pub fn mobile_snapshot(
                 parent_project_id,
                 worktree_branch,
                 child.is_some() && worktree_branch.is_none(),
-                overlay.project_colors.get(id).map(String::as_str),
+                project_color(id),
                 &mut projects,
             );
         }

@@ -851,6 +851,14 @@ pub struct AppState {
     /// though they never appear in `projects`.
     #[serde(default)]
     pub session_sort_modes: HashMap<String, String>,
+    /// Project folder colors: project id → color id (`sky`, `blue`, …).
+    /// The on-disk carrier for every workspace the desktop app's
+    /// UserDefaults overlay does not reach — isolated `UNPEEL_HOME`
+    /// workspaces driven through the loopback gateway, and Linux Hosts.
+    /// Where the overlay is live it wins per project; a Host writes here
+    /// only when no native adapter can persist the color.
+    #[serde(default)]
+    pub project_colors: HashMap<String, String>,
     /// Auto-stop-and-archive cutoff in minutes: sessions continuously idle
     /// this long are stopped and archived (the non-destructive Stop verb —
     /// Restore + Restart resumes). Shared knob for the app and the TUI.
@@ -933,6 +941,7 @@ impl Default for AppState {
             transcript_settings: TranscriptSettings::default(),
             menu_attention_detection: true,
             session_sort_modes: HashMap::new(),
+            project_colors: HashMap::new(),
             auto_stop_archive_minutes: None,
             sidebar_stopped_limit: None,
             session_title_mode: SessionTitleMode::default(),
