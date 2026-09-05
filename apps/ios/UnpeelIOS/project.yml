@@ -1,0 +1,84 @@
+name: UnpeelIOS
+options:
+  minimumXcodeGenVersion: 2.42.0
+packages:
+  UnpeelShared:
+    path: ../../shared/UnpeelShared
+  libghostty-spm:
+    path: ../../native/vendor/libghostty-spm
+targets:
+  UnpeelIOSApp:
+    type: application
+    platform: iOS
+    # iOS 17 minimum: the store uses the @Observable macro (see the package
+    # platforms in Package.swift, which already require .iOS(.v17)).
+    deploymentTarget: "17.0"
+    sources:
+      - path: Sources/UnpeelIOS
+      - path: App
+    dependencies:
+      - package: UnpeelShared
+      - package: libghostty-spm
+        product: GhosttyTerminal
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.unpeel.ios.remote
+        PRODUCT_NAME: Unpeel
+        PRODUCT_MODULE_NAME: UnpeelIOS
+        INFOPLIST_FILE: App/Info.plist
+        # Push Notifications (aps-environment). The App ID has the Push
+        # Notifications capability (enabled 2026-07-24 via the ASC API), so
+        # device builds sign with the entitlement and
+        # registerForRemoteNotifications can mint real APNs tokens. Managed
+        # profiles regenerate to include the capability on the next
+        # -allowProvisioningUpdates build.
+        CODE_SIGN_ENTITLEMENTS: App/UnpeelIOS.entitlements
+        SWIFT_VERSION: "6.0"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        # App icon = the desktop app's icon (App/Assets.xcassets/AppIcon),
+        # a full-bleed 1024 that iOS masks to the rounded-rect.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # Simulator stays unsigned (CI / `xcodebuild` without certs still
+        # works); device builds sign automatically with the personal team so
+        # a real-iPhone run just works from Xcode.
+        CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]: "NO"
+        CODE_SIGNING_ALLOWED[sdk=iphoneos*]: "YES"
+        CODE_SIGN_STYLE: Automatic
+        # Signing team is a single override point: the paid company team
+        # (UX Themes AS). Overridable per build without editing this file:
+        # `xcodebuild ... UNPEEL_DEVELOPMENT_TEAM=ABCDE12345` (e.g. a personal
+        # team for cert-less local dev).
+        UNPEEL_DEVELOPMENT_TEAM: 8M4MM4C2AH
+        DEVELOPMENT_TEAM: $(UNPEEL_DEVELOPMENT_TEAM)
+      configs:
+        Debug:
+          UNPEEL_APNS_ENVIRONMENT: development
+        Release:
+          UNPEEL_APNS_ENVIRONMENT: production
+  UnpeelIOSTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: Tests/UnpeelIOSTests
+    dependencies:
+      - target: UnpeelIOSApp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.unpeel.ios.remote.tests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "6.0"
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/Unpeel.app/Unpeel
+        BUNDLE_LOADER: $(TEST_HOST)
+        CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]: "NO"
+schemes:
+  UnpeelIOSApp:
+    build:
+      targets:
+        UnpeelIOSApp: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - UnpeelIOSTests

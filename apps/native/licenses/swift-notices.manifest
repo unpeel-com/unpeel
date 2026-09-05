@@ -1,0 +1,15 @@
+# label|path relative to apps/native|SHA-256
+libghostty-spm 1.2.4 (vendored with Unpeel patches)|vendor/libghostty-spm/LICENSE|1f4b38df6a142e678a85d84c3a7ec4d1db328a556483241df714156134e81615
+Ghostty commit 2da015cd6ac06cedc89e09756e895d2c1715205d|licenses/ghostty/LICENSE|386211873e5b7a02f663ae4d7adf96285999f91608f8f9f31fecfd0f4095e6f1
+Nerd Fonts data bundled by Ghostty|licenses/ghostty/nerd-fonts-LICENSE|1f6ad4edae6479aaace3112ede5279a23284ae54b2a34db66357aef5f64df160
+uucode 0.2.0 bundled by Ghostty|licenses/ghostty/uucode-LICENSE.md|312e901e142be2477b4ca859e9311f9e3f80d33372991759b7921c1893605f33
+uucode 0.2.0 / Bjoern Hoehrmann code|licenses/ghostty/uucode-LICENSE_Bjoern_Hoehrmann|de219cece932aad5a817bf763393d8d149d378a15d2ad5320e3331eac07626dd
+uucode 0.2.0 / Unicode data|licenses/ghostty/uucode-LICENSE_unicode|1eda5a3b026870c737b22e8bcd4954338612c790db688242e003f41a4fa95175
+Ghostty embedded font attribution manifest|licenses/ghostty/font-res-README.md|b3177ac25cc57c976ae9e2a458a23cf840b7d4c919e4f87fdc8cab7875c3ea17
+Ghostty embedded fonts / SIL Open Font License 1.1|licenses/ghostty/font-res-OFL.txt|fb755fa3280d1d215a20df2e64fe6a0f75f8208439b11671978214aae60d2997
+Ghostty embedded fonts / MIT|licenses/ghostty/font-res-MIT.txt|508a77d2e7b51d98adeed32648ad124b7b30241a8e70b2e72c99f92d8e5874d1
+Ghostty embedded fonts / BSD 2-Clause|licenses/ghostty/font-res-BSD-2-Clause.txt|3cb3f3f5a795547d329828df881c80d923bfc75f65065c44ffa703ad78c678bd
+GhosttyTheme / iTerm2-Color-Schemes data|vendor/libghostty-spm/Sources/GhosttyTheme/LICENSE|ec86fb473b04f6ed4ed9a820f6366355ddbbe69a1673a0d776410971dd0b227c
+Sparkle 2.9.5|UnpeelNative/.build/checkouts/Sparkle/LICENSE|389a4e4e9a32f059775b13a06e25a591445ba229d2838d26dd3e7c0c45127cfe
+ed25519-sparkle bundled by Sparkle 2.9.5|UnpeelNative/.build/checkouts/Sparkle/Vendor/ed25519-sparkle/license.txt|f68d76b9c1c2271422e55134ea94cf71f2ac3fc3ed6a7ec6b83a1a0538753214
+MSDisplayLink 2.1.0|UnpeelNative/.build/checkouts/MSDisplayLink/LICENSE|5dffb6c45faaa71f6c393255b135145cc17f0b07e968a705ef58f9c68aeb112d
