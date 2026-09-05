@@ -29,16 +29,17 @@ concurrency:
 
 jobs:
   macos-clients:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
-      - name: Select Xcode 26.2
-        # The app needs the macOS 26 SDK (Liquid Glass styles) and Swift 6.2, so
-        # the image default (16.4) cannot build it, and the newest installed
-        # Xcode (26.3) crashed ibtoold/actool on this image. Pin a stable 26.x.
+      - name: Show the image's default Xcode
+        # The app needs the macOS 26 SDK (Liquid Glass styles) and Swift 6.2.
+        # Every Xcode 26.x on the macos-15 image crashes ibtoold/actool with
+        # missing-symbol dyld errors (a macOS 26 toolchain on a macOS 15 host),
+        # so the job runs on the macOS 26 image with its default Xcode.
         run: |
-          sudo xcode-select -s /Applications/Xcode_26.2.app
+          ls -d /Applications/Xcode_*.app | sort -V
           xcodebuild -version
       - name: Install declared Rust MSRV
         uses: dtolnay/rust-toolchain@1.88.0
