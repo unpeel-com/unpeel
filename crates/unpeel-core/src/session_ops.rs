@@ -2469,8 +2469,10 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let dir = std::env::temp_dir()
-            .join(format!("unpeel-folder-color-{}-{nonce}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "unpeel-folder-color-{}-{nonce}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("app-state.json");
         std::fs::write(&path, r#"{"projects":[],"presets":[]}"#).unwrap();
@@ -2479,8 +2481,14 @@ mod tests {
         super::set_project_folder_color_at(&path, "p2", Some("moss")).unwrap();
         let state: crate::state::AppState =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        assert_eq!(state.project_colors.get("p1").map(String::as_str), Some("sky"));
-        assert_eq!(state.project_colors.get("p2").map(String::as_str), Some("moss"));
+        assert_eq!(
+            state.project_colors.get("p1").map(String::as_str),
+            Some("sky")
+        );
+        assert_eq!(
+            state.project_colors.get("p2").map(String::as_str),
+            Some("moss")
+        );
         // Unmodelled keys survive the edit.
         assert!(state.presets.is_empty());
 
