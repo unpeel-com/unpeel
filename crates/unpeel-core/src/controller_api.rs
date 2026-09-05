@@ -1253,7 +1253,7 @@ fn bootstrap_body(context: &HostBootstrapContext) -> Value {
             }
         }
         // Additive, data-only isolation + environment advertisement
-        // (unpeel-apple:docs/plans/computer-use-release.md, Lane D / decisions D2, D5).
+        // (the private "computer-use-release" design record, Lane D / decisions D2, D5).
         // A Controller treats a missing value as unknown; 0.5.0 makes no
         // policy decision on either. Router-owned so both Host kinds publish
         // the same shape.

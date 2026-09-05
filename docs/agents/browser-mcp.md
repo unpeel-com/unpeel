@@ -4,7 +4,7 @@
 
 Unpeel ships a second first-party MCP server that gives an agent session a real
 browser. Design rationale and verified engine findings:
-`unpeel-apple:docs/feature/browser-mcp-deep-check.md` (private design records) (the engine has **no MCP mode of its
+the private "browser-mcp-deep-check" design record (the engine has **no MCP mode of its
 own** — Unpeel authors the server and owns the tool schema).
 
 > **Security scope:** the separate browser profile isolates browsing data from
@@ -219,7 +219,7 @@ own** — Unpeel authors the server and owns the tool schema).
   (`shasum -a 256` of the GitHub assets; they must equal the npm `bin/`
   files), bump `AGENT_BROWSER_EXPECTED_VERSION` + hashes in `build-app.sh`
   while bundling remains, run `cargo test -p unpeel-core browser_engine`,
-  then `unpeel-apple:apps/native/verify-browser.sh` against a blank home.
+  then `apps/native/verify-browser.sh` against a blank home.
 - Shared-project **logins** persist in the project profile in 0.34.0 (the live
   smoke proves a cookie survives a full browser restart). Unpeel also keeps
   the engine's encrypted state save/restore enabled as a recovery layer

@@ -1,5 +1,5 @@
 //! Real-process proof for the loopback workspace gateway
-//! (unpeel-apple:docs/plans/workspaces-unification.md phase 2): the Controller-side
+//! (the private "workspaces-unification" design record phase 2): the Controller-side
 //! `LocalProcessConnection` spawns this build's `unpeel-host __remote_stdio__`
 //! directly against a workspace home and drives the same semantic
 //! `RemoteSessionBackend` as SSH — including a home that does not exist yet.

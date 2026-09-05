@@ -6,7 +6,7 @@
 //! to `~/.unpeel/app-sessions/<id>/{manifest.json,output.bin,session.sock}`
 //! and does not need the app window to be open.
 //!
-//! Security model (see `unpeel-apple:docs/feature/remote-control-server.md`):
+//! Security model (see the private "remote-control-server" design record):
 //! - TLS always on: self-signed cert generated into `~/.unpeel/remote/tls/`,
 //!   its SHA-256 fingerprint is surfaced so clients can pin it.
 //! - Bearer token (regenerated per server start, constant-time compared)

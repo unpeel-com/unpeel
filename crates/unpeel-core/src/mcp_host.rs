@@ -1616,7 +1616,7 @@ fn effective_group_id(
 }
 
 /// The only message channel today: terminal-to-terminal. Future channels
-/// (Slack↔terminal — see unpeel-apple:docs/feature/sessions-mcp-channels.md) add their ids
+/// (Slack↔terminal — see the private "sessions-mcp-channels" design record) add their ids
 /// alongside this one.
 pub(crate) const MESSAGE_CHANNEL_TERMINAL: &str = "terminal";
 
@@ -3982,7 +3982,7 @@ fn write_to_session(session_id: &str, data: &str) -> Result<(), String> {
 /// target session's terminal (the proven bracketed-paste + settle + double
 /// Enter recipe). Terminal-to-terminal is today's only message channel; when
 /// other channels exist (Slack↔terminal — see
-/// `unpeel-apple:docs/feature/sessions-mcp-channels.md`), routing on the message's channel
+/// the private "sessions-mcp-channels" design record), routing on the message's channel
 /// happens above this function, and the sender/channel envelope is prepended
 /// to `sanitized` before it reaches the paste. Callers pass already-sanitized
 /// text (`sanitize_paste_text`) and must have passed the write gate.

@@ -1,6 +1,6 @@
 //! Direct-path punch engine — increment 2 of
-//! `unpeel-apple:docs/plans/relay-direct-upgrade.md`. Implements the probe datagram
-//! frozen in `unpeel-apple:docs/feature/direct-path-v1.md`: HKDF-keyed 54-byte probes,
+//! the private "relay-direct-upgrade" design record. Implements the probe datagram
+//! frozen in the private "direct-path-v1" design record: HKDF-keyed 54-byte probes,
 //! response = echo with direction flipped (amplification 1.0), silent
 //! rejection, and the punch state machine that turns candidate pairs into
 //! one validated 4-tuple. Also the minimal STUN binding query and local

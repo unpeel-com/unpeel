@@ -1,0 +1,1391 @@
+diff --git a/build.zig b/build.zig
+index 8ef7701e2..4369df4a0 100644
+--- a/build.zig
++++ b/build.zig
+@@ -189,18 +189,14 @@ pub fn build(b: *std.Build) !void {
+         const lib_shared = try buildpkg.GhosttyLib.initShared(b, &deps);
+         const lib_static = try buildpkg.GhosttyLib.initStatic(b, &deps);
+ 
+-        // We shouldn't have this guard but we don't currently
+-        // build on macOS this way ironically so we need to fix that.
++        // libghostty static install for Darwin:
++        // upstream only wires this for non-Darwin today, but we need the
++        // static archive for our own XCFramework assembly pipeline.
++        lib_shared.installHeader(); // Only need one header
+         if (!config.target.result.os.tag.isDarwin()) {
+-            lib_shared.installHeader(); // Only need one header
+-            if (config.target.result.os.tag == .windows) {
+-                lib_shared.install("ghostty-internal.dll");
+-                lib_static.install("ghostty-internal-static.lib");
+-            } else {
+-                lib_shared.install("ghostty-internal.so");
+-                lib_static.install("ghostty-internal.a");
+-            }
++            lib_shared.install("libghostty.so");
+         }
++        lib_static.install("libghostty.a");
+     }
+ 
+     // macOS only artifacts. These will error if they're initialized for
+diff --git a/build.zig.zon b/build.zig.zon
+index 7925f0d5d..8e360abf0 100644
+--- a/build.zig.zon
++++ b/build.zig.zon
+@@ -9,8 +9,8 @@
+ 
+         .libxev = .{
+             // mitchellh/libxev
+-            .url = "https://deps.files.ghostty.org/libxev-34fa50878aec6e5fa8f532867001ab3c36fae23e.tar.gz",
+-            .hash = "libxev-0.0.0-86vtc4IcEwCqEYxEYoN_3KXmc6A9VLcm22aVImfvecYs",
++            .url = "https://github.com/mitchellh/libxev/archive/7e7d2f2ab4700544657f8ec268715c8ef320d839.tar.gz",
++            .hash = "libxev-0.0.0-86vtcwE9EwB942iWRnaNMXHv3n0BeLAs_tVhrs5cT8cQ",
+             .lazy = true,
+         },
+         .vaxis = .{
+diff --git a/include/ghostty.h b/include/ghostty.h
+index 72bbb57a8..d9e399220 100644
+--- a/include/ghostty.h
++++ b/include/ghostty.h
+@@ -464,10 +464,26 @@ typedef enum {
+   GHOSTTY_SURFACE_CONTEXT_SPLIT = 2,
+ } ghostty_surface_context_e;
+ 
++typedef enum {
++  GHOSTTY_SURFACE_IO_BACKEND_EXEC = 0,
++  GHOSTTY_SURFACE_IO_BACKEND_HOST_MANAGED = 1,
++} ghostty_surface_io_backend_e;
++
++typedef void (*ghostty_surface_receive_buffer_cb)(void*, const uint8_t*, size_t);
++typedef void (*ghostty_surface_receive_resize_cb)(void*,
++                                               uint16_t,
++                                               uint16_t,
++                                               uint32_t,
++                                               uint32_t);
++
+ typedef struct {
+   ghostty_platform_e platform_tag;
+   ghostty_platform_u platform;
+   void* userdata;
++  ghostty_surface_io_backend_e backend;
++  void* receive_userdata;
++  ghostty_surface_receive_buffer_cb receive_buffer;
++  ghostty_surface_receive_resize_cb receive_resize;
+   double scale_factor;
+   float font_size;
+   const char* working_directory;
+@@ -1109,6 +1125,8 @@ GHOSTTY_API ghostty_surface_config_s ghostty_surface_inherited_config(ghostty_su
+ GHOSTTY_API void ghostty_surface_update_config(ghostty_surface_t, ghostty_config_t);
+ GHOSTTY_API bool ghostty_surface_needs_confirm_quit(ghostty_surface_t);
+ GHOSTTY_API bool ghostty_surface_process_exited(ghostty_surface_t);
++GHOSTTY_API void ghostty_surface_write_buffer(ghostty_surface_t, const uint8_t*, uintptr_t);
++GHOSTTY_API void ghostty_surface_process_exit(ghostty_surface_t, uint32_t, uint64_t);
+ GHOSTTY_API void ghostty_surface_refresh(ghostty_surface_t);
+ GHOSTTY_API void ghostty_surface_draw(ghostty_surface_t);
+ GHOSTTY_API void ghostty_surface_set_content_scale(ghostty_surface_t, double, double);
+diff --git a/pkg/macos/build.zig b/pkg/macos/build.zig
+index 0525e481e..bf427b1d7 100644
+--- a/pkg/macos/build.zig
++++ b/pkg/macos/build.zig
+@@ -34,6 +34,8 @@ pub fn build(b: *std.Build) !void {
+     lib.linkFramework("CoreVideo");
+     lib.linkFramework("QuartzCore");
+     lib.linkFramework("IOSurface");
++    lib.linkFramework("Metal");
++    lib.linkFramework("MetalKit");
+     if (target.result.os.tag == .macos) {
+         lib.linkFramework("Carbon");
+         module.linkFramework("Carbon", .{});
+@@ -46,6 +48,8 @@ pub fn build(b: *std.Build) !void {
+         module.linkFramework("CoreVideo", .{});
+         module.linkFramework("QuartzCore", .{});
+         module.linkFramework("IOSurface", .{});
++        module.linkFramework("Metal", .{});
++        module.linkFramework("MetalKit", .{});
+ 
+         try apple_sdk.addPaths(b, lib);
+     }
+diff --git a/pkg/macos/iosurface/iosurface.zig b/pkg/macos/iosurface/iosurface.zig
+index 37f8712ba..380d36064 100644
+--- a/pkg/macos/iosurface/iosurface.zig
++++ b/pkg/macos/iosurface/iosurface.zig
+@@ -20,6 +20,10 @@ pub const IOSurface = opaque {
+     };
+ 
+     pub fn init(properties: Properties) Allocator.Error!*IOSurface {
++        // Ensure row stride is 64-byte aligned for Metal texture compatibility.
++        const aligned_stride: c_int = @intCast(
++            (properties.width * properties.bytes_per_element + 63) & ~@as(c_int, 63),
++        );
+         var w = try foundation.Number.create(.int, &properties.width);
+         defer w.release();
+         var h = try foundation.Number.create(.int, &properties.height);
+@@ -29,14 +33,18 @@ pub const IOSurface = opaque {
+         var bpe = try foundation.Number.create(.int, &properties.bytes_per_element);
+         defer bpe.release();
+ 
++        var stride_num = try foundation.Number.create(.int, &aligned_stride);
++        defer stride_num.release();
++
+         var properties_dict = try foundation.Dictionary.create(
+             &[_]?*const anyopaque{
+                 c.kIOSurfaceWidth,
+                 c.kIOSurfaceHeight,
+                 c.kIOSurfacePixelFormat,
+                 c.kIOSurfaceBytesPerElement,
++                c.kIOSurfaceBytesPerRow,
+             },
+-            &[_]?*const anyopaque{ w, h, pf, bpe },
++            &[_]?*const anyopaque{ w, h, pf, bpe, stride_num },
+         );
+         defer properties_dict.release();
+ 
+@@ -84,14 +92,14 @@ pub const IOSurface = opaque {
+     }
+ 
+     pub inline fn lock(self: *IOSurface) void {
+-        c.IOSurfaceLock(
++        _ = c.IOSurfaceLock(
+             @ptrCast(self),
+             0,
+             null,
+         );
+     }
+     pub inline fn unlock(self: *IOSurface) void {
+-        c.IOSurfaceUnlock(
++        _ = c.IOSurfaceUnlock(
+             @ptrCast(self),
+             0,
+             null,
+diff --git a/src/Surface.zig b/src/Surface.zig
+index c56c9791c..4a97bff94 100644
+--- a/src/Surface.zig
++++ b/src/Surface.zig
+@@ -628,38 +628,50 @@ pub fn init(
+     // This separate block ({}) is important because our errdefers must
+     // be scoped here to be valid.
+     {
+-        var env = rt_surface.defaultTermioEnv() catch |err| env: {
+-            // If an error occurs, we don't want to block surface startup.
+-            log.warn("error getting env map for surface err={}", .{err});
+-            break :env internal_os.getEnvMap(alloc) catch
+-                std.process.EnvMap.init(alloc);
+-        };
+-        errdefer env.deinit();
++        const backend: termio.Backend = switch (rt_surface.termioBackend()) {
++            .exec => backend: {
++                var env = rt_surface.defaultTermioEnv() catch |err| env: {
++                    // If an error occurs, we don't want to block surface startup.
++                    log.warn("error getting env map for surface err={}", .{err});
++                    break :env internal_os.getEnvMap(alloc) catch
++                        std.process.EnvMap.init(alloc);
++                };
++                errdefer env.deinit();
+ 
+-        // don't leak GHOSTTY_LOG to any subprocesses
+-        env.remove("GHOSTTY_LOG");
++                // don't leak GHOSTTY_LOG to any subprocesses
++                env.remove("GHOSTTY_LOG");
+ 
+-        var buf: [18]u8 = undefined;
+-        try env.put(
+-            "GHOSTTY_SURFACE_ID",
+-            std.fmt.bufPrint(&buf, "0x{x:0>16}", .{self.id}) catch unreachable,
+-        );
++                var buf: [18]u8 = undefined;
++                try env.put(
++                    "GHOSTTY_SURFACE_ID",
++                    std.fmt.bufPrint(&buf, "0x{x:0>16}", .{self.id}) catch unreachable,
++                );
+ 
+-        // Initialize our IO backend
+-        var io_exec = try termio.Exec.init(alloc, .{
+-            .command = command,
+-            .env = env,
+-            .env_override = config.env,
+-            .shell_integration = config.@"shell-integration",
+-            .shell_integration_features = config.@"shell-integration-features",
+-            .cursor_blink = config.@"cursor-style-blink",
+-            .working_directory = if (config.@"working-directory") |wd| wd.value() else null,
+-            .resources_dir = global_state.resources_dir.host(),
+-            .term = config.term,
+-            .rt_pre_exec_info = .init(config),
+-            .rt_post_fork_info = .init(config),
+-        });
+-        errdefer io_exec.deinit();
++                // Initialize our IO backend
++                var io_exec = try termio.Exec.init(alloc, .{
++                    .command = command,
++                    .env = env,
++                    .env_override = config.env,
++                    .shell_integration = config.@"shell-integration",
++                    .shell_integration_features = config.@"shell-integration-features",
++                    .cursor_blink = config.@"cursor-style-blink",
++                    .working_directory = if (config.@"working-directory") |wd| wd.value() else null,
++                    .resources_dir = global_state.resources_dir.host(),
++                    .term = config.term,
++                    .rt_pre_exec_info = .init(config),
++                    .rt_post_fork_info = .init(config),
++                });
++                errdefer io_exec.deinit();
++
++                break :backend .{ .exec = io_exec };
++            },
++
++            .host_managed => .{
++                .host_managed = termio.HostManaged.init(
++                    try rt_surface.hostManagedConfig(),
++                ),
++            },
++        };
+ 
+         // Initialize our IO mailbox
+         var io_mailbox = try termio.Mailbox.initSPSC(alloc);
+@@ -669,7 +681,7 @@ pub fn init(
+             .size = size,
+             .full_config = config,
+             .config = try termio.Termio.DerivedConfig.init(alloc, config),
+-            .backend = .{ .exec = io_exec },
++            .backend = backend,
+             .mailbox = io_mailbox,
+             .renderer_state = &self.renderer_state,
+             .renderer_wakeup = render_thread.wakeup,
+@@ -1311,9 +1323,11 @@ fn childExitedAbnormally(
+     const alloc = arena.allocator();
+ 
+     // Build up our command for the error message
+-    const command = try std.mem.join(alloc, " ", switch (self.io.backend) {
+-        .exec => |*exec| exec.subprocess.args,
+-    });
++    const command = switch (self.io.backend) {
++        .exec => |*exec| try std.mem.join(alloc, " ", exec.subprocess.args),
++        .host_managed => try alloc.dupe(u8, "host-managed session"),
++    };
++    defer alloc.free(command);
+     const runtime_str = try std.fmt.allocPrint(alloc, "{d} ms", .{info.runtime_ms});
+ 
+     self.renderer_state.mutex.lock();
+diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
+index 7310159cc..5edc97e9b 100644
+--- a/src/apprt/embedded.zig
++++ b/src/apprt/embedded.zig
+@@ -15,8 +15,9 @@ const input = @import("../input.zig");
+ const internal_os = @import("../os/main.zig");
+ const renderer = @import("../renderer.zig");
+ const terminal = @import("../terminal/main.zig");
++const termio = @import("../termio.zig");
+ const CoreApp = @import("../App.zig");
+-const CoreInspector = @import("../inspector/main.zig").Inspector;
++const CoreInspector = if (@import("../build_config.zig").inspector) @import("../inspector/main.zig").Inspector else struct {};
+ const CoreSurface = @import("../Surface.zig");
+ const configpkg = @import("../config.zig");
+ const Config = configpkg.Config;
+@@ -411,6 +412,8 @@ pub const Surface = struct {
+     app: *App,
+     platform: Platform,
+     userdata: ?*anyopaque = null,
++    termio_backend: TermioBackend = .exec,
++    host_io: HostIO = .{},
+     core_surface: CoreSurface,
+     content_scale: apprt.ContentScale,
+     size: apprt.SurfaceSize,
+@@ -421,6 +424,17 @@ pub const Surface = struct {
+     /// that getTitle works without the implementer needing to save it.
+     title: ?[:0]const u8 = null,
+ 
++    pub const TermioBackend = enum(c_int) {
++        exec = 0,
++        host_managed = 1,
++    };
++
++    pub const HostIO = struct {
++        userdata: ?*anyopaque = null,
++        receive_buffer: ?termio.HostManaged.Config.Write = null,
++        receive_resize: ?termio.HostManaged.Config.Resize = null,
++    };
++
+     /// Surface initialization options.
+     pub const Options = extern struct {
+         /// The platform that this surface is being initialized for and
+@@ -431,6 +445,20 @@ pub const Surface = struct {
+         /// Userdata passed to some of the callbacks.
+         userdata: ?*anyopaque = null,
+ 
++        /// The backend used to satisfy terminal IO for this surface.
++        backend: TermioBackend = .exec,
++
++        /// Userdata passed to host-managed IO callbacks.
++        receive_userdata: ?*anyopaque = null,
++
++        /// Called when Ghostty emits bytes that should be sent to the host
++        /// transport.
++        receive_buffer: ?termio.HostManaged.Config.Write = null,
++
++        /// Called when the terminal size changes and the host transport
++        /// should be updated.
++        receive_resize: ?termio.HostManaged.Config.Resize = null,
++
+         /// The scale factor of the screen.
+         scale_factor: f64 = 1,
+ 
+@@ -469,6 +497,12 @@ pub const Surface = struct {
+             .app = app,
+             .platform = try .init(opts.platform_tag, opts.platform),
+             .userdata = opts.userdata,
++            .termio_backend = opts.backend,
++            .host_io = .{
++                .userdata = opts.receive_userdata orelse opts.userdata,
++                .receive_buffer = opts.receive_buffer,
++                .receive_resize = opts.receive_resize,
++            },
+             .core_surface = undefined,
+             .content_scale = .{
+                 .x = @floatCast(opts.scale_factor),
+@@ -612,6 +646,7 @@ pub const Surface = struct {
+     /// inspector at any given time, so this will return the previous inspector
+     /// if it was already initialized.
+     pub fn initInspector(self: *Surface) !*Inspector {
++        if (comptime !@import("../build_config.zig").inspector) return error.InspectorUnavailable;
+         if (self.inspector) |v| return v;
+ 
+         const alloc = self.app.core_app.alloc;
+@@ -623,6 +658,7 @@ pub const Surface = struct {
+     }
+ 
+     pub fn freeInspector(self: *Surface) void {
++        if (comptime !@import("../build_config.zig").inspector) return;
+         if (self.inspector) |v| {
+             v.deinit();
+             self.app.core_app.alloc.destroy(v);
+@@ -634,6 +670,19 @@ pub const Surface = struct {
+         return &self.core_surface;
+     }
+ 
++    pub fn termioBackend(self: *const Surface) TermioBackend {
++        return self.termio_backend;
++    }
++
++    pub fn hostManagedConfig(self: *const Surface) !termio.HostManaged.Config {
++        const write = self.host_io.receive_buffer orelse return error.HostManagedWriteRequired;
++        return .{
++            .userdata = self.host_io.userdata,
++            .write = write,
++            .resize = self.host_io.receive_resize,
++        };
++    }
++
+     pub fn rtApp(self: *const Surface) *App {
+         return self.app;
+     }
+@@ -991,7 +1040,7 @@ pub const Surface = struct {
+ 
+ /// Inspector is the state required for the terminal inspector. A terminal
+ /// inspector is 1:1 with a Surface.
+-pub const Inspector = struct {
++pub const Inspector = if (@import("../build_config.zig").inspector) struct {
+     const cimgui = @import("dcimgui");
+ 
+     surface: *Surface,
+@@ -1238,6 +1287,10 @@ pub const Inspector = struct {
+         } else (1.0 / 60.0);
+         self.instant = now;
+     }
++} else struct {
++    surface: *Surface = undefined,
++    pub fn init(_: *Surface) !@This() { return .{}; }
++    pub fn deinit(_: *@This()) void {}
+ };
+ 
+ // C API
+@@ -1600,6 +1653,28 @@ pub const CAPI = struct {
+         return surface.core_surface.child_exited;
+     }
+ 
++    export fn ghostty_surface_write_buffer(
++        surface: *Surface,
++        ptr: [*]const u8,
++        len: usize,
++    ) void {
++        if (len == 0) return;
++        surface.core_surface.io.processOutput(ptr[0..len]);
++    }
++
++    export fn ghostty_surface_process_exit(
++        surface: *Surface,
++        exit_code: u32,
++        runtime_ms: u64,
++    ) void {
++        _ = surface.core_surface.io.surface_mailbox.push(.{
++            .child_exited = .{
++                .exit_code = exit_code,
++                .runtime_ms = runtime_ms,
++            },
++        }, .{ .forever = {} });
++    }
++
+     /// Returns true if the surface has a selection.
+     export fn ghostty_surface_has_selection(surface: *Surface) bool {
+         return surface.core_surface.hasSelection();
+@@ -2029,10 +2104,12 @@ pub const CAPI = struct {
+     }
+ 
+     export fn ghostty_inspector_set_size(ptr: *Inspector, w: u32, h: u32) void {
++        if (comptime !@import("../build_config.zig").inspector) return;
+         ptr.updateSize(w, h);
+     }
+ 
+     export fn ghostty_inspector_set_content_scale(ptr: *Inspector, x: f64, y: f64) void {
++        if (comptime !@import("../build_config.zig").inspector) return;
+         ptr.updateContentScale(x, y);
+     }
+ 
+@@ -2042,6 +2119,7 @@ pub const CAPI = struct {
+         button: input.MouseButton,
+         mods: c_int,
+     ) void {
++        if (comptime !@import("../build_config.zig").inspector) return;
+         ptr.mouseButtonCallback(
+             action,
+             button,
+@@ -2053,6 +2131,7 @@ pub const CAPI = struct {
+     }
+ 
+     export fn ghostty_inspector_mouse_pos(ptr: *Inspector, x: f64, y: f64) void {
++        if (comptime !@import("../build_config.zig").inspector) return;
+         ptr.cursorPosCallback(x, y);
+     }
+ 
+@@ -2062,6 +2141,7 @@ pub const CAPI = struct {
+         y: f64,
+         scroll_mods: c_int,
+     ) void {
++        if (comptime !@import("../build_config.zig").inspector) return;
+         ptr.scrollCallback(
+             x,
+             y,
+@@ -2075,6 +2155,7 @@ pub const CAPI = struct {
+         key: input.Key,
+         c_mods: c_int,
+     ) void {
++        if (comptime !@import("../build_config.zig").inspector) return;
+         ptr.keyCallback(
+             action,
+             key,
+@@ -2092,10 +2173,12 @@ pub const CAPI = struct {
+         ptr: *Inspector,
+         str: [*:0]const u8,
+     ) void {
++        if (comptime !@import("../build_config.zig").inspector) return;
+         ptr.textCallback(std.mem.sliceTo(str, 0));
+     }
+ 
+     export fn ghostty_inspector_set_focus(ptr: *Inspector, focused: bool) void {
++        if (comptime !@import("../build_config.zig").inspector) return;
+         ptr.focusCallback(focused);
+     }
+ 
+@@ -2109,26 +2192,11 @@ pub const CAPI = struct {
+         app: *App,
+         window: *anyopaque,
+     ) void {
+-        // This is only supported on macOS
+-        if (comptime builtin.target.os.tag != .macos) return;
+-
+-        const config = &app.config;
+-
+-        // Do nothing if we don't have background transparency enabled
+-        if (config.@"background-opacity" >= 1.0) return;
+-
+-        const nswindow = objc.Object.fromId(window);
+-        _ = CGSSetWindowBackgroundBlurRadius(
+-            CGSDefaultConnectionForThread(),
+-            nswindow.msgSend(usize, objc.sel("windowNumber"), .{}),
+-            @intCast(config.@"background-blur".cval()),
+-        );
++        _ = app;
++        _ = window;
++        return;
+     }
+ 
+-    /// See ghostty_set_window_background_blur
+-    extern "c" fn CGSSetWindowBackgroundBlurRadius(*anyopaque, usize, c_int) i32;
+-    extern "c" fn CGSDefaultConnectionForThread() *anyopaque;
+-
+     // Darwin-only C APIs.
+     const Darwin = struct {
+         export fn ghostty_surface_set_display_id(ptr: *Surface, display_id: u32) void {
+@@ -2223,6 +2291,7 @@ pub const CAPI = struct {
+         }
+ 
+         export fn ghostty_inspector_metal_init(ptr: *Inspector, device: objc.c.id) bool {
++            if (comptime !@import("../build_config.zig").inspector) return false;
+             return ptr.initMetal(.fromId(device));
+         }
+ 
+@@ -2231,6 +2300,7 @@ pub const CAPI = struct {
+             command_buffer: objc.c.id,
+             descriptor: objc.c.id,
+         ) void {
++            if (comptime !@import("../build_config.zig").inspector) return;
+             return ptr.renderMetal(
+                 .fromId(command_buffer),
+                 .fromId(descriptor),
+@@ -2241,6 +2311,7 @@ pub const CAPI = struct {
+         }
+ 
+         export fn ghostty_inspector_metal_shutdown(ptr: *Inspector) void {
++            if (comptime !@import("../build_config.zig").inspector) return;
+             if (ptr.backend) |v| {
+                 v.deinit();
+                 ptr.backend = null;
+diff --git a/src/build/Config.zig b/src/build/Config.zig
+index 0a9947317..4ae60567b 100644
+--- a/src/build/Config.zig
++++ b/src/build/Config.zig
+@@ -31,6 +31,8 @@ font_backend: FontBackend = .freetype,
+ x11: bool = false,
+ wayland: bool = false,
+ sentry: bool = true,
++custom_shaders: bool = true, // LIBGHOSTTY_SPM_TRIM_PATCH
++inspector: bool = true, // LIBGHOSTTY_SPM_INSPECTOR_DISABLE
+ simd: bool = true,
+ i18n: bool = true,
+ wasm_shared: bool = true,
+@@ -193,6 +195,18 @@ pub fn init(b: *std.Build, appVersion: []const u8, libVersion: []const u8) !Conf
+         }
+     };
+ 
++    config.custom_shaders = b.option(
++        bool,
++        "custom-shaders",
++        "Build with custom shader (glslang/spirv-cross) support.",
++    ) orelse true;
++
++    config.inspector = b.option(
++        bool,
++        "inspector",
++        "Build with terminal inspector (dcimgui) support.",
++    ) orelse true;
++
+     config.simd = b.option(
+         bool,
+         "simd",
+@@ -531,6 +545,8 @@ pub fn addOptions(self: *const Config, step: *std.Build.Step.Options) !void {
+     step.addOption(bool, "x11", self.x11);
+     step.addOption(bool, "wayland", self.wayland);
+     step.addOption(bool, "sentry", self.sentry);
++    step.addOption(bool, "custom_shaders", self.custom_shaders);
++    step.addOption(bool, "inspector", self.inspector);
+     step.addOption(bool, "simd", self.simd);
+     step.addOption(bool, "i18n", self.i18n);
+     step.addOption(ApprtRuntime, "app_runtime", self.app_runtime);
+@@ -644,7 +660,7 @@ pub fn osVersionMin(tag: std.Target.Os.Tag) ?std.Target.Query.OsVersion {
+ 
+         // iOS 17 picked arbitrarily
+         .ios => .{ .semver = .{
+-            .major = 17,
++            .major = 15,
+             .minor = 0,
+             .patch = 0,
+         } },
+diff --git a/src/build/GhosttyFrameData.zig b/src/build/GhosttyFrameData.zig
+index 8469759f9..2b3965ddd 100644
+--- a/src/build/GhosttyFrameData.zig
++++ b/src/build/GhosttyFrameData.zig
+@@ -13,7 +13,7 @@ pub fn init(b: *std.Build) !GhosttyFrameData {
+ 
+     // Generate the Zig source file that embeds the compressed data
+     const wf = b.addWriteFiles();
+-    _ = wf.addCopyFile(dist.framedata.path(b), "framedata.compressed");
++    _ = wf.addCopyFile(dist.framedata.generated, "framedata.compressed");
+     const zig_file = wf.add("framedata.zig",
+         \\//! This file is auto-generated. Do not edit.
+         \\
+@@ -36,40 +36,10 @@ pub fn addImport(self: *const GhosttyFrameData, step: *std.Build.Step.Compile) v
+ pub fn distResources(b: *std.Build) struct {
+     framedata: DistResource,
+ } {
+-    const exe = b.addExecutable(.{
+-        .name = "framegen",
+-        .root_module = b.createModule(.{
+-            .target = b.graph.host,
+-        }),
+-    });
+-    exe.addCSourceFile(.{
+-        .file = b.path("src/build/framegen/main.c"),
+-        .flags = &.{},
+-    });
+-    exe.linkLibC();
+-
+-    if (b.systemIntegrationOption("zlib", .{})) {
+-        exe.linkSystemLibrary2("zlib", .{
+-            .preferred_link_mode = .dynamic,
+-            .search_strategy = .mode_first,
+-        });
+-    } else {
+-        if (b.lazyDependency("zlib", .{
+-            .target = b.graph.host,
+-            .optimize = .ReleaseFast,
+-        })) |zlib_dep| {
+-            exe.linkLibrary(zlib_dep.artifact("z"));
+-        }
+-    }
+-
+-    const run = b.addRunArtifact(exe);
+-    run.addDirectoryArg(b.path("src/build/framegen/frames"));
+-    const compressed_file = run.addOutputFileArg("framedata.compressed");
+-
+     return .{
+         .framedata = .{
+             .dist = "src/build/framegen/framedata.compressed",
+-            .generated = compressed_file,
++            .generated = b.path("src/build/framegen/framedata.compressed"),
+         },
+     };
+ }
+diff --git a/src/build/SharedDeps.zig b/src/build/SharedDeps.zig
+index b68be92d0..1e816b582 100644
+--- a/src/build/SharedDeps.zig
++++ b/src/build/SharedDeps.zig
+@@ -305,8 +305,8 @@ pub fn add(
+         }
+     }
+ 
+-    // Glslang
+-    if (b.lazyDependency("glslang", .{
++    // Glslang — only needed for custom shaders
++    if (self.config.custom_shaders) if (b.lazyDependency("glslang", .{
+         .target = target,
+         .optimize = optimize,
+     })) |glslang_dep| {
+@@ -324,10 +324,10 @@ pub fn add(
+                 glslang_dep.artifact("glslang").getEmittedBin(),
+             );
+         }
+-    }
++    };
+ 
+-    // Spirv-cross
+-    if (b.lazyDependency("spirv_cross", .{
++    // Spirv-cross — only needed for custom shaders
++    if (self.config.custom_shaders) if (b.lazyDependency("spirv_cross", .{
+         .target = target,
+         .optimize = optimize,
+     })) |spirv_cross_dep| {
+@@ -344,7 +344,7 @@ pub fn add(
+                 spirv_cross_dep.artifact("spirv_cross").getEmittedBin(),
+             );
+         }
+-    }
++    };
+ 
+     // Sentry
+     if (self.config.sentry) {
+@@ -531,8 +531,8 @@ pub fn add(
+         }
+     }
+ 
+-    // cimgui
+-    if (b.lazyDependency("dcimgui", .{
++    // cimgui — only needed for inspector
++    if (self.config.inspector) if (b.lazyDependency("dcimgui", .{
+         .target = target,
+         .optimize = optimize,
+         .freetype = true,
+@@ -548,7 +548,7 @@ pub fn add(
+             b.allocator,
+             dep.artifact("dcimgui").getEmittedBin(),
+         );
+-    }
++    };
+ 
+     // Fonts
+     {
+diff --git a/src/build_config.zig b/src/build_config.zig
+index c19f7372b..9db41ad66 100644
+--- a/src/build_config.zig
++++ b/src/build_config.zig
+@@ -5,6 +5,8 @@
+ const std = @import("std");
+ const builtin = @import("builtin");
+ const options = @import("build_options");
++pub const custom_shaders = options.custom_shaders;
++pub const inspector = options.inspector;
+ const assert = std.debug.assert;
+ const apprt = @import("apprt.zig");
+ const font = @import("font/main.zig");
+diff --git a/src/font/shaper/coretext.zig b/src/font/shaper/coretext.zig
+index 3f69af6d2..3ad002f6d 100644
+--- a/src/font/shaper/coretext.zig
++++ b/src/font/shaper/coretext.zig
+@@ -75,8 +75,8 @@ pub const Shaper = struct {
+     /// Dedicated thread for releasing CoreFoundation objects. Some objects,
+     /// such as those produced by CoreText, have excessively slow release
+     /// callback logic.
+-    cf_release_thread: *CFReleaseThread,
+-    cf_release_thr: std.Thread,
++    cf_release_thread: ?*CFReleaseThread,
++    cf_release_thr: ?std.Thread,
+ 
+     const CellBuf = std.ArrayListUnmanaged(font.shape.Cell);
+     const CodepointList = std.ArrayListUnmanaged(Codepoint);
+@@ -201,19 +201,21 @@ pub const Shaper = struct {
+         };
+         errdefer typesetter_attr_dict.release();
+ 
+-        // Create the CF release thread.
+-        var cf_release_thread = try alloc.create(CFReleaseThread);
+-        errdefer alloc.destroy(cf_release_thread);
+-        cf_release_thread.* = try .init(alloc);
+-        errdefer cf_release_thread.deinit();
+-
+-        // Start the CF release thread.
+-        var cf_release_thr = try std.Thread.spawn(
+-            .{},
+-            CFReleaseThread.threadMain,
+-            .{cf_release_thread},
+-        );
+-        cf_release_thr.setName("cf_release") catch {};
++        // On iOS the kqueue-based event loop used by the release thread
++        // crashes due to Mach port sandbox restrictions. Skip it entirely
++        // and fall through to synchronous release in endFrame.
++        var cf_release_thread: ?*CFReleaseThread = null;
++        var cf_release_thr: ?std.Thread = null;
++        if (comptime builtin.os.tag != .ios) {
++            const thr_obj = try alloc.create(CFReleaseThread);
++            errdefer alloc.destroy(thr_obj);
++            thr_obj.* = try .init(alloc);
++            errdefer thr_obj.deinit();
++            const thr = try std.Thread.spawn(.{}, CFReleaseThread.threadMain, .{thr_obj});
++            thr.setName("cf_release") catch {};
++            cf_release_thread = thr_obj;
++            cf_release_thr = thr;
++        }
+ 
+         return .{
+             .alloc = alloc,
+@@ -257,14 +259,14 @@ pub const Shaper = struct {
+         }
+         self.cf_release_pool.deinit(self.alloc);
+ 
+-        // Stop the CF release thread
+-        {
+-            self.cf_release_thread.stop.notify() catch |err|
++        // Stop the CF release thread (nil on iOS)
++        if (self.cf_release_thread) |thr_obj| {
++            thr_obj.stop.notify() catch |err|
+                 log.err("error notifying cf release thread to stop, may stall err={}", .{err});
+-            self.cf_release_thr.join();
++            self.cf_release_thr.?.join();
++            thr_obj.deinit();
++            self.alloc.destroy(thr_obj);
+         }
+-        self.cf_release_thread.deinit();
+-        self.alloc.destroy(self.cf_release_thread);
+     }
+ 
+     pub fn endFrame(self: *Shaper) void {
+@@ -279,20 +281,21 @@ pub const Shaper = struct {
+             return;
+         };
+ 
+-        // Send the items. If the send succeeds then we wake up the
+-        // thread to process the items. If the send fails then do a manual
+-        // cleanup.
+-        if (self.cf_release_thread.mailbox.push(.{ .release = .{
+-            .refs = items,
+-            .alloc = self.alloc,
+-        } }, .{ .forever = {} }) != 0) {
+-            self.cf_release_thread.wakeup.notify() catch |err| {
+-                log.warn(
+-                    "error notifying cf release thread to wake up, may stall err={}",
+-                    .{err},
+-                );
+-            };
+-            return;
++        // Offload to the background release thread when available.
++        // On iOS cf_release_thread is nil, so we fall through to sync release.
++        if (self.cf_release_thread) |thr_obj| {
++            if (thr_obj.mailbox.push(.{ .release = .{
++                .refs = items,
++                .alloc = self.alloc,
++            } }, .{ .forever = {} }) != 0) {
++                thr_obj.wakeup.notify() catch |err| {
++                    log.warn(
++                        "error notifying cf release thread to wake up, may stall err={}",
++                        .{err},
++                    );
++                };
++                return;
++            }
+         }
+ 
+         for (items) |ref| macos.foundation.CFRelease(ref);
+diff --git a/src/global.zig b/src/global.zig
+index 29eaf5f36..919c15398 100644
+--- a/src/global.zig
++++ b/src/global.zig
+@@ -4,7 +4,9 @@ const build_config = @import("build_config.zig");
+ const cli = @import("cli.zig");
+ const internal_os = @import("os/main.zig");
+ const fontconfig = @import("fontconfig");
+-const glslang = @import("glslang");
++const glslang = if (build_config.custom_shaders) @import("glslang") else struct {
++    pub fn init() !void {}
++};
+ const harfbuzz = @import("harfbuzz");
+ const oni = @import("oniguruma");
+ const crash = @import("crash/main.zig");
+diff --git a/src/input/key.zig b/src/input/key.zig
+index 9c04f01e0..d43b8615b 100644
+--- a/src/input/key.zig
++++ b/src/input/key.zig
+@@ -1,7 +1,8 @@
+ const std = @import("std");
+ const builtin = @import("builtin");
+ const Allocator = std.mem.Allocator;
+-const cimgui = @import("dcimgui");
++const _build_config = @import("../build_config.zig");
++const cimgui = if (_build_config.inspector) @import("dcimgui") else struct {};
+ 
+ pub const Mods = @import("key_mods.zig").Mods;
+ 
+@@ -543,6 +544,7 @@ pub const Key = enum(c_int) {
+ 
+     /// Returns the cimgui key constant for this key.
+     pub fn imguiKey(self: Key) ?c_int {
++            if (comptime !_build_config.inspector) return null;
+         return switch (self) {
+             .key_a => cimgui.c.ImGuiKey_A,
+             .key_b => cimgui.c.ImGuiKey_B,
+diff --git a/src/inspector/main.zig b/src/inspector/main.zig
+index ae185f479..5a1962023 100644
+--- a/src/inspector/main.zig
++++ b/src/inspector/main.zig
+@@ -1,8 +1,84 @@
+-pub const widgets = @import("widgets.zig");
+-pub const Inspector = @import("Inspector.zig");
++const build_config = @import("../build_config.zig");
++const std = @import("std");
++const terminal = @import("../terminal/main.zig");
++const input = @import("../input.zig");
++const renderer = @import("../renderer.zig");
+ 
++pub const widgets = if (build_config.inspector) @import("widgets.zig") else struct {
++    pub const key = struct {
++        pub const Event = StubKeyEvent;
++    };
++    pub const renderer = struct {
++        pub const Info = StubRendererInfo;
++    };
++    pub const surface = struct {
++        pub const Mouse = StubMouse;
++    };
++};
++
++pub const Inspector = if (build_config.inspector) @import("Inspector.zig") else StubInspector;
+ pub const KeyEvent = widgets.key.Event;
+ 
++/// Stub types — these satisfy all downstream method/field accesses
++/// when inspector is disabled, so no other files need patching.
++
++const StubMouse = struct {
++    last_xpos: f64 = 0,
++    last_ypos: f64 = 0,
++    last_point: ?terminal.Pin = null,
++};
++
++const StubRendererInfo = struct {
++    pub const empty: @This() = .{};
++
++    pub fn deinit(_: *@This(), _: std.mem.Allocator) void {}
++
++    pub fn overlayFeatures(
++        _: *const @This(),
++        _: std.mem.Allocator,
++    ) std.mem.Allocator.Error![]renderer.Overlay.Feature {
++        return &.{};
++    }
++};
++
++const StubKeyEvent = struct {
++    event: input.KeyEvent = undefined,
++    binding: []const input.Binding.Action = &.{},
++    pty: []const u8 = "",
++
++    pub fn deinit(_: *const @This(), _: std.mem.Allocator) void {}
++};
++
++const StubInspector = struct {
++    mouse: StubMouse = .{},
++
++    pub fn setup() void {}
++    pub fn init(_: std.mem.Allocator) !@This() { return .{}; }
++    pub fn deinit(_: *@This(), _: std.mem.Allocator) void {}
++    pub fn render(_: *@This(), _: anytype) void {}
++
++    pub fn rendererInfo(_: *@This()) *StubRendererInfo {
++        return &stub_renderer_info;
++    }
++
++    pub fn recordKeyEvent(
++        _: *@This(),
++        _: std.mem.Allocator,
++        _: StubKeyEvent,
++    ) std.mem.Allocator.Error!void {}
++
++    pub fn recordPtyRead(
++        _: *@This(),
++        _: std.mem.Allocator,
++        _: *terminal.Terminal,
++        _: []const u8,
++    ) !void {}
++
++    var stub_renderer_info: StubRendererInfo = .{};
++};
++
+ test {
+-    @import("std").testing.refAllDecls(@This());
++    if (build_config.inspector) {
++        @import("std").testing.refAllDecls(@This());
++    }
+ }
+diff --git a/src/os/cf_release_thread.zig b/src/os/cf_release_thread.zig
+index 445dc4864..ff13f201a 100644
+--- a/src/os/cf_release_thread.zig
++++ b/src/os/cf_release_thread.zig
+@@ -135,7 +135,7 @@ fn threadMain_(self: *Thread) !void {
+     // Run
+     log.debug("starting cf release thread", .{});
+     defer log.debug("starting cf release thread shutdown", .{});
+-    try self.loop.run(.until_done);
++    self.loop.run(.until_done) catch |err| { log.warn("cf release loop failed err={}", .{err}); return; };
+ }
+ 
+ /// Drain the mailbox, handling all the messages in our terminal implementation.
+diff --git a/src/renderer/Metal.zig b/src/renderer/Metal.zig
+index 6c7432d21..431d7c1f9 100644
+--- a/src/renderer/Metal.zig
++++ b/src/renderer/Metal.zig
+@@ -55,6 +55,9 @@ blending: configpkg.Config.AlphaBlending,
+ /// the "shared" storage mode, instead we have to use the "managed" mode.
+ default_storage_mode: mtl.MTLResourceOptions.StorageMode,
+ 
++/// The default storage mode to use for MTLTexture resources.
++default_texture_storage_mode: mtl.MTLResourceOptions.StorageMode,
++
+ /// The maximum 2D texture width and height supported by the device.
+ max_texture_size: u32,
+ 
+@@ -81,10 +84,24 @@ pub fn init(alloc: Allocator, opts: rendererpkg.Options) !Metal {
+         .ios => .shared,
+         else => if (device.getProperty(bool, "hasUnifiedMemory")) .shared else .managed,
+     };
++    // LIBGHOSTTY_SPM_TEXTURE_STORAGE_PATCH
++    // MTLStorageModeShared is valid for textures on Apple GPUs, while Intel
++    // and AMD macOS GPUs require managed textures even when hasUnifiedMemory is
++    // true. Keep buffer storage unchanged, but choose texture storage from the
++    // Metal GPU family as Apple recommends for CPU-updated textures.
++    const default_texture_storage_mode: mtl.MTLResourceOptions.StorageMode = switch (comptime builtin.os.tag) {
++        .ios => .shared,
++        .macos => if (device.msgSend(
++            bool,
++            objc.sel("supportsFamily:"),
++            .{mtl.MTLGPUFamily.apple1},
++        )) .shared else .managed,
++        else => default_storage_mode,
++    };
+     const max_texture_size = queryMaxTextureSize(device);
+     log.debug(
+-        "device properties default_storage_mode={} max_texture_size={}",
+-        .{ default_storage_mode, max_texture_size },
++        "device properties default_storage_mode={} default_texture_storage_mode={} max_texture_size={}",
++        .{ default_storage_mode, default_texture_storage_mode, max_texture_size },
+     );
+ 
+     const ViewInfo = struct {
+@@ -151,6 +168,7 @@ pub fn init(alloc: Allocator, opts: rendererpkg.Options) !Metal {
+         .queue = queue,
+         .blending = opts.config.blending,
+         .default_storage_mode = default_storage_mode,
++        .default_texture_storage_mode = default_texture_storage_mode,
+         .max_texture_size = max_texture_size,
+     };
+ }
+@@ -167,6 +185,12 @@ pub fn loopEnter(self: *Metal) void {
+         @ptrCast(&displayCallback),
+         @ptrCast(renderer),
+     );
++
++    // iOS: sublayer bounds are already set before the callback is wired up,
++    // so no display message fires automatically. Kick the first frame.
++    if (comptime builtin.os.tag == .ios) {
++        self.layer.layer.msgSend(void, objc.sel("setNeedsDisplay"), .{});
++    }
+ }
+ 
+ fn displayCallback(renderer: *Renderer) align(8) void {
+@@ -243,7 +267,7 @@ pub fn initTarget(self: *const Metal, width: usize, height: usize) !Target {
+             .bgra8unorm_srgb
+         else
+             .bgra8unorm,
+-        .storage_mode = self.default_storage_mode,
++        .storage_mode = self.default_texture_storage_mode,
+         .width = width,
+         .height = height,
+     });
+@@ -251,6 +275,12 @@ pub fn initTarget(self: *const Metal, width: usize, height: usize) !Target {
+ 
+ /// Present the provided target.
+ pub inline fn present(self: *Metal, target: Target, sync: bool) !void {
++    // iOS: always present synchronously — the render loop already runs on
++    // the main thread, so the async GCD hop is unnecessary overhead.
++    if (comptime builtin.os.tag == .ios) {
++        try self.layer.setSurface(target.surface);
++        return;
++    }
+     if (sync) {
+         self.layer.setSurfaceSync(target.surface);
+     } else {
+@@ -296,7 +326,7 @@ pub inline fn textureOptions(self: Metal) Texture.Options {
+         .resource_options = .{
+             // Indicate that the CPU writes to this resource but never reads it.
+             .cpu_cache_mode = .write_combined,
+-            .storage_mode = self.default_storage_mode,
++            .storage_mode = self.default_texture_storage_mode,
+         },
+         .usage = .{
+             // textureOptions is currently only used for custom shaders,
+@@ -355,7 +385,7 @@ pub inline fn imageTextureOptions(
+         .resource_options = .{
+             // Indicate that the CPU writes to this resource but never reads it.
+             .cpu_cache_mode = .write_combined,
+-            .storage_mode = self.default_storage_mode,
++            .storage_mode = self.default_texture_storage_mode,
+         },
+         .usage = .{
+             // We only need to read from this texture from a shader.
+@@ -382,7 +412,7 @@ pub fn initAtlasTexture(
+             .resource_options = .{
+                 // Indicate that the CPU writes to this resource but never reads it.
+                 .cpu_cache_mode = .write_combined,
+-                .storage_mode = self.default_storage_mode,
++                .storage_mode = self.default_texture_storage_mode,
+             },
+             .usage = .{
+                 // We only need to read from this texture from a shader.
+diff --git a/src/renderer/generic.zig b/src/renderer/generic.zig
+index 0f4a294bc..a161f6881 100644
+--- a/src/renderer/generic.zig
++++ b/src/renderer/generic.zig
+@@ -1034,17 +1034,15 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+             // Flag that we need to update our custom shaders
+             self.custom_shader_focused_changed = true;
+ 
+-            // If we're not focused, then we want to stop the display link
+-            // because it is a waste of resources and we can move to pure
+-            // change-driven updates.
+-            if (comptime DisplayLink != void) link: {
+-                const display_link = self.display_link orelse break :link;
+-                if (focus) {
+-                    display_link.start() catch {};
+-                } else {
+-                    display_link.stop() catch {};
+-                }
+-            }
++            // LIBGHOSTTY_SPM_DISPLAY_LINK_VISIBLE_PATCH
++            // Upstream stops the display link on focus loss and only
++            // restarts it for focused+visible surfaces. Unpeel shows
++            // several surfaces at once (retained panes, splits), and an
++            // unfocused-but-visible surface on change-driven updates
++            // starves under sustained output (kitty image streams present
++            // at a fraction of display rate). The link now follows
++            // visibility alone — see setVisible; focus changes leave it
++            // untouched.
+         }
+ 
+         /// Callback when the window is visible or occluded.
+@@ -1054,9 +1052,11 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+             // If we're not visible, then we want to stop the display link
+             // because it is a waste of resources and we can move to pure
+             // change-driven updates.
++            // LIBGHOSTTY_SPM_DISPLAY_LINK_VISIBLE_PATCH: visibility is the
++            // only gate (focus intentionally ignored, see setFocus).
+             if (comptime DisplayLink != void) link: {
+                 const display_link = self.display_link orelse break :link;
+-                if (visible and self.focused) {
++                if (visible) {
+                     display_link.start() catch {};
+                 } else {
+                     display_link.stop() catch {};
+diff --git a/src/renderer/metal/IOSurfaceLayer.zig b/src/renderer/metal/IOSurfaceLayer.zig
+index 34fbfbed5..3b2cec4bb 100644
+--- a/src/renderer/metal/IOSurfaceLayer.zig
++++ b/src/renderer/metal/IOSurfaceLayer.zig
+@@ -3,13 +3,13 @@
+ const IOSurfaceLayer = @This();
+ 
+ const std = @import("std");
++const builtin = @import("builtin");
+ const Allocator = std.mem.Allocator;
+ const objc = @import("objc");
+ const macos = @import("macos");
+ 
+ const IOSurface = macos.iosurface.IOSurface;
+ 
+-const log = std.log.scoped(.IOSurfaceLayer);
+ 
+ /// We subclass CALayer with a custom display handler, we only need
+ /// to make the subclass once, and then we can use it as a singleton.
+@@ -32,6 +32,7 @@ pub fn init() !IOSurfaceLayer {
+     // The layer gravity is set to top-left so that the contents aren't
+     // stretched during resize operations before a new frame has been drawn.
+     layer.setProperty("contentsGravity", macos.animation.kCAGravityTopLeft);
++    layer.setProperty("opaque", true);
+ 
+     layer.setInstanceVariable("display_cb", .{ .value = null });
+     layer.setInstanceVariable("display_ctx", .{ .value = null });
+@@ -89,6 +90,10 @@ const SetSurfaceBlock = objc.Block(struct {
+     surface: *IOSurface,
+ }, .{}, void);
+ 
++/// Rate-limit counter for the drift log below; presents run on the main
++/// queue, so plain state is fine.
++var drift_count: usize = 0;
++
+ fn setSurfaceCallback(
+     block: *const SetSurfaceBlock.Context,
+ ) callconv(.c) void {
+@@ -107,12 +112,38 @@ fn setSurfaceCallback(
+     const scale = layer.getProperty(f64, "contentsScale");
+     const width: usize = @intFromFloat(bounds.size.width * scale);
+     const height: usize = @intFromFloat(bounds.size.height * scale);
+-    if (width != surface.getWidth() or height != surface.getHeight()) {
+-        log.debug(
+-            "setSurfaceCallback(): surface is wrong size for layer, discarding. surface = {d}x{d}, layer = {d}x{d}",
+-            .{ surface.getWidth(), surface.getHeight(), width, height },
+-        );
+-        return;
++    const sw = surface.getWidth();
++    const sh = surface.getHeight();
++    const dw: usize = if (width > sw) width - sw else sw - width;
++    const dh: usize = if (height > sh) height - sh else sh - height;
++    // LIBGHOSTTY_SPM_PRESENT_DRIFT_PATCH: upstream macOS discards any async
++    // frame whose IOSurface size differs from layer bounds*scale at all.
++    // An embedder whose surface size disagrees with the layer by a rounding
++    // pixel then renders at full rate while every frame is silently thrown
++    // away — visible as inexplicably low terminal FPS. Use the iOS recovery
++    // on both platforms (rescale contentsScale so CA maps the surface
++    // correctly) for small drift, and log so the condition is observable.
++    // Large drift (a real mid-resize race) still discards to avoid jank.
++    if (dw > 0 or dh > 0) {
++        drift_count += 1;
++        if (drift_count == 1 or drift_count % 120 == 0) {
++            std.debug.print(
++                "[ghostty-embed] IOSurfaceLayer size drift #{d}: surface={d}x{d} layer={d}x{d}\n",
++                .{ drift_count, sw, sh, width, height },
++            );
++        }
++        if (dw > 8 or dh > 8) return;
++        // Recalculate contentsScale so CA maps surface pixels to layer points
++        const pw = bounds.size.width;
++        const ph = bounds.size.height;
++        if (pw > 0 and ph > 0) {
++            const cs_x: f64 = @as(f64, @floatFromInt(sw)) / pw;
++            const cs_y: f64 = @as(f64, @floatFromInt(sh)) / ph;
++            const cs: f64 = @max(cs_x, cs_y);
++            if (@abs(cs - scale) > 0.01) {
++                layer.setProperty("contentsScale", cs);
++            }
++        }
+     }
+ 
+     layer.setProperty("contents", surface);
+@@ -138,11 +169,15 @@ pub fn setDisplayCallback(
+ fn getSubclass() error{ObjCFailed}!objc.Class {
+     if (Subclass) |c| return c;
+ 
+-    const CALayer =
++    const parent_cls = if (comptime builtin.os.tag == .ios)
++        // CAIOSurfaceLayer provides native zero-copy IOSurface compositing
++        objc.getClass("CAIOSurfaceLayer") orelse
++            objc.getClass("CALayer") orelse return error.ObjCFailed
++    else
+         objc.getClass("CALayer") orelse return error.ObjCFailed;
+ 
+     var subclass =
+-        objc.allocateClassPair(CALayer, "IOSurfaceLayer") orelse return error.ObjCFailed;
++        objc.allocateClassPair(parent_cls, "IOSurfaceLayer") orelse return error.ObjCFailed;
+     errdefer objc.disposeClassPair(subclass);
+ 
+     if (!subclass.addIvar("display_cb")) return error.ObjCFailed;
+diff --git a/src/renderer/shadertoy.zig b/src/renderer/shadertoy.zig
+index 556c28293..0688a2986 100644
+--- a/src/renderer/shadertoy.zig
++++ b/src/renderer/shadertoy.zig
+@@ -2,6 +2,7 @@ const std = @import("std");
+ const builtin = @import("builtin");
+ const Allocator = std.mem.Allocator;
+ const ArenaAllocator = std.heap.ArenaAllocator;
++const build_config = @import("../build_config.zig");
+ const glslang = @import("glslang");
+ const spvcross = @import("spirv_cross");
+ const configpkg = @import("../config.zig");
+@@ -49,6 +50,7 @@ pub fn loadFromFiles(
+     paths: configpkg.RepeatablePath,
+     target: Target,
+ ) ![]const [:0]const u8 {
++    if (comptime !build_config.custom_shaders) return &.{};
+     var list: std.ArrayList([:0]const u8) = .empty;
+     defer list.deinit(alloc_gpa);
+     errdefer for (list.items) |shader| alloc_gpa.free(shader);
+diff --git a/src/terminal/Screen.zig b/src/terminal/Screen.zig
+index c9cabfd27..af4999547 100644
+--- a/src/terminal/Screen.zig
++++ b/src/terminal/Screen.zig
+@@ -394,9 +394,19 @@ pub fn reset(self: *Screen) void {
+     };
+ 
+     if (comptime build_options.kitty_graphics) {
+-        // Reset kitty graphics storage
++        // Reset kitty graphics storage.
++        // LIBGHOSTTY_SPM_KITTY_LIMITS_RESET_PATCH: preserve the configured
++        // loading limits across RIS — the embedder set them at terminal
++        // creation (Termio uses .all) and a client-driven reset must not
++        // silently downgrade the advertised capabilities to `.direct`.
++        // Unpeel's attach clients emit RIS on every reattach; losing
++        // file/shm support forced kitty graphics apps onto inline pixel
++        // transmission at a fraction of the frame rate. Mirrors
++        // ImageStorage.setLimit, which already preserves limits across a
++        // full storage wipe.
++        const image_limits = self.kitty_images.image_limits;
+         self.kitty_images.deinit(self.alloc, self);
+-        self.kitty_images = .{ .dirty = true };
++        self.kitty_images = .{ .dirty = true, .image_limits = image_limits };
+     }
+ 
+     // Reset our basic state
+diff --git a/src/termio.zig b/src/termio.zig
+index b16885109..6931fcb58 100644
+--- a/src/termio.zig
++++ b/src/termio.zig
+@@ -23,6 +23,7 @@ const message = @import("termio/message.zig");
+ pub const backend = @import("termio/backend.zig");
+ pub const mailbox = @import("termio/mailbox.zig");
+ pub const Exec = @import("termio/Exec.zig");
++pub const HostManaged = @import("termio/HostManaged.zig");
+ pub const Options = @import("termio/Options.zig");
+ pub const Termio = @import("termio/Termio.zig");
+ pub const Thread = @import("termio/Thread.zig");
+diff --git a/src/termio/backend.zig b/src/termio/backend.zig
+index c29009acb..9857cbd7a 100644
+--- a/src/termio/backend.zig
++++ b/src/termio/backend.zig
+@@ -11,28 +11,34 @@ const ProcessInfo = @import("../pty.zig").ProcessInfo;
+ const WRITE_REQ_PREALLOC = std.math.pow(usize, 2, 5);
+ 
+ /// The kinds of backends.
+-pub const Kind = enum { exec };
++pub const Kind = enum { exec, host_managed };
+ 
+ /// Configuration for the various backend types.
+ pub const Config = union(Kind) {
+     /// Exec uses posix exec to run a command with a pty.
+     exec: termio.Exec.Config,
++
++    /// Host managed forwards terminal IO through embedder callbacks.
++    host_managed: termio.HostManaged.Config,
+ };
+ 
+ /// Backend implementations. A backend is responsible for owning the pty
+ /// behavior and providing read/write capabilities.
+ pub const Backend = union(Kind) {
+     exec: termio.Exec,
++    host_managed: termio.HostManaged,
+ 
+     pub fn deinit(self: *Backend) void {
+         switch (self.*) {
+             .exec => |*exec| exec.deinit(),
++            .host_managed => |*host_managed| host_managed.deinit(),
+         }
+     }
+ 
+     pub fn initTerminal(self: *Backend, t: *terminal.Terminal) void {
+         switch (self.*) {
+             .exec => |*exec| exec.initTerminal(t),
++            .host_managed => |*host_managed| host_managed.initTerminal(t),
+         }
+     }
+ 
+@@ -44,12 +50,14 @@ pub const Backend = union(Kind) {
+     ) !void {
+         switch (self.*) {
+             .exec => |*exec| try exec.threadEnter(alloc, io, td),
++            .host_managed => |*host_managed| try host_managed.threadEnter(alloc, io, td),
+         }
+     }
+ 
+     pub fn threadExit(self: *Backend, td: *termio.Termio.ThreadData) void {
+         switch (self.*) {
+             .exec => |*exec| exec.threadExit(td),
++            .host_managed => |*host_managed| host_managed.threadExit(td),
+         }
+     }
+ 
+@@ -60,6 +68,7 @@ pub const Backend = union(Kind) {
+     ) !void {
+         switch (self.*) {
+             .exec => |*exec| try exec.focusGained(td, focused),
++            .host_managed => |*host_managed| try host_managed.focusGained(td, focused),
+         }
+     }
+ 
+@@ -70,6 +79,7 @@ pub const Backend = union(Kind) {
+     ) !void {
+         switch (self.*) {
+             .exec => |*exec| try exec.resize(grid_size, screen_size),
++            .host_managed => |*host_managed| try host_managed.resize(grid_size, screen_size),
+         }
+     }
+ 
+@@ -82,6 +92,7 @@ pub const Backend = union(Kind) {
+     ) !void {
+         switch (self.*) {
+             .exec => |*exec| try exec.queueWrite(alloc, td, data, linefeed),
++            .host_managed => |*host_managed| try host_managed.queueWrite(alloc, td, data, linefeed),
+         }
+     }
+ 
+@@ -99,6 +110,12 @@ pub const Backend = union(Kind) {
+                 exit_code,
+                 runtime_ms,
+             ),
++            .host_managed => |*host_managed| try host_managed.childExitedAbnormally(
++                gpa,
++                t,
++                exit_code,
++                runtime_ms,
++            ),
+         }
+     }
+ 
+@@ -108,6 +125,7 @@ pub const Backend = union(Kind) {
+     pub fn getProcessInfo(self: *Backend, comptime info: ProcessInfo) ?ProcessInfo.Type(info) {
+         return switch (self.*) {
+             .exec => |*exec| exec.getProcessInfo(info),
++            .host_managed => null,
+         };
+     }
+ };
+@@ -115,10 +133,12 @@ pub const Backend = union(Kind) {
+ /// Termio thread data. See termio.ThreadData for docs.
+ pub const ThreadData = union(Kind) {
+     exec: termio.Exec.ThreadData,
++    host_managed: termio.HostManaged.ThreadData,
+ 
+     pub fn deinit(self: *ThreadData, alloc: Allocator) void {
+         switch (self.*) {
+             .exec => |*exec| exec.deinit(alloc),
++            .host_managed => |*host_managed| host_managed.deinit(alloc),
+         }
+     }
+ 

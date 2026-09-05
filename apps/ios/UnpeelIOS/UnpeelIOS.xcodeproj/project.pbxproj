@@ -1,0 +1,663 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		0B4492C4340C5A03C9017B73 /* SessionOrganizeSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DE0A8A88A7C75B1B8C6DE7A /* SessionOrganizeSheet.swift */; };
+		14FDDF079F0228D7CCEBCFA3 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 454864BC5A77DB31F7C0A40B /* Assets.xcassets */; };
+		18BF661599CECD95CFA53E14 /* RemoteTerminalCanvasLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C40D45609C71DE74AF45813 /* RemoteTerminalCanvasLayoutTests.swift */; };
+		204E0E17C9C474F3A6C86B15 /* TerminalDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14A13E0858FC398FCD66D35E /* TerminalDetailView.swift */; };
+		25FDC5556E66470F1CA4FA39 /* VoiceDictationController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DA917AA8CD4A43FA7BF9443 /* VoiceDictationController.swift */; };
+		27E08F0A247347DE298C506F /* MascotView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B2930CBC1E438FE112E8574 /* MascotView.swift */; };
+		2B0BD67198460F70E41BD7FF /* RemoteTerminalScrollPredictionEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D94E06532B93D0CB5BFA8ABF /* RemoteTerminalScrollPredictionEngineTests.swift */; };
+		36133415189F80B660470436 /* RemoteTerminalStreamTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA9DD529220DBB00767CEA04 /* RemoteTerminalStreamTransport.swift */; };
+		37D068E872F846E2BADD0778 /* RemoteConnectionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 136237BC753D3BB859F6655B /* RemoteConnectionStore.swift */; };
+		3B97BECA1C3A4239D89EDFE7 /* RemoteTerminalScrollPrediction.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47A4E1EF7AFF6A227B02227B /* RemoteTerminalScrollPrediction.swift */; };
+		3C4F9310DF145DC876AF9F86 /* RemoteTerminalPrediction.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08E727BEFBCEE86B25CBD1A5 /* RemoteTerminalPrediction.swift */; };
+		452A4CA6B2C1B54AC8604021 /* ImageAnnotationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 710A41D592E31FF23614E491 /* ImageAnnotationView.swift */; };
+		4D5168CC8CB5AE0043A78244 /* StreamFrameReconcilerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 356480C3F9A7F695EF3F9DB4 /* StreamFrameReconcilerTests.swift */; };
+		50BBEB5538A4EEA704C668EE /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 483986B35FA459AD109B9733 /* PrivacyInfo.xcprivacy */; };
+		5119955D34CDE7F70C8BD328 /* TerminalTextSelectionSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D247134AE2D98CF96D1671C /* TerminalTextSelectionSheet.swift */; };
+		513D1D26536C9A38B610834A /* ResumableArtifactUploaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC680D47F7A740B95E97199C /* ResumableArtifactUploaderTests.swift */; };
+		5196F87214A4396FCC8A35E0 /* PushManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C017C4C2C5B8CDB18106CA1E /* PushManager.swift */; };
+		55749F9522834BF44C9D2534 /* RemoteTerminalStreamTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75A6326DA5406AF3DBAD58BF /* RemoteTerminalStreamTransportTests.swift */; };
+		5DBF647D9901B45614866920 /* RemoteGhosttyTerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0203528B33AB9C12ED5F377A /* RemoteGhosttyTerminalView.swift */; };
+		61AF837AFFD7995940F5AD9A /* RemoteTerminalPredictionEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C48BEABFCD725D1237313119 /* RemoteTerminalPredictionEngineTests.swift */; };
+		66F10DA1C988FB70641A6831 /* UnpeelIOSRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD6C864DFF86CEF5806D1535 /* UnpeelIOSRootView.swift */; };
+		6B62D3C0E8E678C89C9DD6F0 /* ProjectOrganizeSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBADB142794892CE559C0EAC /* ProjectOrganizeSheet.swift */; };
+		6EF9F10EB927AD8AFD118155 /* RemotePreviewStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BE85BAB677E884DA193D48E /* RemotePreviewStore.swift */; };
+		733B56E538B00ED3D6BA93ED /* DictationReflection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51A95FD6742717367B56B702 /* DictationReflection.swift */; };
+		75361CA26B4DF48E868F7D53 /* SharedIconViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDAD69E4E3089D05983F848D /* SharedIconViews.swift */; };
+		85A28BCA2E34EEA0404C62BA /* RemotePreviewStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9033636306B3C0FEB4381F33 /* RemotePreviewStoreTests.swift */; };
+		86CC59DCEA5A08DC121C14EE /* RemoteDirectTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C70EADE8D0522BAF6E6BA08 /* RemoteDirectTransport.swift */; };
+		9AEFBB617CE81A691FC3A9AE /* RemoteTerminalMouseModeTrackerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82D18349E4343863AF59CEA9 /* RemoteTerminalMouseModeTrackerTests.swift */; };
+		9C6C14805AA0B688B0250FBA /* RemoteDirectTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F2368DFDBAB350B790F5763 /* RemoteDirectTransportTests.swift */; };
+		B1F1E7F4576195CB8E223371 /* TerminalQueryFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD8900B06A8EC90298981115 /* TerminalQueryFilter.swift */; };
+		B35103E7509B4E674B70B030 /* RemoteMacClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F35970DFF94726780F3CAA25 /* RemoteMacClient.swift */; };
+		B3AB5ABDD497E2D81FE16AB5 /* AppLock.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26682F9596E7F66A050E29A6 /* AppLock.swift */; };
+		B811FDB432E51119FB2681FE /* DevSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96A6E0A24C494F55C74A71E5 /* DevSettings.swift */; };
+		C006ABCAF7FE73BAF92E745D /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D50426BA77F15D2EAE5A2F63 /* PairingView.swift */; };
+		C58213F67C52238EB5728B66 /* StreamFrameReconciler.swift in Sources */ = {isa = PBXBuildFile; fileRef = F78C3102A092C65B449508AA /* StreamFrameReconciler.swift */; };
+		C5C068AF8AE0845D5964C1D8 /* PushManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 780E8FFFE71973418DA23BD9 /* PushManagerTests.swift */; };
+		C7D1B83132DCF24DF9D31E5F /* TerminalQueryStripTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52EEA2336A3740AB8188D474 /* TerminalQueryStripTests.swift */; };
+		C8D674440CF58AF963993DB3 /* PairedMacStorageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4D302616CB80681E0F35D56 /* PairedMacStorageTests.swift */; };
+		D0067DE734CD9822E6E14032 /* UnpeelShared in Frameworks */ = {isa = PBXBuildFile; productRef = F3C1B035F426586A97EA8CBC /* UnpeelShared */; };
+		DEA4D27E7E6E9670A0019738 /* TerminalSessionCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 031A4729CA2E9483ADA358C5 /* TerminalSessionCache.swift */; };
+		DF75995BF874B48FB50DA8EE /* RemoteTerminalWebSocket.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2587BC2C493BEAEC57E4AD9E /* RemoteTerminalWebSocket.swift */; };
+		E948BA854287FDD3A80A08E6 /* ArchivedSessionsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5490E0DB3F682CA7E9BD4FDC /* ArchivedSessionsSheet.swift */; };
+		E9B943585B7DE54019B2A5E2 /* SessionLRUIndexTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5BA0F3EFF25D7095CC41D50 /* SessionLRUIndexTests.swift */; };
+		F430DB6E6FF4567F36E836EB /* RemoteMouseWheelPreferenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A91665E27B97F3EC3B1AF962 /* RemoteMouseWheelPreferenceTests.swift */; };
+		F7B3B48F981DC88572535695 /* UnpeelIOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD8B97D14664B1460BC86B4F /* UnpeelIOSApp.swift */; };
+		F7FAE7652EFF4D0314042EA1 /* GhosttyTerminal in Frameworks */ = {isa = PBXBuildFile; productRef = 9A1BCB4AF46C7FD5D8054E0B /* GhosttyTerminal */; };
+		F9528893B56A67DE090B2939 /* BrowserGalleryPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 206A52245EC5E8A90D080850 /* BrowserGalleryPanel.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		397EB1AA5070CC5C58AE27D5 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 84C3DD7DD1F1D4C6ADD3756C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 23A1BC7D1446651F6351DD47;
+			remoteInfo = UnpeelIOSApp;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		0203528B33AB9C12ED5F377A /* RemoteGhosttyTerminalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteGhosttyTerminalView.swift; sourceTree = "<group>"; };
+		031A4729CA2E9483ADA358C5 /* TerminalSessionCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalSessionCache.swift; sourceTree = "<group>"; };
+		08E727BEFBCEE86B25CBD1A5 /* RemoteTerminalPrediction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTerminalPrediction.swift; sourceTree = "<group>"; };
+		136237BC753D3BB859F6655B /* RemoteConnectionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteConnectionStore.swift; sourceTree = "<group>"; };
+		14A13E0858FC398FCD66D35E /* TerminalDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalDetailView.swift; sourceTree = "<group>"; };
+		163A567A0B204B52C72E3F9B /* UnpeelIOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = UnpeelIOS.entitlements; sourceTree = "<group>"; };
+		206A52245EC5E8A90D080850 /* BrowserGalleryPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserGalleryPanel.swift; sourceTree = "<group>"; };
+		2587BC2C493BEAEC57E4AD9E /* RemoteTerminalWebSocket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTerminalWebSocket.swift; sourceTree = "<group>"; };
+		26682F9596E7F66A050E29A6 /* AppLock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLock.swift; sourceTree = "<group>"; };
+		356480C3F9A7F695EF3F9DB4 /* StreamFrameReconcilerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamFrameReconcilerTests.swift; sourceTree = "<group>"; };
+		3DA917AA8CD4A43FA7BF9443 /* VoiceDictationController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceDictationController.swift; sourceTree = "<group>"; };
+		454864BC5A77DB31F7C0A40B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		47A4E1EF7AFF6A227B02227B /* RemoteTerminalScrollPrediction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTerminalScrollPrediction.swift; sourceTree = "<group>"; };
+		483986B35FA459AD109B9733 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		4BE85BAB677E884DA193D48E /* RemotePreviewStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePreviewStore.swift; sourceTree = "<group>"; };
+		4DE0A8A88A7C75B1B8C6DE7A /* SessionOrganizeSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionOrganizeSheet.swift; sourceTree = "<group>"; };
+		51A95FD6742717367B56B702 /* DictationReflection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationReflection.swift; sourceTree = "<group>"; };
+		52EEA2336A3740AB8188D474 /* TerminalQueryStripTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalQueryStripTests.swift; sourceTree = "<group>"; };
+		5490E0DB3F682CA7E9BD4FDC /* ArchivedSessionsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchivedSessionsSheet.swift; sourceTree = "<group>"; };
+		5B2930CBC1E438FE112E8574 /* MascotView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MascotView.swift; sourceTree = "<group>"; };
+		5C70EADE8D0522BAF6E6BA08 /* RemoteDirectTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDirectTransport.swift; sourceTree = "<group>"; };
+		6B38875DF944FBFF6DAD2FCA /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		6F2368DFDBAB350B790F5763 /* RemoteDirectTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDirectTransportTests.swift; sourceTree = "<group>"; };
+		710A41D592E31FF23614E491 /* ImageAnnotationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageAnnotationView.swift; sourceTree = "<group>"; };
+		75A6326DA5406AF3DBAD58BF /* RemoteTerminalStreamTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTerminalStreamTransportTests.swift; sourceTree = "<group>"; };
+		780E8FFFE71973418DA23BD9 /* PushManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushManagerTests.swift; sourceTree = "<group>"; };
+		82D18349E4343863AF59CEA9 /* RemoteTerminalMouseModeTrackerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTerminalMouseModeTrackerTests.swift; sourceTree = "<group>"; };
+		846FBEFB61B23FA8273177EB /* libghostty-spm */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "libghostty-spm"; path = "../../native/vendor/libghostty-spm"; sourceTree = SOURCE_ROOT; };
+		8C40D45609C71DE74AF45813 /* RemoteTerminalCanvasLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTerminalCanvasLayoutTests.swift; sourceTree = "<group>"; };
+		9033636306B3C0FEB4381F33 /* RemotePreviewStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePreviewStoreTests.swift; sourceTree = "<group>"; };
+		96A6E0A24C494F55C74A71E5 /* DevSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevSettings.swift; sourceTree = "<group>"; };
+		9823F21C68452019849EEDF3 /* UnpeelShared */ = {isa = PBXFileReference; lastKnownFileType = folder; name = UnpeelShared; path = ../../shared/UnpeelShared; sourceTree = SOURCE_ROOT; };
+		9D247134AE2D98CF96D1671C /* TerminalTextSelectionSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalTextSelectionSheet.swift; sourceTree = "<group>"; };
+		A91665E27B97F3EC3B1AF962 /* RemoteMouseWheelPreferenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteMouseWheelPreferenceTests.swift; sourceTree = "<group>"; };
+		B4D302616CB80681E0F35D56 /* PairedMacStorageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairedMacStorageTests.swift; sourceTree = "<group>"; };
+		BA9DD529220DBB00767CEA04 /* RemoteTerminalStreamTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTerminalStreamTransport.swift; sourceTree = "<group>"; };
+		C017C4C2C5B8CDB18106CA1E /* PushManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushManager.swift; sourceTree = "<group>"; };
+		C48BEABFCD725D1237313119 /* RemoteTerminalPredictionEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTerminalPredictionEngineTests.swift; sourceTree = "<group>"; };
+		C5BA0F3EFF25D7095CC41D50 /* SessionLRUIndexTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionLRUIndexTests.swift; sourceTree = "<group>"; };
+		CBADB142794892CE559C0EAC /* ProjectOrganizeSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectOrganizeSheet.swift; sourceTree = "<group>"; };
+		CC680D47F7A740B95E97199C /* ResumableArtifactUploaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResumableArtifactUploaderTests.swift; sourceTree = "<group>"; };
+		CD8B97D14664B1460BC86B4F /* UnpeelIOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnpeelIOSApp.swift; sourceTree = "<group>"; };
+		CDAD69E4E3089D05983F848D /* SharedIconViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedIconViews.swift; sourceTree = "<group>"; };
+		D070D81C8211292F8355A4C9 /* UnpeelIOSTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = UnpeelIOSTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		D50426BA77F15D2EAE5A2F63 /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
+		D94E06532B93D0CB5BFA8ABF /* RemoteTerminalScrollPredictionEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTerminalScrollPredictionEngineTests.swift; sourceTree = "<group>"; };
+		DD6C864DFF86CEF5806D1535 /* UnpeelIOSRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnpeelIOSRootView.swift; sourceTree = "<group>"; };
+		DD8900B06A8EC90298981115 /* TerminalQueryFilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalQueryFilter.swift; sourceTree = "<group>"; };
+		F35970DFF94726780F3CAA25 /* RemoteMacClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteMacClient.swift; sourceTree = "<group>"; };
+		F61A248B3F2DA11663093133 /* UnpeelIOSApp.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = UnpeelIOSApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F78C3102A092C65B449508AA /* StreamFrameReconciler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamFrameReconciler.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		CC3C3E786D4011D13C228001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D0067DE734CD9822E6E14032 /* UnpeelShared in Frameworks */,
+				F7FAE7652EFF4D0314042EA1 /* GhosttyTerminal in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		05A9348F49050C5C557E295F = {
+			isa = PBXGroup;
+			children = (
+				F5665A122EE6B34BCBC45810 /* App */,
+				81A5268132B32FDE4FDC809E /* Packages */,
+				B3576E578B472FAA1E406723 /* UnpeelIOS */,
+				992C5D43CF2671BF008E6FE9 /* UnpeelIOSTests */,
+				9C41D4C126CFA98EC5EBC1BF /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		81A5268132B32FDE4FDC809E /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				846FBEFB61B23FA8273177EB /* libghostty-spm */,
+				9823F21C68452019849EEDF3 /* UnpeelShared */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+		992C5D43CF2671BF008E6FE9 /* UnpeelIOSTests */ = {
+			isa = PBXGroup;
+			children = (
+				B4D302616CB80681E0F35D56 /* PairedMacStorageTests.swift */,
+				780E8FFFE71973418DA23BD9 /* PushManagerTests.swift */,
+				6F2368DFDBAB350B790F5763 /* RemoteDirectTransportTests.swift */,
+				A91665E27B97F3EC3B1AF962 /* RemoteMouseWheelPreferenceTests.swift */,
+				9033636306B3C0FEB4381F33 /* RemotePreviewStoreTests.swift */,
+				8C40D45609C71DE74AF45813 /* RemoteTerminalCanvasLayoutTests.swift */,
+				82D18349E4343863AF59CEA9 /* RemoteTerminalMouseModeTrackerTests.swift */,
+				C48BEABFCD725D1237313119 /* RemoteTerminalPredictionEngineTests.swift */,
+				D94E06532B93D0CB5BFA8ABF /* RemoteTerminalScrollPredictionEngineTests.swift */,
+				75A6326DA5406AF3DBAD58BF /* RemoteTerminalStreamTransportTests.swift */,
+				CC680D47F7A740B95E97199C /* ResumableArtifactUploaderTests.swift */,
+				C5BA0F3EFF25D7095CC41D50 /* SessionLRUIndexTests.swift */,
+				356480C3F9A7F695EF3F9DB4 /* StreamFrameReconcilerTests.swift */,
+				52EEA2336A3740AB8188D474 /* TerminalQueryStripTests.swift */,
+			);
+			name = UnpeelIOSTests;
+			path = Tests/UnpeelIOSTests;
+			sourceTree = "<group>";
+		};
+		9C41D4C126CFA98EC5EBC1BF /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				F61A248B3F2DA11663093133 /* UnpeelIOSApp.app */,
+				D070D81C8211292F8355A4C9 /* UnpeelIOSTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		B3576E578B472FAA1E406723 /* UnpeelIOS */ = {
+			isa = PBXGroup;
+			children = (
+				26682F9596E7F66A050E29A6 /* AppLock.swift */,
+				5490E0DB3F682CA7E9BD4FDC /* ArchivedSessionsSheet.swift */,
+				206A52245EC5E8A90D080850 /* BrowserGalleryPanel.swift */,
+				96A6E0A24C494F55C74A71E5 /* DevSettings.swift */,
+				51A95FD6742717367B56B702 /* DictationReflection.swift */,
+				710A41D592E31FF23614E491 /* ImageAnnotationView.swift */,
+				5B2930CBC1E438FE112E8574 /* MascotView.swift */,
+				D50426BA77F15D2EAE5A2F63 /* PairingView.swift */,
+				CBADB142794892CE559C0EAC /* ProjectOrganizeSheet.swift */,
+				C017C4C2C5B8CDB18106CA1E /* PushManager.swift */,
+				136237BC753D3BB859F6655B /* RemoteConnectionStore.swift */,
+				5C70EADE8D0522BAF6E6BA08 /* RemoteDirectTransport.swift */,
+				0203528B33AB9C12ED5F377A /* RemoteGhosttyTerminalView.swift */,
+				F35970DFF94726780F3CAA25 /* RemoteMacClient.swift */,
+				4BE85BAB677E884DA193D48E /* RemotePreviewStore.swift */,
+				08E727BEFBCEE86B25CBD1A5 /* RemoteTerminalPrediction.swift */,
+				47A4E1EF7AFF6A227B02227B /* RemoteTerminalScrollPrediction.swift */,
+				BA9DD529220DBB00767CEA04 /* RemoteTerminalStreamTransport.swift */,
+				2587BC2C493BEAEC57E4AD9E /* RemoteTerminalWebSocket.swift */,
+				4DE0A8A88A7C75B1B8C6DE7A /* SessionOrganizeSheet.swift */,
+				CDAD69E4E3089D05983F848D /* SharedIconViews.swift */,
+				F78C3102A092C65B449508AA /* StreamFrameReconciler.swift */,
+				14A13E0858FC398FCD66D35E /* TerminalDetailView.swift */,
+				DD8900B06A8EC90298981115 /* TerminalQueryFilter.swift */,
+				031A4729CA2E9483ADA358C5 /* TerminalSessionCache.swift */,
+				9D247134AE2D98CF96D1671C /* TerminalTextSelectionSheet.swift */,
+				DD6C864DFF86CEF5806D1535 /* UnpeelIOSRootView.swift */,
+				3DA917AA8CD4A43FA7BF9443 /* VoiceDictationController.swift */,
+			);
+			name = UnpeelIOS;
+			path = Sources/UnpeelIOS;
+			sourceTree = "<group>";
+		};
+		F5665A122EE6B34BCBC45810 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				454864BC5A77DB31F7C0A40B /* Assets.xcassets */,
+				6B38875DF944FBFF6DAD2FCA /* Info.plist */,
+				483986B35FA459AD109B9733 /* PrivacyInfo.xcprivacy */,
+				163A567A0B204B52C72E3F9B /* UnpeelIOS.entitlements */,
+				CD8B97D14664B1460BC86B4F /* UnpeelIOSApp.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		1FFF44595C773BF4048406E9 /* UnpeelIOSTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 3ED554FF7F923122D530E985 /* Build configuration list for PBXNativeTarget "UnpeelIOSTests" */;
+			buildPhases = (
+				6660FED38BBD3755E4EB7FF6 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				B15C0ECCC4053939BCCD5605 /* PBXTargetDependency */,
+			);
+			name = UnpeelIOSTests;
+			packageProductDependencies = (
+			);
+			productName = UnpeelIOSTests;
+			productReference = D070D81C8211292F8355A4C9 /* UnpeelIOSTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		23A1BC7D1446651F6351DD47 /* UnpeelIOSApp */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1C0488C5DCE82EC071A67FE6 /* Build configuration list for PBXNativeTarget "UnpeelIOSApp" */;
+			buildPhases = (
+				EA414F3E391BA268F0309884 /* Sources */,
+				62ED29F8B3F56FDAC6FC709D /* Resources */,
+				CC3C3E786D4011D13C228001 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = UnpeelIOSApp;
+			packageProductDependencies = (
+				F3C1B035F426586A97EA8CBC /* UnpeelShared */,
+				9A1BCB4AF46C7FD5D8054E0B /* GhosttyTerminal */,
+			);
+			productName = UnpeelIOSApp;
+			productReference = F61A248B3F2DA11663093133 /* UnpeelIOSApp.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		84C3DD7DD1F1D4C6ADD3756C /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					23A1BC7D1446651F6351DD47 = {
+						DevelopmentTeam = "$(UNPEEL_DEVELOPMENT_TEAM)";
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 4B09BD8FC098A700DF419BF5 /* Build configuration list for PBXProject "UnpeelIOS" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 05A9348F49050C5C557E295F;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				955B15B9075A5745A96BAB2C /* XCLocalSwiftPackageReference "../../shared/UnpeelShared" */,
+				6B8DEF1D443FA546E03E12B4 /* XCLocalSwiftPackageReference "../../native/vendor/libghostty-spm" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 9C41D4C126CFA98EC5EBC1BF /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				23A1BC7D1446651F6351DD47 /* UnpeelIOSApp */,
+				1FFF44595C773BF4048406E9 /* UnpeelIOSTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		62ED29F8B3F56FDAC6FC709D /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				14FDDF079F0228D7CCEBCFA3 /* Assets.xcassets in Resources */,
+				50BBEB5538A4EEA704C668EE /* PrivacyInfo.xcprivacy in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		6660FED38BBD3755E4EB7FF6 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C8D674440CF58AF963993DB3 /* PairedMacStorageTests.swift in Sources */,
+				C5C068AF8AE0845D5964C1D8 /* PushManagerTests.swift in Sources */,
+				9C6C14805AA0B688B0250FBA /* RemoteDirectTransportTests.swift in Sources */,
+				F430DB6E6FF4567F36E836EB /* RemoteMouseWheelPreferenceTests.swift in Sources */,
+				85A28BCA2E34EEA0404C62BA /* RemotePreviewStoreTests.swift in Sources */,
+				18BF661599CECD95CFA53E14 /* RemoteTerminalCanvasLayoutTests.swift in Sources */,
+				9AEFBB617CE81A691FC3A9AE /* RemoteTerminalMouseModeTrackerTests.swift in Sources */,
+				61AF837AFFD7995940F5AD9A /* RemoteTerminalPredictionEngineTests.swift in Sources */,
+				2B0BD67198460F70E41BD7FF /* RemoteTerminalScrollPredictionEngineTests.swift in Sources */,
+				55749F9522834BF44C9D2534 /* RemoteTerminalStreamTransportTests.swift in Sources */,
+				513D1D26536C9A38B610834A /* ResumableArtifactUploaderTests.swift in Sources */,
+				E9B943585B7DE54019B2A5E2 /* SessionLRUIndexTests.swift in Sources */,
+				4D5168CC8CB5AE0043A78244 /* StreamFrameReconcilerTests.swift in Sources */,
+				C7D1B83132DCF24DF9D31E5F /* TerminalQueryStripTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EA414F3E391BA268F0309884 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B3AB5ABDD497E2D81FE16AB5 /* AppLock.swift in Sources */,
+				E948BA854287FDD3A80A08E6 /* ArchivedSessionsSheet.swift in Sources */,
+				F9528893B56A67DE090B2939 /* BrowserGalleryPanel.swift in Sources */,
+				B811FDB432E51119FB2681FE /* DevSettings.swift in Sources */,
+				733B56E538B00ED3D6BA93ED /* DictationReflection.swift in Sources */,
+				452A4CA6B2C1B54AC8604021 /* ImageAnnotationView.swift in Sources */,
+				27E08F0A247347DE298C506F /* MascotView.swift in Sources */,
+				C006ABCAF7FE73BAF92E745D /* PairingView.swift in Sources */,
+				6B62D3C0E8E678C89C9DD6F0 /* ProjectOrganizeSheet.swift in Sources */,
+				5196F87214A4396FCC8A35E0 /* PushManager.swift in Sources */,
+				37D068E872F846E2BADD0778 /* RemoteConnectionStore.swift in Sources */,
+				86CC59DCEA5A08DC121C14EE /* RemoteDirectTransport.swift in Sources */,
+				5DBF647D9901B45614866920 /* RemoteGhosttyTerminalView.swift in Sources */,
+				B35103E7509B4E674B70B030 /* RemoteMacClient.swift in Sources */,
+				6EF9F10EB927AD8AFD118155 /* RemotePreviewStore.swift in Sources */,
+				3C4F9310DF145DC876AF9F86 /* RemoteTerminalPrediction.swift in Sources */,
+				3B97BECA1C3A4239D89EDFE7 /* RemoteTerminalScrollPrediction.swift in Sources */,
+				36133415189F80B660470436 /* RemoteTerminalStreamTransport.swift in Sources */,
+				DF75995BF874B48FB50DA8EE /* RemoteTerminalWebSocket.swift in Sources */,
+				0B4492C4340C5A03C9017B73 /* SessionOrganizeSheet.swift in Sources */,
+				75361CA26B4DF48E868F7D53 /* SharedIconViews.swift in Sources */,
+				C58213F67C52238EB5728B66 /* StreamFrameReconciler.swift in Sources */,
+				204E0E17C9C474F3A6C86B15 /* TerminalDetailView.swift in Sources */,
+				B1F1E7F4576195CB8E223371 /* TerminalQueryFilter.swift in Sources */,
+				DEA4D27E7E6E9670A0019738 /* TerminalSessionCache.swift in Sources */,
+				5119955D34CDE7F70C8BD328 /* TerminalTextSelectionSheet.swift in Sources */,
+				F7B3B48F981DC88572535695 /* UnpeelIOSApp.swift in Sources */,
+				66F10DA1C988FB70641A6831 /* UnpeelIOSRootView.swift in Sources */,
+				25FDC5556E66470F1CA4FA39 /* VoiceDictationController.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		B15C0ECCC4053939BCCD5605 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 23A1BC7D1446651F6351DD47 /* UnpeelIOSApp */;
+			targetProxy = 397EB1AA5070CC5C58AE27D5 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		40D63BEBF8AFEF7A8F7AD70B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		751C4DE6F0450605342C96AD /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				"CODE_SIGNING_ALLOWED[sdk=iphoneos*]" = YES;
+				"CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]" = NO;
+				CODE_SIGN_ENTITLEMENTS = App/UnpeelIOS.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = "$(UNPEEL_DEVELOPMENT_TEAM)";
+				INFOPLIST_FILE = App/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.unpeel.ios.remote;
+				PRODUCT_MODULE_NAME = UnpeelIOS;
+				PRODUCT_NAME = Unpeel;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				UNPEEL_APNS_ENVIRONMENT = production;
+				UNPEEL_DEVELOPMENT_TEAM = 8M4MM4C2AH;
+			};
+			name = Release;
+		};
+		B5C66DF9CE7C940B720B23F9 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		B60D452518137660C26F3456 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				"CODE_SIGNING_ALLOWED[sdk=iphoneos*]" = YES;
+				"CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]" = NO;
+				CODE_SIGN_ENTITLEMENTS = App/UnpeelIOS.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = "$(UNPEEL_DEVELOPMENT_TEAM)";
+				INFOPLIST_FILE = App/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.unpeel.ios.remote;
+				PRODUCT_MODULE_NAME = UnpeelIOS;
+				PRODUCT_NAME = Unpeel;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				UNPEEL_APNS_ENVIRONMENT = development;
+				UNPEEL_DEVELOPMENT_TEAM = 8M4MM4C2AH;
+			};
+			name = Debug;
+		};
+		FC15AA2B7EF7561235C3AD38 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				"CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]" = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.unpeel.ios.remote.tests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Unpeel.app/Unpeel";
+			};
+			name = Release;
+		};
+		FD8C396595337A9AA35212D2 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				"CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]" = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.unpeel.ios.remote.tests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Unpeel.app/Unpeel";
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		1C0488C5DCE82EC071A67FE6 /* Build configuration list for PBXNativeTarget "UnpeelIOSApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B60D452518137660C26F3456 /* Debug */,
+				751C4DE6F0450605342C96AD /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		3ED554FF7F923122D530E985 /* Build configuration list for PBXNativeTarget "UnpeelIOSTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FD8C396595337A9AA35212D2 /* Debug */,
+				FC15AA2B7EF7561235C3AD38 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		4B09BD8FC098A700DF419BF5 /* Build configuration list for PBXProject "UnpeelIOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				40D63BEBF8AFEF7A8F7AD70B /* Debug */,
+				B5C66DF9CE7C940B720B23F9 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		6B8DEF1D443FA546E03E12B4 /* XCLocalSwiftPackageReference "../../native/vendor/libghostty-spm" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../../native/vendor/libghostty-spm";
+		};
+		955B15B9075A5745A96BAB2C /* XCLocalSwiftPackageReference "../../shared/UnpeelShared" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../shared/UnpeelShared;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		9A1BCB4AF46C7FD5D8054E0B /* GhosttyTerminal */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = GhosttyTerminal;
+		};
+		F3C1B035F426586A97EA8CBC /* UnpeelShared */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = UnpeelShared;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 84C3DD7DD1F1D4C6ADD3756C /* Project object */;
+}

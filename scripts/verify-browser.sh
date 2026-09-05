@@ -10,7 +10,7 @@
 # already survived multiple engine landmines (profile+allowlist daemon wedge,
 # historical mock-keychain cookie purges, STREAM_PORT no-op) — run this after every
 # agent-browser version bump BEFORE raising the pinned version, and after
-# changes to browser_mcp.rs. See unpeel-apple:docs/feature/browser-mcp-deep-check.md
+# changes to browser_mcp.rs. See the private "browser-mcp-deep-check" design record
 # ("Native-Mode Findings") for why each check exists.
 #
 # Verifies:

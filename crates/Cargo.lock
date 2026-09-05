@@ -1189,6 +1189,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "unpeel-native-bridge"
+version = "0.5.3"
+dependencies = [
+ "serde",
+ "serde_json",
+ "unpeel-core",
+ "unpeel-serve",
+]
+
+[[package]]
 name = "unpeel-serve"
 version = "0.5.3"
 dependencies = [

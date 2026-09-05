@@ -21,7 +21,7 @@
 #                   and the fixture prints exactly the typed text
 #   6. cleanup    — Remove ends the driver session (no leftover sockets)
 #
-# Engine resolution, in order (unpeel-apple:docs/plans/computer-use-release.md D3):
+# Engine resolution, in order (the private "computer-use-release" design record D3):
 #   UNPEEL_CUA_DRIVER_BIN            an explicit engine binary
 #   unpeel computer install          the pinned, hash-verified managed copy
 #                                    (Lane A; absent on older trees)

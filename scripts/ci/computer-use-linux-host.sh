@@ -5,7 +5,7 @@
 # Controller (a release Mac app, the phone, the matrix) can exercise the
 # Computer tab, the launch gate, and approvals end to end. This is the
 # "fake Host bootstrap fixture (stub driver)" from the Lane C D2 proof in
-# unpeel-apple:docs/plans/computer-use-release.md; Lane E's matrix case and the Box recipe
+# the private "computer-use-release" design record; Lane E's matrix case and the Box recipe
 # start from the same shape.
 #
 #   UNPEEL_BIN_DIR=~/cu-target/debug ./scripts/ci/computer-use-linux-host.sh [UNPEEL_HOME]

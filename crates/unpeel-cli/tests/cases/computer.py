@@ -4,7 +4,7 @@
 `cua-driver` (here `scripts/ci/fake-cua-driver.sh`), needs a graphical
 session (`DISPLAY`), and supervises `cua-driver serve --embedded`. This case
 drives that adapter through real hosted sessions and the unified MCP server
-and proves the D2 contract from unpeel-apple:docs/plans/computer-use-release.md:
+and proves the D2 contract from the private "computer-use-release" design record:
 
 - the Host advertises availability, and readiness only once the daemon is up;
 - a Session launched before readiness never sees the `computer` tool, one

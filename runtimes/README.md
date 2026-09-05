@@ -145,7 +145,7 @@ bun run validate:runtimes
 cargo test -p unpeel-core
 cargo test -p unpeel-host
 cargo test -p unpeel-cli
-# The Apple repo (unpeel-apple) runs its own client suites against the catalog
+# The Apple clients (apps/) run their own suites against the catalog
 # regenerated with --out from this checkout
 ```
 

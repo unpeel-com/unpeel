@@ -1,0 +1,19 @@
+[package]
+name = "unpeel-native-bridge"
+description = "Panic-contained C ABI for the native Unpeel app to call unpeel-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+unpeel-core = { path = "../unpeel-core" }
+
+[dev-dependencies]
+unpeel-serve = { path = "../unpeel-serve" }

@@ -16,10 +16,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from harness import run, REPO  # noqa: E402
 
 TESTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# The shipped Swift pairing client lives in the Apple client repo
-# (unpeel-apple: apps/shared/UnpeelShared). Point UNPEEL_SHARED_SWIFT_DIR at
-# that Sources/UnpeelShared directory to run the macOS Controller oracle from
-# the server repo; without it (or without those sources) the Swift half is
+# The shipped Swift pairing client lives in apps/shared/UnpeelShared;
+# UNPEEL_SHARED_SWIFT_DIR points at another copy of
+# its Sources/UnpeelShared directory to run the macOS Controller oracle
+# against it; without an Apple toolchain (or those sources) the Swift half is
 # skipped with a NOTE and the QR half still runs.
 SHARED = os.environ.get("UNPEEL_SHARED_SWIFT_DIR") or os.path.join(
     REPO, "apps", "shared", "UnpeelShared", "Sources", "UnpeelShared"
@@ -150,7 +150,7 @@ def body(case):
         elif mac_build_error.startswith("missing shared source"):
             case.note(
                 "shipped Swift pairing client not in this repo — set "
-                "UNPEEL_SHARED_SWIFT_DIR=<unpeel-apple>/apps/shared/UnpeelShared/Sources/UnpeelShared "
+                "UNPEEL_SHARED_SWIFT_DIR=<checkout>/apps/shared/UnpeelShared/Sources/UnpeelShared "
                 "to run the macOS Controller pairing oracle"
             )
         else:

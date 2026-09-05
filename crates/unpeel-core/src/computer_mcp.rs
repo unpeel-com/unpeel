@@ -4,7 +4,7 @@
 //! clicking/typing, app/window control — through the embedded **cua-driver**
 //! engine (github.com/trycua/cua, `libs/cua-driver`).
 //!
-//! Design doc: `unpeel-apple:docs/feature/computer-mcp.md` (engine switched from Peekaboo
+//! Design doc: the private "computer-mcp" design record (engine switched from Peekaboo
 //! to cua-driver 2026-07-22, pre-release — the action surface was reshaped to
 //! cua-driver's window-first model at the same time; there is no legacy
 //! surface to keep compatible).

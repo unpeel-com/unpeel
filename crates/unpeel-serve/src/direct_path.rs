@@ -1,7 +1,7 @@
-//! Host-side direct-path signaling (`unpeel-apple:docs/plans/relay-direct-upgrade.md`
+//! Host-side direct-path signaling (the private "relay-direct-upgrade" design record
 //! increment 2): serves `POST /mobile/direct-path` (candidate negotiate)
 //! and `POST /mobile/direct-path-result` for relay-tunneled Controllers,
-//! per the frozen contract in `unpeel-apple:docs/feature/direct-path-v1.md`.
+//! per the frozen contract in the private "direct-path-v1" design record.
 //!
 //! Only a relayed connection can negotiate — the probe key derives from
 //! that connection's E2E handshake material, which the relay loop registers

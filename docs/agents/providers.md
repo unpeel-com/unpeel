@@ -135,7 +135,7 @@ Cline (`cline` CLI):
   `CLINE_HOOKS_DIR` but never reads it when resolving hook paths
 - Cline exposes no approval-request hook, so custom `--auto-approve false`
   prompts have no distinct hook-driven attention state
-- Full findings: `unpeel-apple:docs/feature/cline-cli-integration.md` (private)
+- Full findings: the private "cline-cli-integration" design record
 
 Pi:
 

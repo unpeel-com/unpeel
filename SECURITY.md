@@ -21,7 +21,7 @@ In scope, in rough order of how much we care:
 - Host exposure: the remote-control server (TLS/pairing/auth), the hook HTTP
   server, the MCP trust boundary (cross-group writes, approval bypasses),
   and the SSH gateway.
-- The clients (macOS, iOS, TUI): sandbox escapes via terminal output,
+- The clients (macOS, iOS): sandbox escapes via terminal output,
   credential handling, pairing spoofing.
 - License/entitlement forgery.
 - The operated services (unpeel.com accounts/licensing, the relay): please

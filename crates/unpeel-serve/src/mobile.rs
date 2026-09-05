@@ -2013,7 +2013,7 @@ fn handle_authenticated_with_effects(
     if request.method != "GET" && request.method != "POST" {
         return (405, error_body("method not allowed"));
     }
-    // Reserved `direct.path.*` operations (unpeel-apple:docs/feature/direct-path-v1.md):
+    // Reserved `direct.path.*` operations (the private "direct-path-v1" design record):
     // connection-scoped like pairing, handled here where transport context
     // lives. Only a relay-tunneled request carries a conn id and handshake
     // material; LAN and SSH get the contract's coarse 409. Not in the

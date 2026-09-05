@@ -34,8 +34,16 @@ src-tauri/target
 # Rust (standalone attach client crate, not a crates/ workspace member)
 crates/unpeel-attach/target
 scripts/tools/ht
+apps/native/tools/ht
 
-# Swift/Xcode build outputs
+# Swift/Xcode build outputs (apps/native, apps/ios, apps/shared)
+apps/*/*/.build
+apps/*/*/.derived
+apps/*/*/.swiftpm
+apps/ios/UnpeelIOS/.deriveddata
+apps/ios/UnpeelIOS/build
+DerivedData
+xcuserdata/
 
 # Python bytecode
 __pycache__
@@ -43,5 +51,8 @@ __pycache__
 .claude/worktrees/
 
 
-# Operator-local agent context (points at the private unpeel-apple map)
+# Wrangler's local miniflare cache (release publisher runs from the root)
+.wrangler/
+
+# Operator-local agent context
 CLAUDE.local.md

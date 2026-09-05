@@ -1,6 +1,6 @@
 //! Real-process proof that the workspace worker supervises its own
 //! `unpeel-host __remote__` TLS terminal streamer
-//! (unpeel-apple:docs/plans/remote-streamer-supervision.md, deliverable 1).
+//! (the private "remote-streamer-supervision" design record, deliverable 1).
 //!
 //! Case 1 runs this build's `unpeel-host __serve__` against an isolated
 //! workspace with one paired device, kills the streamer named in

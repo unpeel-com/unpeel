@@ -25,10 +25,11 @@ reading this first will save you a closed pull request.
   contract; transports (local socket, Direct, SSH, Link) never grow their own
   verbs. Capabilities are advertised in the bootstrap descriptor
   (`protocol/host-capabilities-v1.json`) and every Host runs
-  `protocol/host-conformance-v1.json`. **A protocol change is a public pull
-  request here plus a version bump on the client side** (the Apple apps pin
-  a tagged server release and read `protocol/` from its archive), so change
-  the contract additively and document it in `docs/agents/serve.md`.
+  `protocol/host-conformance-v1.json`. **A protocol change lands Host-first
+  and additively**: change `crates/` and `protocol/` (advertised in
+  bootstrap), then the Swift side under `apps/` in the same tree, and
+  document it in `docs/agents/serve.md`. Out-of-tree clients read
+  `protocol/` from the CLI archive they pin.
 
 ## Where contributions land best
 

@@ -1,0 +1,84 @@
+# The Apple clients (apps/native, apps/ios, apps/shared) and the C-ABI bridge
+# crate build from this tree. One macOS job, kept cheap (macOS minutes cost
+# 10x): an unsigned Mac app assembled through the default from-source path,
+# the iOS package tests in a simulator, and the shared package's `swift test`.
+# No signing identities, notary credentials, or Sparkle keys exist here;
+# official signed builds are cut by the release scripts on an operator's Mac.
+name: Apple clients
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/**'
+      - 'crates/unpeel-native-bridge/**'
+      - '.github/workflows/clients.yml'
+  pull_request:
+    paths:
+      - 'apps/**'
+      - 'crates/unpeel-native-bridge/**'
+      - '.github/workflows/clients.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clients-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos-clients:
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show the image's default Xcode
+        # The app needs the macOS 26 SDK (Liquid Glass styles) and Swift 6.2.
+        # Every Xcode 26.x on the macos-15 image crashes ibtoold/actool with
+        # missing-symbol dyld errors (a macOS 26 toolchain on a macOS 15 host),
+        # so the job runs on the macOS 26 image with its default Xcode.
+        run: |
+          ls -d /Applications/Xcode_*.app | sort -V
+          xcodebuild -version
+      - name: Install declared Rust MSRV
+        uses: dtolnay/rust-toolchain@1.88.0
+      - uses: oven-sh/setup-bun@v2
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            crates
+            crates/unpeel-attach
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: |
+            apps/native/UnpeelNative/.build
+            apps/shared/UnpeelShared/.build
+            ~/Library/Caches/org.swift.swiftpm
+            ~/Library/Developer/Xcode/DerivedData/**/SourcePackages
+          key: swiftpm-${{ runner.os }}-${{ hashFiles('apps/**/Package.resolved', 'apps/native/vendor/libghostty-spm/Package.swift') }}
+          restore-keys: |
+            swiftpm-${{ runner.os }}-
+      - name: Runtime catalog copies agree
+        run: bun run check:runtimes
+      - name: UnpeelShared tests
+        run: swift test --package-path apps/shared/UnpeelShared
+      - name: Unsigned Mac app (server + bridge built from this tree)
+        env:
+          CODESIGN_IDENTITY: '-'
+          UNPEEL_DEV_BUILD: '0'
+          UNPEEL_BUILD: ${{ github.run_number }}
+        run: apps/native/build-app.sh
+      - name: iOS package tests (simulator)
+        # Pick whatever iPhone simulator the image ships (device names change
+        # with every iOS runtime; the image had no "iPhone 16 Pro" under iOS 26).
+        env:
+          UNPEEL_IOS_TEST_DERIVED_DATA: ${{ runner.temp }}/unpeel-ios-tests
+        run: |
+          UDID="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; c=sorted([x for rt,xs in d.items() if "iOS" in rt for x in xs if x.get("isAvailable") and x["name"].startswith("iPhone")], key=lambda x: x["name"]); print(c[-1]["udid"] if c else "")')"
+          test -n "$UDID" || { echo "no available iPhone simulator on this image"; xcrun simctl list devices available; exit 1; }
+          xcrun simctl boot "$UDID" || true
+          export UNPEEL_IOS_TEST_DESTINATION="platform=iOS Simulator,id=$UDID"
+          echo "destination: $UNPEEL_IOS_TEST_DESTINATION"
+          apps/ios/test-ios.sh

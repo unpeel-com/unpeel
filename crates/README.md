@@ -3,7 +3,7 @@
 The Rust workspace: Unpeel's session backend and terminal-side binaries. No
 GUI dependency — everything here runs the same under the Mac app, the
 terminal UI, or a headless Linux host. All of it is open per
-`unpeel-apple:docs/plans/open-source.md`.
+the private "open-source" design record.
 
 | crate | what it is |
 | --- | --- |
