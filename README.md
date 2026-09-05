@@ -3,8 +3,9 @@
 Unpeel is an **agent-first terminal multiplexer**, written in Rust. Sessions
 keep running on your own machines, know when the agent inside them needs you,
 and give that agent a browser, a computer, and its sibling sessions to work
-with. The Mac app, the iPhone/iPad app, and (later) a web app connect to it;
-this repository is the server.
+with. This repository is the whole product apart from the website and the
+operated Link service: the server, the Mac app, and the iPhone/iPad app,
+built from one tree at one version.
 
 **Why this multiplexer**
 
@@ -170,9 +171,24 @@ default; session creation stays user-only. Detail:
 
 ## Clients
 
-Listed at the top of this file. Every client speaks the Host protocol in
-[`protocol/`](protocol/); a headless Linux Host is driven from the Mac app or
-the phone exactly like a Mac Host: [unpeel.com/docs/headless-host](https://unpeel.com/docs/headless-host).
+- **Mac app** — [`apps/native`](apps/native). The desktop client: a Controller
+  of the bundled Host service plus the platform adapter (notifications,
+  Keychain, approvals, Computer Use on the Mac's own desktop). Signed,
+  notarized builds: [unpeel.com/download](https://unpeel.com/download).
+- **iPhone / iPad app** — [`apps/ios`](apps/ios). A remote Controller: steer
+  every session from your phone over your network or through Unpeel Link.
+  Builds ship through TestFlight; see [unpeel.com](https://unpeel.com).
+- **Shared Swift package** — [`apps/shared/UnpeelShared`](apps/shared/UnpeelShared):
+  pairing, the Host protocol client, and the end-to-end relay crypto both apps
+  use, pinned to the same test vectors as the Rust side.
+- **`unpeel` CLI** — this repository's `crates/unpeel-cli`, for terminals and
+  headless Hosts.
+
+Every client speaks the Host protocol in [`protocol/`](protocol/); a headless
+Linux Host is driven from the Mac app or the phone exactly like a Mac Host:
+[unpeel.com/docs/headless-host](https://unpeel.com/docs/headless-host).
+Building the apps from source is covered in the "Apple clients" section of
+[`AGENTS.md`](AGENTS.md).
 
 ## Open source boundary
 
