@@ -6,7 +6,7 @@
 [extend]
 useDefault = true
 
-[allowlist]
+[[allowlists]]
 description = "Known test fixtures (verified non-secrets, 2026-08-13)"
 regexes = [
   # Fake pairing token used across TUI + Swift protocol tests.
@@ -31,3 +31,37 @@ regexes = [
   # commit hashes, which a fresh-start import (one new commit) never has.
   '''^0123456789abcdef$''',
 ]
+
+[[allowlists]]
+description = "Build output that a --no-git working-tree scan would otherwise walk"
+paths = [
+  # Compiled crate metadata embeds the PEM test vectors of the `pem` crate.
+  '''^crates/target/''',
+  '''^crates/unpeel-attach/target/''',
+  '''(^|/)\.build/''',
+  '''^apps/native/dist/''',
+  '''^node_modules/''',
+]
+
+# Apple client test fixtures (imported 2026-09-05). Scoped to the exact files
+# and rules instead of disabling a rule: the fixture pairing token and the
+# dummy platform-adapter callback token are literal test data in the Swift
+# suites, and `privateKey` in RelayProtocol.swift is a CryptoKit
+# Curve25519.KeyAgreement.PrivateKey declaration, never key material.
+[[allowlists]]
+description = "Swift test fixtures: fake pairing token and dummy callback token"
+targetRules = ["generic-api-key", "curl-auth-header", "hashicorp-tf-password"]
+paths = [
+  '''^apps/(native|ios|shared)/.*/Tests/.*\.swift$''',
+  '''^apps/native/UnpeelNative/Sources/UnpeelNative/Previews/.*\.swift$''',
+]
+regexes = [
+  '''0123456789abcdef0123456789abcdef''',
+  '''K7ZP2Q4RSTUVWXYZABCDEFGH23''',
+]
+
+[[allowlists]]
+description = "RelayProtocol.swift: Curve25519 private-key type declarations"
+targetRules = ["generic-api-key", "private-key"]
+paths = ['''^apps/shared/UnpeelShared/Sources/UnpeelShared/RelayProtocol\.swift$''']
+regexes = ['''privateKey''']
