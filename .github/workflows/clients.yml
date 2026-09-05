@@ -33,13 +33,12 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
-      - name: Use the runner image's default Xcode
-        # The image default is the version GitHub curates as stable for this
-        # macOS; the newest installed Xcode (a 26.x on macos-15) crashed
-        # ibtoold/actool with missing-symbol dyld errors on first run.
+      - name: Select Xcode 26.2
+        # The app needs the macOS 26 SDK (Liquid Glass styles) and Swift 6.2, so
+        # the image default (16.4) cannot build it, and the newest installed
+        # Xcode (26.3) crashed ibtoold/actool on this image. Pin a stable 26.x.
         run: |
-          ls -d /Applications/Xcode_*.app | sort -V
-          xcode-select -p
+          sudo xcode-select -s /Applications/Xcode_26.2.app
           xcodebuild -version
       - name: Install declared Rust MSRV
         uses: dtolnay/rust-toolchain@1.88.0
