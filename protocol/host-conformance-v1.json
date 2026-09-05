@@ -843,6 +843,73 @@
       }
     },
     {
+      "id": "openers.unknown-selector",
+      "method": "POST",
+      "path": "/mobile/openers",
+      "body": {
+        "selector": "file:text/unknown",
+        "opener": "editor"
+      },
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "openers.app-must-declare-resource",
+      "method": "POST",
+      "path": "/mobile/openers",
+      "body": {
+        "selector": "file:text/markdown",
+        "opener": "app:unpeel.app.design"
+      },
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "apps-install.malformed-id",
+      "method": "POST",
+      "path": "/mobile/apps/install",
+      "body": {},
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "apps-open.missing-resource",
+      "method": "POST",
+      "path": "/mobile/apps/open",
+      "body": {
+        "callerSessionID": "caller",
+        "appID": "unpeel.app.markdown"
+      },
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "apps-open.app-must-declare-media-type",
+      "method": "POST",
+      "path": "/mobile/apps/open",
+      "body": {
+        "callerSessionID": "caller",
+        "appID": "unpeel.app.design",
+        "mediaType": "text/markdown",
+        "resource": {
+          "kind": "file",
+          "id": "/tmp/readme.md"
+        }
+      },
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
       "id": "unknown-route",
       "method": "GET",
       "path": "/mobile/definitely-not-a-route",
@@ -853,6 +920,26 @@
     }
   ],
   "additiveBootstrapFields": [
+    {
+      "field": "availableApps",
+      "required": true,
+      "note": "Official Host catalog, including missing Apps, for install prompts and Settings."
+    },
+    {
+      "field": "installedApps",
+      "required": true,
+      "note": "Live Host PATH subset of availableApps."
+    },
+    {
+      "field": "openers",
+      "required": true,
+      "note": "Host-owned typed resource selector to app/editor/system preference map."
+    },
+    {
+      "field": "appPresentations",
+      "required": true,
+      "note": "Validated semantic App companion bindings, including reveal revisions, for pane projection in local and remote Controllers."
+    },
     {
       "field": "hostIsolationTier",
       "required": true,

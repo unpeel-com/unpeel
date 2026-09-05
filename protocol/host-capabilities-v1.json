@@ -67,6 +67,20 @@
       "tui": true
     },
     {
+      "id": "apps.install",
+      "method": "POST",
+      "path": "/mobile/apps/install",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "apps.open",
+      "method": "POST",
+      "path": "/mobile/apps/open",
+      "native": true,
+      "tui": true
+    },
+    {
       "id": "host.bootstrap",
       "method": "GET",
       "path": "/mobile/bootstrap",
@@ -280,6 +294,13 @@
       "id": "settings.presets.set",
       "method": "POST",
       "path": "/mobile/presets",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "settings.openers.set",
+      "method": "POST",
+      "path": "/mobile/openers",
       "native": true,
       "tui": true
     },
