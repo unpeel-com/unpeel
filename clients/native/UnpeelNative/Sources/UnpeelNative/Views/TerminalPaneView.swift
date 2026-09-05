@@ -776,6 +776,13 @@ struct TerminalPaneContainer: View {
         store.selectedHostScope == .local
     }
 
+    /// Local scope or a scoped local workspace: panes attach for real here,
+    /// so a phone-owned grid must letterbox them (a true remote Host's
+    /// streamed surface never resizes the PTY).
+    private var isLocalMachineScope: Bool {
+        store.selectedHostScope.isLocalMachine
+    }
+
     private var presentedPanes: [PresentedPane] {
         if let group {
             return group.panes.map { pane in
@@ -1103,7 +1110,7 @@ struct TerminalPaneContainer: View {
                             sessionsDir: store.scopedSessionsDir,
                             frameBackgroundColor: background,
                             themeRevision: cache.themeRevision,
-                            phoneResize: isOwnLocalScope
+                            phoneResize: isLocalMachineScope
                                 ? store.phoneResizeOverrides[entry.id]
                                 : nil,
                             cache: cache,
@@ -1557,7 +1564,7 @@ struct TerminalPaneContainer: View {
     /// terminal's hit area) whenever nothing applies.
     @ViewBuilder
     private func paneCornerControls(for entry: SessionEntry) -> some View {
-        let phoneResize = isOwnLocalScope ? store.phoneResizeOverrides[entry.id] : nil
+        let phoneResize = isLocalMachineScope ? store.phoneResizeOverrides[entry.id] : nil
         let showsGallery = isOwnLocalScope && store.showSessionGallery
         if isAgentTerminal(entry), phoneResize != nil || showsGallery {
             HStack(spacing: 2) {

@@ -837,6 +837,11 @@ final class UnpeelStore: ObservableObject {
     /// canonical Rust workspace worker. The native app presents them only;
     /// Allow/Deny routes back over the same local Host connection.
     var hostOwnedMcpApprovalIDs: Set<String> = []
+    /// Approval rows projected from the SELECTED non-Local scope's bootstrap
+    /// (`pendingApprovals`): a scoped local workspace or a remote Host, whose
+    /// worker has no platform adapter into this app. Answered through the
+    /// selected runtime's `approval.answer`, never the own-home gateway.
+    var scopedHostMcpApprovalIDs: Set<String> = []
     var hostMcpApprovalMessages: [String: (title: String, body: String)] = [:]
     var hostMcpApprovalAnswersInFlight: Set<String> = []
     /// The floating panel for the computer-permissions (TCC) nudge.
@@ -6593,7 +6598,10 @@ final class UnpeelStore: ObservableObject {
         if nextDetectedLocalURLs != detectedLocalURLs {
             detectedLocalURLs = nextDetectedLocalURLs
         }
-        if phoneResizeOverrides.keys.contains(where: { !seen.contains($0) }) {
+        // `seen` is this home's session dirs; a scoped workspace's overrides
+        // are Host-published and reconciled by its projection instead.
+        if selectedHostScope == .local,
+           phoneResizeOverrides.keys.contains(where: { !seen.contains($0) }) {
             phoneResizeOverrides = phoneResizeOverrides.filter { seen.contains($0.key) }
         }
         if resumeFailures.contains(where: { !seen.contains($0) }) {
@@ -8701,7 +8709,11 @@ final class UnpeelStore: ObservableObject {
     func clearPhoneResizeOverride(for sessionID: String) {
         guard phoneResizeOverrides[sessionID] != nil else { return }
         phoneResizeOverrides.removeValue(forKey: sessionID)
-        guard localHostClientStarted, selectedHostScope == .local else { return }
+        // Host-published fits: this window's Local scope as a worker client,
+        // or a scoped local workspace (its worker owns the grid the same way).
+        guard selectedHostScope.isLocalMachine,
+              selectedHostScope != .local || localHostClientStarted
+        else { return }
         phoneFitLocallyClearedSessionIDs.insert(sessionID)
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -15825,6 +15837,21 @@ extension UnpeelStore {
             ))
             reconcileAppPresentations(snapshot.appPresentations)
         }
+        if projectsLocalHost {
+            // Local approvals arrive through the platform adapter; drop any
+            // rows a previously selected scope projected.
+            reconcileScopedHostApprovals([])
+        } else {
+            // A scoped/remote worker has no adapter into this app: its
+            // pending approvals ride the bootstrap, like on the phone.
+            reconcileScopedHostApprovals(snapshot.pendingApprovals ?? [])
+            // A scoped local workspace's panes attach for real, so they
+            // would fight a phone-owned grid exactly like Local panes:
+            // letterbox to the Host-published fit.
+            if selectedHostScope.isLocalMachine {
+                applyHostPublishedPhoneFits(snapshot.sessions)
+            }
+        }
 
         // Entering a non-local Host: swap the expansion set to the Host's own
         // persisted state so open/closed folders are remembered per Host.
@@ -15951,6 +15978,10 @@ extension UnpeelStore {
     private func clearRemoteScopeProjectionState() {
         for sourceID in remoteRestartPlaceholders.keys {
             restartingSessionIDs.remove(sourceID)
+        }
+        reconcileScopedHostApprovals([])
+        if !phoneResizeOverrides.isEmpty {
+            phoneResizeOverrides = [:]
         }
         remoteRestartPlaceholders = [:]
         remoteNodes = []
