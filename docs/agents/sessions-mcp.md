@@ -225,13 +225,9 @@ Auto-registration per provider:
 `apps_mcp.rs` is the first landed piece of the Unpeel Apps agent contract
 (`unpeel-apple:docs/plans/unpeel-apps.md` "Agent access" is authoritative). An installed
 Unpeel App is an entry in `protocol/app-registry.json` whose declared
-CLI resolves through the Host's search path (including its managed App bin
-directory). This catalog plus search-path check is the entire
+CLI resolves on the Host's PATH. This catalog plus PATH check is the entire
 current discovery contract; **no app ever runs its own MCP server**. The `apps`
-domain advertises `list`, `catalog`, `describe`, `search`, `context`, and
-`open`. `catalog` includes missing official Apps, their declared file
-extensions/resource kinds/defaults, and the exact user-facing installation
-command. Agents cannot install software through MCP.
+domain advertises `list`, `describe`, `search`, `context`, and `open`.
 `context` returns agent-safe attached/project relationships plus the same
 caller-relative direct-neighbor snapshot as `sessions.current`. A neighboring
 App includes its ordinary readable companion Session id so “check Design on
@@ -262,31 +258,13 @@ remains — and always framed as app-authored data, never instructions; each
 App's public documentation defines its own `context` schema (Unpeel Design:
 selected file + line span; a markdown App: current file/heading). `open`
 resolves only an installed catalog entry, derives caller/project/cwd Host-side,
-requires remembered user approval per caller/App pair, and attaches/reveals
-only a project/resource App instance that a user Controller or CLI action
-already created. MCP never installs an App and never creates, restarts, or
-removes its companion Session; a missing App or instance returns exact guidance
-to ask the user. A caller-scoped `request_id` deduplicates retries;
-`reveal:false` attaches without advancing the reveal revision. The root `skills` domain provides
+requires remembered user approval per caller/App pair, ensures a Host-owned
+project/resource App instance, and spawns/reuses its Horizon-A companion
+Session. A caller-scoped `request_id` deduplicates retries; `reveal:false`
+attaches without advancing the reveal revision. The root `skills` domain provides
 `list`, `search`, and `get`; future App package guidance uses namespaced ids
 there rather than adding an Apps action. Every App action rechecks the Host's
 resolved PATH, so a mid-session install is visible without a restart.
-
-`apps.open` and the Controller's user-initiated `apps.open` Host effect share
-the typed resolver and presentation model in `app_open`; only the direct user
-path may create/restart a companion. An explicit `resource` plus `media_type`
-defaults to `resource_kind:file`; otherwise callers use a declared typed kind
-such as `folder` or `git.working-tree`. Future kinds such as
-`github.pull-request` use the same wire. The Host passes any resource as one
-shell-safe argument to the resolved App executable. Agent MCP opens retain the
-per-caller/App prompt for attaching/revealing an existing instance, while
-cmd-click is already a direct user action and may install then create it.
-
-That lifecycle boundary is enforced on the supported MCP adapter, not as an
-OS sandbox around arbitrary commands. A hosted process runs as the user's
-account and can invoke the ordinary `unpeel` CLI; noninteractive
-`unpeel apps install` requires an explicit `--yes`, but the cooperative-policy
-contract still depends on agents using the MCP surface for App actions.
 
 Presentation state is the versioned `app_presentations` envelope in
 `app-state.json`: App instances are project/resource identities; bindings pair
@@ -298,9 +276,8 @@ Controllers consume the trusted binding and project a first reveal as their
 own trailing/right split. Pane ids, ratios, focus, visibility, and durable
 membership remain in Controller-owned pane state. Each Controller persists a
 local handled/dismissed revision, so detaching stays detached until a later
-intentional `open` increments the Host revision. The validated semantic
-envelope is also published as bootstrap `appPresentations`, so scoped and
-remote Controllers use the same projection; do not infer it from Session role,
+intentional `open` increments the Host revision. Remote/phone projection still
+needs an additive Host-bootstrap field; do not infer it from Session role,
 commands, or pane files.
 
 Advertising: the `apps` and `skills` tools appear whenever any other domain is advertised

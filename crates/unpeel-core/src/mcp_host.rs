@@ -14,7 +14,7 @@ use crate::session_host::{self, HostedSessionManifest, HostedSessionState, Sessi
 use crate::session_input::sanitize_paste_text;
 #[cfg(test)]
 use crate::session_input::{encode_bracketed_paste, looks_like_it_contains_a_path};
-use crate::state::{current_timestamp_ms, McpGrant, McpRole, McpScope};
+use crate::state::{current_timestamp_ms, McpGrant, McpRole, McpScope, SessionInfo};
 #[cfg(test)]
 use crate::transcripts::transcript_provider_for_command;
 use crate::transcripts::{
@@ -537,8 +537,7 @@ fn initialize_result(params: &Value) -> Value {
     'describe' an app's declared tools plus its optional skill references, and use 'context' \
     to distinguish Apps attached to this agent from other App instances in its project and \
     identify one occupying a direct neighboring pane. \
-    'open' attaches/reveals an approval-gated App panel that the user already created; it never \
-    installs Apps or creates/restarts Sessions. If missing, ask the user to install/open it. \
+    'open' establishes/reuses an approval-gated App panel and asks Controllers to reveal it; \
     the open receipt does not prove panel side, geometry, focus, or current visibility; resolve \
     a later caller-relative layout snapshot with sessions current or apps context. 'skills' discovers \
     and reads narrowly scoped guidance by stable namespaced id. A token like \
@@ -1084,14 +1083,89 @@ fn require_app_open_approval(
     ))
 }
 
-/// Attach/reuse an existing user-created App instance and ask Controllers to
-/// reveal it. MCP never creates or restarts the companion Session.
+fn app_companion_manifest_state(session_id: &str) -> Option<HostedSessionState> {
+    session_host::refresh_manifest_health(session_id).map(|manifest| manifest.state)
+}
+
+/// Start the Horizon-A companion Session exactly once across concurrent MCP
+/// processes. The lifecycle lock is keyed by the Host-minted companion id;
+/// callers that arrive while a detached launcher is publishing its manifest
+/// wait briefly and then observe that same process instead of spawning a
+/// duplicate.
+fn ensure_app_companion_running(
+    result: &mut crate::app_presentations::EnsureAppPresentationResult,
+    request: &crate::app_presentations::EnsureAppPresentation,
+    caller: &HostedSessionManifest,
+    app_name: &str,
+    command: &str,
+) -> Result<&'static str, String> {
+    // A previously healthy companion may have exited. Remove it through the
+    // ordinary lifecycle path so the App identity index is pruned, then mint
+    // one clean replacement and preserve the caller's requested presentation.
+    if app_companion_manifest_state(&result.instance.companion_session_id)
+        == Some(HostedSessionState::Exited)
+    {
+        crate::session_ops::remove_session(&result.instance.companion_session_id)?;
+        *result = crate::app_presentations::ensure_app_presentation(request)?;
+    }
+
+    let companion_id = result.instance.companion_session_id.clone();
+    let _lifecycle_lock = crate::session_ops::lock_session_lifecycle(&companion_id)?;
+    if app_companion_manifest_state(&companion_id) == Some(HostedSessionState::Running) {
+        return Ok("running");
+    }
+
+    let session = SessionInfo {
+        id: companion_id.clone(),
+        project_id: request.project_id.clone(),
+        label: app_name.to_string(),
+        custom_title: true,
+        command: command.to_string(),
+        created_at: current_timestamp_ms(),
+        owner_principal_id: caller.session.owner_principal_id.clone(),
+        created_by_device_id: None,
+        source_preset_id: None,
+        tag_id: None,
+        worktree_path: caller.session.worktree_path.clone(),
+        worktree_branch: caller.session.worktree_branch.clone(),
+        parent_session_id: None,
+        spawned_by: Some(caller.session.id.clone()),
+        role: Some("app-panel".into()),
+        task: Some(format!("Companion panel for {app_name}")),
+    };
+    let hook_port = candidate_app_ports().into_iter().next();
+    crate::session_ops::spawn_session(session, &caller.cwd, hook_port, 80, 32)
+        .map_err(|error| format!("Failed to start App '{app_name}': {error}"))?;
+
+    // The launcher detaches before the Host publishes manifest.json. Keep the
+    // lifecycle lock through that short handoff so a concurrent opener cannot
+    // mistake the accepted launch for an absent process.
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(5) {
+        if app_companion_manifest_state(&companion_id) == Some(HostedSessionState::Running) {
+            return Ok("running");
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    Ok("starting")
+}
+
+/// Establish/reuse the Host semantic binding and ask Controllers to reveal it.
 /// `target: panel` is the whole placement contract: a Mac Controller projects
 /// it on the trailing/right edge, while other Controllers choose their native
 /// equivalent.
 fn tool_apps_open(args: &Value) -> Result<String, String> {
-    let (caller, _) = apps_caller_context()?;
-    let media_type = optional_trimmed_str(args, "media_type");
+    let (caller, project_id) = apps_caller_context()?;
+    let app = crate::apps_mcp::resolve_open_app(
+        optional_trimmed_str(args, "app"),
+        optional_trimmed_str(args, "media_type"),
+    )?;
+    let command = app.command.as_deref().ok_or_else(|| {
+        format!(
+            "App '{}' has no launch command in its manifest, so it cannot open a panel.",
+            app.id
+        )
+    })?;
     match optional_trimmed_str(args, "target") {
         None | Some("panel") => {}
         Some(target) => {
@@ -1105,54 +1179,42 @@ fn tool_apps_open(args: &Value) -> Result<String, String> {
         Some(Value::Bool(reveal)) => *reveal,
         Some(_) => return Err("'reveal' must be a boolean".into()),
     };
-    let explicit_resource = optional_trimmed_str(args, "resource");
-    let resource_kind = optional_trimmed_str(args, "resource_kind").unwrap_or_else(|| {
-        if explicit_resource.is_some() && media_type.is_some() {
-            "file"
-        } else {
-            "folder"
-        }
-    });
-    if resource_kind == "file" && media_type.is_none() {
-        return Err("A file resource requires 'media_type'.".into());
-    }
-    let app = crate::apps_mcp::resolve_open_app(
-        optional_trimmed_str(args, "app"),
-        resource_kind,
-        media_type,
-    )?;
     let resource = Some(crate::app_presentations::AppResourceRef {
-        kind: resource_kind.to_string(),
-        id: explicit_resource.unwrap_or(&caller.cwd).to_string(),
+        kind: optional_trimmed_str(args, "resource_kind")
+            .unwrap_or("folder")
+            .to_string(),
+        id: optional_trimmed_str(args, "resource")
+            .unwrap_or(&caller.cwd)
+            .to_string(),
     });
-    let request = crate::app_open::OpenAppRequest {
+    let request = crate::app_presentations::EnsureAppPresentation {
         caller_session_id: caller.session.id.clone(),
+        project_id,
         app_id: app.id.clone(),
-        media_type: media_type.map(str::to_string),
         view_id: optional_trimmed_str(args, "view_id")
             .unwrap_or(crate::app_presentations::DEFAULT_APP_VIEW_ID)
             .to_string(),
         resource,
+        target: crate::app_presentations::AppPresentationTarget::Panel,
         reveal,
         request_id: optional_trimmed_str(args, "request_id").map(str::to_string),
     };
 
-    // A missing/stopped user-owned instance must fail before consuming the
-    // user's attention or recording an approval that cannot be used.
-    crate::app_open::validate_existing_app(&request)?;
-    // Revealing an installed App is an effect distinct from terminal writes.
-    // Remember approval per caller/App pair before committing the caller's
-    // presentation binding, so a decline cannot leave a phantom attachment.
+    // Launching an installed App is an effect distinct from terminal writes.
+    // Remember approval per caller/App pair before committing new Host state,
+    // so a decline cannot leave a phantom instance behind.
     require_app_open_approval(&caller.session.id, &app.id, &app.name)?;
     // An approval answered after the client cancelled this call must not
     // still commit Host state or launch the companion.
     crate::mcp_cancel::bail_if_cancelled()?;
-    let result = crate::app_open::open_existing_app(&request)?;
-    let receipt = result.presentation.agent_receipt();
+    let mut result = crate::app_presentations::ensure_app_presentation(&request)?;
+    let process_state =
+        ensure_app_companion_running(&mut result, &request, &caller, &app.name, command)?;
+    let receipt = result.agent_receipt();
     serde_json::to_string_pretty(&json!({
-        "app": { "id": result.app_id, "name": result.app_name },
+        "app": { "id": app.id, "name": app.name },
         "presentation": receipt,
-        "process_state": result.process_state,
+        "process_state": process_state,
         "projection": "Host recorded a semantic panel request. Controller geometry and current visibility are intentionally not reported here.",
     }))
     .map_err(|error| format!("Failed to render App open receipt: {error}"))
@@ -1724,8 +1786,8 @@ fn apps_tool_definition() -> Value {
                 "app": { "type": "string", "description": "describe: installed app id (from 'list')" },
                 "query": { "type": "string", "description": "search: case-insensitive substring" },
                 "media_type": { "type": "string", "description": "open: resolve/validate an App handler" },
-                "resource": { "type": "string", "description": "open: resource identity (default caller folder; explicit media-typed resources are files)" },
-                "resource_kind": { "type": "string", "description": "open: file or folder (defaults to file for an explicit media-typed resource, otherwise folder)" },
+                "resource": { "type": "string", "description": "open: resource identity (default caller folder)" },
+                "resource_kind": { "type": "string", "description": "open: resource namespace (default folder)" },
                 "view_id": { "type": "string", "description": "open: App view (default main)" },
                 "target": { "type": "string", "enum": ["panel"], "description": "open: semantic target" },
                 "reveal": { "type": "boolean", "description": "open: ask Controllers to reveal (default true)" },
@@ -4234,21 +4296,6 @@ mod tests {
         assert!(hit_client.join().expect("client stub thread"));
     }
 
-    #[test]
-    fn session_scoped_apps_mcp_cannot_reach_the_controller_install_effect() {
-        assert!(!crate::apps_mcp::APPS_ACTIONS.contains(&"install"));
-        assert!(!apps_action_names().contains(&"install"));
-        let error = run_apps_action(
-            "install",
-            &serde_json::json!({ "app": "unpeel.app.markdown" }),
-        )
-        .unwrap_err();
-        assert!(
-            error.starts_with("Unknown apps action: install."),
-            "{error}"
-        );
-    }
-
     use crate::state::SessionInfo;
     use crate::transcripts::{
         collect_transcript_entries, resume_id_from_command, TranscriptProvider,
@@ -4397,9 +4444,6 @@ mod tests {
             description: "Visual React designer".into(),
             command: Some("unpeel-design".into()),
             media_types: vec![],
-            file_extensions: Default::default(),
-            resource_kinds: Vec::new(),
-            default_for: Vec::new(),
             tools: vec![crate::apps_mcp::AgentToolDecl {
                 name: "set_text".into(),
                 description: "Replace a selected element's text".into(),

@@ -120,93 +120,43 @@ printf '{"channel":"%s","install_dir":"%s","installed_at":"%s"}\n' \
 
 ver="$("$dir/unpeel" --version 2>/dev/null || echo unpeel)"
 
-# The canonical seated mascot from the unpeel-mascot repository. Interactive
-# terminals get its agent-color gradient; piped/dumb terminals get the same
-# silhouette in three monochrome shades and no escape sequences.
-mascot_color=false
-if [ -t 1 ] && [ "${TERM:-dumb}" != dumb ]; then
-  mascot_color=true
-fi
-
-# Set mascot_rgb to the mascot's horizontal six-stop gradient. Face and feet
-# use the midpoint between the body color and white.
-mascot_gradient() {
-  mascot_gradient_pos=$(( ($1 - 1) * 500 ))
-  [ "$mascot_gradient_pos" -lt 0 ] && mascot_gradient_pos=0
-  [ "$mascot_gradient_pos" -gt 5000 ] && mascot_gradient_pos=5000
-  mascot_gradient_segment=$(( mascot_gradient_pos / 1000 ))
-  if [ "$mascot_gradient_segment" -ge 5 ]; then
-    mascot_gradient_segment=4
-  fi
-  mascot_gradient_fraction=$(( mascot_gradient_pos - mascot_gradient_segment * 1000 ))
-  case "$mascot_gradient_segment" in
-    0) mascot_ar=217; mascot_ag=119; mascot_ab=87;  mascot_br=0;   mascot_bg=196; mascot_bb=196 ;;
-    1) mascot_ar=0;   mascot_ag=196; mascot_ab=196; mascot_br=67;  mascot_bg=194; mascot_bb=81  ;;
-    2) mascot_ar=67;  mascot_ag=194; mascot_ab=81;  mascot_br=79;  mascot_bg=168; mascot_bb=255 ;;
-    3) mascot_ar=79;  mascot_ag=168; mascot_ab=255; mascot_br=76;  mascot_bg=125; mascot_bb=247 ;;
-    4) mascot_ar=76;  mascot_ag=125; mascot_ab=247; mascot_br=155; mascot_bg=97;  mascot_bb=234 ;;
-  esac
-  mascot_r=$(( mascot_ar + (mascot_br - mascot_ar) * mascot_gradient_fraction / 1000 ))
-  mascot_g=$(( mascot_ag + (mascot_bg - mascot_ag) * mascot_gradient_fraction / 1000 ))
-  mascot_b=$(( mascot_ab + (mascot_bb - mascot_ab) * mascot_gradient_fraction / 1000 ))
-  if [ "$2" = light ]; then
-    mascot_r=$(( mascot_r + (255 - mascot_r) / 2 ))
-    mascot_g=$(( mascot_g + (255 - mascot_g) / 2 ))
-    mascot_b=$(( mascot_b + (255 - mascot_b) / 2 ))
-  fi
-  mascot_rgb="$mascot_r;$mascot_g;$mascot_b"
-}
-
-mascot_row() {
-  mascot_cells=$1
-  mascot_column=0
-  printf '   '
-  while [ -n "$mascot_cells" ]; do
-    mascot_cell=${mascot_cells%"${mascot_cells#?}"}
-    mascot_cells=${mascot_cells#?}
-    case "$mascot_cell" in
-      B)
-        if $mascot_color; then printf '\033[38;2;0;0;0m██'; else printf '  '; fi
-        ;;
-      L)
-        if $mascot_color; then
-          mascot_gradient "$mascot_column" light
-          printf '\033[38;2;%sm██' "$mascot_rgb"
-        else
-          printf '▓▓'
-        fi
-        ;;
-      M|D)
-        if $mascot_color; then
-          mascot_gradient "$mascot_column" body
-          printf '\033[38;2;%sm██' "$mascot_rgb"
-        else
-          printf '██'
-        fi
-        ;;
-      *)
-        if $mascot_color; then printf '\033[0m  '; else printf '  '; fi
-        ;;
-    esac
-    mascot_column=$((mascot_column + 1))
-  done
-  if $mascot_color; then printf '\033[0m\n'; else printf '\n'; fi
-}
-
+# The block wordmark (unpeel-type.sh --type in the unpeel-mascot repo). On a
+# live terminal, one wave of agent colors shimmers through the letters and
+# settles back to the default color — the same effect as the website's
+# wordmark hover. Piped/dumb terminals get the plain banner.
 echo ""
-mascot_row '....DDDDD........'
-mascot_row '...DDDDDDD.......'
-mascot_row '..MLLLLLLLM......'
-mascot_row '.LMLBLLLBLML.....'
-mascot_row '.LMLBLLLBLMLMM...'
-mascot_row '..MLLLLLLLM..M...'
-mascot_row '...MMLLLMM....M..'
-mascot_row '....MMMMM.....M..'
-mascot_row '....MMMMMM....M..'
-mascot_row '...MMMMMMMM..M...'
-mascot_row '...MMMMMMMMMM....'
-mascot_row '...MMMMMMMMM.....'
-mascot_row '...LLMMMLLM......'
+U1='█   █'; N1='█▄  █'; P1='█▀▀▀█'; E1='█▀▀▀▀'; L1='█'
+U2='█   █'; N2='█ ▀▄█'; P2='█▀▀▀▀'; E2='█▀▀▀ '; L2='█'
+U3='▀▀▀▀▀'; N3='▀   ▀'; P3='▀    '; E3='▀▀▀▀▀'; L3='▀▀▀▀▀'
+if [ -t 1 ] && [ "${TERM:-dumb}" != dumb ] && sleep 0.01 2>/dev/null; then
+  # Agent palette (truecolor): claude, codex, green, kimi, cursor, kiro.
+  C1='217;119;87'; C2='94;197;190'; C3='61;198;116'
+  C4='79;168;255'; C5='170;110;245'; C6='193;154;255'
+  # paint <frame> <letter#> <chunk>: the wave is two letters wide.
+  paint() {
+    if [ "$1" -ge "$2" ] && [ "$1" -le "$(($2 + 1))" ]; then
+      eval "printf '\033[38;2;%sm%s\033[0m' \"\$C$2\" \"\$3\""
+    else
+      printf '%s' "$3"
+    fi
+  }
+  f=0
+  while [ "$f" -le 8 ]; do
+    [ "$f" -gt 0 ] && printf '\033[3A'
+    for r in 1 2 3; do
+      eval "u=\$U$r; n=\$N$r; p=\$P$r; e=\$E$r; l=\$L$r"
+      printf '%s %s %s %s %s %s\n' \
+        "$(paint "$f" 1 "$u")" "$(paint "$f" 2 "$n")" "$(paint "$f" 3 "$p")" \
+        "$(paint "$f" 4 "$e")" "$(paint "$f" 5 "$e")" "$(paint "$f" 6 "$l")"
+    done
+    sleep 0.06
+    f=$((f + 1))
+  done
+else
+  printf '%s %s %s %s %s %s\n' "$U1" "$N1" "$P1" "$E1" "$E1" "$L1"
+  printf '%s %s %s %s %s %s\n' "$U2" "$N2" "$P2" "$E2" "$E2" "$L2"
+  printf '%s %s %s %s %s %s\n' "$U3" "$N3" "$P3" "$E3" "$E3" "$L3"
+fi
 echo ""
 echo "$ver ($CHANNEL) installed to $dir"
 

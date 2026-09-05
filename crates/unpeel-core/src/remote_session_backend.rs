@@ -66,10 +66,7 @@ const CREATE_CAPABILITY: &str = "session.create";
 const ORDER_SET_CAPABILITY: &str = "session.order.set";
 const PROJECT_ORGANIZATION_CAPABILITY: &str = "project.organization.set";
 const PRESETS_CAPABILITY: &str = "settings.presets.set";
-const OPENERS_CAPABILITY: &str = "settings.openers.set";
 const WORKSPACE_SETTINGS_CAPABILITY: &str = "settings.workspace.set";
-const APPS_INSTALL_CAPABILITY: &str = "apps.install";
-const APPS_OPEN_CAPABILITY: &str = "apps.open";
 const ARCHIVE_LIST_CAPABILITY: &str = "session.archive.list";
 const TRANSCRIPT_MARKDOWN_CAPABILITY: &str = "session.transcript.markdown";
 const METRICS_CAPABILITY: &str = "session.metrics.read";
@@ -93,10 +90,7 @@ pub const REMOTE_CAPABILITY_CREATE: &str = CREATE_CAPABILITY;
 pub const REMOTE_CAPABILITY_ORDER_SET: &str = ORDER_SET_CAPABILITY;
 pub const REMOTE_CAPABILITY_PROJECT_ORGANIZATION_SET: &str = PROJECT_ORGANIZATION_CAPABILITY;
 pub const REMOTE_CAPABILITY_PRESETS_SET: &str = PRESETS_CAPABILITY;
-pub const REMOTE_CAPABILITY_OPENERS_SET: &str = OPENERS_CAPABILITY;
 pub const REMOTE_CAPABILITY_WORKSPACE_SETTINGS_SET: &str = WORKSPACE_SETTINGS_CAPABILITY;
-pub const REMOTE_CAPABILITY_APPS_INSTALL: &str = APPS_INSTALL_CAPABILITY;
-pub const REMOTE_CAPABILITY_APPS_OPEN: &str = APPS_OPEN_CAPABILITY;
 pub const REMOTE_CAPABILITY_ARCHIVE_LIST: &str = ARCHIVE_LIST_CAPABILITY;
 pub const REMOTE_CAPABILITY_TRANSCRIPT_MARKDOWN: &str = TRANSCRIPT_MARKDOWN_CAPABILITY;
 pub const REMOTE_CAPABILITY_METRICS_READ: &str = METRICS_CAPABILITY;
@@ -114,10 +108,7 @@ const SESSIONS_CREATE_PATH: &str = "/mobile/sessions";
 const SESSION_ORDER_PATH: &str = "/mobile/session-order";
 const PROJECT_ORGANIZATION_PATH: &str = "/mobile/project-organization";
 const PRESETS_PATH: &str = "/mobile/presets";
-const OPENERS_PATH: &str = "/mobile/openers";
 const WORKSPACE_SETTINGS_PATH: &str = "/mobile/workspace-settings";
-const APPS_INSTALL_PATH: &str = "/mobile/apps/install";
-const APPS_OPEN_PATH: &str = "/mobile/apps/open";
 const ARCHIVE_LIST_PATH: &str = "/mobile/archive";
 const TRANSCRIPT_MARKDOWN_PATH: &str = "/mobile/transcript-markdown";
 const METRICS_PATH: &str = "/mobile/metrics";
@@ -138,7 +129,6 @@ const DEFAULT_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(10);
 // relay latency into a generation-destroying timeout.
 const DEFAULT_OUTPUT_HEADROOM: Duration = Duration::from_secs(10);
 const DEFAULT_EFFECT_TIMEOUT: Duration = Duration::from_secs(10);
-const APP_INSTALL_EFFECT_TIMEOUT: Duration = Duration::from_secs(180);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -366,31 +356,6 @@ pub struct RemotePaneGroupSummary {
     pub session_ids: Vec<String>,
 }
 
-/// One official App from the Host's embedded registry. `installed` is a live
-/// PATH projection; the remaining fields describe Apps that may be offered
-/// before installation without duplicating the catalog in a Controller.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RemoteAppSummary {
-    pub id: String,
-    pub name: String,
-    #[serde(default)]
-    pub description: String,
-    #[serde(default)]
-    pub tint: Option<String>,
-    pub command: String,
-    #[serde(default)]
-    pub media_types: Vec<String>,
-    #[serde(default)]
-    pub file_extensions: HashMap<String, String>,
-    #[serde(default)]
-    pub resource_kinds: Vec<String>,
-    #[serde(default)]
-    pub default_for: Vec<String>,
-    #[serde(default)]
-    pub installed: bool,
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteBootstrapSnapshot {
@@ -409,21 +374,6 @@ pub struct RemoteBootstrapSnapshot {
     /// Hosts.
     #[serde(default, rename = "workspaceSettings")]
     pub workspace_settings: Option<RemoteWorkspaceSettings>,
-    /// Additive (minor 15): the complete official catalog, including Apps not
-    /// installed on this Host yet.
-    #[serde(default)]
-    pub available_apps: Vec<RemoteAppSummary>,
-    /// Additive (minor 15): live installed subset, retained separately for
-    /// simple Controllers and compatibility with the original plan.
-    #[serde(default)]
-    pub installed_apps: Vec<RemoteAppSummary>,
-    /// Additive (minor 15): typed selector -> app/editor/system preference.
-    #[serde(default)]
-    pub openers: HashMap<String, String>,
-    /// Additive (minor 15): validated semantic App/pane bindings. Controllers
-    /// use the same envelope locally and remotely.
-    #[serde(default)]
-    pub app_presentations: Option<Value>,
     pub sessions: Vec<RemoteSessionSummary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane_groups: Option<Vec<RemotePaneGroupSummary>>,
@@ -1057,39 +1007,6 @@ pub struct RemoteWorkspaceSettingsPatch {
     pub computer_access: Option<String>,
     pub mcp_worktree_access: Option<bool>,
     pub mcp_auto_add_browser_screenshots: Option<bool>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct OpenerWire<'a> {
-    selector: &'a str,
-    opener: &'a str,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-struct AppInstallWire<'a> {
-    #[serde(rename = "appID")]
-    app_id: &'a str,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-struct AppOpenResourceWire<'a> {
-    kind: &'a str,
-    id: &'a str,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AppOpenWire<'a> {
-    #[serde(rename = "callerSessionID")]
-    caller_session_id: &'a str,
-    #[serde(rename = "appID")]
-    app_id: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    media_type: Option<&'a str>,
-    resource: AppOpenResourceWire<'a>,
-    #[serde(rename = "requestID")]
-    request_id: &'a str,
 }
 
 impl RemoteWorkspaceSettingsPatch {
@@ -2305,162 +2222,6 @@ impl RemoteSessionBackend {
         )
     }
 
-    /// Set one Host-owned typed-resource opener preference.
-    pub fn set_opener(
-        &self,
-        selector: &str,
-        opener: &str,
-    ) -> Result<RemoteEffectReceipt, RemoteEffectFailure> {
-        const OPERATION: &str = "resource opener";
-        let effect_turn = self.inner.begin_effect();
-        effect_preflight(OPERATION, || {
-            if selector.is_empty()
-                || selector.len() > 228
-                || (!selector.starts_with("file:") && !selector.starts_with("resource:"))
-                || !selector.bytes().all(|byte| {
-                    byte.is_ascii_alphanumeric()
-                        || matches!(byte, b':' | b'/' | b'.' | b'+' | b'_' | b'-')
-                })
-            {
-                return Err(invalid_effect_input(OPERATION, "invalid opener selector"));
-            }
-            if !matches!(opener, "editor" | "system") && !opener.starts_with("app:unpeel.app.") {
-                return Err(invalid_effect_input(OPERATION, "invalid opener"));
-            }
-            Ok(())
-        })?;
-        let body = encode_effect_body(OPERATION, &OpenerWire { selector, opener })?;
-        self.inner.perform_effect(
-            &effect_turn,
-            OPERATION,
-            OPENERS_CAPABILITY,
-            OPENERS_PATH,
-            body,
-        )
-    }
-
-    /// Install an official App on the Host. The Host resolves the id through
-    /// its own embedded allowlist and chooses the platform artifact.
-    pub fn install_app(&self, app_id: &str) -> Result<RemoteEffectReceipt, RemoteEffectFailure> {
-        const OPERATION: &str = "App install";
-        let effect_turn = self.inner.begin_effect();
-        effect_preflight(OPERATION, || {
-            if app_id.is_empty()
-                || app_id.len() > 128
-                || !app_id
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
-            {
-                return Err(invalid_effect_input(OPERATION, "invalid App id"));
-            }
-            Ok(())
-        })?;
-        let body = encode_effect_body(OPERATION, &AppInstallWire { app_id })?;
-        self.inner.perform_effect_with_timeout(
-            &effect_turn,
-            OPERATION,
-            APPS_INSTALL_CAPABILITY,
-            APPS_INSTALL_PATH,
-            body,
-            APP_INSTALL_EFFECT_TIMEOUT,
-        )
-    }
-
-    /// Open an installed App for one typed resource. This user-initiated
-    /// Controller entry may create/restart the semantic companion; MCP can
-    /// only attach to one that already exists. The resulting pane arrives
-    /// through bootstrap's `appPresentations` projection.
-    pub fn open_app(
-        &self,
-        caller_session_id: &str,
-        app_id: &str,
-        resource_kind: &str,
-        media_type: Option<&str>,
-        resource_id: &str,
-        request_id: &str,
-    ) -> Result<RemoteEffectReceipt, RemoteEffectFailure> {
-        const OPERATION: &str = "App open";
-        let effect_turn = self.inner.begin_effect();
-        effect_preflight(OPERATION, || {
-            for (name, value) in [
-                ("caller Session id", caller_session_id),
-                ("App id", app_id),
-                ("request id", request_id),
-            ] {
-                if value.is_empty()
-                    || value.len() > 256
-                    || value.contains('\0')
-                    || !value.bytes().all(|byte| {
-                        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
-                    })
-                {
-                    return Err(invalid_effect_input(OPERATION, format!("invalid {name}")));
-                }
-            }
-            if !crate::apps_mcp::valid_resource_kind(resource_kind) {
-                return Err(invalid_effect_input(OPERATION, "invalid resource kind"));
-            }
-            match media_type {
-                Some(media_type)
-                    if media_type.is_empty()
-                        || media_type.len() > 128
-                        || !media_type.bytes().all(|byte| {
-                            byte.is_ascii_alphanumeric()
-                                || matches!(byte, b'/' | b'.' | b'+' | b'-')
-                        }) =>
-                {
-                    return Err(invalid_effect_input(OPERATION, "invalid media type"));
-                }
-                None if resource_kind == "file" => {
-                    return Err(invalid_effect_input(
-                        OPERATION,
-                        "file resources require a media type",
-                    ));
-                }
-                Some(_) if resource_kind != "file" => {
-                    return Err(invalid_effect_input(
-                        OPERATION,
-                        "media type is valid only for file resources",
-                    ));
-                }
-                _ => {}
-            }
-            if resource_id.is_empty() || resource_id.len() > 4 * 1024 || resource_id.contains('\0')
-            {
-                return Err(invalid_effect_input(OPERATION, "invalid resource id"));
-            }
-            if matches!(resource_kind, "file" | "folder" | "git.working-tree")
-                && !std::path::Path::new(resource_id).is_absolute()
-            {
-                return Err(invalid_effect_input(
-                    OPERATION,
-                    "path-backed resources require an absolute Host path",
-                ));
-            }
-            Ok(())
-        })?;
-        let body = encode_effect_body(
-            OPERATION,
-            &AppOpenWire {
-                caller_session_id,
-                app_id,
-                media_type,
-                resource: AppOpenResourceWire {
-                    kind: resource_kind,
-                    id: resource_id,
-                },
-                request_id,
-            },
-        )?;
-        self.inner.perform_effect(
-            &effect_turn,
-            OPERATION,
-            APPS_OPEN_CAPABILITY,
-            APPS_OPEN_PATH,
-            body,
-        )
-    }
-
     /// Create a Session on the Host (`session.create`). Session creation is
     /// user-initiated from Controller UI; this method is that path. Exactly
     /// like every other effect it is dispatched at most once on the accepted
@@ -2495,7 +2256,6 @@ impl RemoteSessionBackend {
             &[],
             "application/json",
             body,
-            DEFAULT_EFFECT_TIMEOUT,
         )?;
         let response: CreateSessionResponseWire =
             serde_json::from_slice(&exchange.body).map_err(|error| {
@@ -2556,7 +2316,6 @@ impl RemoteSessionBackend {
             &[],
             "application/json",
             body.to_vec(),
-            DEFAULT_EFFECT_TIMEOUT,
         )?;
         Ok(exchange.body)
     }
@@ -2619,7 +2378,6 @@ impl RemoteSessionBackend {
             &query,
             wire_content_type.expect("validated in preflight"),
             bytes,
-            DEFAULT_EFFECT_TIMEOUT,
         )?;
         let response: UploadResponseWire =
             serde_json::from_slice(&exchange.body).map_err(|error| {
@@ -3054,25 +2812,6 @@ impl BackendInner {
         path: &'static str,
         body: Vec<u8>,
     ) -> Result<RemoteEffectReceipt, RemoteEffectFailure> {
-        self.perform_effect_with_timeout(
-            effect_turn,
-            operation,
-            capability,
-            path,
-            body,
-            DEFAULT_EFFECT_TIMEOUT,
-        )
-    }
-
-    fn perform_effect_with_timeout(
-        &self,
-        effect_turn: &EffectTurn<'_>,
-        operation: &'static str,
-        capability: &'static str,
-        path: &'static str,
-        body: Vec<u8>,
-        timeout: Duration,
-    ) -> Result<RemoteEffectReceipt, RemoteEffectFailure> {
         let exchange = self.perform_effect_exchange(
             effect_turn,
             operation,
@@ -3081,7 +2820,6 @@ impl BackendInner {
             &[],
             "application/json",
             body,
-            timeout,
         )?;
         let receipt: EffectReceiptWire =
             serde_json::from_slice(&exchange.body).map_err(|error| {
@@ -3113,7 +2851,6 @@ impl BackendInner {
         query: &[(&'static str, String)],
         content_type: &'static str,
         body: Vec<u8>,
-        timeout: Duration,
     ) -> Result<EffectExchange, RemoteEffectFailure> {
         let accepted = self.ensure_bootstrap().map_err(|error| {
             effect_failure(operation, RemoteEffectFailureKind::NotApplied, error)
@@ -3169,7 +2906,7 @@ impl BackendInner {
             }
         };
         let request_id = call.request_id();
-        let reply = match self.connection.request(call, timeout) {
+        let reply = match self.connection.request(call, DEFAULT_EFFECT_TIMEOUT) {
             Ok(reply) => reply,
             Err(error) => {
                 if connection_error_invalidates_generation(&error) {
@@ -4535,97 +4272,6 @@ mod tests {
                 DEFAULT_EFFECT_TIMEOUT,
                 DEFAULT_EFFECT_TIMEOUT,
                 DEFAULT_EFFECT_TIMEOUT,
-                DEFAULT_EFFECT_TIMEOUT,
-            ]
-        );
-    }
-
-    #[test]
-    fn app_effects_use_shared_host_contracts_and_install_timeout() {
-        let connection = ScriptedConnection::new();
-        let generation = connection.generation(1);
-        add_bootstrap(
-            &connection,
-            generation,
-            bootstrap_json(
-                Some("host-1"),
-                HOST_PROTOCOL_MAJOR,
-                Some(&[
-                    BOOTSTRAP_CAPABILITY,
-                    OPENERS_CAPABILITY,
-                    APPS_INSTALL_CAPABILITY,
-                    APPS_OPEN_CAPABILITY,
-                ]),
-            ),
-        );
-        for (path, body) in [
-            (
-                OPENERS_PATH,
-                json!({
-                    "selector": "file:text/markdown",
-                    "opener": "app:unpeel.app.markdown",
-                }),
-            ),
-            (APPS_INSTALL_PATH, json!({ "appID": "unpeel.app.markdown" })),
-            (
-                APPS_OPEN_PATH,
-                json!({
-                    "callerSessionID": "s1",
-                    "appID": "unpeel.app.markdown",
-                    "mediaType": "text/markdown",
-                    "resource": {
-                        "kind": "file",
-                        "id": "/tmp/hello world.md",
-                    },
-                    "requestID": "open-1",
-                }),
-            ),
-        ] {
-            connection.push(reply_step(
-                expected_effect(generation, path, body),
-                generation,
-                200,
-                br#"{"ok":true}"#.to_vec(),
-            ));
-        }
-        let backend = RemoteSessionBackend::new(connection.clone());
-        backend.bootstrap().unwrap();
-
-        assert_eq!(
-            backend
-                .set_opener("file:text/markdown", "app:unpeel.app.markdown")
-                .unwrap()
-                .request_id(),
-            2
-        );
-        assert_eq!(
-            backend
-                .install_app("unpeel.app.markdown")
-                .unwrap()
-                .request_id(),
-            3
-        );
-        assert_eq!(
-            backend
-                .open_app(
-                    "s1",
-                    "unpeel.app.markdown",
-                    "file",
-                    Some("text/markdown"),
-                    "/tmp/hello world.md",
-                    "open-1",
-                )
-                .unwrap()
-                .request_id(),
-            4
-        );
-        assert_eq!(connection.remaining(), 0);
-        assert_eq!(
-            connection.timeouts(),
-            vec![
-                DEFAULT_BOOTSTRAP_TIMEOUT,
-                DEFAULT_EFFECT_TIMEOUT,
-                APP_INSTALL_EFFECT_TIMEOUT,
                 DEFAULT_EFFECT_TIMEOUT,
             ]
         );

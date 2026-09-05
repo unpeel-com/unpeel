@@ -21,8 +21,6 @@ pub const NATIVE_HOST_CAPABILITIES: &[&str] = &[
     "artifact.request_screenshot",
     "artifact.upload",
     "artifact.upload.resumable",
-    "apps.install",
-    "apps.open",
     "host.bootstrap",
     "host.mobile.tls",
     "pairing.create",
@@ -53,7 +51,6 @@ pub const NATIVE_HOST_CAPABILITIES: &[&str] = &[
     "session.title.set",
     "session.transcript.markdown",
     "settings.presets.set",
-    "settings.openers.set",
     "settings.workspace.set",
 ];
 
@@ -65,8 +62,6 @@ pub const HEADLESS_HOST_CAPABILITIES: &[&str] = &[
     "artifact.read",
     "artifact.request_screenshot",
     "artifact.upload.resumable",
-    "apps.install",
-    "apps.open",
     "host.bootstrap",
     "host.mobile.tls",
     "pairing.create",
@@ -94,7 +89,6 @@ pub const HEADLESS_HOST_CAPABILITIES: &[&str] = &[
     "session.title.set",
     "session.transcript.markdown",
     "settings.presets.set",
-    "settings.openers.set",
     "settings.workspace.set",
 ];
 
@@ -121,10 +115,6 @@ impl HostProtocolDescriptor {
             minor_version: HOST_PROTOCOL_MINOR,
             capabilities: capabilities
                 .iter()
-                .filter(|capability| {
-                    **capability != "apps.install"
-                        || crate::app_installer::release_target().is_some()
-                })
                 .map(|value| (*value).to_owned())
                 .collect(),
         }
@@ -180,7 +170,6 @@ mod tests {
             .into_iter()
             .filter(|entry| entry.tui)
             .map(|entry| entry.id)
-            .filter(|id| id != "apps.install" || crate::app_installer::release_target().is_some())
             .collect();
         assert_eq!(HostProtocolDescriptor::headless_v1().capabilities, expected);
     }
@@ -195,21 +184,8 @@ mod tests {
             .into_iter()
             .filter(|entry| entry.native)
             .map(|entry| entry.id)
-            .filter(|id| id != "apps.install" || crate::app_installer::release_target().is_some())
             .collect();
         assert_eq!(HostProtocolDescriptor::native_v1().capabilities, expected);
-    }
-
-    #[test]
-    fn app_install_is_advertised_only_on_a_published_target() {
-        assert_eq!(
-            HostProtocolDescriptor::headless_v1().supports("apps.install"),
-            crate::app_installer::release_target().is_some()
-        );
-        assert_eq!(
-            HostProtocolDescriptor::native_v1().supports("apps.install"),
-            crate::app_installer::release_target().is_some()
-        );
     }
 
     #[test]

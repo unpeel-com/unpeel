@@ -117,9 +117,6 @@ test('installer verifies a valid sidecar and installs both binaries', () => {
     assert.equal(result.status, 0, result.stderr)
     assert.equal(existsSync(resolve(state.installDir, 'unpeel')), true)
     assert.equal(existsSync(resolve(state.installDir, 'unpeel-host')), true)
-    assert.match(result.stdout, /██▓▓▓▓▓▓▓▓▓▓▓▓▓▓██/)
-    assert.doesNotMatch(result.stdout, /█   █ █▄  █/)
-    assert.doesNotMatch(result.stdout, /\x1b/)
   } finally {
     rmSync(state.root, { recursive: true, force: true })
   }

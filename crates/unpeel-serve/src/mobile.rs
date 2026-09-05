@@ -1776,20 +1776,6 @@ fn handle_with_effects(
                 unpeel_core::controller_host::workspace_settings_response(&body_json(request));
             (status, body.to_string())
         }
-        ("POST", "/mobile/openers") => {
-            let (status, body) = unpeel_core::controller_host::opener_response(&body_json(request));
-            (status, body.to_string())
-        }
-        ("POST", "/mobile/apps/install") => {
-            let (status, body) =
-                unpeel_core::controller_host::app_install_response(&body_json(request));
-            (status, body.to_string())
-        }
-        ("POST", "/mobile/apps/open") => {
-            let (status, body) =
-                unpeel_core::controller_host::app_open_response(&body_json(request), hook_port);
-            (status, body.to_string())
-        }
         ("POST", "/mobile/resize-desktop") => {
             // This is the phone's FIT verb: on the desktop it letterboxes
             // the surface AND resizes the PTY to the phone grid. App-less
