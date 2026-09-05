@@ -73,12 +73,10 @@ jobs:
       - name: iOS package tests (simulator)
         # Pick whatever iPhone simulator the image ships (device names change
         # with every iOS runtime; the image had no "iPhone 16 Pro" under iOS 26).
+        env:
+          UNPEEL_IOS_TEST_DERIVED_DATA: ${{ runner.temp }}/unpeel-ios-tests
         run: |
-          UDID="$(xcrun simctl list devices available -j | python3 -c 'import json,sys
-d=json.load(sys.stdin)["devices"]
-cands=[dev for rt,devs in d.items() if "iOS" in rt for dev in devs if dev.get("isAvailable") and dev["name"].startswith("iPhone")]
-cands.sort(key=lambda x:x["name"])
-print(cands[-1]["udid"] if cands else "")')"
+          UDID="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; c=sorted([x for rt,xs in d.items() if "iOS" in rt for x in xs if x.get("isAvailable") and x["name"].startswith("iPhone")], key=lambda x: x["name"]); print(c[-1]["udid"] if c else "")')"
           test -n "$UDID" || { echo "no available iPhone simulator on this image"; xcrun simctl list devices available; exit 1; }
           xcrun simctl boot "$UDID" || true
           export UNPEEL_IOS_TEST_DESTINATION="platform=iOS Simulator,id=$UDID"
