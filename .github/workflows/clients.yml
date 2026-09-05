@@ -71,7 +71,16 @@ jobs:
           UNPEEL_BUILD: ${{ github.run_number }}
         run: apps/native/build-app.sh
       - name: iOS package tests (simulator)
-        env:
-          UNPEEL_IOS_TEST_DESTINATION: 'platform=iOS Simulator,name=iPhone 16 Pro,OS=latest'
-          UNPEEL_IOS_TEST_DERIVED_DATA: ${{ runner.temp }}/unpeel-ios-tests
-        run: apps/ios/test-ios.sh
+        # Pick whatever iPhone simulator the image ships (device names change
+        # with every iOS runtime; the image had no "iPhone 16 Pro" under iOS 26).
+        run: |
+          UDID="$(xcrun simctl list devices available -j | python3 -c 'import json,sys
+d=json.load(sys.stdin)["devices"]
+cands=[dev for rt,devs in d.items() if "iOS" in rt for dev in devs if dev.get("isAvailable") and dev["name"].startswith("iPhone")]
+cands.sort(key=lambda x:x["name"])
+print(cands[-1]["udid"] if cands else "")')"
+          test -n "$UDID" || { echo "no available iPhone simulator on this image"; xcrun simctl list devices available; exit 1; }
+          xcrun simctl boot "$UDID" || true
+          export UNPEEL_IOS_TEST_DESTINATION="platform=iOS Simulator,id=$UDID"
+          echo "destination: $UNPEEL_IOS_TEST_DESTINATION"
+          apps/ios/test-ios.sh
