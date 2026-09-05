@@ -10,7 +10,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.5.2"
+version = "0.5.3"
 edition = "2021"
 # Locked dependencies (notably plist/time/instability) require Rust 1.88.
 # Keep this honest with the MSRV check in .github/workflows/linux-cli.yml.
