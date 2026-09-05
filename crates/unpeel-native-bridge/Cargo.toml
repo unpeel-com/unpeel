@@ -13,11 +13,7 @@ crate-type = ["rlib", "staticlib"]
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-# These two lines are REWRITTEN by apps/native/pin-bridge.sh (run by
-# build-rust-bridge.sh): path deps into UNPEEL_SERVER_SOURCE (or ../unpeel)
-# for development, `git = "https://github.com/unpeel-com/unpeel", tag = "v<SERVER_VERSION>"`
-# for release builds. The committed form is the git pin.
-unpeel-core = { git = "https://github.com/unpeel-com/unpeel", tag = "v0.5.3" }
+unpeel-core = { path = "../unpeel-core" }
 
 [dev-dependencies]
-unpeel-serve = { git = "https://github.com/unpeel-com/unpeel", tag = "v0.5.3" }
+unpeel-serve = { path = "../unpeel-serve" }
