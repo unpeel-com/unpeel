@@ -179,6 +179,45 @@ path:    /Users/me/.unpeel/browser/bin/agent-browser
 browser: /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
 ```
 
+### Unpeel Apps (`unpeel apps`)
+
+Official App discovery and installation are Host-owned, so the same commands
+work in the default workspace, an isolated local workspace, and a remote
+Linux/SSH Host:
+
+```text
+unpeel apps list [--json]
+unpeel apps install <app-id> [--check] [--yes] [--json]
+unpeel open <path> [--with <app-id>] [--media-type <type>] [--json]
+unpeel open git:working-tree [--with diffs] [--json]
+unpeel open <resource-id> --kind <resource-kind> [--with <app-id>] [--json]
+unpeel settings openers set <file:media-type|resource:kind> <editor|system|app:id>
+```
+
+The embedded `protocol/app-registry.json` is the allowlist. Managed copies
+land under `~/.unpeel/apps/bin`; installation selects the Host platform,
+requires the release archive's `.sha256` sidecar, extracts only the declared
+binary, and atomically replaces it under a flock. `--check` reports exit 3
+when the App is absent and never downloads. Bootstrap publishes the catalog,
+installed subset, and typed opener map to capability-aware Controllers.
+Direct installs prompt on an interactive terminal. Noninteractive automation
+must pass `--yes`; without it the CLI fails closed. `--check` never prompts or
+downloads.
+
+`unpeel open` is the user-facing dispatcher. It normalizes the argument into
+a typed resource, resolves a workspace preference or the registry's
+`default_for`, offers to install a missing official App only on an interactive
+terminal, and passes the resource as one shell-safe argument to the exact
+resolved executable. Inside an Unpeel Session it uses the shared `app_open`
+operation to create/reuse a companion pane. Outside a Session it launches the
+same command as a new hosted App Session. Noninteractive calls never install
+implicitly; the error names the exact `unpeel apps install` command.
+
+Opener preferences and managed binaries are per workspace Host. This is what
+makes the same flow work on isolated local workspaces and SSH/Linux Hosts: the
+registry, file/resource, installation, and App process all live on the Host.
+The Controller never copies or executes a remote App locally.
+
 ### Desktop-session service (`unpeel serve install --graphical`)
 
 Linux only. Writes the `graphical-session.target`-bound variant of the
