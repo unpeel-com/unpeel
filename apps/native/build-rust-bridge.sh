@@ -20,10 +20,6 @@ if [ "$MODE" = "release" ]; then
   unpeel_enable_rust_path_remapping "$REPO_ROOT"
 fi
 
-# Select path deps (dev: ../unpeel or UNPEEL_SERVER_SOURCE) or the git tag
-# pin (UNPEEL_BRIDGE_PIN=release, set by build-app.sh for release builds).
-"$HERE/pin-bridge.sh" "${UNPEEL_BRIDGE_PIN:-dev}"
-
 PROFILE_DIR="$MODE"
 LINK_DIR="$REPO_ROOT/crates/target/native-bridge/$PROFILE_DIR"
 BUILD_TARGET_DIR="$REPO_ROOT/crates/target/native-bridge-build"

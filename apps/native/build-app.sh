@@ -14,21 +14,22 @@
 # Developer ID builds are signed with hardened runtime + timestamp so they can
 # be notarized before public distribution.
 #
-# The server binaries (unpeel-host, unpeel, unpeel-attach) come from the
-# RELEASED CLI archive for the version pinned in apps/native/SERVER_VERSION
-# (docs/plans/repo-split-inventory.md §5.3): the macos-universal tarball is
-# fetched from R2, verified against its immutable sha256 sidecar and
-# BUILD_PROVENANCE.json, cached, and extracted into the bundle. Overrides:
-#   UNPEEL_SERVER_ARCHIVE=<local .tar.gz>    use a local archive (offline/dev;
-#                                            e.g. from `release:cli --dry-run`)
-#   UNPEEL_BUILD_SERVER_FROM_SOURCE=1        cargo-build from this tree (dev
-#                                            builds only; release builds refuse)
-#   UNPEEL_SERVER_CHANNEL=<alpha|beta|stable> R2 channel to fetch from (beta)
-#   UNPEEL_RELEASE_BASE_URL=<origin>         defaults to https://unpeel.com
+# The server binaries (unpeel-host, unpeel, unpeel-attach) are built FROM
+# THIS TREE by default (`cargo build --release --locked` in crates/ and
+# crates/unpeel-attach), so the app can never skew from the server it
+# bundles: one workspace version (crates/Cargo.toml) names both. For a
+# reproducibility check against a published server release, bundle that
+# release's archive instead:
+#   UNPEEL_SERVER_ARCHIVE=<local .tar.gz>    a `unpeel-<version>-macos-universal`
+#                                            CLI archive (from `release:cli`,
+#                                            or its `--dry-run`); its `.sha256`
+#                                            sidecar is verified when present
+#                                            and BUILD_PROVENANCE.json must name
+#                                            the workspace version
 #
 # Usage:
 #   apps/native/build-app.sh
-#   UNPEEL_VERSION=0.3.0 UNPEEL_BUILD=37 apps/native/build-app.sh
+#   UNPEEL_BUILD=37 apps/native/build-app.sh
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -36,27 +37,17 @@ NATIVE_DIR="$REPO_ROOT/apps/native"
 SWIFT_DIR="$NATIVE_DIR/UnpeelNative"
 DIST="$NATIVE_DIR/dist"
 APP="$DIST/Unpeel.app"
-# SERVER_VERSION pins the server release this app bundles. Until the app
-# leaves the monorepo it must equal the crates workspace version (one number,
-# decided 2026-08-13); after the split it is the only version the app reads
-# and the bridge crate's pinned unpeel-core tag must match it.
-SERVER_VERSION_FILE="$NATIVE_DIR/SERVER_VERSION"
-SERVER_VERSION="$(tr -d '[:space:]' < "$SERVER_VERSION_FILE" 2>/dev/null || true)"
+# One version number for the app, the bridge, and the server binaries: the
+# crates workspace version. Bump crates/Cargo.toml (then `cargo update
+# --workspace`) to release a new version; nothing here restates it.
+SERVER_VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$REPO_ROOT/crates/Cargo.toml" | head -n1)"
 [ -n "$SERVER_VERSION" ] || {
-  echo "FAIL: could not read $SERVER_VERSION_FILE" >&2
+  echo "FAIL: could not read the workspace version from crates/Cargo.toml" >&2
   exit 1
 }
 case "$SERVER_VERSION" in
-  *[!A-Za-z0-9._-]*) echo "FAIL: SERVER_VERSION may only contain [A-Za-z0-9._-]" >&2; exit 1 ;;
+  *[!A-Za-z0-9._-]*) echo "FAIL: the workspace version may only contain [A-Za-z0-9._-]" >&2; exit 1 ;;
 esac
-if [ -f "$REPO_ROOT/crates/Cargo.toml" ]; then
-  WORKSPACE_VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$REPO_ROOT/crates/Cargo.toml" | head -n1)"
-  [ "$WORKSPACE_VERSION" = "$SERVER_VERSION" ] || {
-    echo "FAIL: apps/native/SERVER_VERSION ($SERVER_VERSION) does not match the crates workspace version ($WORKSPACE_VERSION)." >&2
-    echo "      While the app lives in the monorepo the two are bumped together." >&2
-    exit 1
-  }
-fi
 VERSION="${UNPEEL_VERSION:-$SERVER_VERSION}"
 BUILD="${UNPEEL_BUILD:-5}"
 # Empty by default on purpose: a dev build must not be a live Sparkle client
@@ -139,24 +130,9 @@ verify_release_architectures() {
 # --- 1. Release builds ------------------------------------------------------
 
 step "building native Rust bridge (release)"
-# Release builds pin the bridge's server deps at the git tag v$SERVER_VERSION;
-# dev builds keep the path deps (../unpeel or UNPEEL_SERVER_SOURCE).
-if [ "$UNPEEL_DEV_BUILD" = "1" ]; then
-  UNPEEL_BRIDGE_PIN="${UNPEEL_BRIDGE_PIN:-dev}" "$NATIVE_DIR/build-rust-bridge.sh" release
-else
-  UNPEEL_BRIDGE_PIN="${UNPEEL_BRIDGE_PIN:-release}" "$NATIVE_DIR/build-rust-bridge.sh" release
-fi
-# The bridge must be built from the same server commit as the bundled
-# binaries: in git mode the pinned tag must be v$SERVER_VERSION.
-BRIDGE_CORE_TAG="$(sed -n 's/^unpeel-core *= *{.*tag *= *"\([^"]*\)".*/\1/p' "$REPO_ROOT/crates/unpeel-native-bridge/Cargo.toml" | head -n1)"
-if [ -n "$BRIDGE_CORE_TAG" ] && [ "$BRIDGE_CORE_TAG" != "v$SERVER_VERSION" ]; then
-  echo "FAIL: unpeel-native-bridge pins unpeel-core at $BRIDGE_CORE_TAG but SERVER_VERSION is $SERVER_VERSION" >&2
-  exit 1
-fi
-if [ "$UNPEEL_DEV_BUILD" != "1" ] && [ -z "$BRIDGE_CORE_TAG" ]; then
-  echo "FAIL: release build without the bridge git pin (pin-bridge.sh release)" >&2
-  exit 1
-fi
+# The bridge is a workspace member with path deps on unpeel-core/unpeel-serve,
+# so it is always built from the same tree as the server binaries below.
+"$NATIVE_DIR/build-rust-bridge.sh" release
 
 step "building UnpeelNative (release)"
 # SwiftPM's generated Bundle.module accessor bakes its absolute .build path
@@ -171,19 +147,17 @@ then
 fi
 (cd "$SWIFT_DIR" && swift build -c release "${SWIFT_PATH_REMAP_FLAGS[@]}")
 
-# --- 1b. Server binaries: the released CLI archive for SERVER_VERSION --------
+# --- 1b. Server binaries: built from this tree (default) or a CLI archive ----
 #
-# Release builds bundle exactly the published server binaries. A dev build
-# from the tree (dev-app.sh / dev-blank.sh) may cargo-build them instead.
+# Default: cargo-build unpeel-host, unpeel, and unpeel-attach from this
+# checkout — the same commit as the bridge and the app. UNPEEL_SERVER_ARCHIVE
+# bundles a published CLI archive instead (reproducibility checks, upgrade
+# rehearsals); its provenance must name this workspace version.
 SERVER_BIN_DIR="$(mktemp -d "${TMPDIR:-/tmp}/unpeel-server-bins.XXXXXX")"
 SERVER_BINARIES=(unpeel-host unpeel unpeel-attach)
 sha256_of() { shasum -a 256 "$1" | awk '{print $1}'; }
 
 stage_server_from_source() {
-  echo "FAIL: this repository has no server source; UNPEEL_BUILD_SERVER_FROM_SOURCE is not available here." >&2
-  echo "      Use the published archive for apps/native/SERVER_VERSION or UNPEEL_SERVER_ARCHIVE=<tar.gz>" >&2
-  echo "      (produce one in the server repo with: bun run release:cli -- --channel beta --dry-run)." >&2
-  exit 1
   step "building unpeel-host + unpeel (release, from source)"
   (cd "$REPO_ROOT/crates" && cargo build --release --locked --bin unpeel-host --bin unpeel)
   step "building unpeel-attach (release, from source)"
@@ -191,6 +165,22 @@ stage_server_from_source() {
   cp "$REPO_ROOT/crates/target/release/unpeel-host" "$SERVER_BIN_DIR/unpeel-host"
   cp "$REPO_ROOT/crates/target/release/unpeel" "$SERVER_BIN_DIR/unpeel"
   cp "$REPO_ROOT/crates/unpeel-attach/target/release/unpeel-attach" "$SERVER_BIN_DIR/unpeel-attach"
+  # The archive path ships THIRD_PARTY_NOTICES.txt for these three binaries;
+  # a from-source build collects the same notices from the locked graphs.
+  step "collecting server third-party notices"
+  local notice_target
+  notice_target="$(rustc -vV | sed -n 's/^host: //p')"
+  [ -n "$notice_target" ] || { echo "FAIL: rustc did not report a host target" >&2; exit 1; }
+  cargo run --quiet --locked \
+    --manifest-path "$REPO_ROOT/crates/Cargo.toml" \
+    -p unpeel-license-notices -- \
+    --manifest-path "$REPO_ROOT/crates/Cargo.toml" \
+    --package unpeel-cli \
+    --package unpeel-host \
+    --manifest-path "$REPO_ROOT/crates/unpeel-attach/Cargo.toml" \
+    --package unpeel-attach \
+    --target "$notice_target" \
+    --output "$SERVER_BIN_DIR/THIRD_PARTY_NOTICES.txt"
 }
 
 verify_server_archive() { # verify_server_archive <archive> [<sha256 sidecar>]
@@ -234,42 +224,11 @@ verify_server_archive() { # verify_server_archive <archive> [<sha256 sidecar>]
   echo "    archive sha256 $(sha256_of "$archive")"
 }
 
-fetch_server_archive() {
-  local channel="${UNPEEL_SERVER_CHANNEL:-beta}"
-  local base="${UNPEEL_RELEASE_BASE_URL:-https://unpeel.com}"
-  base="${base%/}"
-  # Immutable versioned key + its immutable sidecar (never the -latest alias).
-  local name="unpeel-$SERVER_VERSION-macos-universal.tar.gz"
-  local url="$base/releases/$channel/cli/$name"
-  local cache="${UNPEEL_SERVER_ARCHIVE_CACHE:-$HOME/Library/Caches/unpeel-apple/cli/$SERVER_VERSION}"
-  mkdir -p "$cache"
-  if [ ! -s "$cache/$name" ] || [ ! -s "$cache/$name.sha256" ]; then
-    step "fetching server archive $url"
-    curl -fsSL -o "$cache/$name.partial" "$url" || {
-      echo "FAIL: could not download $url" >&2
-      echo "      Publish the server release for $SERVER_VERSION first (bun run release:cli), or set" >&2
-      echo "      UNPEEL_SERVER_ARCHIVE=<local tar.gz>; dev builds may set UNPEEL_BUILD_SERVER_FROM_SOURCE=1." >&2
-      exit 1
-    }
-    curl -fsSL -o "$cache/$name.sha256.partial" "$url.sha256" || {
-      echo "FAIL: could not download the sha256 sidecar $url.sha256" >&2
-      exit 1
-    }
-    mv "$cache/$name.partial" "$cache/$name"
-    mv "$cache/$name.sha256.partial" "$cache/$name.sha256"
-  else
-    step "using cached server archive $cache/$name"
-  fi
-  verify_server_archive "$cache/$name" "$cache/$name.sha256"
-}
-
-if [ "${UNPEEL_BUILD_SERVER_FROM_SOURCE:-0}" = "1" ]; then
-  [ "$UNPEEL_DEV_BUILD" = "1" ] || {
-    echo "FAIL: UNPEEL_BUILD_SERVER_FROM_SOURCE=1 is for dev builds only; release builds bundle the published server archive for SERVER_VERSION" >&2
+if [ -n "${UNPEEL_SERVER_ARCHIVE:-}" ]; then
+  if [ "${UNPEEL_BUILD_SERVER_FROM_SOURCE:-0}" = "1" ]; then
+    echo "FAIL: UNPEEL_SERVER_ARCHIVE and UNPEEL_BUILD_SERVER_FROM_SOURCE=1 contradict each other" >&2
     exit 1
-  }
-  stage_server_from_source
-elif [ -n "${UNPEEL_SERVER_ARCHIVE:-}" ]; then
+  fi
   step "using local server archive $UNPEEL_SERVER_ARCHIVE"
   [ -s "$UNPEEL_SERVER_ARCHIVE" ] || { echo "FAIL: UNPEEL_SERVER_ARCHIVE not found: $UNPEEL_SERVER_ARCHIVE" >&2; exit 1; }
   if [ -s "$UNPEEL_SERVER_ARCHIVE.sha256" ]; then
@@ -278,7 +237,9 @@ elif [ -n "${UNPEEL_SERVER_ARCHIVE:-}" ]; then
     verify_server_archive "$UNPEEL_SERVER_ARCHIVE"
   fi
 else
-  fetch_server_archive
+  # The default (UNPEEL_BUILD_SERVER_FROM_SOURCE=1 is accepted as the explicit
+  # spelling of it): the server binaries come from this tree.
+  stage_server_from_source
 fi
 for bin in "${SERVER_BINARIES[@]}"; do
   [ -x "$SERVER_BIN_DIR/$bin" ] || { echo "FAIL: server binary missing after staging: $bin" >&2; exit 1; }

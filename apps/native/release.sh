@@ -97,12 +97,12 @@ esac
 # (this script and scripts/release-cli.mjs) can never drift.
 WORKSPACE_VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$REPO_ROOT/crates/Cargo.toml" | head -n1)"
 [ -n "$WORKSPACE_VERSION" ] || fail "could not read the workspace version from crates/Cargo.toml"
-# apps/native/SERVER_VERSION pins the published server archive build-app.sh
-# bundles; while the app lives here it must restate the workspace version.
-SERVER_VERSION="$(tr -d '[:space:]' < "$REPO_ROOT/apps/native/SERVER_VERSION" 2>/dev/null || true)"
-[ -n "$SERVER_VERSION" ] || fail "could not read apps/native/SERVER_VERSION"
-[ "$SERVER_VERSION" = "$WORKSPACE_VERSION" ] || fail "apps/native/SERVER_VERSION ($SERVER_VERSION) does not match the crates workspace version ($WORKSPACE_VERSION); bump both together."
-[ "${UNPEEL_BUILD_SERVER_FROM_SOURCE:-0}" != "1" ] || fail "UNPEEL_BUILD_SERVER_FROM_SOURCE=1 is a dev-build override; a release bundles the published server archive for SERVER_VERSION (or UNPEEL_SERVER_ARCHIVE for a rehearsal)."
+# The bundled server binaries (unpeel-host, unpeel, unpeel-attach) and the
+# bridge are built by build-app.sh from THIS tree at the same commit as the
+# app, so a release can never skew from its server. UNPEEL_SERVER_ARCHIVE
+# instead bundles a published CLI archive of the same version (a
+# reproducibility check or an upgrade rehearsal); build-app.sh verifies its
+# sha256 sidecar and BUILD_PROVENANCE.json against the workspace version.
 if [ -z "$VERSION" ]; then
   VERSION="$WORKSPACE_VERSION"
 elif [ "$VERSION" != "$WORKSPACE_VERSION" ]; then

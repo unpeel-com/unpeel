@@ -816,8 +816,8 @@ final class RemoteControlProtocolTests: XCTestCase {
         return try JSONDecoder().decode(T.self, from: data)
     }
 
-    /// `protocol/<name>` is vendored at the repo root from the pinned server
-    /// archive by `apps/native/vendor-protocol.sh` (gitignored);
+    /// `protocol/<name>` is this checkout's protocol/ directory (the server and
+    /// the clients build from one tree);
     /// UNPEEL_PROTOCOL_DIR points at another copy (a server checkout's
     /// `protocol/`, or an extracted archive).
     private func fixtureJSON(_ name: String) throws -> [String: Any] {
@@ -838,7 +838,7 @@ final class RemoteControlProtocolTests: XCTestCase {
             }
             directory.deleteLastPathComponent()
         }
-        XCTFail("could not locate protocol/\(name) from \(#filePath) — run apps/native/vendor-protocol.sh or set UNPEEL_PROTOCOL_DIR")
+        XCTFail("could not locate protocol/\(name) from \(#filePath) — set UNPEEL_PROTOCOL_DIR at a protocol/ directory")
         return [:]
     }
 }

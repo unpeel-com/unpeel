@@ -2,16 +2,18 @@
 
 ## Creating a Release
 
-A release is cut from a Mac with **one command** — `unpeel-apple:apps/native/release.sh`
-(exposed as `bun run release`). It chains the existing per-step scripts; there
-is no website/admin path, because signing, notarization, and Sparkle signing
-need local secrets a Cloudflare Worker cannot hold.
+A release is cut from a Mac with **one command** — `apps/native/release.sh`
+(exposed as `bun run release:mac`). It chains the existing per-step scripts;
+there is no website/admin path, because signing, notarization, and Sparkle
+signing need local secrets a Cloudflare Worker cannot hold. The release order
+is CLI (`bun run release:cli`) → Mac app (`bun run release:mac`) → website
+(the changelog entry goes live from the separate `unpeel-website` repo).
 
 ```sh
-CODESIGN_IDENTITY="Developer ID Application: UX Themes AS (8M4MM4C2AH)" \
+CODESIGN_IDENTITY="Developer ID Application: <team> (<TEAMID>)" \
 NOTARY_KEY_PATH=~/.appstoreconnect/private_keys/AuthKey_<KEYID>.p8 \
 NOTARY_KEY_ID=<KEYID> NOTARY_ISSUER=<issuer-uuid> \
-bun run release -- --channel beta --build 9
+bun run release:mac -- --channel beta --build 9
 ```
 
 **Lockstep versioning (decided 2026-08-13):** the app and the `unpeel` CLI
@@ -82,7 +84,7 @@ signs + appcasts locally but skips Apple notary and R2 upload (the app is
 `dist/sparkle-dryrun/` so they can never leak into a real appcast);
 `--skip-notarize` for fast local iteration — it refuses to publish (combine
 with `--dry-run`), since an un-notarized build must never reach R2. See
-`unpeel-website:docs/feature/cloudflare-releases.md` for the full walkthrough and the manual
+the private "cloudflare-releases" design record for the full walkthrough and the manual
 fallbacks.
 
 > **For agents:** you cannot cut a real release — it requires the operator's
@@ -122,7 +124,7 @@ curl -fsSL https://unpeel.com/install.sh | sh
   `session_ops.rs`) plus, when the
   archive carries it (0.4.5+), `unpeel-attach` (the Controller terminal
   client; harmless standalone, and what the Mac app will bundle from these
-  archives after the repo split — `unpeel-apple:docs/plans/open-source.md`). The installer
+  archives after the repo split — the private "open-source" design record). The installer
   never requires `unpeel-attach`, so a worker deploy ahead of a CLI publish
   keeps installing the older two-binary `-latest` archive. Everything goes into
   `/usr/local/bin` if writable, else `~/.local/bin` (`UNPEEL_INSTALL_DIR`
@@ -232,14 +234,15 @@ installed build from a from-source checkout or the PTY test harness's
 isolated `UNPEEL_HOME` — it is simply unread now that nothing checks for
 updates.
 
-## Server archives, `protocol/`, and the app's `SERVER_VERSION` (2026-09-03)
+## Server archives, `protocol/`, and the Mac app's server binaries
 
 - **Every CLI archive ships `generated/`** — `generated/GeneratedRuntimeCatalog.swift`,
-  the client-safe runtime catalog the Apple repo copies into
-  `UnpeelShared` (its `unpeel-apple:apps/native/vendor-protocol.sh` reads it from the
-  archive first), so a pinned client needs no server checkout. Same rules as
-  `protocol/`: in the tar lists, in the required-entry check, ignored by
-  `install.sh`.
+  the client-safe runtime catalog. The Apple clients in this tree consume the
+  identical copy at `apps/shared/UnpeelShared/Sources/UnpeelShared/` (both are
+  written by `bun run generate:runtimes` and verified by `bun run
+  check:runtimes`); the archive copy exists for out-of-tree clients and
+  humans. Same rules as `protocol/`: in the tar lists, in the required-entry
+  check, ignored by `install.sh`.
 - **Every CLI archive ships `protocol/`** — all of `protocol/*` (capability
   ledger, conformance fixtures, pane-layout operations, relay KAT vectors,
   `app-registry.json`, the UI stream fixtures) verbatim next to the three
@@ -249,33 +252,29 @@ updates.
   (`assertCliArchiveEntries` in `release-cli-state.mjs`) refuses an archive
   without `protocol/host-capabilities-v1.json` + `host-conformance-v1.json`.
   `install.sh` ignores the directory (it never installs it); it exists for
-  the clients that pin a server release (the Apple repo's conformance tests
-  read the pinned archive's copy) and for humans.
+  out-of-tree clients that pin a server release and for humans. The Swift
+  conformance tests in `apps/` read this checkout's `protocol/` directly.
 - **Every versioned archive has an immutable `.sha256` sidecar** at
   `<channel>/cli/unpeel-<version>-<target>.tar.gz.sha256` (previously only
-  `-latest` and revisioned keys had one). The Mac app build verifies the
-  exact versioned archive against it.
-- **`unpeel-apple:apps/native/SERVER_VERSION`** (one line, `X.Y.Z`) pins the server
-  release the app bundles. `build-app.sh` fetches
-  `https://unpeel.com/releases/<channel>/cli/unpeel-<SERVER_VERSION>-macos-universal.tar.gz`
-  (`UNPEEL_SERVER_CHANNEL`, default `beta`; `UNPEEL_RELEASE_BASE_URL`
-  overrides the origin) plus its sidecar into
-  `~/Library/Caches/unpeel-apple/cli/<version>/`, verifies the digest and
-  `BUILD_PROVENANCE.json` (`version == SERVER_VERSION`,
-  `target == macos-universal`, a 40-hex `source_commit`, echoed in the build
-  log), and extracts `unpeel-host`, `unpeel`, `unpeel-attach` into
-  `Contents/MacOS/` — replacing the two in-tree `cargo build` steps.
-  `UNPEEL_SERVER_ARCHIVE=<local .tar.gz>` uses a local archive (its
-  `.sha256` sibling is verified when present; produce one with
-  `bun run release:cli -- --channel beta --dry-run`).
-  `UNPEEL_BUILD_SERVER_FROM_SOURCE=1` cargo-builds from this tree — dev
-  builds only (`dev-app.sh` / `dev-blank.sh` set it); `build-app.sh` and
-  `release.sh` refuse it for release builds. Preflight: `SERVER_VERSION` must
-  equal the crates workspace version while the app lives in the monorepo,
-  and once `unpeel-native-bridge` pins `unpeel-core` by git tag that tag must
-  be `v<SERVER_VERSION>`. The server release (`release:cli`, all three
-  targets) must therefore be published **before** the app cut; the first
-  archive the app can consume is the first three-binary one (0.4.5+).
+  `-latest` and revisioned keys had one). A Mac app build that bundles an
+  archive verifies the exact versioned archive against it.
+- **The Mac app bundles the server built from this tree.** `build-app.sh`
+  cargo-builds `unpeel-host`, `unpeel`, and `unpeel-attach` (`--release
+  --locked`, from `crates/` and `crates/unpeel-attach`) at the same commit as
+  the app and the `unpeel-native-bridge` crate (a workspace member with path
+  deps on `unpeel-core`/`unpeel-serve`), and collects their third-party
+  notices with `unpeel-license-notices` exactly like `release:cli`. There is
+  no server-version pin file and no bridge tag to re-pin: the crates workspace
+  version is the only version, for the CLI archives and the app alike.
+  `UNPEEL_SERVER_ARCHIVE=<local .tar.gz>` is the explicit opt-in that bundles
+  a published `macos-universal` CLI archive instead (reproducibility checks,
+  upgrade rehearsals): its `.sha256` sibling is verified when present and its
+  `BUILD_PROVENANCE.json` must name the workspace version, `macos-universal`,
+  and a 40-hex `source_commit` (echoed in the build log). Produce one with
+  `bun run release:cli -- --channel beta --dry-run`. Because the app build
+  no longer downloads a server archive, the CLI publish and the app cut are
+  independent steps of one release: cut the CLI first (`release:cli`, all
+  three targets), then the app (`release:mac`), then deploy the website.
 - **The changelog lives with the website.** `release.sh` resolves it via
   `scripts/release-changelog.mjs`: `UNPEEL_CHANGELOG`, then
   `../unpeel-website/app/changelog.md` (the sibling checkout after the

@@ -6,11 +6,9 @@ Worker WebCrypto implementations are pinned to).
 
 The Swift-oracle half — the SHIPPED phone crypto (RelayProtocol.swift)
 completing a forward-secret handshake and sealed /mobile round-trips against
-this Host through a stand-in relay — is owned by the Apple client repo
-(decision 2026-09-03, unpeel-apple:docs/plans/repo-split-inventory.md §7 item 4) and
-runs in that repo's CI against the pinned server version. It is skipped here
-with a NOTE unless UNPEEL_RELAY_SWIFT_ORACLE=1 is set while apps/shared is
-still in this tree."""
+this Host through a stand-in relay — builds the shipped Swift sources from
+apps/shared/UnpeelShared and needs an Apple toolchain (CryptoKit). It is
+skipped here with a NOTE unless UNPEEL_RELAY_SWIFT_ORACLE=1 is set."""
 
 import sys, os, json, socket, base64, hashlib, struct, subprocess, time, threading, shutil
 
@@ -69,10 +67,9 @@ def body(case):
         if os.environ.get("UNPEEL_RELAY_SWIFT_ORACLE") == "1":
             case.check("Swift oracle requested but swiftc/apps/shared unavailable", False)
         else:
-            case.note("Swift-oracle handshake half is unpeel-apple-owned (runs in the "
-                      "Apple repo's CI against the pinned server); set "
-                      "UNPEEL_RELAY_SWIFT_ORACLE=1 to run it here while apps/shared "
-                      "is still in-tree")
+            case.note("Swift-oracle handshake half skipped (needs an Apple toolchain and "
+                      "apps/shared); set "
+                      "UNPEEL_RELAY_SWIFT_ORACLE=1 to require it")
         return
     home = case.home
     home.project("p", "unpeel", "/tmp")

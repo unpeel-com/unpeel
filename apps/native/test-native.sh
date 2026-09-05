@@ -1,16 +1,12 @@
 #!/usr/bin/env bash
+# Native app unit suite: builds the debug bridge from this tree, then runs
+# `swift test` in apps/native/UnpeelNative. The Swift conformance tests read
+# the protocol contracts from this checkout's protocol/ directory (walking up
+# from their own file; UNPEEL_PROTOCOL_DIR overrides), and the runtime catalog
+# copy in apps/shared is checked against runtimes/ by `bun run check:runtimes`.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$HERE/../.." && pwd)"
-# The protocol contracts and the runtime catalog come from the pinned server
-# release (apps/native/SERVER_VERSION): vendor them first, then verify the
-# committed catalog matches (UNPEEL_VENDOR_PROTOCOL=check only verifies).
-if [ "${UNPEEL_VENDOR_PROTOCOL:-vendor}" = "check" ]; then
-  "$HERE/vendor-protocol.sh" --check
-else
-  "$HERE/vendor-protocol.sh"
-fi
 "$HERE/build-rust-bridge.sh" debug
 cd "$HERE/UnpeelNative"
 swift test "$@"

@@ -120,7 +120,7 @@ if (!/^[A-Za-z0-9._-]+$/.test(version)) {
   throw new Error(`--version may only contain [A-Za-z0-9._-], got ${version}`)
 }
 // Lockstep versioning: the CLI and the app share the crates workspace version
-// (the app side asserts the same in unpeel-apple:apps/native/release.sh). Bump
+// (the app side asserts the same in apps/native/release.sh). Bump
 // crates/Cargo.toml to release a new version; an explicit --version may only
 // restate it.
 if (args.version != null && workspaceVersion && version !== workspaceVersion) {
@@ -221,7 +221,7 @@ if (args['macos-universal']) {
       target: 'macos-universal'
     }), null, 2)}\n`
   )
-  // protocol/ rides along verbatim (decision 3, unpeel-apple:docs/plans/repo-split-inventory.md §7).
+  // protocol/ rides along verbatim (decision 3, the private "repo-split-inventory" design record §7).
   cpSync(protocolDir, resolve(stage, CLI_ARCHIVE_PROTOCOL_DIR), { recursive: true })
   // generated/ (the client-safe runtime catalog) rides along the same way.
   cpSync(generatedDir, resolve(stage, CLI_ARCHIVE_GENERATED_DIR), { recursive: true })
@@ -428,10 +428,10 @@ for (const [target, file] of Object.entries(tarballs)) {
     versionedKey,
     artifactRevision == null ? basename(file) : versionedFilename
   )
-  // The versioned key always gets an immutable `.sha256` sidecar: the Mac
-  // app build (`unpeel-apple:apps/native/build-app.sh`) fetches the exact
-  // `unpeel-<version>-macos-universal.tar.gz` for its SERVER_VERSION and
-  // verifies it against this sidecar, never against the mutable `-latest`.
+  // The versioned key always gets an immutable `.sha256` sidecar: a Mac
+  // app build that bundles a published archive (`apps/native/build-app.sh`
+  // with UNPEEL_SERVER_ARCHIVE) verifies the exact versioned archive
+  // against this sidecar, never against the mutable `-latest`.
   const versionedShaKey = `${versionedKey}.sha256`
   const versionedShaPath = resolve(tmp, `${target}-versioned.sha256`)
   const latestShaPath = resolve(tmp, `${target}-latest.sha256`)

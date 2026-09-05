@@ -34,8 +34,8 @@ if [ -z "$CODESIGN_IDENTITY" ] || [ "$CODESIGN_IDENTITY" = "-" ]; then
 fi
 
 echo "==> dev build, signing with: $CODESIGN_IDENTITY"
-# Server binaries come from the published archive for apps/native/SERVER_VERSION
-# (or UNPEEL_SERVER_ARCHIVE=<tar.gz>); there is no server source in this repo.
+# Server binaries and the bridge are built from this tree by build-app.sh
+# (UNPEEL_SERVER_ARCHIVE=<tar.gz> bundles a published archive instead).
 UNPEEL_DEV_BUILD=1 CODESIGN_IDENTITY="$CODESIGN_IDENTITY" "$HERE/build-app.sh"
 
 APP="$HERE/dist/Unpeel.app"
