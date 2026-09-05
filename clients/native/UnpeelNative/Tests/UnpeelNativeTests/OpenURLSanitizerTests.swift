@@ -88,11 +88,11 @@ final class OpenURLSanitizerTests: XCTestCase {
         let project = "/Users/example/Dev/unpeel"
         XCTAssertEqual(
             GhosttyTerminalPane.conciseDropReference(
-                "/Users/example/Dev/unpeel/apps/native/App.swift",
+                "/Users/example/Dev/unpeel/clients/native/App.swift",
                 projectRoot: project,
                 homeDirectory: home
             ),
-            "apps/native/App.swift"
+            "clients/native/App.swift"
         )
         XCTAssertEqual(
             GhosttyTerminalPane.conciseDropReference(

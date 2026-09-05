@@ -1,7 +1,7 @@
 # UnpeelShared
 
 Swift package with the client-side protocol and crypto shared by the Mac app
-(`apps/native`) and the iPhone/iPad app (`apps/ios`) — one implementation so
+(`clients/native`) and the iPhone/iPad app (`clients/ios`) — one implementation so
 the two clients can never drift on wire behavior:
 
 - `RemoteControlProtocol.swift` — the Host remote-control contract (session
@@ -22,7 +22,7 @@ Tests include the relay known-answer vectors
 JS tests run, keeping both ends of the E2E protocol pinned to identical
 bytes.
 
-Run tests: `swift test --package-path apps/shared/UnpeelShared` (this one
+Run tests: `swift test --package-path clients/shared/UnpeelShared` (this one
 works with plain `swift test`, unlike the iOS package).
 
 Everything here is open source and must stay free of closed-service

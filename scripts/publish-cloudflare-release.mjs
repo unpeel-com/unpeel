@@ -7,9 +7,9 @@
 //     --channel beta \
 //     --version 0.1.0-beta.1 \
 //     --build 3 \
-//     --dmg apps/native/dist/Unpeel.dmg \
-//     --zip apps/native/dist/Unpeel-0.1.0-beta.1.zip \
-//     --appcast apps/native/dist/appcast-beta.xml
+//     --dmg clients/native/dist/Unpeel.dmg \
+//     --zip clients/native/dist/Unpeel-0.1.0-beta.1.zip \
+//     --appcast clients/native/dist/appcast-beta.xml
 
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'

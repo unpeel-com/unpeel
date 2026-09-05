@@ -179,10 +179,10 @@ the same Host; moving work to a different Host remains restart-with-resume.
   `protocol/host-capabilities-v1.json`,
   `protocol/host-conformance-v1.json`
 - Shared QR, pairing response, and validation:
-  `apps/shared/UnpeelShared/Sources/UnpeelShared/RemoteControlProtocol.swift`,
+  `clients/shared/UnpeelShared/Sources/UnpeelShared/RemoteControlProtocol.swift`,
   `RemotePairingClient.swift`
 - Mac invitation UI and proxy lifecycle:
-  `apps/native/UnpeelNative/Sources/UnpeelNative/Views/HostPickerView.swift`,
+  `clients/native/UnpeelNative/Sources/UnpeelNative/Views/HostPickerView.swift`,
   `UnpeelStore.swift`, `ControllerPairingProxy.swift`
 - Generation-bound Controller backend:
   `crates/unpeel-core/src/remote_session_backend.rs`,
@@ -190,7 +190,7 @@ the same Host; moving work to a different Host remains restart-with-resume.
 - Headless Direct and Link Host adapters:
   `crates/unpeel-cli/src/mobile.rs`, `pairing.rs`, `relay.rs`
 - Phone persistence of the real Host endpoint:
-  `apps/ios/UnpeelIOS/Sources/UnpeelIOS/RemoteConnectionStore.swift`
+  `clients/ios/UnpeelIOS/Sources/UnpeelIOS/RemoteConnectionStore.swift`
 
 ## Rules for extensions
 

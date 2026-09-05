@@ -17,7 +17,7 @@ enum LaunchConfig {
     /// Environment variable that overrides the unpeel-host binary path.
     static let hostCommandEnvVar = "UNPEEL_HOST_CMD"
 
-    /// Repo root for an app assembled under `<repo>/apps/native/dist`.
+    /// Repo root for an app assembled under `<repo>/clients/native/dist`.
     ///
     /// Derive this from the bundle location instead of `#filePath`: the latter
     /// embeds the release builder's absolute checkout path in every shipped

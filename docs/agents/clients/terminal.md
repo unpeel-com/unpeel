@@ -47,7 +47,7 @@ The native terminal is a **libghostty** surface (GhosttyKit), Metal-rendered, no
   startup. A live Host older than protocol v4 is never rewritten underneath
   its open file descriptor; the normal **Reload Terminal** recommendation
   upgrades it to bounded journaling.
-- The native app keeps a small LRU cache of live surfaces and pre-warms on hover (see the surface cache in `apps/native`); evicted-then-remounted surfaces rebuild from the replay tail plus new live output.
+- The native app keeps a small LRU cache of live surfaces and pre-warms on hover (see the surface cache in `clients/native`); evicted-then-remounted surfaces rebuild from the replay tail plus new live output.
 - Agent TUIs that repaint the screen in place can still appear to "crop" or "overwrite" detail while streaming — normal terminal behavior; intermediate full-screen redraw states are not guaranteed to survive as scrollback.
 
 ### TUI kitty graphics passthrough (removed 2026-09-03)

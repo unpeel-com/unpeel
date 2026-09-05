@@ -2,7 +2,7 @@
 
 ## Local Development Builds
 
-For a local dev build of the native app, use `apps/native/dev-app.sh`
+For a local dev build of the native app, use `clients/native/dev-app.sh`
 (exposed as `bun run dev:native`). It builds + signs `dist/Unpeel.app` and
 launches it.
 
@@ -54,7 +54,7 @@ feed-less dev-signed bundle that can never self-update (exactly the state we
 dug ourselves out of). It stays current by itself; new Mac releases reach it
 through Sparkle, not `cp`.
 
-Dev builds live at `apps/native/dist/Unpeel.app` (`bun run dev:native` builds,
+Dev builds live at `clients/native/dist/Unpeel.app` (`bun run dev:native` builds,
 signs, quits any already-running **Unpeel Dev** from that dist bundle, then
 launches it with `open -n` so an installed app with the shared bundle id
 cannot steal the launch). The installed `/Applications/Unpeel.app` is never
@@ -90,12 +90,12 @@ do next depends on the change:
 Confirm which binary is serving with
 `pgrep -fl "Unpeel.app/Contents/MacOS/UnpeelNative"` (the path shows dist vs
 /Applications), and that a new route made it into a build with e.g.
-`strings apps/native/dist/Unpeel.app/Contents/MacOS/UnpeelNative | grep <route>`.
+`strings clients/native/dist/Unpeel.app/Contents/MacOS/UnpeelNative | grep <route>`.
 
 ### iOS app: build & deploy
 
-The iOS client (`apps/ios/UnpeelIOS`) is an xcodegen project — after adding or
-renaming Swift files, run `xcodegen` (in `apps/ios/UnpeelIOS`) so the `.xcodeproj`
+The iOS client (`clients/ios/UnpeelIOS`) is an xcodegen project — after adding or
+renaming Swift files, run `xcodegen` (in `clients/ios/UnpeelIOS`) so the `.xcodeproj`
 picks them up, or the build fails with "cannot find … in scope". Discover the
 simulator/device ids with `xcrun devicectl list devices` and
 `xcrun simctl list devices booted`.
@@ -117,9 +117,9 @@ Simulator:
 
 ```sh
 # Unit suite (builds and runs against the latest iPhone simulator):
-apps/ios/test-ios.sh
+clients/ios/test-ios.sh
 
-cd apps/ios/UnpeelIOS
+cd clients/ios/UnpeelIOS
 xcodebuild -project UnpeelIOS.xcodeproj -scheme UnpeelIOSApp \
   -destination 'id=<SIM_UDID>' -configuration Debug \
   -derivedDataPath /tmp/unpeel-ios-dd build
@@ -187,7 +187,7 @@ reliably over the Metal surface — present modals at the root (see
 ### Blank / first-run dev instance
 
 To exercise first-run behavior (or any clean-state behavior) without touching
-your real `~/.unpeel`, use `apps/native/dev-blank.sh` (exposed as
+your real `~/.unpeel`, use `clients/native/dev-blank.sh` (exposed as
 `bun run dev:native:blank`). It does the same stable-signed build, then launches
 the `UnpeelNative` executable directly (not `open`, so the env is inherited)
 with `UNPEEL_HOME` pointed at a throwaway state dir — so the app boots as if

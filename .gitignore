@@ -34,14 +34,14 @@ src-tauri/target
 # Rust (standalone attach client crate, not a crates/ workspace member)
 crates/unpeel-attach/target
 scripts/tools/ht
-apps/native/tools/ht
+clients/native/tools/ht
 
-# Swift/Xcode build outputs (apps/native, apps/ios, apps/shared)
-apps/*/*/.build
-apps/*/*/.derived
-apps/*/*/.swiftpm
-apps/ios/UnpeelIOS/.deriveddata
-apps/ios/UnpeelIOS/build
+# Swift/Xcode build outputs (clients/native, clients/ios, clients/shared)
+clients/*/*/.build
+clients/*/*/.derived
+clients/*/*/.swiftpm
+clients/ios/UnpeelIOS/.deriveddata
+clients/ios/UnpeelIOS/build
 DerivedData
 xcuserdata/
 

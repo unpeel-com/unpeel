@@ -43,7 +43,7 @@ or quit `/Applications/Unpeel.app`; develop against `dist/Unpeel.app` and
 check the menu bar says "Unpeel Dev". Ghostty surfaces cannot initialize in
 headless agent runs — verify Metal rendering interactively only.
 
-Build: `apps/native/build-rust-bridge.sh debug` then `swift build` in
+Build: `clients/native/build-rust-bridge.sh debug` then `swift build` in
 `UnpeelNative/` for a compile check; `bun run dev:native` from the repo root
-for a runnable signed app; `CODESIGN_IDENTITY=- apps/native/build-app.sh`
+for a runnable signed app; `CODESIGN_IDENTITY=- clients/native/build-app.sh`
 for an unsigned (ad-hoc) bundle without launching anything.

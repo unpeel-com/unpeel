@@ -1,4 +1,4 @@
-# The Apple clients (apps/native, apps/ios, apps/shared) and the C-ABI bridge
+# The Apple clients (clients/native, clients/ios, clients/shared) and the C-ABI bridge
 # crate build from this tree. One macOS job, kept cheap (macOS minutes cost
 # 10x): an unsigned Mac app assembled through the default from-source path,
 # the iOS package tests in a simulator, and the shared package's `swift test`.
@@ -11,12 +11,12 @@ on:
   push:
     branches: [main]
     paths:
-      - 'apps/**'
+      - 'clients/**'
       - 'crates/unpeel-native-bridge/**'
       - '.github/workflows/clients.yml'
   pull_request:
     paths:
-      - 'apps/**'
+      - 'clients/**'
       - 'crates/unpeel-native-bridge/**'
       - '.github/workflows/clients.yml'
 
@@ -53,23 +53,23 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            apps/native/UnpeelNative/.build
-            apps/shared/UnpeelShared/.build
+            clients/native/UnpeelNative/.build
+            clients/shared/UnpeelShared/.build
             ~/Library/Caches/org.swift.swiftpm
             ~/Library/Developer/Xcode/DerivedData/**/SourcePackages
-          key: swiftpm-${{ runner.os }}-${{ hashFiles('apps/**/Package.resolved', 'apps/native/vendor/libghostty-spm/Package.swift') }}
+          key: swiftpm-${{ runner.os }}-${{ hashFiles('clients/**/Package.resolved', 'clients/native/vendor/libghostty-spm/Package.swift') }}
           restore-keys: |
             swiftpm-${{ runner.os }}-
       - name: Runtime catalog copies agree
         run: bun run check:runtimes
       - name: UnpeelShared tests
-        run: swift test --package-path apps/shared/UnpeelShared
+        run: swift test --package-path clients/shared/UnpeelShared
       - name: Unsigned Mac app (server + bridge built from this tree)
         env:
           CODESIGN_IDENTITY: '-'
           UNPEEL_DEV_BUILD: '0'
           UNPEEL_BUILD: ${{ github.run_number }}
-        run: apps/native/build-app.sh
+        run: clients/native/build-app.sh
       - name: iOS package tests (simulator)
         # Pick whatever iPhone simulator the image ships (device names change
         # with every iOS runtime; the image had no "iPhone 16 Pro" under iOS 26).
@@ -81,4 +81,4 @@ jobs:
           xcrun simctl boot "$UDID" || true
           export UNPEEL_IOS_TEST_DESTINATION="platform=iOS Simulator,id=$UDID"
           echo "destination: $UNPEEL_IOS_TEST_DESTINATION"
-          apps/ios/test-ios.sh
+          clients/ios/test-ios.sh

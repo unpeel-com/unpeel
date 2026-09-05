@@ -13,11 +13,11 @@
 #     --team-id TEAMID1234
 #
 # Usage:
-#   NOTARY_KEYCHAIN_PROFILE=unpeel-notary apps/native/notarize-dmg.sh
-#   NOTARY_KEYCHAIN_PROFILE=unpeel-notary apps/native/notarize-dmg.sh apps/native/dist/Unpeel.dmg
+#   NOTARY_KEYCHAIN_PROFILE=unpeel-notary clients/native/notarize-dmg.sh
+#   NOTARY_KEYCHAIN_PROFILE=unpeel-notary clients/native/notarize-dmg.sh clients/native/dist/Unpeel.dmg
 #   # submit a ZIP of the app, staple the app itself:
-#   NOTARY_KEYCHAIN_PROFILE=unpeel-notary apps/native/notarize-dmg.sh \
-#     /tmp/Unpeel-notary.zip --staple apps/native/dist/Unpeel.app
+#   NOTARY_KEYCHAIN_PROFILE=unpeel-notary clients/native/notarize-dmg.sh \
+#     /tmp/Unpeel-notary.zip --staple clients/native/dist/Unpeel.app
 #
 # Alternative: an App Store Connect API key (most reliable headless — the
 # keychain profile lives in the data-protection keychain, which can be
@@ -25,18 +25,18 @@
 #   NOTARY_KEY_PATH=~/.appstoreconnect/private_keys/AuthKey_XXXXXXXXXX.p8 \
 #   NOTARY_KEY_ID=XXXXXXXXXX \
 #   NOTARY_ISSUER=00000000-0000-0000-0000-000000000000 \
-#   apps/native/notarize-dmg.sh
+#   clients/native/notarize-dmg.sh
 #
 # Alternative non-interactive credentials (prefer the keychain profile — the
 # trio puts the app-specific password in the process argv, visible in ps):
 #   NOTARY_APPLE_ID=you@example.com \
 #   NOTARY_TEAM_ID=TEAMID1234 \
 #   NOTARY_PASSWORD=app-specific-password \
-#   apps/native/notarize-dmg.sh
+#   clients/native/notarize-dmg.sh
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-ARTIFACT="$REPO_ROOT/apps/native/dist/Unpeel.dmg"
+ARTIFACT="$REPO_ROOT/clients/native/dist/Unpeel.dmg"
 STAPLE_TARGET=""
 NOTARY_TIMEOUT="${NOTARY_TIMEOUT:-30m}"
 
@@ -70,7 +70,7 @@ Recommended:
     --team-id TEAMID1234
 
 Then run:
-  NOTARY_KEYCHAIN_PROFILE=unpeel-notary apps/native/notarize-dmg.sh
+  NOTARY_KEYCHAIN_PROFILE=unpeel-notary clients/native/notarize-dmg.sh
 EOF
   exit 1
 fi

@@ -4,7 +4,7 @@
 
 Sessions can run in a git worktree of the project instead of the main checkout, so multiple agents can work the same repo in parallel without touching each other's files.
 
-- Worktree git operations (native): `apps/native/UnpeelNative/Sources/UnpeelNative/WorktreeGit.swift` shells out to stock `git worktree`.
+- Worktree git operations (native): `clients/native/UnpeelNative/Sources/UnpeelNative/WorktreeGit.swift` shells out to stock `git worktree`.
 - Unpeel-created worktrees live in `~/.unpeel/worktrees/<repo-name>-<hash>/<worktree-name-slug>/`, outside the repo (same convention as Codex's `~/.codex/worktrees`). If no custom worktree name is provided, the branch slug is used. Legacy in-repo `<repo>/.worktrees/` checkouts are still recognized as Unpeel-managed.
 - Each used worktree becomes a child `Project` (`worktree_branch` + `parent_project_id` fields), so it groups multiple sessions and reuses all project UI.
 - The native app also discovers worktrees created by Claude,

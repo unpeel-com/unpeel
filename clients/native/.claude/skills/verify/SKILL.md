@@ -8,12 +8,12 @@ description: Build, launch, and drive the native Unpeel macOS app to verify sess
 ## Build + launch the dev app
 
 ```sh
-apps/native/dev-app.sh        # = `bun run dev:native` (bun may not be on PATH in agent shells)
+clients/native/dev-app.sh        # = `bun run dev:native` (bun may not be on PATH in agent shells)
 ```
 
 Builds release, signs with the stable dev cert, quits any already-running
 Unpeel Dev from that dist bundle, then `open -n`s
-`apps/native/dist/Unpeel.app` ("Unpeel Dev", burnt-orange icon).
+`clients/native/dist/Unpeel.app` ("Unpeel Dev", burnt-orange icon).
 
 Gotchas:
 

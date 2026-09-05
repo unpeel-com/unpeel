@@ -4,15 +4,15 @@
   "license": "MIT",
   "scripts": {
     "test:release": "node --test scripts/release-*.test.mjs",
-    "generate:runtimes": "bun scripts/generate-runtime-client-catalog.mjs && bun scripts/generate-runtime-client-catalog.mjs --out apps/shared/UnpeelShared/Sources/UnpeelShared/GeneratedRuntimeCatalog.swift",
-    "check:runtimes": "bun scripts/generate-runtime-client-catalog.mjs --check && bun scripts/generate-runtime-client-catalog.mjs --check --out generated/GeneratedRuntimeCatalog.swift && bun scripts/generate-runtime-client-catalog.mjs --check --out apps/shared/UnpeelShared/Sources/UnpeelShared/GeneratedRuntimeCatalog.swift",
+    "generate:runtimes": "bun scripts/generate-runtime-client-catalog.mjs && bun scripts/generate-runtime-client-catalog.mjs --out clients/shared/UnpeelShared/Sources/UnpeelShared/GeneratedRuntimeCatalog.swift",
+    "check:runtimes": "bun scripts/generate-runtime-client-catalog.mjs --check && bun scripts/generate-runtime-client-catalog.mjs --check --out generated/GeneratedRuntimeCatalog.swift && bun scripts/generate-runtime-client-catalog.mjs --check --out clients/shared/UnpeelShared/Sources/UnpeelShared/GeneratedRuntimeCatalog.swift",
     "validate:runtimes": "bun run check:runtimes && cargo test --manifest-path crates/Cargo.toml -p unpeel-core runtime_catalog",
     "release:cli": "node scripts/release-cli.mjs",
     "release:app": "node scripts/release-app.mjs",
     "release:cli:linux": "scripts/build-cli-linux.sh",
-    "release:mac": "apps/native/release.sh",
-    "dev:native": "apps/native/dev-app.sh",
-    "dev:native:blank": "apps/native/dev-blank.sh"
+    "release:mac": "clients/native/release.sh",
+    "dev:native": "clients/native/dev-app.sh",
+    "dev:native:blank": "clients/native/dev-blank.sh"
   },
   "devDependencies": {
     "wrangler": "^4.110.0"

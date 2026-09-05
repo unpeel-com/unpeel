@@ -2,7 +2,7 @@
 #
 # build-app.sh — assemble an installable Unpeel.app from release builds.
 #
-# Produces apps/native/dist/Unpeel.app containing:
+# Produces clients/native/dist/Unpeel.app containing:
 #   - the release UnpeelNative binary (GhosttyKit is statically linked)
 #   - unpeel-host + unpeel-attach release binaries (embedded helpers the app
 #     spawns; LaunchConfig resolves them via Bundle.main auxiliary executables)
@@ -28,12 +28,12 @@
 #                                            the workspace version
 #
 # Usage:
-#   apps/native/build-app.sh
-#   UNPEEL_BUILD=37 apps/native/build-app.sh
+#   clients/native/build-app.sh
+#   UNPEEL_BUILD=37 clients/native/build-app.sh
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-NATIVE_DIR="$REPO_ROOT/apps/native"
+NATIVE_DIR="$REPO_ROOT/clients/native"
 SWIFT_DIR="$NATIVE_DIR/UnpeelNative"
 DIST="$NATIVE_DIR/dist"
 APP="$DIST/Unpeel.app"

@@ -26,7 +26,7 @@ BUILD_TARGET_DIR="$REPO_ROOT/crates/target/native-bridge-build"
 mkdir -p "$LINK_DIR"
 
 RUST_HEADER="$REPO_ROOT/crates/unpeel-native-bridge/include/unpeel_native_bridge.h"
-SWIFT_HEADER="$REPO_ROOT/apps/native/UnpeelNative/Sources/CUnpeelNativeBridge/include/unpeel_native_bridge.h"
+SWIFT_HEADER="$REPO_ROOT/clients/native/UnpeelNative/Sources/CUnpeelNativeBridge/include/unpeel_native_bridge.h"
 if ! cmp -s "$RUST_HEADER" "$SWIFT_HEADER"; then
   echo "error: native bridge C headers are out of sync" >&2
   exit 1
@@ -73,6 +73,6 @@ fi
 # link-task input. Bump the C shim's mtime after replacing the archive so every
 # sanctioned native build/test recompiles that tiny object and relinks against
 # the exact Rust code just built.
-touch "$REPO_ROOT/apps/native/UnpeelNative/Sources/CUnpeelNativeBridge/shim.c"
+touch "$REPO_ROOT/clients/native/UnpeelNative/Sources/CUnpeelNativeBridge/shim.c"
 
 echo "Built $LINK_DIR/libunpeel_native_bridge.a"

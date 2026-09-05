@@ -33,9 +33,9 @@ makes sense for coding, it does not belong here.
 | `crates/unpeel-cli` | The `unpeel` CLI and its PTY test matrix (`crates/unpeel-cli/tests`) |
 | `crates/unpeel-attach` | Terminal attach client (standalone crate, ships next to `unpeel-host`) |
 | `crates/unpeel-native-bridge` | Panic-contained C ABI over `unpeel-core` that the Mac app links (workspace member, path deps) |
-| `apps/native` | The macOS app (Swift + SwiftUI + libghostty) and its build/release scripts |
-| `apps/ios` | The iPhone/iPad Controller (xcodegen project `UnpeelIOS/`) |
-| `apps/shared/UnpeelShared` | Swift package shared by both apps: pairing, Host protocol client, Relay E2E, icon art, the runtime catalog copy |
+| `clients/native` | The macOS app (Swift + SwiftUI + libghostty) and its build/release scripts |
+| `clients/ios` | The iPhone/iPad Controller (xcodegen project `UnpeelIOS/`) |
+| `clients/shared/UnpeelShared` | Swift package shared by both apps: pairing, Host protocol client, Relay E2E, icon art, the runtime catalog copy |
 | `protocol/` | Host protocol contracts: capabilities, conformance cases, engine pins, App registry, relay test vectors |
 | `runtimes/` | Built-in agent runtime packages (descriptor, adapter, hook assets, fixtures); `runtimes/README.md` is the contribution contract |
 | `generated/` | The client-safe runtime catalog, regenerated from `runtimes/` and shipped in every CLI archive |
@@ -131,18 +131,18 @@ Detail lives in `docs/agents/clients/` (`dev-builds.md`, `terminal.md`,
 
 ### Layout
 
-- `apps/native/UnpeelNative/` — the Swift macOS app (`UnpeelStore.swift` is
+- `clients/native/UnpeelNative/` — the Swift macOS app (`UnpeelStore.swift` is
   the Controller projection; `HookServer.swift` serves only the platform-
   adapter callback — no Host routes; `LaunchConfig.swift` resolves the bundled
   `unpeel-host`/`unpeel`/`unpeel-attach`). `Sources/CUnpeelNativeBridge/`
   is the C shim; its header must stay identical to
   `crates/unpeel-native-bridge/include/unpeel_native_bridge.h`
-  (`build-rust-bridge.sh` checks). `apps/native/vendor/libghostty-spm/` is
+  (`build-rust-bridge.sh` checks). `clients/native/vendor/libghostty-spm/` is
   the vendored, patched libghostty package; every bump is a deliberate event.
-- `apps/ios/UnpeelIOS/` — xcodegen project (`project.yml` → `xcodegen` after
+- `clients/ios/UnpeelIOS/` — xcodegen project (`project.yml` → `xcodegen` after
   adding or renaming Swift files); `Tools/dev_bridge.py` drives the
   simulator against a local Host.
-- `apps/shared/UnpeelShared/` — `RemoteControlProtocol.swift`,
+- `clients/shared/UnpeelShared/` — `RemoteControlProtocol.swift`,
   `RemotePairingClient.swift`, `RelayProtocol.swift` /
   `RemoteRelayConnection.swift` (forward-secret E2E over the Link relay,
   pinned to `protocol/relay-kat-vectors-v1.json`), `PairedHostRecord.swift`,
@@ -153,16 +153,16 @@ Detail lives in `docs/agents/clients/` (`dev-builds.md`, `terminal.md`,
 
 ### Build, run, test
 
-- Bridge: `apps/native/build-rust-bridge.sh debug|release` (into
+- Bridge: `clients/native/build-rust-bridge.sh debug|release` (into
   `crates/target/native-bridge/<profile>/`, linked by `Package.swift`).
 - Mac app compile check: the bridge, then `swift build` in
-  `apps/native/UnpeelNative`. Full bundle without signing secrets:
-  `CODESIGN_IDENTITY=- apps/native/build-app.sh` (ad-hoc; builds the server
+  `clients/native/UnpeelNative`. Full bundle without signing secrets:
+  `CODESIGN_IDENTITY=- clients/native/build-app.sh` (ad-hoc; builds the server
   binaries and the bridge **from this tree** by default;
   `UNPEEL_SERVER_ARCHIVE=<tar.gz>` bundles a published CLI archive of the
   same version instead, for reproducibility checks). Never launch it.
-- Dev app: `bun run dev:native` (`apps/native/dev-app.sh`) builds and signs
-  `apps/native/dist/Unpeel.app` with a **stable** local identity (never
+- Dev app: `bun run dev:native` (`clients/native/dev-app.sh`) builds and signs
+  `clients/native/dist/Unpeel.app` with a **stable** local identity (never
   ad-hoc — an ad-hoc rebuild re-triggers the license Keychain prompt), quits
   only an already-running **Unpeel Dev**, and launches the new one. Dev
   builds say "Unpeel Dev" in the menu bar with a burnt-orange icon; a
@@ -171,13 +171,13 @@ Detail lives in `docs/agents/clients/` (`dev-builds.md`, `terminal.md`,
   dev:native:blank` runs against a throwaway `UNPEEL_HOME` (isolates
   UserDefaults too). Ghostty surfaces cannot initialize headless: verify
   Metal rendering interactively only.
-- Tests: `apps/native/test-native.sh` (debug bridge + `swift test`; the
+- Tests: `clients/native/test-native.sh` (debug bridge + `swift test`; the
   conformance tests read this checkout's `protocol/`, `UNPEEL_PROTOCOL_DIR`
-  overrides); `swift test --package-path apps/shared/UnpeelShared`;
-  `apps/ios/test-ios.sh` (xcodebuild against a simulator —
+  overrides); `swift test --package-path clients/shared/UnpeelShared`;
+  `clients/ios/test-ios.sh` (xcodebuild against a simulator —
   `UNPEEL_IOS_TEST_DESTINATION` picks it; plain `swift test` is broken for
   the iOS package on macOS, never use it as the iOS gate);
-  `python3 -m py_compile apps/ios/UnpeelIOS/Tools/dev_bridge.py`;
+  `python3 -m py_compile clients/ios/UnpeelIOS/Tools/dev_bridge.py`;
   `bun run check:runtimes`. CI: `.github/workflows/clients.yml` (unsigned
   Mac build, iOS simulator tests, shared package tests; no signing secrets).
 - iOS device builds need the signing team from `project.yml`
@@ -188,7 +188,7 @@ Detail lives in `docs/agents/clients/` (`dev-builds.md`, `terminal.md`,
 
 - **Never write to, launch, or quit `/Applications/Unpeel.app`.** It is the
   released, notarized, Sparkle-updating install and the operator's daily
-  driver. Develop against `apps/native/dist/Unpeel.app` and check the menu
+  driver. Develop against `clients/native/dist/Unpeel.app` and check the menu
   bar says "Unpeel Dev". If a workflow truly needs the dev build to be the
   only instance, ask the operator first and restore the prior state after.
 - **The app is a pure Controller.** It never hosts sessions, installs hook

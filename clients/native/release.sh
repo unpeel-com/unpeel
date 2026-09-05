@@ -21,7 +21,7 @@
 # Usage:
 #   CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID1234)" \
 #   NOTARY_KEYCHAIN_PROFILE=unpeel-notary \
-#   apps/native/release.sh --channel beta --build 6
+#   clients/native/release.sh --channel beta --build 6
 #
 # The version comes from the crates workspace (crates/Cargo.toml) — the app
 # and the `unpeel` CLI are versioned in lockstep. --version is optional and
@@ -30,11 +30,11 @@
 # pipelines move together.
 #
 #   # with release notes shown in the Sparkle update dialog (HTML body):
-#   ... apps/native/release.sh --channel beta --version 0.1.0-beta.4 --build 6 \
-#       --notes apps/native/release-notes/0.1.0-beta.4.html
+#   ... clients/native/release.sh --channel beta --version 0.1.0-beta.4 --build 6 \
+#       --notes clients/native/release-notes/0.1.0-beta.4.html
 #
 #   # rehearse without touching Apple notary or R2 (still builds + signs locally):
-#   ... apps/native/release.sh --channel beta --version 0.1.0-beta.4 --build 6 --dry-run
+#   ... clients/native/release.sh --channel beta --version 0.1.0-beta.4 --build 6 --dry-run
 #
 # Flags:
 #   --dry-run         no notarization, no upload; Sparkle artifacts are staged
@@ -54,7 +54,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-NATIVE_DIR="$REPO_ROOT/apps/native"
+NATIVE_DIR="$REPO_ROOT/clients/native"
 SWIFT_DIR="$NATIVE_DIR/UnpeelNative"
 DIST="$NATIVE_DIR/dist"
 
@@ -182,7 +182,7 @@ if [ "$DRY_RUN" -eq 0 ] && [ "$SKIP_NOTARIZE" -eq 0 ]; then
     { [ -n "${NOTARY_APPLE_ID:-}" ] && [ -n "${NOTARY_TEAM_ID:-}" ] && [ -n "${NOTARY_PASSWORD:-}" ]; } || \
     fail "missing notary credentials (set the NOTARY_KEY_PATH / NOTARY_KEY_ID /
       NOTARY_ISSUER API-key trio, NOTARY_KEYCHAIN_PROFILE, or the NOTARY_APPLE_ID /
-      NOTARY_TEAM_ID / NOTARY_PASSWORD trio). See apps/native/notarize-dmg.sh."
+      NOTARY_TEAM_ID / NOTARY_PASSWORD trio). See clients/native/notarize-dmg.sh."
 fi
 
 if [ "$DRY_RUN" -eq 0 ]; then

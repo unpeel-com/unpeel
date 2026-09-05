@@ -2,19 +2,19 @@
 #
 # make-dmg.sh — package dist/Unpeel.app into a drag-to-install DMG.
 #
-# Produces apps/native/dist/Unpeel.dmg: a Finder window holding Unpeel.app
+# Produces clients/native/dist/Unpeel.dmg: a Finder window holding Unpeel.app
 # next to an /Applications alias, so the user drags the app across to install.
 # Run build-app.sh first (or pass --build to do it here), then open the DMG.
 #
 # Usage:
-#   apps/native/make-dmg.sh          # package the already-built app
-#   apps/native/make-dmg.sh --build  # build the app first, then package
-#   apps/native/make-dmg.sh --open   # also open the finished DMG
-#   CODESIGN_IDENTITY="Developer ID Application: …" apps/native/make-dmg.sh --build
+#   clients/native/make-dmg.sh          # package the already-built app
+#   clients/native/make-dmg.sh --build  # build the app first, then package
+#   clients/native/make-dmg.sh --open   # also open the finished DMG
+#   CODESIGN_IDENTITY="Developer ID Application: …" clients/native/make-dmg.sh --build
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-NATIVE_DIR="$REPO_ROOT/apps/native"
+NATIVE_DIR="$REPO_ROOT/clients/native"
 DIST="$NATIVE_DIR/dist"
 APP="$DIST/Unpeel.app"
 VOLNAME="Unpeel"

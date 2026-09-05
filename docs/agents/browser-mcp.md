@@ -219,7 +219,7 @@ own** — Unpeel authors the server and owns the tool schema).
   (`shasum -a 256` of the GitHub assets; they must equal the npm `bin/`
   files), bump `AGENT_BROWSER_EXPECTED_VERSION` + hashes in `build-app.sh`
   while bundling remains, run `cargo test -p unpeel-core browser_engine`,
-  then `apps/native/verify-browser.sh` against a blank home.
+  then `clients/native/verify-browser.sh` against a blank home.
 - Shared-project **logins** persist in the project profile in 0.34.0 (the live
   smoke proves a cookie survives a full browser restart). Unpeel also keeps
   the engine's encrypted state save/restore enabled as a recovery layer

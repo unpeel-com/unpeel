@@ -434,7 +434,7 @@ Safety:
 The Swift codebase should move toward these target boundaries:
 
 ```text
-apps/shared/UnpeelShared/
+clients/shared/UnpeelShared/
   Sources/
     UnpeelShared/
       Cross-platform data models
@@ -446,7 +446,7 @@ apps/shared/UnpeelShared/
 Mac target:
 
 ```text
-apps/native/UnpeelNative/
+clients/native/UnpeelNative/
   Package.swift depends on ../../shared/UnpeelShared
   Sources/
     UnpeelNative/
@@ -460,7 +460,7 @@ apps/native/UnpeelNative/
 Future iOS target:
 
 ```text
-apps/ios/UnpeelIOS/
+clients/ios/UnpeelIOS/
   Sources/
     UnpeelIOS/
       SwiftUI app shell

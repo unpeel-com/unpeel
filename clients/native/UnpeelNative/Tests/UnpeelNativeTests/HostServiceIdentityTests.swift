@@ -103,7 +103,7 @@ final class HostServiceIdentityTests: XCTestCase {
     /// and a second reconcile in the same launch leaves the replacement alone.
     func testStaleWorkerIsRestartedOnceNotInALoop() throws {
         var repo = URL(fileURLWithPath: #filePath)
-        for _ in 0..<6 { repo.deleteLastPathComponent() } // …/apps/native/UnpeelNative/Tests/UnpeelNativeTests/X.swift
+        for _ in 0..<6 { repo.deleteLastPathComponent() } // …/clients/native/UnpeelNative/Tests/UnpeelNativeTests/X.swift
         let realHost = repo.appendingPathComponent("crates/target/debug/unpeel-host")
         try XCTSkipUnless(
             FileManager.default.isExecutableFile(atPath: realHost.path),

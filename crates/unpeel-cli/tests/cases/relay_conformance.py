@@ -7,7 +7,7 @@ Worker WebCrypto implementations are pinned to).
 The Swift-oracle half — the SHIPPED phone crypto (RelayProtocol.swift)
 completing a forward-secret handshake and sealed /mobile round-trips against
 this Host through a stand-in relay — builds the shipped Swift sources from
-apps/shared/UnpeelShared and needs an Apple toolchain (CryptoKit). It is
+clients/shared/UnpeelShared and needs an Apple toolchain (CryptoKit). It is
 skipped here with a NOTE unless UNPEEL_RELAY_SWIFT_ORACLE=1 is set."""
 
 import sys, os, json, socket, base64, hashlib, struct, subprocess, time, threading, shutil
@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from harness import run, REPO  # noqa: E402
 
 TESTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SHARED = os.path.join(REPO, "apps", "shared", "UnpeelShared", "Sources", "UnpeelShared")
+SHARED = os.path.join(REPO, "clients", "shared", "UnpeelShared", "Sources", "UnpeelShared")
 
 
 VECTORS = os.path.join(REPO, "protocol", "relay-kat-vectors-v1.json")
@@ -65,10 +65,10 @@ def body(case):
     oracle = build_oracle(case.home.path("build"))
     if not oracle:
         if os.environ.get("UNPEEL_RELAY_SWIFT_ORACLE") == "1":
-            case.check("Swift oracle requested but swiftc/apps/shared unavailable", False)
+            case.check("Swift oracle requested but swiftc/clients/shared unavailable", False)
         else:
             case.note("Swift-oracle handshake half skipped (needs an Apple toolchain and "
-                      "apps/shared); set "
+                      "clients/shared); set "
                       "UNPEEL_RELAY_SWIFT_ORACLE=1 to require it")
         return
     home = case.home

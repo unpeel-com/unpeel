@@ -2,7 +2,7 @@
 //!
 //! Everything here is frontend-agnostic: it is consumed by the standalone
 //! `unpeel-host` binary (session host + Unpeel Sessions MCP) that the native
-//! Swift app (`apps/native`) spawns. No GUI/Tauri dependency may be added to
+//! Swift app (`clients/native`) spawns. No GUI/Tauri dependency may be added to
 //! this crate — keeping it that way is what lets the host run headless.
 
 // The unified MCP tool definitions are single large `json!` literals (one

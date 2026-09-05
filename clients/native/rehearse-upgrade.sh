@@ -23,9 +23,9 @@
 # 104 bytes (the PTY harness has the same rule).
 #
 # Usage:
-#   apps/native/rehearse-upgrade.sh                 # 0.3.1 → dist/Unpeel.app
-#   OLD_VERSION=0.3.1 NEW_APP=/path/Unpeel.app apps/native/rehearse-upgrade.sh
-#   SOAK=40 apps/native/rehearse-upgrade.sh          # longer app soak
+#   clients/native/rehearse-upgrade.sh                 # 0.3.1 → dist/Unpeel.app
+#   OLD_VERSION=0.3.1 NEW_APP=/path/Unpeel.app clients/native/rehearse-upgrade.sh
+#   SOAK=40 clients/native/rehearse-upgrade.sh          # longer app soak
 #
 # Never touches ~/.unpeel, /Applications/Unpeel.app, or a running Unpeel.
 set -uo pipefail

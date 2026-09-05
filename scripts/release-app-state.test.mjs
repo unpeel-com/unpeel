@@ -236,7 +236,7 @@ test('new builds are monotonic across every channel', () => {
 
 test('native release entrypoint rejects build zero before doing release work', () => {
   const result = spawnSync('bash', [
-    resolve(repoRoot, 'apps/native/release.sh'),
+    resolve(repoRoot, 'clients/native/release.sh'),
     '--channel', 'beta',
     '--build', '0',
     '--dry-run'

@@ -2,7 +2,7 @@
 
 ## Creating a Release
 
-A release is cut from a Mac with **one command** — `apps/native/release.sh`
+A release is cut from a Mac with **one command** — `clients/native/release.sh`
 (exposed as `bun run release:mac`). It chains the existing per-step scripts;
 there is no website/admin path, because signing, notarization, and Sparkle
 signing need local secrets a Cloudflare Worker cannot hold. The release order
@@ -238,7 +238,7 @@ updates.
 
 - **Every CLI archive ships `generated/`** — `generated/GeneratedRuntimeCatalog.swift`,
   the client-safe runtime catalog. The Apple clients in this tree consume the
-  identical copy at `apps/shared/UnpeelShared/Sources/UnpeelShared/` (both are
+  identical copy at `clients/shared/UnpeelShared/Sources/UnpeelShared/` (both are
   written by `bun run generate:runtimes` and verified by `bun run
   check:runtimes`); the archive copy exists for out-of-tree clients and
   humans. Same rules as `protocol/`: in the tar lists, in the required-entry

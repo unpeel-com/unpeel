@@ -22,7 +22,7 @@ select menus are detected from rendered viewport text (they fire no hooks).
 - `PRD.md` — original product framing
 
 Shared protocol/crypto (pairing, remote control, Relay E2E) lives in
-`apps/shared/UnpeelShared`, not here.
+`clients/shared/UnpeelShared`, not here.
 
 ## Build & test
 

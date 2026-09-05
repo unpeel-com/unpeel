@@ -662,8 +662,8 @@ Serve lifecycle, protocol, or launch changes must run these gates serially
 (cd crates && cargo test --workspace)
 (cd crates && cargo test -p unpeel-cli --test serve_command --test unified_service)
 crates/unpeel-cli/tests/run.sh
-apps/native/build-rust-bridge.sh debug
-(cd apps/native/UnpeelNative && swift build)
+clients/native/build-rust-bridge.sh debug
+(cd clients/native/UnpeelNative && swift build)
 scripts/verify-attach.sh
 ```
 

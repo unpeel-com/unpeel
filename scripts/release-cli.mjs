@@ -120,7 +120,7 @@ if (!/^[A-Za-z0-9._-]+$/.test(version)) {
   throw new Error(`--version may only contain [A-Za-z0-9._-], got ${version}`)
 }
 // Lockstep versioning: the CLI and the app share the crates workspace version
-// (the app side asserts the same in apps/native/release.sh). Bump
+// (the app side asserts the same in clients/native/release.sh). Bump
 // crates/Cargo.toml to release a new version; an explicit --version may only
 // restate it.
 if (args.version != null && workspaceVersion && version !== workspaceVersion) {
@@ -429,7 +429,7 @@ for (const [target, file] of Object.entries(tarballs)) {
     artifactRevision == null ? basename(file) : versionedFilename
   )
   // The versioned key always gets an immutable `.sha256` sidecar: a Mac
-  // app build that bundles a published archive (`apps/native/build-app.sh`
+  // app build that bundles a published archive (`clients/native/build-app.sh`
   // with UNPEEL_SERVER_ARCHIVE) verifies the exact versioned archive
   // against this sidecar, never against the mutable `-latest`.
   const versionedShaKey = `${versionedKey}.sha256`

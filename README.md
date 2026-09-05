@@ -57,7 +57,7 @@ built from one tree at one version.
 This repository holds the Host service, the shared PTY core, the unified
 `unpeel` MCP server, the built-in agent runtimes, the CLI, and the Host
 protocol — and the Mac and iOS app sources under
-[`apps/`](apps/) (`apps/native`, `apps/ios`, `apps/shared`) plus the C-ABI
+[`clients/`](clients/) (`clients/native`, `clients/ios`, `clients/shared`) plus the C-ABI
 bridge crate the Mac app links, so app and server always build from one tree.
 How to build and test them: the "Apple clients" section of
 [`AGENTS.md`](AGENTS.md#apple-clients).
@@ -171,14 +171,14 @@ default; session creation stays user-only. Detail:
 
 ## Clients
 
-- **Mac app** — [`apps/native`](apps/native). The desktop client: a Controller
+- **Mac app** — [`clients/native`](clients/native). The desktop client: a Controller
   of the bundled Host service plus the platform adapter (notifications,
   Keychain, approvals, Computer Use on the Mac's own desktop). Signed,
   notarized builds: [unpeel.com/download](https://unpeel.com/download).
-- **iPhone / iPad app** — [`apps/ios`](apps/ios). A remote Controller: steer
+- **iPhone / iPad app** — [`clients/ios`](clients/ios). A remote Controller: steer
   every session from your phone over your network or through Unpeel Link.
   Builds ship through TestFlight; see [unpeel.com](https://unpeel.com).
-- **Shared Swift package** — [`apps/shared/UnpeelShared`](apps/shared/UnpeelShared):
+- **Shared Swift package** — [`clients/shared/UnpeelShared`](clients/shared/UnpeelShared):
   pairing, the Host protocol client, and the end-to-end relay crypto both apps
   use, pinned to the same test vectors as the Rust side.
 - **`unpeel` CLI** — this repository's `crates/unpeel-cli`, for terminals and

@@ -1,4 +1,4 @@
-# label|path relative to apps/native|SHA-256
+# label|path relative to clients/native|SHA-256
 libghostty-spm 1.2.4 (vendored with Unpeel patches)|vendor/libghostty-spm/LICENSE|1f4b38df6a142e678a85d84c3a7ec4d1db328a556483241df714156134e81615
 Ghostty commit 2da015cd6ac06cedc89e09756e895d2c1715205d|licenses/ghostty/LICENSE|386211873e5b7a02f663ae4d7adf96285999f91608f8f9f31fecfd0f4095e6f1
 Nerd Fonts data bundled by Ghostty|licenses/ghostty/nerd-fonts-LICENSE|1f6ad4edae6479aaace3112ede5279a23284ae54b2a34db66357aef5f64df160
