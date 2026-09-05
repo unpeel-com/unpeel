@@ -1066,6 +1066,17 @@ struct ChevronGlyph: View {
 
 // MARK: - Project node (project row + sessions + worktree children)
 
+extension ProjectNode {
+    /// Whether this folder owns the selected Session directly or through a
+    /// nested group/worktree. Inline folder shells use this to retain their
+    /// hover wash while one of their descendants is active.
+    func containsSidebarSession(_ sessionID: String?) -> Bool {
+        guard let sessionID else { return false }
+        return sessions.contains { $0.id == sessionID }
+            || worktrees.contains { $0.containsSidebarSession(sessionID) }
+    }
+}
+
 /// A destination in the session context menu's "Move to" flyout.
 struct SessionMoveTarget: Identifiable, Equatable {
     let id: String
@@ -1131,6 +1142,7 @@ extension ProjectRowView: @MainActor Equatable {
             && lhs.folderColor == rhs.folderColor
             && lhs.showsWorktreeCreate == rhs.showsWorktreeCreate
             && lhs.showsLocalProjectVerbs == rhs.showsLocalProjectVerbs
+            && lhs.showsOrganizationVerbs == rhs.showsOrganizationVerbs
             && lhs.showsFilesystemVerbs == rhs.showsFilesystemVerbs
             && lhs.isConfirmingRemove == rhs.isConfirmingRemove
             && lhs.shortcutHint == rhs.shortcutHint
@@ -1270,13 +1282,11 @@ struct ProjectNodeView: View {
             }
         }
         .background {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(groupHovering ? Theme.hoverRow.opacity(0.5) : .clear)
-                // Child-group layout is already inset by its parent list.
-                // Expand the wash back toward the Session-row bounds. Its
-                // natural height gives the shell one extra point above and
-                // below compared with the previous vertically-inset shape.
-                .padding(.trailing, -1)
+            GroupClusterBackground(
+                selection: store.sessionSelection,
+                node: node,
+                isHovering: groupHovering
+            )
         }
         .background {
             // Drop-target frame lives on its OWN stable layer, not on the
@@ -1291,7 +1301,6 @@ struct ProjectNodeView: View {
                 kind: .groupShell(projectID: node.id)
             )
         }
-        .animation(.easeOut(duration: 0.12), value: groupHovering)
         .onHover { groupHovering = $0 }
     }
 
@@ -1313,15 +1322,14 @@ struct ProjectNodeView: View {
 
     @ViewBuilder
     private var projectRow: some View {
-        // `showsLocalProjectVerbs` is still the coarse gate for a mixed menu:
-        // folder color and sort mode have Host carriers, while group creation,
-        // worktree rename, and native preset management do not yet. Keep the
-        // bundle pure `.local` until those affordances are capability-split.
-        // `isLocalMachine` gates the
-        // verbs that ARE valid against a scoped local workspace on this Mac:
-        // filesystem verbs (Reveal/Open in editor operate on the real path)
+        // `showsLocalProjectVerbs` is the pure-`.local` gate: native preset
+        // management (Settings ▸ Agents & Apps edits THIS instance's home).
+        // `isLocalMachine` gates the verbs that ARE valid against a scoped
+        // local workspace on this Mac: organization verbs (folder color, sort,
+        // groups, rename — Host carriers or the scoped home's own records),
+        // filesystem verbs (Reveal/Open in editor operate on the real path),
         // and Remove/Add (they run local-against the scoped workspace's home).
-        // A true remote Host scope hides both sets.
+        // A true remote Host scope hides all of them.
         let isLocalScope = store.selectedHostScope == .local
         let isLocalMachine = store.selectedHostScope.isLocalMachine
         let worktreesEnabled = store.isExperimentalEnabled(.worktrees)
@@ -1344,12 +1352,13 @@ struct ProjectNodeView: View {
             menuPresets: store.displayAvailablePresets,
             addableApps: isLocalScope ? store.addableApps : [],
             onAddApp: isLocalScope ? { store.addAppPreset($0) } : nil,
-            folderColor: isLocalScope ? store.projectFolderColor(for: node.id) : nil,
+            folderColor: isLocalMachine ? store.projectFolderColor(for: node.id) : nil,
             // Worktree menu toggle gate (ProjectItem.svelte:843-848):
             // real project (not a plain folder), not a worktree child,
             // and the path is a git repo.
             showsWorktreeCreate: canCreateWorktree,
             showsLocalProjectVerbs: isLocalScope,
+            showsOrganizationVerbs: isLocalMachine,
             showsFilesystemVerbs: isLocalMachine,
             isConfirmingRemove: store.confirmingRemoveProjectID == node.id,
             shortcutHint: store.projectShortcutHintIndex(forProject: node.id),
@@ -1862,6 +1871,30 @@ struct EmptySessionsPlaceholderRow: View {
     }
 }
 
+/// A selection switch publishes through `SessionSelectionState`, not the
+/// whole store. Keeping this observer in the background leaf lets ancestor
+/// group/worktree washes follow selection without rebuilding their rows.
+private struct GroupClusterBackground: View {
+    @ObservedObject var selection: SessionSelectionState
+    let node: ProjectNode
+    let isHovering: Bool
+
+    private var isHighlighted: Bool {
+        isHovering || node.containsSidebarSession(selection.sessionID)
+    }
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(isHighlighted ? Theme.hoverRow.opacity(0.5) : .clear)
+            // Child-group layout is already inset by its parent list. Expand
+            // the wash back toward the Session-row bounds. Its natural height
+            // gives the shell one extra point above and below compared with
+            // the previous vertically-inset shape.
+            .padding(.trailing, -1)
+            .animation(.easeOut(duration: 0.12), value: isHighlighted)
+    }
+}
+
 // MARK: - Project row
 
 struct ProjectRowView: View {
@@ -1893,10 +1926,16 @@ struct ProjectRowView: View {
     /// Whether the context menu offers New worktree… (gate: not a folder,
     /// not a worktree child, is a git repo — ProjectItem.svelte:843-848).
     var showsWorktreeCreate = false
-    /// Coarse Local-only gate for a mixed menu. Some fields have Host
-    /// organization verbs, but group/worktree/native-preset affordances still
-    /// lack a complete remote carrier and have not been capability-split.
+    /// Pure-`.local` gate: native preset management (Manage Agents & Apps…)
+    /// edits this instance's own home, so it stays off in a scoped workspace.
     var showsLocalProjectVerbs = true
+    /// Whether the organization verbs (Rename, Folder color, Sort sessions,
+    /// New group…, Remove group/worktree) are offered. True in `.local` AND
+    /// in a scoped `.localWorkspace`: folder color, sort, and group rename
+    /// ride the Host's `project.organization.set`; group create/remove and
+    /// worktree rename write the scoped home's own records. False for a
+    /// true remote Host.
+    var showsOrganizationVerbs = true
     /// Whether the filesystem/state verbs valid on THIS machine (Reveal in
     /// Finder, Open in editor, Remove) are offered. True in `.local` AND in a
     /// scoped `.localWorkspace` (same Mac). False for a true remote Host.
@@ -2182,9 +2221,9 @@ struct ProjectRowView: View {
         // is non-destructive (stopSession per live session — rows stay as
         // exited). Unpeel Sessions MCP access is set per session.
         .contextMenu {
-            if (isChildFolder && showsLocalProjectVerbs)
+            if (isChildFolder && showsOrganizationVerbs)
                 || (node.project.acceptsSessionDrop && canPin) {
-                if isChildFolder, showsLocalProjectVerbs {
+                if isChildFolder, showsOrganizationVerbs {
                     Button("Rename") {
                         onRenameWorktree()
                     }
@@ -2212,7 +2251,7 @@ struct ProjectRowView: View {
             // Folder color is a MAIN-project verb: groups and worktrees stay
             // neutral so nesting reads by indent, not tint (decided
             // 2026-08-13 after a group picked up a color by accident).
-            if node.project.parentProjectID == nil, showsLocalProjectVerbs {
+            if node.project.parentProjectID == nil, showsOrganizationVerbs {
                 Menu("Folder color") {
                     Button {
                         onSetFolderColor(nil)
@@ -2240,10 +2279,9 @@ struct ProjectRowView: View {
             // Per-group sort: custom (the manual drag order, the default) or
             // recently updated (last activity, like All recent). Date sort
             // disables drag re-ordering for the group; the stored manual
-            // order survives a switch back. The current view exposes this
-            // mixed project menu only in Local; the store also supports the
-            // Host `project.organization.set` carrier.
-            if showsLocalProjectVerbs {
+            // order survives a switch back. Scoped local workspaces flip it
+            // through the Host `project.organization.set` carrier.
+            if showsOrganizationVerbs {
             Menu("Sort sessions") {
                 Picker("Sort sessions", selection: Binding(
                     get: { isDateSorted },
@@ -2261,7 +2299,7 @@ struct ProjectRowView: View {
                     onCreateWorktree()
                 }
             }
-            if node.project.parentProjectID == nil, showsLocalProjectVerbs {
+            if node.project.parentProjectID == nil, showsOrganizationVerbs {
                 Button("New group…") {
                     onCreateGroup()
                 }
@@ -2341,9 +2379,10 @@ struct ProjectRowView: View {
                 }
             }
             if isWorktreeChild || isChildFolder {
-                // Worktree/group removal is a native-overlay operation with no
-                // scoped-home carrier yet — pure `.local` only.
-                if showsLocalProjectVerbs {
+                // Worktree/group removal writes the scoped home's own
+                // records (and runs git against the real path), so it is
+                // valid on this Mac; a true remote Host hides it.
+                if showsOrganizationVerbs {
                     Divider()
                     if isWorktreeChild {
                         Button("Remove worktree", role: .destructive) {

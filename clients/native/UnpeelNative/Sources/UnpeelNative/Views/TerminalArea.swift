@@ -880,6 +880,7 @@ struct TerminalHostView: NSViewRepresentable {
     /// Called when a pointer press lands in this hosted terminal. A multi-pane
     /// view uses it to remember which independently mounted surface owns focus.
     var onActivate: (() -> Void)? = nil
+    var onCommandClick: ((ClickablePath.Match, String) -> Bool)? = nil
 
     final class SwapContainer: NSView {
         var frameBackgroundColor = Theme.terminalBackgroundNSColor {
@@ -1083,6 +1084,7 @@ struct TerminalHostView: NSViewRepresentable {
         cache.noteShown(session.id)
 
         if let pane = cache.existingPane(for: session.id) {
+            pane.commandClickHandler = onCommandClick
             container.pendingCreateSessionID = nil
             // When the live theme revision moves, re-push Ghostty colors for
             // the already-attached pane (attach is a no-op if still hosted).
@@ -1112,6 +1114,7 @@ struct TerminalHostView: NSViewRepresentable {
         let session = session
         let workingDirectory = workingDirectory
         let sessionsDir = sessionsDir
+        let onCommandClick = onCommandClick
         DispatchQueue.main.async { [cache, weak container] in
             guard let container,
                   container.representedSessionID == session.id,
@@ -1123,6 +1126,7 @@ struct TerminalHostView: NSViewRepresentable {
                 workingDirectory: workingDirectory,
                 sessionsDir: sessionsDir
             )
+            pane.commandClickHandler = onCommandClick
             attach(pane, to: container)
         }
     }

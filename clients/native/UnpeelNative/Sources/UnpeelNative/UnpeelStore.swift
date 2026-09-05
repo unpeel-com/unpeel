@@ -837,6 +837,11 @@ final class UnpeelStore: ObservableObject {
     /// canonical Rust workspace worker. The native app presents them only;
     /// Allow/Deny routes back over the same local Host connection.
     var hostOwnedMcpApprovalIDs: Set<String> = []
+    /// Approval rows projected from the SELECTED non-Local scope's bootstrap
+    /// (`pendingApprovals`): a scoped local workspace or a remote Host, whose
+    /// worker has no platform adapter into this app. Answered through the
+    /// selected runtime's `approval.answer`, never the own-home gateway.
+    var scopedHostMcpApprovalIDs: Set<String> = []
     var hostMcpApprovalMessages: [String: (title: String, body: String)] = [:]
     var hostMcpApprovalAnswersInFlight: Set<String> = []
     /// The floating panel for the computer-permissions (TCC) nudge.
@@ -6593,7 +6598,10 @@ final class UnpeelStore: ObservableObject {
         if nextDetectedLocalURLs != detectedLocalURLs {
             detectedLocalURLs = nextDetectedLocalURLs
         }
-        if phoneResizeOverrides.keys.contains(where: { !seen.contains($0) }) {
+        // `seen` is this home's session dirs; a scoped workspace's overrides
+        // are Host-published and reconciled by its projection instead.
+        if selectedHostScope == .local,
+           phoneResizeOverrides.keys.contains(where: { !seen.contains($0) }) {
             phoneResizeOverrides = phoneResizeOverrides.filter { seen.contains($0.key) }
         }
         if resumeFailures.contains(where: { !seen.contains($0) }) {
@@ -6931,8 +6939,11 @@ final class UnpeelStore: ObservableObject {
     // MARK: - Project folder colors
 
     func projectFolderColor(for projectID: String) -> ProjectFolderColor? {
+        // The Host's projection carries the color for every scope; this
+        // instance's own UserDefaults dictionary is only a `.local` fallback
+        // (a scoped workspace's ids must never pick up this home's colors).
         let raw = remoteProjectSummariesByID[projectID]?.colorID
-            ?? projectFolderColorIDs[projectID]
+            ?? (selectedHostScope == .local ? projectFolderColorIDs[projectID] : nil)
         guard let raw else { return nil }
         return ProjectFolderColor(rawValue: raw)
     }
@@ -8698,7 +8709,11 @@ final class UnpeelStore: ObservableObject {
     func clearPhoneResizeOverride(for sessionID: String) {
         guard phoneResizeOverrides[sessionID] != nil else { return }
         phoneResizeOverrides.removeValue(forKey: sessionID)
-        guard localHostClientStarted, selectedHostScope == .local else { return }
+        // Host-published fits: this window's Local scope as a worker client,
+        // or a scoped local workspace (its worker owns the grid the same way).
+        guard selectedHostScope.isLocalMachine,
+              selectedHostScope != .local || localHostClientStarted
+        else { return }
         phoneFitLocallyClearedSessionIDs.insert(sessionID)
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -10565,6 +10580,160 @@ final class UnpeelStore: ObservableObject {
         openInEditor(editor: preferredCodeEditor(), path: path, line: line, column: column)
     }
 
+    /// Route a cmd-click through the selected Host's typed opener table.
+    /// Returning false lets Ghostty keep its ordinary URL/selection behavior.
+    @discardableResult
+    func openClickedFile(
+        _ match: ClickablePath.Match,
+        path: String,
+        fromSessionID sessionID: String
+    ) -> Bool {
+        let snapshot = remoteHostRuntime.snapshot
+        let apps = snapshot?.availableApps ?? []
+        guard let mediaType = RemoteAppSummary.mediaType(forPath: path, in: apps) else {
+            return false
+        }
+        let selector = "file:\(mediaType)"
+        let installed = Set((snapshot?.installedApps ?? []).map(\.id))
+        let handlers = apps.filter { $0.handles(selector: selector) }
+        let handler = handlers.first { $0.defaultFor.contains(selector) }
+            ?? (handlers.count == 1 ? handlers[0] : nil)
+        let configured = snapshot?.openers?[selector]
+        let opener = configured
+            ?? handler.map { "app:\($0.id)" }
+            ?? "editor"
+
+        switch opener {
+        case "editor":
+            openClickedFileInEditor(match, path: path)
+        case "system":
+            openClickedFileWithSystem(path)
+        default:
+            guard opener.hasPrefix("app:") else {
+                openClickedFileInEditor(match, path: path)
+                return true
+            }
+            let appID = String(opener.dropFirst(4))
+            guard
+                  let app = snapshot?.availableApps?.first(where: { $0.id == appID }),
+                  app.handles(selector: selector)
+            else {
+                openClickedFileInEditor(match, path: path)
+                return true
+            }
+            if installed.contains(app.id) || app.installed {
+                launchAppPane(
+                    app,
+                    mediaType: mediaType,
+                    path: path,
+                    fromSessionID: sessionID
+                )
+            } else {
+                promptToInstallApp(
+                    app,
+                    selector: selector,
+                    mediaType: mediaType,
+                    path: path,
+                    match: match,
+                    fromSessionID: sessionID
+                )
+            }
+        }
+        return true
+    }
+
+    private func openClickedFileInEditor(_ match: ClickablePath.Match, path: String) {
+        guard selectedHostScope.isLocalMachine else {
+            Self.showRemoteVerbFailure(
+                title: "The file is on the Host",
+                message: "Choose an Unpeel App for this file type to open it from a remote workspace."
+            )
+            return
+        }
+        Self.openFileInPreferredEditor(path: path, line: match.line, column: match.column)
+    }
+
+    private func openClickedFileWithSystem(_ path: String) {
+        guard selectedHostScope.isLocalMachine else {
+            Self.showRemoteVerbFailure(
+                title: "The file is on the Host",
+                message: "The system opener is available only for workspaces on this Mac."
+            )
+            return
+        }
+        if !NSWorkspace.shared.open(URL(fileURLWithPath: path)) {
+            Self.showRemoteVerbFailure(
+                title: "Couldn't open the file",
+                message: path
+            )
+        }
+    }
+
+    private func promptToInstallApp(
+        _ app: RemoteAppSummary,
+        selector: String,
+        mediaType: String,
+        path: String,
+        match: ClickablePath.Match,
+        fromSessionID sessionID: String
+    ) {
+        guard remoteHostRuntime.supportsHostOperation(
+            RemoteHostRuntime.HostOperation.appsInstall
+        ) else {
+            openClickedFileInEditor(match, path: path)
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "Open this file in \(app.name)?"
+        alert.informativeText = "\(app.name) is not installed on this Host yet."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Install")
+        alert.addButton(withTitle: "Use Editor")
+        alert.addButton(withTitle: "Always Use Editor")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            performRemoteVerb("Couldn't install \(app.name)") { [weak self] runtime in
+                try await runtime.installApp(app.id)
+                try await runtime.setOpener(
+                    selector: selector,
+                    opener: "app:\(app.id)"
+                )
+                runtime.requestImmediateRefresh()
+                self?.launchAppPane(
+                    app,
+                    mediaType: mediaType,
+                    path: path,
+                    fromSessionID: sessionID
+                )
+            }
+        case .alertThirdButtonReturn:
+            performRemoteVerb("Couldn't save the resource opener") { [weak self] runtime in
+                try await runtime.setOpener(selector: selector, opener: "editor")
+                self?.openClickedFileInEditor(match, path: path)
+            }
+        default:
+            openClickedFileInEditor(match, path: path)
+        }
+    }
+
+    private func launchAppPane(
+        _ app: RemoteAppSummary,
+        mediaType: String,
+        path: String,
+        fromSessionID sessionID: String
+    ) {
+        guard displaySessionsByID[sessionID] != nil else { return }
+        performRemoteVerb("Couldn't open \(app.name)") { runtime in
+            try await runtime.openApp(
+                app.id,
+                resourceKind: "file",
+                mediaType: mediaType,
+                resourceID: path,
+                callerSessionID: sessionID
+            )
+        }
+    }
+
     private nonisolated static func openInEditor(
         editor: String,
         path: String,
@@ -11030,7 +11199,7 @@ final class UnpeelStore: ObservableObject {
     /// the git branch or move an existing checkout folder; live sessions and
     /// saved manifests continue to point at the same path.
     func promptRenameWorktreeProject(_ projectID: String) {
-        guard let project = projectsByID[projectID],
+        guard let project = displayProjectsByID[projectID] ?? projectsByID[projectID],
               project.parentProjectID != nil
         else { return }
         let branch = project.worktreeBranch
@@ -11056,8 +11225,39 @@ final class UnpeelStore: ObservableObject {
             // `tui-` ids) — the worktree path's native-record lookup would
             // silently drop the rename for those.
             renameGroupProject(projectID, to: field.stringValue)
+        } else if selectedHostScope.scopedLocalHome != nil {
+            renameScopedWorkspaceWorktreeProject(projectID, to: field.stringValue)
         } else {
             renameWorktreeProject(projectID, to: field.stringValue)
+        }
+    }
+
+    /// `.localWorkspace` worktree rename: the scoped home's own native
+    /// records and its `app-state.json` entry (the gateway reads only the
+    /// file), never this instance's. The git branch and checkout stay put,
+    /// exactly like the `.local` rename.
+    private func renameScopedWorkspaceWorktreeProject(_ projectID: String, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let project = displayProjectsByID[projectID],
+              project.parentProjectID != nil,
+              trimmed != project.name
+        else { return }
+        let defaults = scopedAppDefaults
+        var records = Self.loadNativeProjects(from: defaults)
+        if let index = records.firstIndex(where: { $0.id == projectID }) {
+            records[index].name = trimmed
+            if let data = try? JSONEncoder().encode(records) {
+                defaults.set(data, forKey: Self.nativeProjectsKey)
+            }
+        }
+        editScopedAppStateAnnouncing { object in
+            var projects = (object["projects"] as? [[String: Any]]) ?? []
+            guard let index = projects.firstIndex(where: {
+                ($0["id"] as? String) == projectID
+            }) else { return }
+            projects[index]["name"] = trimmed
+            object["projects"] = projects
         }
     }
 
@@ -11096,7 +11296,8 @@ final class UnpeelStore: ObservableObject {
     /// sessions — moving a session in is a `project-override.json` marker,
     /// never a manifest edit.
     func promptCreateGroup(projectID: String) {
-        guard let project = projectsByID[projectID] else { return }
+        guard let project = displayProjectsByID[projectID] ?? projectsByID[projectID]
+        else { return }
         let alert = NSAlert()
         alert.messageText = "New group"
         alert.informativeText = "Group sessions under a named folder in the sidebar. Sessions keep running where they are — this only organizes the list."
@@ -11109,6 +11310,10 @@ final class UnpeelStore: ObservableObject {
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
+        if selectedHostScope.scopedLocalHome != nil {
+            createScopedWorkspaceGroup(name: name, parent: project)
+            return
+        }
         var records = loadNativeProjects()
         records.append(NativeProjectRecord(
             id: "native-\(UUID().uuidString.lowercased())",
@@ -11123,6 +11328,42 @@ final class UnpeelStore: ObservableObject {
         }
         expandedProjectIDs.insert(projectID)
         rescan()
+    }
+
+    /// `.localWorkspace` New group: the child record lands in the SCOPED
+    /// workspace's own native suite and is mirrored into its `app-state.json`
+    /// under the shared lock (the gateway reads only the file), then the
+    /// re-bootstrap is nudged so the folder row appears in the scoped
+    /// sidebar. Same shape `mirrorProjectsToSharedState` writes for `.local`.
+    private func createScopedWorkspaceGroup(name: String, parent: Project) {
+        let record = NativeProjectRecord(
+            id: "native-\(UUID().uuidString.lowercased())",
+            name: name,
+            path: parent.path,
+            parentProjectID: parent.id,
+            isFolder: true
+        )
+        let defaults = scopedAppDefaults
+        var records = Self.loadNativeProjects(from: defaults)
+        records.append(record)
+        if let data = try? JSONEncoder().encode(records) {
+            defaults.set(data, forKey: Self.nativeProjectsKey)
+        }
+        editScopedAppStateAnnouncing { object in
+            var projects = (object["projects"] as? [[String: Any]]) ?? []
+            guard !projects.contains(where: { ($0["id"] as? String) == record.id }) else {
+                return
+            }
+            projects.append([
+                "id": record.id,
+                "name": record.name,
+                "path": record.path,
+                "parent_project_id": parent.id,
+                "is_folder": true,
+            ])
+            object["projects"] = projects
+        }
+        expandedProjectIDs.insert(parent.id)
     }
 
     /// Rename either a native-record group or a shared-file group. The latter
@@ -11178,6 +11419,9 @@ final class UnpeelStore: ObservableObject {
     /// Controller callers already confirmed and pass `confirm: false`.
     @discardableResult
     func removeGroupProject(_ projectID: String, confirm: Bool = true) -> Int? {
+        if selectedHostScope.scopedLocalHome != nil {
+            return removeScopedWorkspaceGroup(projectID, confirm: confirm)
+        }
         guard let project = projectsByID[projectID],
               let parentID = project.parentProjectID,
               project.acceptsSessionDrop
@@ -11220,6 +11464,44 @@ final class UnpeelStore: ObservableObject {
         }
         rescan()
         return archivedCount
+    }
+
+    /// `.localWorkspace` Remove group: the member Sessions ride the Host's
+    /// move/archive verbs (awaited in order, so the Host still knows the
+    /// group while it re-files them), then the organizational record leaves
+    /// the scoped home's own records and `app-state.json`. Returns the number
+    /// of members that will be archived (the count the confirm quoted).
+    private func removeScopedWorkspaceGroup(_ projectID: String, confirm: Bool) -> Int? {
+        guard let project = displayProjectsByID[projectID],
+              let parentID = project.parentProjectID,
+              project.acceptsSessionDrop
+        else { return nil }
+        let members = displaySessionsByID.values
+            .filter { $0.projectID == projectID }
+            .sorted { $0.id < $1.id }
+        if confirm && !members.isEmpty {
+            let count = members.count
+            let noun = count == 1 ? "session" : "sessions"
+            let parentName = displayProjectsByID[parentID]?.name ?? "the parent project"
+            let alert = NSAlert()
+            alert.messageText = "Remove group?"
+            alert.informativeText = "\(count) \(noun) will move under \(parentName). Resumable conversations will also be archived."
+            alert.addButton(withTitle: "Remove Group")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        }
+        let archivable = members.filter { sessionCanArchive($0.id) }.map(\.id)
+        let memberIDs = members.map(\.id)
+        performRemoteVerb("Couldn't remove the group") { [weak self] runtime in
+            for sessionID in memberIDs {
+                try await runtime.setSessionProject(sessionID, projectID: parentID)
+            }
+            for sessionID in archivable {
+                try await runtime.archiveSession(sessionID)
+            }
+            self?.removeScopedWorkspaceProject(projectID)
+        }
+        return archivable.count
     }
 
     /// Whether a session row in a DATE-SORTED list still participates in the
@@ -11712,7 +11994,7 @@ final class UnpeelStore: ObservableObject {
     /// or width; the desktop convention is simply a trailing/right split on
     /// first reveal. Existing user placement is respected on later reveals.
     private func reconcileAppPresentations(_ envelope: AppPresentationsFile?) {
-        guard selectedHostScope == .local,
+        guard selectedHostScope.supportsSessionPanes,
               let envelope,
               envelope.version == 1
         else { return }
@@ -11727,12 +12009,12 @@ final class UnpeelStore: ObservableObject {
                 presentationID: presentation.id
             ),
             let instance = instances[presentation.instanceID],
-            let caller = sessionsByID[presentation.callerSessionID],
-            let companion = sessionsByID[instance.companionSessionID],
+            let caller = displaySessionsByID[presentation.callerSessionID],
+            let companion = displaySessionsByID[instance.companionSessionID],
             caller.isAttachable,
             companion.isAttachable,
-            !archivedSessionIDs.contains(caller.id),
-            !archivedSessionIDs.contains(companion.id)
+            !isHiddenArchived(caller.id),
+            !isHiddenArchived(companion.id)
             else { continue }
 
             let location: PaneLocation?
@@ -12621,10 +12903,13 @@ final class UnpeelStore: ObservableObject {
     /// work stays on the branch either way
     /// (handleRemoveProject, Sidebar.svelte:74-106).
     func removeWorktreeProject(_ projectID: String) {
-        guard let project = projectsByID[projectID],
+        let projects = displayProjectsByID
+        guard let project = projects[projectID] ?? projectsByID[projectID],
               let branch = project.worktreeBranch
         else { return }
-        let parentPath = project.parentProjectID.flatMap { projectsByID[$0]?.path }
+        let parentPath = project.parentProjectID.flatMap {
+            (projects[$0] ?? projectsByID[$0])?.path
+        }
 
         let alert = NSAlert()
         alert.messageText = "Remove worktree \"\(project.name)\"?"
@@ -15550,6 +15835,22 @@ extension UnpeelStore {
                     return session.id
                 }
             ))
+            reconcileAppPresentations(snapshot.appPresentations)
+        }
+        if projectsLocalHost {
+            // Local approvals arrive through the platform adapter; drop any
+            // rows a previously selected scope projected.
+            reconcileScopedHostApprovals([])
+        } else {
+            // A scoped/remote worker has no adapter into this app: its
+            // pending approvals ride the bootstrap, like on the phone.
+            reconcileScopedHostApprovals(snapshot.pendingApprovals ?? [])
+            // A scoped local workspace's panes attach for real, so they
+            // would fight a phone-owned grid exactly like Local panes:
+            // letterbox to the Host-published fit.
+            if selectedHostScope.isLocalMachine {
+                applyHostPublishedPhoneFits(snapshot.sessions)
+            }
         }
 
         // Entering a non-local Host: swap the expansion set to the Host's own
@@ -15677,6 +15978,10 @@ extension UnpeelStore {
     private func clearRemoteScopeProjectionState() {
         for sourceID in remoteRestartPlaceholders.keys {
             restartingSessionIDs.remove(sourceID)
+        }
+        reconcileScopedHostApprovals([])
+        if !phoneResizeOverrides.isEmpty {
+            phoneResizeOverrides = [:]
         }
         remoteRestartPlaceholders = [:]
         remoteNodes = []

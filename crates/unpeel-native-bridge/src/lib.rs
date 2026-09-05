@@ -284,6 +284,41 @@ trait RegisteredRemoteBackend: Send + Sync {
             message: "Workspace settings are unavailable on this backend".into(),
         })
     }
+    fn set_opener(&self, _selector: &str, _opener: &str) -> Result<u64, NativeRemoteEffectError> {
+        Err(NativeRemoteEffectError {
+            result: ERROR_REMOTE,
+            kind: "notApplied",
+            code: "opener_unavailable",
+            operation: "resource opener",
+            message: "Resource opener settings are unavailable on this backend".into(),
+        })
+    }
+    fn install_app(&self, _app_id: &str) -> Result<u64, NativeRemoteEffectError> {
+        Err(NativeRemoteEffectError {
+            result: ERROR_REMOTE,
+            kind: "notApplied",
+            code: "app_install_unavailable",
+            operation: "App install",
+            message: "App installation is unavailable on this backend".into(),
+        })
+    }
+    fn open_app(
+        &self,
+        _caller_session_id: &str,
+        _app_id: &str,
+        _resource_kind: &str,
+        _media_type: Option<&str>,
+        _resource_id: &str,
+        _request_id: &str,
+    ) -> Result<u64, NativeRemoteEffectError> {
+        Err(NativeRemoteEffectError {
+            result: ERROR_REMOTE,
+            kind: "notApplied",
+            code: "app_open_unavailable",
+            operation: "App open",
+            message: "Opening Apps is unavailable on this backend".into(),
+        })
+    }
     fn set_preset(&self, _patch: &RemotePresetPatch) -> Result<u64, NativeRemoteEffectError> {
         Err(NativeRemoteEffectError {
             result: ERROR_REMOTE,
@@ -599,6 +634,42 @@ impl RegisteredRemoteBackend for RegisteredCoreBackend {
     ) -> Result<u64, NativeRemoteEffectError> {
         self.backend
             .set_workspace_settings(patch)
+            .map(|receipt| receipt.request_id())
+            .map_err(native_remote_effect_error)
+    }
+
+    fn set_opener(&self, selector: &str, opener: &str) -> Result<u64, NativeRemoteEffectError> {
+        self.backend
+            .set_opener(selector, opener)
+            .map(|receipt| receipt.request_id())
+            .map_err(native_remote_effect_error)
+    }
+
+    fn install_app(&self, app_id: &str) -> Result<u64, NativeRemoteEffectError> {
+        self.backend
+            .install_app(app_id)
+            .map(|receipt| receipt.request_id())
+            .map_err(native_remote_effect_error)
+    }
+
+    fn open_app(
+        &self,
+        caller_session_id: &str,
+        app_id: &str,
+        resource_kind: &str,
+        media_type: Option<&str>,
+        resource_id: &str,
+        request_id: &str,
+    ) -> Result<u64, NativeRemoteEffectError> {
+        self.backend
+            .open_app(
+                caller_session_id,
+                app_id,
+                resource_kind,
+                media_type,
+                resource_id,
+                request_id,
+            )
             .map(|receipt| receipt.request_id())
             .map_err(native_remote_effect_error)
     }
@@ -2091,6 +2162,89 @@ fn set_remote_workspace_settings(
         .map_err(native_not_applied_effect_error("workspace settings"))?
         .set_workspace_settings(&patch)?;
     encode_effect_receipt("workspace settings", request_id)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeOpenerWire {
+    selector: String,
+    opener: String,
+}
+
+fn set_remote_opener(
+    handle: RemoteHandle,
+    body_json: &[u8],
+) -> Result<Vec<u8>, NativeRemoteEffectError> {
+    let wire: NativeOpenerWire = serde_json::from_slice(body_json).map_err(|error| {
+        native_not_applied_effect_error("resource opener")(NativeRemoteError::invalid_input(
+            "invalid_opener_json",
+            format!("Resource opener request is malformed: {error}"),
+        ))
+    })?;
+    let request_id = remote_backend(handle)
+        .map_err(native_not_applied_effect_error("resource opener"))?
+        .set_opener(&wire.selector, &wire.opener)?;
+    encode_effect_receipt("resource opener", request_id)
+}
+
+#[derive(Debug, Deserialize)]
+struct NativeAppInstallWire {
+    #[serde(rename = "appID")]
+    app_id: String,
+}
+
+fn install_remote_app(
+    handle: RemoteHandle,
+    body_json: &[u8],
+) -> Result<Vec<u8>, NativeRemoteEffectError> {
+    let wire: NativeAppInstallWire = serde_json::from_slice(body_json).map_err(|error| {
+        native_not_applied_effect_error("App install")(NativeRemoteError::invalid_input(
+            "invalid_app_install_json",
+            format!("App install request is malformed: {error}"),
+        ))
+    })?;
+    let request_id = remote_backend(handle)
+        .map_err(native_not_applied_effect_error("App install"))?
+        .install_app(&wire.app_id)?;
+    encode_effect_receipt("App install", request_id)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeAppOpenWire {
+    #[serde(rename = "callerSessionID")]
+    caller_session_id: String,
+    #[serde(rename = "appID")]
+    app_id: String,
+    resource_kind: String,
+    media_type: Option<String>,
+    #[serde(rename = "resourceID")]
+    resource_id: String,
+    #[serde(rename = "requestID")]
+    request_id: String,
+}
+
+fn open_remote_app(
+    handle: RemoteHandle,
+    body_json: &[u8],
+) -> Result<Vec<u8>, NativeRemoteEffectError> {
+    let wire: NativeAppOpenWire = serde_json::from_slice(body_json).map_err(|error| {
+        native_not_applied_effect_error("App open")(NativeRemoteError::invalid_input(
+            "invalid_app_open_json",
+            format!("App open request is malformed: {error}"),
+        ))
+    })?;
+    let request_id = remote_backend(handle)
+        .map_err(native_not_applied_effect_error("App open"))?
+        .open_app(
+            &wire.caller_session_id,
+            &wire.app_id,
+            &wire.resource_kind,
+            wire.media_type.as_deref(),
+            &wire.resource_id,
+            &wire.request_id,
+        )?;
+    encode_effect_receipt("App open", request_id)
 }
 
 fn set_remote_project_organization(
@@ -4139,6 +4293,101 @@ pub unsafe extern "C" fn unpeel_native_bridge_remote_workspace_settings_set(
     finish_remote_effect_ffi(outcome, "workspace settings", out_pointer, out_length)
 }
 
+/// Set one remote Host typed resource opener preference (`settings.openers.set`).
+///
+/// # Safety
+///
+/// A non-empty body must point to readable bytes of its declared length.
+/// Both output pointers must be non-null and writable.
+#[no_mangle]
+pub unsafe extern "C" fn unpeel_native_bridge_remote_opener_set(
+    handle: RemoteHandle,
+    body_json_pointer: *const u8,
+    body_json_length: usize,
+    out_pointer: *mut *mut u8,
+    out_length: *mut usize,
+) -> i32 {
+    if out_pointer.is_null() || out_length.is_null() {
+        return ERROR_INVALID_INPUT;
+    }
+    *out_pointer = ptr::null_mut();
+    *out_length = 0;
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        let body = input_bytes(body_json_pointer, body_json_length).map_err(|message| {
+            native_not_applied_effect_error("resource opener")(NativeRemoteError::invalid_input(
+                "invalid_opener_buffer",
+                message,
+            ))
+        })?;
+        set_remote_opener(handle, body)
+    }));
+    finish_remote_effect_ffi(outcome, "resource opener", out_pointer, out_length)
+}
+
+/// Install one official App on the remote Host (`apps.install`).
+///
+/// # Safety
+///
+/// A non-empty body must point to readable bytes of its declared length.
+/// Both output pointers must be non-null and writable.
+#[no_mangle]
+pub unsafe extern "C" fn unpeel_native_bridge_remote_app_install(
+    handle: RemoteHandle,
+    body_json_pointer: *const u8,
+    body_json_length: usize,
+    out_pointer: *mut *mut u8,
+    out_length: *mut usize,
+) -> i32 {
+    if out_pointer.is_null() || out_length.is_null() {
+        return ERROR_INVALID_INPUT;
+    }
+    *out_pointer = ptr::null_mut();
+    *out_length = 0;
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        let body = input_bytes(body_json_pointer, body_json_length).map_err(|message| {
+            native_not_applied_effect_error("App install")(NativeRemoteError::invalid_input(
+                "invalid_app_install_buffer",
+                message,
+            ))
+        })?;
+        install_remote_app(handle, body)
+    }));
+    finish_remote_effect_ffi(outcome, "App install", out_pointer, out_length)
+}
+
+/// Open one installed App through the Host's semantic App presentation path
+/// (`apps.open`). `body_json` contains callerSessionID, appID, resourceKind,
+/// optional mediaType, resourceID, and an idempotency requestID.
+///
+/// # Safety
+///
+/// A non-empty body must point to readable bytes of its declared length.
+/// Both output pointers must be non-null and writable.
+#[no_mangle]
+pub unsafe extern "C" fn unpeel_native_bridge_remote_app_open(
+    handle: RemoteHandle,
+    body_json_pointer: *const u8,
+    body_json_length: usize,
+    out_pointer: *mut *mut u8,
+    out_length: *mut usize,
+) -> i32 {
+    if out_pointer.is_null() || out_length.is_null() {
+        return ERROR_INVALID_INPUT;
+    }
+    *out_pointer = ptr::null_mut();
+    *out_length = 0;
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        let body = input_bytes(body_json_pointer, body_json_length).map_err(|message| {
+            native_not_applied_effect_error("App open")(NativeRemoteError::invalid_input(
+                "invalid_app_open_buffer",
+                message,
+            ))
+        })?;
+        open_remote_app(handle, body)
+    }));
+    finish_remote_effect_ffi(outcome, "App open", out_pointer, out_length)
+}
+
 /// Organize one remote project/group (`project.organization.set`).
 /// `patch_json` is the camelCase one-project patch (sortOrder?, displayName?,
 /// colorID?, dateSorted?, pinned?; absent fields are left unchanged). `sortOrder`
@@ -5139,6 +5388,41 @@ mod tests {
             Ok(51)
         }
 
+        fn set_opener(&self, selector: &str, opener: &str) -> Result<u64, NativeRemoteEffectError> {
+            self.effects
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(format!("opener:{selector}:{opener}"));
+            Ok(52)
+        }
+
+        fn install_app(&self, app_id: &str) -> Result<u64, NativeRemoteEffectError> {
+            self.effects
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(format!("app-install:{app_id}"));
+            Ok(53)
+        }
+
+        fn open_app(
+            &self,
+            caller_session_id: &str,
+            app_id: &str,
+            resource_kind: &str,
+            media_type: Option<&str>,
+            resource_id: &str,
+            request_id: &str,
+        ) -> Result<u64, NativeRemoteEffectError> {
+            self.effects
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(format!(
+                    "app-open:{caller_session_id}:{app_id}:{resource_kind}:{}:{resource_id}:{request_id}",
+                    media_type.unwrap_or("-")
+                ));
+            Ok(54)
+        }
+
         fn session_verb(
             &self,
             verb: RemoteSessionVerb,
@@ -5333,6 +5617,42 @@ mod tests {
             "folders": [],
             "projects": [],
             "presets": [],
+            "availableApps": [{
+                "id": "unpeel.app.markdown",
+                "name": "Markdown",
+                "command": "unpeel-markdown",
+                "mediaTypes": ["text/markdown"],
+                "fileExtensions": {"md": "text/markdown"},
+                "resourceKinds": ["folder"],
+                "defaultFor": ["file:text/markdown"],
+                "installed": true
+            }],
+            "installedApps": [{
+                "id": "unpeel.app.markdown",
+                "name": "Markdown",
+                "command": "unpeel-markdown",
+                "mediaTypes": ["text/markdown"],
+                "fileExtensions": {"md": "text/markdown"},
+                "resourceKinds": ["folder"],
+                "defaultFor": ["file:text/markdown"],
+                "installed": true
+            }],
+            "openers": {"file:text/markdown": "app:unpeel.app.markdown"},
+            "appPresentations": {
+                "version": 1,
+                "instances": [{
+                    "id": "instance-1",
+                    "app_id": "unpeel.app.markdown",
+                    "companion_session_id": "companion-1"
+                }],
+                "presentations": [{
+                    "id": "presentation-1",
+                    "caller_session_id": "session-1",
+                    "instance_id": "instance-1",
+                    "target": "panel",
+                    "reveal_revision": 1
+                }]
+            },
             "sessions": [{
                 "id": "session-1",
                 "projectID": "project-1",
@@ -6198,6 +6518,15 @@ mod tests {
         assert_eq!(snapshot["paneGroups"][0]["sessionIDs"][1], "session-2");
         assert!(snapshot["sessions"][0]["providerID"].is_null());
         assert!(snapshot["hostProtocol"]["capabilities"].is_array());
+        assert_eq!(snapshot["availableApps"][0]["id"], "unpeel.app.markdown");
+        assert_eq!(
+            snapshot["openers"]["file:text/markdown"],
+            "app:unpeel.app.markdown"
+        );
+        assert_eq!(
+            snapshot["appPresentations"]["instances"][0]["companion_session_id"],
+            "companion-1"
+        );
         assert!(snapshot.get("unexpectedWireField").is_none());
     }
 
@@ -6568,6 +6897,62 @@ mod tests {
         assert_eq!(
             *controls.effects.lock().unwrap(),
             vec!["write:s1:x", "fit:s1:80x24", "clear:s1", "read:s1"]
+        );
+        assert_eq!(unsafe { close_ffi(handle) }.0, RESULT_OK);
+    }
+
+    #[test]
+    fn remote_app_effects_round_trip_through_the_c_abi() {
+        let (handle, controls) = register_interactive_remote(false, None);
+
+        unsafe {
+            let mut pointer = ptr::null_mut();
+            let mut length = 0;
+            let opener = br#"{"selector":"file:text/markdown","opener":"app:unpeel.app.markdown"}"#;
+            let code = unpeel_native_bridge_remote_opener_set(
+                handle,
+                opener.as_ptr(),
+                opener.len(),
+                &mut pointer,
+                &mut length,
+            );
+            assert_eq!(code, RESULT_OK);
+            assert_eq!(take_owned_json(pointer, length)["requestID"], 52);
+
+            let mut pointer = ptr::null_mut();
+            let mut length = 0;
+            let install = br#"{"appID":"unpeel.app.markdown"}"#;
+            let code = unpeel_native_bridge_remote_app_install(
+                handle,
+                install.as_ptr(),
+                install.len(),
+                &mut pointer,
+                &mut length,
+            );
+            assert_eq!(code, RESULT_OK);
+            assert_eq!(take_owned_json(pointer, length)["requestID"], 53);
+
+            let mut pointer = ptr::null_mut();
+            let mut length = 0;
+            let open = br#"{"callerSessionID":"s1","appID":"unpeel.app.markdown","resourceKind":"file","mediaType":"text/markdown","resourceID":"/tmp/hello world.md","requestID":"open-1"}"#;
+            let code = unpeel_native_bridge_remote_app_open(
+                handle,
+                open.as_ptr(),
+                open.len(),
+                &mut pointer,
+                &mut length,
+            );
+            assert_eq!(code, RESULT_OK);
+            assert_eq!(take_owned_json(pointer, length)["requestID"], 54);
+        }
+
+        assert_eq!(
+            *controls.effects.lock().unwrap(),
+            vec![
+                "opener:file:text/markdown:app:unpeel.app.markdown",
+                "app-install:unpeel.app.markdown",
+                "app-open:s1:unpeel.app.markdown:file:text/markdown:/tmp/hello world.md:open-1",
+            ]
         );
         assert_eq!(unsafe { close_ffi(handle) }.0, RESULT_OK);
     }

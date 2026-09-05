@@ -103,6 +103,7 @@ makes sense for coding, it does not belong here.
 cargo test --manifest-path crates/Cargo.toml --workspace          # includes unpeel-native-bridge
 cargo test --manifest-path crates/unpeel-attach/Cargo.toml
 cargo clippy --manifest-path crates/Cargo.toml --workspace --all-targets --all-features -- -D warnings
+scripts/ci/check-portable-core.sh          # unpeel-core without the Host (controller-core + wasm32 clippy)
 crates/unpeel-cli/tests/run.sh            # the PTY matrix (real binaries, ~10 min); ./run.sh <filter> for a subset
 scripts/verify-attach.sh                   # attach end to end
 scripts/verify-browser.sh                  # browser engine + MCP (needs Chrome)

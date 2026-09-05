@@ -15,6 +15,7 @@ pub const HELP: &str = "\
 usage: unpeel settings list [--json]
        unpeel settings get <key> [--json]
        unpeel settings set <key> <value> [--json]
+       unpeel settings openers set <selector> <editor|system|app:id> [--json]
 
 Script this workspace's allowlisted settings:
   experimental_features.sessions_mcp   true | false
@@ -335,6 +336,9 @@ fn parse_command(args: &[String]) -> Result<SettingsCommand, String> {
 }
 
 pub fn run(args: &[String], json: bool) -> Result<(), String> {
+    if args.first().map(String::as_str) == Some("openers") {
+        return set_opener(&args[1..], json);
+    }
     match parse_command(args)? {
         SettingsCommand::List => {
             let state = unpeel_core::app_state::load()?;
@@ -370,6 +374,33 @@ pub fn run(args: &[String], json: bool) -> Result<(), String> {
             print_value(key, effective, json)
         }
     }
+}
+
+fn set_opener(args: &[String], json_output: bool) -> Result<(), String> {
+    if args.len() != 3 || args[0] != "set" {
+        return Err(
+            "usage: unpeel settings openers set <file:media-type|resource:kind> <editor|system|app:id>".into(),
+        );
+    }
+    let (status, body) = unpeel_core::controller_host::opener_response(
+        &serde_json::json!({ "selector": args[1], "opener": args[2] }),
+    );
+    if status != 200 {
+        return Err(body
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("could not set resource opener")
+            .into());
+    }
+    if json_output {
+        println!(
+            "{}",
+            serde_json::json!({ "selector": args[1], "opener": args[2] })
+        );
+    } else {
+        println!("{} -> {}", args[1], args[2]);
+    }
+    Ok(())
 }
 
 fn print_value(key: SettingKey, value: Value, json: bool) -> Result<(), String> {

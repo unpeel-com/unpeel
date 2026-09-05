@@ -201,12 +201,15 @@ read the trusted binding, insert the companion on their own trailing/right
 edge, and retain a Controller-local receipt when the user detaches it. A repeated transport request cannot undo that dismissal; a new
 intentional open advances the revision and may reveal it again. The immediate
 `apps.open` receipt returns only the association and makes no layout claim.
-Once a local Controller has projected the binding, `apps.context` can identify
+Once a Controller has projected the binding, `apps.context` can identify
 the companion Session only if it is one of the caller's direct durable
-neighbors, using the narrow self-context projection above. Remote and phone
-projection must travel as an additive, capability-advertised Host protocol
-projection before those Controllers can render or report it; they must never
-infer it from commands, Session roles, or pane summaries.
+neighbors, using the narrow self-context projection above. Native and headless
+Hosts publish the validated semantic envelope as additive bootstrap
+`appPresentations`, so scoped and remote Controllers render the same intent;
+exited companion Sessions are filtered before projection, and Controllers
+never infer bindings from commands, Session roles, or pane summaries. MCP may
+only attach/reveal an existing user-created App instance and cannot create or
+restart the companion Session.
 
 The phone still presents one terminal per screen. In its sidebar, a pane
 group's representative Session keeps the ordinary main row and the remaining

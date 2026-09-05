@@ -70,4 +70,15 @@ final class ClickablePathTests: XCTestCase {
         let m = match("Footer.tsx changed", column: 2)
         XCTAssertEqual(m, .init(path: "Footer.tsx", line: nil, column: nil))
     }
+
+    func testRemoteResolutionDoesNotRequireControllerFile() {
+        XCTAssertEqual(
+            ClickablePath.absolutePath(
+                "docs/readme.md",
+                workingDirectory: "/srv/worktree"
+            ),
+            "/srv/worktree/docs/readme.md"
+        )
+    }
+
 }

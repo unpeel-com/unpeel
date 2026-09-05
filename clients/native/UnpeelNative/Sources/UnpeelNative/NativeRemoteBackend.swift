@@ -197,6 +197,16 @@ protocol NativeRemoteBackendProtocol: Sendable {
     ) async throws -> NativeRemoteEffectReceipt
     func setPreset(patch: RemotePresetPatch) async throws -> NativeRemoteEffectReceipt
     func setWorkspaceSettings(patch: RemoteWorkspaceSettingsPatch) async throws -> NativeRemoteEffectReceipt
+    func setOpener(selector: String, opener: String) async throws -> NativeRemoteEffectReceipt
+    func installApp(appID: String) async throws -> NativeRemoteEffectReceipt
+    func openApp(
+        callerSessionID: String,
+        appID: String,
+        resourceKind: String,
+        mediaType: String?,
+        resourceID: String,
+        requestID: String
+    ) async throws -> NativeRemoteEffectReceipt
     func createSession(
         _ request: RemoteCreateSessionRequest
     ) async throws -> NativeRemoteCreatedSession
@@ -218,6 +228,46 @@ protocol NativeRemoteBackendProtocol: Sendable {
 }
 
 extension NativeRemoteBackendProtocol {
+    func setOpener(
+        selector: String,
+        opener: String
+    ) async throws -> NativeRemoteEffectReceipt {
+        throw NativeRemoteBackendError(
+            result: Int32(UNPEEL_NATIVE_BRIDGE_ERROR_REMOTE),
+            code: "opener_unavailable",
+            message: "Resource opener settings are unavailable on this backend.",
+            kind: "notApplied",
+            operation: "resource opener"
+        )
+    }
+
+    func installApp(appID: String) async throws -> NativeRemoteEffectReceipt {
+        throw NativeRemoteBackendError(
+            result: Int32(UNPEEL_NATIVE_BRIDGE_ERROR_REMOTE),
+            code: "app_install_unavailable",
+            message: "App installation is unavailable on this backend.",
+            kind: "notApplied",
+            operation: "App install"
+        )
+    }
+
+    func openApp(
+        callerSessionID: String,
+        appID: String,
+        resourceKind: String,
+        mediaType: String?,
+        resourceID: String,
+        requestID: String
+    ) async throws -> NativeRemoteEffectReceipt {
+        throw NativeRemoteBackendError(
+            result: Int32(UNPEEL_NATIVE_BRIDGE_ERROR_REMOTE),
+            code: "app_open_unavailable",
+            message: "Opening Apps is unavailable on this backend.",
+            kind: "notApplied",
+            operation: "App open"
+        )
+    }
+
     /// Default for gateways and test doubles that predate the platform
     /// adapter verb: fail closed rather than mutating Controller-local state.
     func setSessionNotifyWhenDone(
@@ -1371,6 +1421,119 @@ final class NativeRemoteBackend: @unchecked Sendable {
                 pointer: outputPointer,
                 length: outputLength,
                 operation: "workspace settings"
+            )
+        }
+    }
+
+    private struct OpenerRequest: Encodable {
+        let selector: String
+        let opener: String
+    }
+
+    func setOpener(
+        selector: String,
+        opener: String
+    ) async throws -> NativeRemoteEffectReceipt {
+        let handle = try currentIdentityValidatedHandle()
+        let body = try JSONEncoder().encode(OpenerRequest(
+            selector: selector,
+            opener: opener
+        ))
+        return try await Self.runBlocking(priority: .userInitiated) {
+            try Task.checkCancellation()
+            var outputPointer: UnsafeMutablePointer<UInt8>?
+            var outputLength = 0
+            let result = body.withUnsafeBytes { bytes in
+                unpeel_native_bridge_remote_opener_set(
+                    handle,
+                    bytes.bindMemory(to: UInt8.self).baseAddress,
+                    bytes.count,
+                    &outputPointer,
+                    &outputLength
+                )
+            }
+            return try Self.decodeEffect(
+                result: result,
+                pointer: outputPointer,
+                length: outputLength,
+                operation: "resource opener"
+            )
+        }
+    }
+
+    private struct AppInstallRequest: Encodable {
+        let appID: String
+    }
+
+    func installApp(appID: String) async throws -> NativeRemoteEffectReceipt {
+        let handle = try currentIdentityValidatedHandle()
+        let body = try JSONEncoder().encode(AppInstallRequest(appID: appID))
+        return try await Self.runBlocking(priority: .userInitiated) {
+            try Task.checkCancellation()
+            var outputPointer: UnsafeMutablePointer<UInt8>?
+            var outputLength = 0
+            let result = body.withUnsafeBytes { bytes in
+                unpeel_native_bridge_remote_app_install(
+                    handle,
+                    bytes.bindMemory(to: UInt8.self).baseAddress,
+                    bytes.count,
+                    &outputPointer,
+                    &outputLength
+                )
+            }
+            return try Self.decodeEffect(
+                result: result,
+                pointer: outputPointer,
+                length: outputLength,
+                operation: "App install"
+            )
+        }
+    }
+
+    private struct AppOpenRequest: Encodable {
+        let callerSessionID: String
+        let appID: String
+        let resourceKind: String
+        let mediaType: String?
+        let resourceID: String
+        let requestID: String
+    }
+
+    func openApp(
+        callerSessionID: String,
+        appID: String,
+        resourceKind: String,
+        mediaType: String?,
+        resourceID: String,
+        requestID: String
+    ) async throws -> NativeRemoteEffectReceipt {
+        let handle = try currentIdentityValidatedHandle()
+        let body = try JSONEncoder().encode(AppOpenRequest(
+            callerSessionID: callerSessionID,
+            appID: appID,
+            resourceKind: resourceKind,
+            mediaType: mediaType,
+            resourceID: resourceID,
+            requestID: requestID
+        ))
+        return try await Self.runBlocking(priority: .userInitiated) {
+            try Task.checkCancellation()
+            var outputPointer: UnsafeMutablePointer<UInt8>?
+            var outputLength = 0
+            let result = body.withUnsafeBytes { bytes in
+                unpeel_native_bridge_remote_app_open(
+                    handle,
+                    bytes.bindMemory(to: UInt8.self).baseAddress,
+                    bytes.count,
+                    &outputPointer,
+                    &outputLength
+                )
+            }
+            return try Self.decodeEffect(
+                result: result,
+                pointer: outputPointer,
+                length: outputLength,
+                operation: "App open"
             )
         }
     }
