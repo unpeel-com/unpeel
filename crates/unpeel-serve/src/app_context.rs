@@ -217,6 +217,30 @@ fn current_workspace(overlay: Option<&NativeOverlay>) -> WorkspaceContext {
     workspace_at(explicit_home.as_deref(), &real_unpeel, overlay)
 }
 
+/// The name Controllers should show for THIS Host when it serves an isolated
+/// workspace (`UNPEEL_HOME` other than the real `~/.unpeel`): the registered
+/// workspace name — exactly what the desktop's workspace picker shows — so a
+/// phone paired to two workspaces on one Mac can tell them apart instead of
+/// seeing the hostname twice. `None` for the default workspace, which keeps
+/// naming itself after the Mac.
+pub(crate) fn isolated_workspace_name() -> Option<String> {
+    let explicit_home = std::env::var_os("UNPEEL_HOME")
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())?;
+    let real_unpeel = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".unpeel");
+    isolated_workspace_name_at(&explicit_home, &real_unpeel)
+}
+
+fn isolated_workspace_name_at(explicit_home: &Path, real_unpeel: &Path) -> Option<String> {
+    if normalized_path(explicit_home) == normalized_path(real_unpeel) {
+        return None;
+    }
+    Some(workspace_at(Some(explicit_home), real_unpeel, None).name)
+}
+
 fn workspace_at(
     explicit_home: Option<&Path>,
     real_unpeel: &Path,
@@ -333,6 +357,21 @@ mod tests {
                 name: "Work".into(),
             }
         );
+        // The Controller-facing Host name follows the same registry: a
+        // registered workspace is named like the desktop picker names it,
+        // an unregistered home falls back to its folder, and the default
+        // workspace keeps the hostname (None here).
+        assert_eq!(
+            isolated_workspace_name_at(&scoped, &root).as_deref(),
+            Some("Work")
+        );
+        let unregistered = root.join("profiles/scratch");
+        std::fs::create_dir_all(&unregistered).unwrap();
+        assert_eq!(
+            isolated_workspace_name_at(&unregistered, &root).as_deref(),
+            Some("scratch")
+        );
+        assert_eq!(isolated_workspace_name_at(&root, &root), None);
 
         let overlay = NativeOverlay {
             default_workspace_name: Some("Personal renamed".into()),

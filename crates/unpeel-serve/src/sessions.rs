@@ -2128,7 +2128,12 @@ pub fn mobile_snapshot(
 
     MobileSnapshot {
         bootstrap: serde_json::json!({
-            "macName": hostname_short(),
+            // An isolated workspace names itself like the desktop's
+            // workspace picker does; the default workspace stays the Mac.
+            // The pairing invitation reuses this name, so a phone's
+            // Workspaces list shows it too.
+            "macName": crate::app_context::isolated_workspace_name()
+                .unwrap_or_else(hostname_short),
             "folders": folders,
             "projects": projects,
             "presets": presets,
