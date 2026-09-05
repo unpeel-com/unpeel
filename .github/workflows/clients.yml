@@ -33,10 +33,13 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
-      - name: Select the newest installed Xcode
+      - name: Use the runner image's default Xcode
+        # The image default is the version GitHub curates as stable for this
+        # macOS; the newest installed Xcode (a 26.x on macos-15) crashed
+        # ibtoold/actool with missing-symbol dyld errors on first run.
         run: |
-          XCODE="$(ls -d /Applications/Xcode_*.app | sort -V | tail -n1)"
-          sudo xcode-select -s "$XCODE"
+          ls -d /Applications/Xcode_*.app | sort -V
+          xcode-select -p
           xcodebuild -version
       - name: Install declared Rust MSRV
         uses: dtolnay/rust-toolchain@1.88.0
