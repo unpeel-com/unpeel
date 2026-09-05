@@ -20,6 +20,8 @@ pub mod app_open;
 pub mod app_paths;
 #[cfg(feature = "native-host")]
 pub mod app_presentations;
+#[cfg(feature = "controller-core")]
+pub mod app_resources;
 #[cfg(feature = "native-host")]
 pub mod app_runtime;
 #[cfg(feature = "native-host")]
@@ -76,6 +78,11 @@ pub mod mcp_host;
 pub mod menu_prompt;
 #[cfg(feature = "native-host")]
 mod pane_context;
+/// Lexical guard that `controller-core` modules never reach into
+/// `native-host` modules ungated (the portable build is otherwise only
+/// exercised by `scripts/ci/check-portable-core.sh`).
+#[cfg(all(test, feature = "controller-core"))]
+mod portable_gating_tests;
 #[cfg(feature = "controller-core")]
 #[cfg(feature = "native-host")]
 pub mod pty_core;

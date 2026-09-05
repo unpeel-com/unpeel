@@ -4294,6 +4294,11 @@ pub unsafe extern "C" fn unpeel_native_bridge_remote_workspace_settings_set(
 }
 
 /// Set one remote Host typed resource opener preference (`settings.openers.set`).
+///
+/// # Safety
+///
+/// A non-empty body must point to readable bytes of its declared length.
+/// Both output pointers must be non-null and writable.
 #[no_mangle]
 pub unsafe extern "C" fn unpeel_native_bridge_remote_opener_set(
     handle: RemoteHandle,
@@ -4320,6 +4325,11 @@ pub unsafe extern "C" fn unpeel_native_bridge_remote_opener_set(
 }
 
 /// Install one official App on the remote Host (`apps.install`).
+///
+/// # Safety
+///
+/// A non-empty body must point to readable bytes of its declared length.
+/// Both output pointers must be non-null and writable.
 #[no_mangle]
 pub unsafe extern "C" fn unpeel_native_bridge_remote_app_install(
     handle: RemoteHandle,
@@ -4348,6 +4358,11 @@ pub unsafe extern "C" fn unpeel_native_bridge_remote_app_install(
 /// Open one installed App through the Host's semantic App presentation path
 /// (`apps.open`). `body_json` contains callerSessionID, appID, resourceKind,
 /// optional mediaType, resourceID, and an idempotency requestID.
+///
+/// # Safety
+///
+/// A non-empty body must point to readable bytes of its declared length.
+/// Both output pointers must be non-null and writable.
 #[no_mangle]
 pub unsafe extern "C" fn unpeel_native_bridge_remote_app_open(
     handle: RemoteHandle,

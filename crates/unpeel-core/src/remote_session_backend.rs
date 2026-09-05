@@ -2397,7 +2397,7 @@ impl RemoteSessionBackend {
                     return Err(invalid_effect_input(OPERATION, format!("invalid {name}")));
                 }
             }
-            if !crate::apps_mcp::valid_resource_kind(resource_kind) {
+            if !crate::app_resources::valid_resource_kind(resource_kind) {
                 return Err(invalid_effect_input(OPERATION, "invalid resource kind"));
             }
             match media_type {

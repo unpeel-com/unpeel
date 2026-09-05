@@ -106,24 +106,43 @@ pub struct HostProtocolDescriptor {
     pub capabilities: Vec<String>,
 }
 
+/// The capability a Host advertises only when it can actually install Apps:
+/// there has to be a published App release target for its platform
+/// (`app_installer::release_target()`), which is a Host-side fact.
+pub const APPS_INSTALL_CAPABILITY: &str = "apps.install";
+
 impl HostProtocolDescriptor {
+    /// The descriptor a native (Mac app) Host advertises in bootstrap.
+    #[cfg(feature = "native-host")]
     pub fn native_v1() -> Self {
-        Self::v1(NATIVE_HOST_CAPABILITIES)
+        Self::advertised_v1(
+            NATIVE_HOST_CAPABILITIES,
+            crate::app_installer::release_target().is_some(),
+        )
     }
 
+    /// The descriptor a headless (`unpeel serve`) Host advertises in bootstrap.
+    #[cfg(feature = "native-host")]
     pub fn headless_v1() -> Self {
-        Self::v1(HEADLESS_HOST_CAPABILITIES)
+        Self::advertised_v1(
+            HEADLESS_HOST_CAPABILITIES,
+            crate::app_installer::release_target().is_some(),
+        )
     }
 
-    fn v1(capabilities: &[&str]) -> Self {
+    /// Build a protocol-1 descriptor from a capability set. Pure and portable:
+    /// the only Host-side input is whether App installation is available on
+    /// this platform, which decides if [`APPS_INSTALL_CAPABILITY`] is listed.
+    /// Hosts use [`Self::native_v1`] / [`Self::headless_v1`]; Controllers and
+    /// their tests build expected descriptors through this constructor.
+    pub fn advertised_v1(capabilities: &[&str], app_install_available: bool) -> Self {
         Self {
             major_version: HOST_PROTOCOL_MAJOR,
             minor_version: HOST_PROTOCOL_MINOR,
             capabilities: capabilities
                 .iter()
                 .filter(|capability| {
-                    **capability != "apps.install"
-                        || crate::app_installer::release_target().is_some()
+                    **capability != APPS_INSTALL_CAPABILITY || app_install_available
                 })
                 .map(|value| (*value).to_owned())
                 .collect(),
@@ -166,55 +185,142 @@ mod tests {
         tui: bool,
     }
 
+    fn ledger() -> Ledger {
+        serde_json::from_str(include_str!("../../../protocol/host-capabilities-v1.json"))
+            .expect("valid host capability ledger")
+    }
+
+    fn ledger_ids(ledger: Ledger, select: fn(&LedgerCapability) -> bool) -> Vec<String> {
+        ledger
+            .capabilities
+            .into_iter()
+            .filter(select)
+            .map(|entry| entry.id)
+            .collect()
+    }
+
     #[test]
-    fn headless_descriptor_matches_the_canonical_ledger() {
-        let ledger: Ledger =
-            serde_json::from_str(include_str!("../../../protocol/host-capabilities-v1.json"))
-                .expect("valid host capability ledger");
+    fn ledger_protocol_version_matches_the_constants() {
+        let ledger = ledger();
         assert_eq!(ledger.schema_version, 1);
         assert_eq!(ledger.protocol.major, HOST_PROTOCOL_MAJOR);
         assert_eq!(ledger.protocol.minor, HOST_PROTOCOL_MINOR);
-
-        let expected: Vec<String> = ledger
-            .capabilities
-            .into_iter()
-            .filter(|entry| entry.tui)
-            .map(|entry| entry.id)
-            .filter(|id| id != "apps.install" || crate::app_installer::release_target().is_some())
-            .collect();
-        assert_eq!(HostProtocolDescriptor::headless_v1().capabilities, expected);
     }
 
     #[test]
-    fn native_descriptor_matches_the_canonical_ledger() {
-        let ledger: Ledger =
+    fn headless_capability_set_matches_the_canonical_ledger() {
+        let expected = ledger_ids(ledger(), |entry| entry.tui);
+        let advertised =
+            HostProtocolDescriptor::advertised_v1(HEADLESS_HOST_CAPABILITIES, true).capabilities;
+        assert_eq!(advertised, expected);
+    }
+
+    #[test]
+    fn native_capability_set_matches_the_canonical_ledger() {
+        let expected = ledger_ids(ledger(), |entry| entry.native);
+        let advertised =
+            HostProtocolDescriptor::advertised_v1(NATIVE_HOST_CAPABILITIES, true).capabilities;
+        assert_eq!(advertised, expected);
+    }
+
+    #[test]
+    fn app_install_is_the_only_capability_that_depends_on_a_release_target() {
+        for set in [HEADLESS_HOST_CAPABILITIES, NATIVE_HOST_CAPABILITIES] {
+            let with = HostProtocolDescriptor::advertised_v1(set, true);
+            let without = HostProtocolDescriptor::advertised_v1(set, false);
+            assert!(with.supports(APPS_INSTALL_CAPABILITY));
+            assert!(!without.supports(APPS_INSTALL_CAPABILITY));
+            assert!(with.supports("apps.open") && without.supports("apps.open"));
+            let mut expected = with.capabilities.clone();
+            expected.retain(|id| id != APPS_INSTALL_CAPABILITY);
+            assert_eq!(without.capabilities, expected);
+            assert_eq!(
+                (with.major_version, with.minor_version),
+                (1, HOST_PROTOCOL_MINOR)
+            );
+        }
+    }
+
+    /// The ledger's `protocol.history` records which capability ids each
+    /// additive minor introduced. The 0.6 openers and the `/mobile` TLS change
+    /// ship together under minor 15; every id is advertised individually (a
+    /// Controller checks ids, never the minor), so each must be in both
+    /// capability sets and in the ledger's capability list.
+    #[test]
+    fn minor_history_capabilities_are_advertised_individually() {
+        let raw: serde_json::Value =
             serde_json::from_str(include_str!("../../../protocol/host-capabilities-v1.json"))
                 .expect("valid host capability ledger");
-        let expected: Vec<String> = ledger
-            .capabilities
-            .into_iter()
-            .filter(|entry| entry.native)
-            .map(|entry| entry.id)
-            .filter(|id| id != "apps.install" || crate::app_installer::release_target().is_some())
+        let history = raw["protocol"]["history"]
+            .as_array()
+            .expect("protocol.history array");
+        let latest = history
+            .iter()
+            .filter_map(|entry| entry["minor"].as_u64())
+            .max()
+            .expect("at least one history entry");
+        assert_eq!(latest, u64::from(HOST_PROTOCOL_MINOR));
+
+        let minor_15 = history
+            .iter()
+            .find(|entry| entry["minor"].as_u64() == Some(15))
+            .expect("minor 15 history entry");
+        let ids: Vec<&str> = minor_15["capabilities"]
+            .as_array()
+            .expect("capabilities array")
+            .iter()
+            .filter_map(|value| value.as_str())
             .collect();
-        assert_eq!(HostProtocolDescriptor::native_v1().capabilities, expected);
+        assert_eq!(
+            ids,
+            [
+                "apps.install",
+                "apps.open",
+                "host.mobile.tls",
+                "settings.openers.set"
+            ]
+        );
+        let ledger_both = ledger_ids(ledger(), |entry| entry.native && entry.tui);
+        for entry in history {
+            for id in entry["capabilities"]
+                .as_array()
+                .expect("capabilities array")
+                .iter()
+                .filter_map(|value| value.as_str())
+            {
+                assert!(
+                    HEADLESS_HOST_CAPABILITIES.contains(&id),
+                    "{id} missing from headless set"
+                );
+                assert!(
+                    NATIVE_HOST_CAPABILITIES.contains(&id),
+                    "{id} missing from native set"
+                );
+                assert!(
+                    ledger_both.contains(&id.to_owned()),
+                    "{id} missing from the canonical ledger"
+                );
+            }
+        }
     }
 
+    #[cfg(feature = "native-host")]
     #[test]
-    fn app_install_is_advertised_only_on_a_published_target() {
+    fn host_descriptors_follow_the_platform_release_target() {
+        let available = crate::app_installer::release_target().is_some();
         assert_eq!(
-            HostProtocolDescriptor::headless_v1().supports("apps.install"),
-            crate::app_installer::release_target().is_some()
+            HostProtocolDescriptor::headless_v1(),
+            HostProtocolDescriptor::advertised_v1(HEADLESS_HOST_CAPABILITIES, available)
         );
         assert_eq!(
-            HostProtocolDescriptor::native_v1().supports("apps.install"),
-            crate::app_installer::release_target().is_some()
+            HostProtocolDescriptor::native_v1(),
+            HostProtocolDescriptor::advertised_v1(NATIVE_HOST_CAPABILITIES, available)
         );
     }
 
     #[test]
     fn compatibility_is_major_version_only() {
-        let descriptor = HostProtocolDescriptor::headless_v1();
+        let descriptor = HostProtocolDescriptor::advertised_v1(HEADLESS_HOST_CAPABILITIES, false);
         assert!(descriptor.is_compatible_with(1));
         assert!(!descriptor.is_compatible_with(2));
         assert!(descriptor.supports("host.bootstrap"));

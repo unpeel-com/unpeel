@@ -7,7 +7,20 @@
       "major": "must-match",
       "minor": "additive",
       "unknownCapabilities": "ignore"
-    }
+    },
+    "history": [
+      {
+        "minor": 15,
+        "release": "0.6.0",
+        "summary": "/mobile served over the pinned Host TLS certificate, and Host-owned typed resource openers (Apps): install, open, and the per-selector opener policy. One additive minor for both; a Controller still checks each id, never the minor.",
+        "capabilities": [
+          "apps.install",
+          "apps.open",
+          "host.mobile.tls",
+          "settings.openers.set"
+        ]
+      }
+    ]
   },
   "capabilities": [
     {

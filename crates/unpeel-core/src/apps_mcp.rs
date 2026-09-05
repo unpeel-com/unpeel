@@ -228,13 +228,10 @@ fn valid_file_extension(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'+' | b'-'))
 }
 
-pub fn valid_resource_kind(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 100
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
-}
+/// The resource-kind grammar is shared with Controllers; it lives in the
+/// portable [`crate::app_resources`] module and is re-exported here for the
+/// Host-side callers (CLI, MCP, opener dispatch).
+pub use crate::app_resources::valid_resource_kind;
 
 /// Resolve the central App catalog against the Host's PATH on every call.
 /// A catalog entry is installed only while its declared binary resolves.
