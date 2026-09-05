@@ -43,7 +43,7 @@ import UnpeelShared
 enum SettingsTab: String, CaseIterable, Identifiable {
     // Workspaces leads the nav: the workspace list is the primary scope
     // surface, and Settings edits per-workspace state (see
-    // docs/plans/workspace-scope-and-pairing.md). Remote keeps inbound
+    // the scope selector below). Remote keeps inbound
     // devices, Link, and legacy license.
     case workspaces
     case presets
@@ -105,7 +105,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
 
     /// The tabs that follow the Settings scope dropdown to the selected
     /// workspace/Host — i.e. whose settings operations exist on the Host
-    /// contract. Grows as verbs land (docs/plans/workspace-scope-and-pairing.md);
+    /// contract. Grows as verbs land;
     /// `settings.presets.set` is the first.
     static var hostScopedCases: [SettingsTab] {
         [
@@ -188,8 +188,8 @@ struct SettingsSidebarPanel: View {
                     )
                     .padding(.bottom, 6) // .back-row margin-bottom 6
 
-                    // The Settings scope dropdown (Decision 1,
-                    // docs/plans/workspace-scope-and-pairing.md): always
+                    // The Settings scope dropdown (the
+                    // scope rule): always
                     // present, showing the ACTIVE workspace. Everything below
                     // it except the Workspaces registry row IS that
                     // workspace's settings — appearance included, since each
@@ -833,7 +833,7 @@ private struct HostTranscriptsSettingsPanel: View {
         runtime.snapshot?.workspaceSettings?.transcriptSettings
     }
 
-    // Decision 6 (docs/plans/workspace-scope-and-pairing.md): this is the
+    // Scope rule: this is the
     // local Transcripts panel's exact layout — same rows, copy, and section
     // header — with only the write path swapped for the workspace verb.
     var body: some View {
@@ -2313,8 +2313,8 @@ struct SettingsContentHost: View {
         return editedWorkspaceName
     }
 
-    /// Interim scope labeling (docs/plans/workspace-scope-and-pairing.md,
-    /// Decision 2): Settings always edits THIS instance's workspace, even
+    /// Interim scope labeling (scope
+    /// rule): Settings always edits THIS instance's workspace, even
     /// while the sidebar picker scopes the window to another Host. Name the
     /// edited workspace whenever another scope exists to be confused with;
     /// a plain single-workspace install keeps the bare "Settings" title.
@@ -3380,7 +3380,7 @@ struct ShareWorkspaceSheet: View {
 /// `relayAllowed` flag) and outbound paired Hosts (the per-Host
 /// `linkEnabled` flag). The uplink runs whenever ≥1 inbound device is
 /// enrolled — the entitlement check itself stays server-side
-/// (docs/plans/unpeel-link.md).
+/// (the Link service contract).
 private struct LinkEnrollmentSection: View {
     @ObservedObject var store: UnpeelStore
     @ObservedObject private var management: HostManagementState

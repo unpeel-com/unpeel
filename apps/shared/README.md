@@ -26,5 +26,5 @@ Run tests: `swift test --package-path apps/shared/UnpeelShared` (this one
 works with plain `swift test`, unlike the iOS package).
 
 Everything here is open source and must stay free of closed-service
-dependencies (`docs/plans/open-source.md`): crypto and wire behavior are
+dependencies: crypto and wire behavior are
 exactly the things users need to be able to audit.

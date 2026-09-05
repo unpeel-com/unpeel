@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "description": "Direct-path negotiation v1 message fixtures. Contract: unpeel-apple:docs/feature/direct-path-v1.md. Both language implementations must agree on every case; a disagreement is a protocol fork, not a test adjustment.",
+  "description": "Direct-path negotiation v1 message fixtures. Contract: the private "direct-path-v1" design record. Both language implementations must agree on every case; a disagreement is a protocol fork, not a test adjustment.",
   "cases": [
     {
       "id": "offer.valid-minimal",

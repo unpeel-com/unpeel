@@ -373,8 +373,8 @@ For agent providers with durable transcript/session storage, iOS should prefer a
 native conversation view over the terminal viewport. The terminal remains the
 fallback and the write/key transport.
 
-See `docs/feature/remote-transcript-api.md` for the provider matrix and shared
-adapter implementation.
+The provider matrix and the shared adapter implementation live in
+`crates/unpeel-core/src/transcripts/` (see `docs/agents/clients/transcripts.md`).
 
 V1 candidate providers:
 

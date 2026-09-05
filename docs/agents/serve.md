@@ -319,7 +319,7 @@ libxinerama1 libxcursor1 libxfixes3 libxkbcommon0 libxcb1`
 next resolve, so installing the packages heals readiness without a
 restart. Install those packages before `unpeel computer install` on any
 minimal Debian/Ubuntu Host (the Box recipe in
-`unpeel-apple:docs/plans/computer-use-release.md` does).
+the private "computer-use-release" design record does).
 
 `unpeel serve install --graphical` (systemd only; launchd refuses) writes
 `packaging/service/unpeel-serve-graphical.service` under the same unit name:
@@ -662,8 +662,8 @@ Serve lifecycle, protocol, or launch changes must run these gates serially
 (cd crates && cargo test --workspace)
 (cd crates && cargo test -p unpeel-cli --test serve_command --test unified_service)
 crates/unpeel-cli/tests/run.sh
-unpeel-apple:apps/native/build-rust-bridge.sh debug
-(cd unpeel-apple:apps/native/UnpeelNative && swift build)
+apps/native/build-rust-bridge.sh debug
+(cd apps/native/UnpeelNative && swift build)
 scripts/verify-attach.sh
 ```
 
@@ -709,7 +709,7 @@ removed 2026-09-03. The focused real process proofs must continue to show:
 - `verify-attach.sh` preserves replay, live echo, and reattach independently
   of the serving lifecycle.
 
-Website documentation and `unpeel-apple:docs/plans/headless-serve.md` must stay aligned
+Website documentation and the private "headless-serve" design record must stay aligned
 with this file, but this `docs/agents/serve.md` is the authoritative current
 subsystem map. Directional app-as-client migration belongs in the plan until
 each increment ships.

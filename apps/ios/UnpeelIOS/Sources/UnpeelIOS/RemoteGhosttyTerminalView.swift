@@ -2372,7 +2372,7 @@ final class RemoteGhosttyRenderer: ObservableObject {
     /// (confidence + path latency), so re-enabling is one flag — but only
     /// justified by a region-aware shift (translate the scrolled rows, not
     /// the surface) or the transcript-lens local scroll from
-    /// `docs/plans/remote-feel.md`.
+    /// the remote-feel work (input never waits, connections never visibly end).
     private static let scrollPredictionDisplayEnabled = false
 
     private func publishScrollPredictionOffset(easeHome: Bool = false) {

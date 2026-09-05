@@ -172,8 +172,8 @@ struct PresetsSettingsPanel: View {
             )
             .padding(EdgeInsets(top: 20, leading: 20, bottom: 10, trailing: 20))
 
-            // Interim scope labeling (docs/plans/workspace-scope-and-pairing.md,
-            // Decision 2): while the window is scoped to another Host, launch
+            // Interim scope labeling (scope
+            // rule): while the window is scoped to another Host, launch
             // presets come from that Host's list, but this editor still writes
             // this instance's own workspace. Say so, once, right here.
             if let scopeName = store.selectedScopeDisplayName {
@@ -672,7 +672,7 @@ struct EditorButton: View {
 /// the single resulting index commits as ONE `settings.presets.set` effect on
 /// drop — never an effect per hovered row.
 /// Settings ▸ Presets while the scope dropdown targets the window's selected
-/// workspace/Host (docs/plans/workspace-scope-and-pairing.md, Decision 1):
+/// workspace/Host (scope rule):
 /// the SELECTED Host's flat preset list, read from its bootstrap snapshot and
 /// edited exclusively through `RemoteHostRuntime.setPreset`
 /// (`settings.presets.set`) — capability-gated, generation-bound, never a

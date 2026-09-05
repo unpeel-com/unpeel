@@ -7,5 +7,5 @@ for everything; every entry point catches Rust panics at the FFI boundary so
 a backend bug can't take down the app.
 
 Keep this crate a thin translation layer: logic belongs in `unpeel-core`, and
-anything the TUI also needs must live there (see
-`docs/plans/shared-core.md` — one core, two UIs).
+anything another client needs must live there (one core, many
+clients).

@@ -18,7 +18,7 @@ live Sessions keep their launch-time domain set until the runtime/MCP client is
 restarted. Transcript display settings remain under Settings ▸ Transcripts.
 
 Terminal messaging may later become channel-based — terminal↔terminal is the
-default today; see `unpeel-apple:docs/feature/sessions-mcp-channels.md`. Every
+default today; see the private "sessions-mcp-channels" design record. Every
 `send_text` delivery carries `[message from id:<sender>, channel: terminal]`.
 Route inter-session text through
 `deliver_text_to_terminal`; do not bake “the other end is a PTY” into future
@@ -58,7 +58,7 @@ channel semantics.
 > development-only under the 2026-08-14 containment; engine swapped
 > 2026-07-22):** the
 > `computer` action tool (`crates/unpeel-core/src/computer_mcp.rs`,
-> **cua-driver** engine — see `unpeel-apple:docs/feature/computer-mcp.md`) gives a session
+> **cua-driver** engine — see the private "computer-mcp" design record) gives a session
 > **background** control of the user's REAL apps: `launch` → pid + windows,
 > `see` → accessibility tree (`[N]` element indices) + screenshot artifact,
 > then click/type/set_value by element index — no focus steal, the user's
@@ -100,8 +100,8 @@ channel semantics.
 > Session cleanup rides `__computer_cleanup__ <id>` next to
 > `__browser_cleanup__`. Not yet: `verify-computer.sh` and a CLI-matrix
 > case (plan Lane E). Its Ask prompt is a cooperative agent control, not a
-> sandbox boundary; see `unpeel-apple:docs/feature/computer-mcp.md` and
-> `unpeel-apple:docs/plans/computer-use-release.md`. **Engine bump procedure:** update
+> sandbox boundary; see the private "computer-mcp" design record and
+> the private "computer-use-release" design record. **Engine bump procedure:** update
 > `version`, every `sha256` from the release's `checksums.txt`, every
 > `binarySha256` from the extracted member, and the notice in
 > `protocol/computer-engine-v1.json`, then `cargo test -p unpeel-core
@@ -223,7 +223,7 @@ Auto-registration per provider:
 ## The `apps` and root `skills` domains (2026-08-24)
 
 `apps_mcp.rs` is the first landed piece of the Unpeel Apps agent contract
-(`unpeel-apple:docs/plans/unpeel-apps.md` "Agent access" is authoritative). An installed
+(the private "unpeel-apps" design record "Agent access" is authoritative). An installed
 Unpeel App is an entry in `protocol/app-registry.json` whose declared
 CLI resolves on the Host's PATH. This catalog plus PATH check is the entire
 current discovery contract; **no app ever runs its own MCP server**. The `apps`

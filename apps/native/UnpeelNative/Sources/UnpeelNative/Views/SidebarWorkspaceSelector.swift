@@ -2,7 +2,7 @@
 //  SidebarWorkspaceSelector.swift
 //  UnpeelNative
 //
-//  Workspaces unification (docs/plans/workspaces-unification.md): local
+//  Workspaces unification: local
 //  workspaces and remote Hosts are one product concept. The sidebar footer
 //  dots are the compact switcher; secondary-clicking them opens this picker.
 //  The picker contains the default instance,

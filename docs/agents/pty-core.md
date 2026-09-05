@@ -251,7 +251,7 @@ Gates: `cargo test -p unpeel-core pty_core`, the PTY case
 ## Memory gate
 
 `scripts/bench-memory.sh` is the source of truth for the per-terminal
-numbers (`unpeel-apple:docs/plans/pty-core.md` "Measurement recipe", private); `UNPEEL_PTY_CORE=1`
+numbers (the private "pty-core" design record "Measurement recipe", private); `UNPEEL_PTY_CORE=1`
 measures the core. CI runs it on macOS with the core off and on and on
 Ubuntu headless (`.github/workflows/bench-memory.yml`), publishes each table
 to the job summary, and fails when reclamation is not total or a row exceeds

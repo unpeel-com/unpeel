@@ -50,7 +50,7 @@ GhosttyKit build uses is never left modified. Today there is one:
   (the Host's filled-terminal floor), and the pool preheat touched one OS
   page per preheated slot per screen before any output (the empty-grid
   floor). Rationale, numbers, and the measurement recipe:
-  `unpeel-apple:docs/plans/pty-core.md` "Round 3, Lane 3". The patched constants do not
+  the private "pty-core" design record "Round 3, Lane 3". The patched constants do not
   change any C API type, so `layout_matches_type_json` still applies.
 - `0002-unpeel-pack-page-metadata.patch` — `Page.layout` puts the metadata
   regions (style set, grapheme/string allocators and maps, hyperlink set and
@@ -62,7 +62,7 @@ GhosttyKit build uses is never left modified. Today there is one:
   terminal committed 81 KiB; packed, 61 KiB (`vt_footprint_per_terminal`,
   2026-09-03). Filled terminals are unchanged (they touch every page
   anyway). Pure offset reorder: consumers only read `Page.Layout`. This is
-  the upstreamable candidate described in `unpeel-apple:docs/plans/pty-core.md`
+  the upstreamable candidate described in the private "pty-core" design record
   "Round 4, Lane 2". Note: the alternate screen is already created lazily
   upstream (`Terminal.switchScreen` → `ScreenSet.getInit`), so no lazy-alt
   patch exists.

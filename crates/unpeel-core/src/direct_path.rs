@@ -1,9 +1,9 @@
 //! Direct-path negotiation contract (v1) — the frozen message layer for
-//! `unpeel-apple:docs/plans/relay-direct-upgrade.md` increment 1. Candidate exchange
+//! the private "relay-direct-upgrade" design record increment 1. Candidate exchange
 //! rides the existing sealed tunnel envelope as capability-gated Host
 //! operations, so the Relay never sees an address; this module owns only
 //! the strict codec and address policy. Contract and threat model:
-//! `unpeel-apple:docs/feature/direct-path-v1.md`. Fixtures: `protocol/direct-path-v1.json`.
+//! the private "direct-path-v1" design record. Fixtures: `protocol/direct-path-v1.json`.
 //!
 //! Deliberately crypto-free and std-only (like `relay_wire`) so every
 //! Controller build — including wasm — compiles the exact contract even

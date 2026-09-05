@@ -10,7 +10,7 @@
 //  these are the Form sections it embeds there, above the enrollment list.
 //  LicenseManager, the key format, and seat activation are unchanged
 //  underneath (offline signature check + online activation). See
-//  docs/agents/licensing.md and docs/plans/unpeel-link.md.
+//  LicenseManager.swift.
 //
 
 import AppKit
@@ -44,7 +44,7 @@ struct LinkLicenseSections: View {
     /// How this person appears to other controllers connected to the same
     /// Host (presence chips, "who is typing"). Stored in shared
     /// app-state.json beside the TUI's identical rows; the Link control
-    /// plane carries it later (docs/plans/unpeel-link.md).
+    /// plane carries it later.
     private var profileSection: some View {
         Section {
             LabeledContent {

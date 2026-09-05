@@ -7,7 +7,7 @@
 //  Mac uplink and the iOS client use this file verbatim; the relay itself
 //  never links it (it only pipes the opaque bytes these functions produce).
 //
-//  Security design (see docs/feature/unpeel-remote.md):
+//  Security design:
 //  - Per-device static 32-byte e2eKey, exchanged at pairing over the LAN.
 //  - Per-connection handshake: both sides contribute a fresh 16-byte salt;
 //    session keys are HKDF-SHA256(e2eKey, saltC‖saltH, direction info) —

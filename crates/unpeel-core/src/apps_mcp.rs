@@ -1,5 +1,5 @@
 //! The `apps` MCP domain — the discovery slice of the Unpeel Apps agent
-//! contract (`unpeel-apple:docs/plans/unpeel-apps.md`, "Agent access").
+//! contract (the private "unpeel-apps" design record, "Agent access").
 //!
 //! Official Unpeel Apps are allowlisted in the shared release/CLI registry and
 //! become installed when their CLI is found on the Host's resolved PATH. This

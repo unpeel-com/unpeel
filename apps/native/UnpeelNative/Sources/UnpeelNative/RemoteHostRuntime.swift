@@ -3694,7 +3694,7 @@ extension RemoteHostRuntime {
 
     /// Edit the selected Host's preset list (`settings.presets.set`) — the
     /// Controller half of scoped Settings ▸ Presets
-    /// (docs/plans/workspace-scope-and-pairing.md, Decision 1). One-preset
+    /// (the scope selector follows the window's active workspace). One-preset
     /// patch, capability-gated, refreshed like every organization verb; a
     /// create's minted id arrives with the refreshed snapshot.
     func setPreset(_ patch: RemotePresetPatch) async throws {

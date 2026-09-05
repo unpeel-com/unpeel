@@ -161,7 +161,7 @@ enum UnpeelFeatureFlags {
     }
 
     /// Whether THIS Controller may operate the selected Host's computer use
-    /// (decision D2, `docs/plans/computer-use-release.md`): it follows what
+    /// (release rule: the Mac's own desktop stays development-only): it follows what
     /// the Host advertises in its bootstrap (`computerUseAvailable`), never
     /// this app's build flavor. A Linux Host running `unpeel serve` in a
     /// desktop session launders no privilege, so a release Mac app may drive

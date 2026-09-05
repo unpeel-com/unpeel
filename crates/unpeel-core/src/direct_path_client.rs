@@ -1,5 +1,5 @@
 //! Controller-side direct-path negotiation — the client half of
-//! `unpeel-apple:docs/feature/direct-path-v1.md`, transport-agnostic by design: the
+//! the private "direct-path-v1" design record, transport-agnostic by design: the
 //! caller supplies (a) the connection's E2E handshake material and (b) a
 //! closure that POSTs one authenticated tunnel request, so the same
 //! negotiator rides the Swift-carried relay (via bridge), a future Rust

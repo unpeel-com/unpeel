@@ -1,5 +1,5 @@
 //! Relay latency probe (`unpeel-host __relay_probe__`) — increment 0 of
-//! `unpeel-apple:docs/plans/relay-direct-upgrade.md`. Decomposes off-LAN latency into
+//! the private "relay-direct-upgrade" design record. Decomposes off-LAN latency into
 //! peer→edge and edge→DO legs and benches seal/unseal locally, so the
 //! direct-path upgrade has a measured baseline to beat.
 //!

@@ -72,7 +72,7 @@ impl SettingKey {
         match raw {
             "experimental_features.sessions_mcp" => Ok(Self::SessionsMcp),
             "experimental_features.browser_mcp" => Ok(Self::BrowserMcp),
-            // Short spelling used by unpeel-apple:docs/plans/computer-use-release.md and
+            // Short spelling used by the private "computer-use-release" design record and
             // the Box recipe; the stored key is the nested experimental gate.
             "experimental_features.computer_use" | "computer_use" => Ok(Self::ComputerUse),
             "browser_default_access" => Ok(Self::BrowserDefaultAccess),

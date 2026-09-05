@@ -63,7 +63,7 @@ systemctl --user enable --now unpeel-serve.service
 
 ## Linux — desktop-session variant (`unpeel-serve-graphical.service`)
 
-Computer Use (`unpeel-apple:docs/plans/computer-use-release.md`) needs the Host inside
+Computer Use (the private "computer-use-release" design record) needs the Host inside
 the desktop session: the engine reads the session's `DISPLAY` /
 `WAYLAND_DISPLAY` and the accessibility (AT-SPI) bus on the session D-Bus.
 `unpeel serve install --graphical` writes this template instead of the

@@ -1576,7 +1576,7 @@ final class UnpeelStore: ObservableObject {
     /// Display name of the selected non-local scope, nil for Local. Feeds
     /// the interim Settings scope labeling (Settings edits THIS instance's
     /// workspace regardless of the picker — see
-    /// docs/plans/workspace-scope-and-pairing.md, Decision 2).
+    /// the interim scope labeling in SettingsView).
     var selectedScopeDisplayName: String? {
         switch selectedHostScope {
         case .local:
@@ -1588,8 +1588,8 @@ final class UnpeelStore: ObservableObject {
                 ?? "the selected Host"
         }
     }
-    /// Settings scope selector (docs/plans/workspace-scope-and-pairing.md,
-    /// Decision 1): the dropdown FOLLOWS the window's active workspace by
+    /// Settings scope selector (scope rule shared with
+    /// SettingsView): the dropdown FOLLOWS the window's active workspace by
     /// default — while a non-local scope is selected, the workspace-scoped
     /// Settings panels target it over its existing connection. Picking
     /// "This Mac" in the dropdown pins Settings to this instance's own

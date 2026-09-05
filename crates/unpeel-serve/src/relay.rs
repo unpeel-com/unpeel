@@ -61,7 +61,7 @@ struct DispatchCompletion {
 }
 
 /// Submit→sealed-send latencies above this land in trace.log; the relay
-/// latency baseline (unpeel-relay:docs/feature/relay-latency-baseline.md) needs our own
+/// latency baseline (the private "relay-latency-baseline" design record) needs our own
 /// pipeline observable without flooding the log on the happy path.
 const SLOW_DISPATCH_TRACE: Duration = Duration::from_millis(100);
 
@@ -784,7 +784,7 @@ fn run_once(
                         continue;
                     };
                     // Retain the handshake inputs for direct-path probe-key
-                    // derivation (unpeel-apple:docs/feature/direct-path-v1.md); dead with
+                    // derivation (the private "direct-path-v1" design record); dead with
                     // the connection, never logged.
                     direct_path.register(
                         conn_id,

@@ -1,7 +1,6 @@
 // swift-tools-version: 6.0
 //
 // UnpeelNative — Phase 0 spike for the Swift + libghostty rewrite.
-// See docs/plans/swift-libghostty-rewrite.md.
 //
 // libghostty-spm is VENDORED at ../vendor/libghostty-spm (tag 1.2.4 plus
 // local patches, see UNPEEL-PATCHES.md there). The libghostty public API

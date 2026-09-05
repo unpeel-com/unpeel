@@ -14,7 +14,7 @@
 #       anything else     → {"ok":true,"tool":"<tool>"}
 #
 # Point the Host at it with UNPEEL_CUA_DRIVER_BIN=$PWD/scripts/ci/fake-cua-driver.sh.
-# Used by the Lane C D2 proof and Lane E's matrix case (unpeel-apple:docs/plans/computer-use-release.md).
+# Used by the Lane C D2 proof and Lane E's matrix case (the private "computer-use-release" design record).
 set -euo pipefail
 
 subcommand="${1:-}"

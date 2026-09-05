@@ -1,6 +1,6 @@
 Unpeel: smaller standard pages and no page preheat for the Host-side VT.
 
-Why: docs/plans/pty-core.md, 'Round 3, Lane 3'. Upstream's standard page is
+Why: the private "pty-core" design record, 'Round 3, Lane 3'. Upstream's standard page is
 512 KiB and PageList.minMaxSize forces at least two pages, so any
 max_scrollback under 1 MiB is silently raised to 1 MiB; page_preheat = 4
 touches 8 x 16 KiB per terminal before a cell is written. Applied only when

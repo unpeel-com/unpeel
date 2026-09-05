@@ -16,7 +16,7 @@ final class PaneWorkingDirectoryTests: XCTestCase {
 
         var probed: [String] = []
         let resolved = ClickablePath.resolveFile(
-            "docs/plans/announcement-bar-single-line.md",
+            "docs/notes/announcement-bar-single-line.md",
             workingDirectory: cwd,
             fileExists: { path in
                 probed.append(path)
@@ -25,7 +25,7 @@ final class PaneWorkingDirectoryTests: XCTestCase {
         )
         XCTAssertEqual(
             resolved,
-            "/Users/me/Dev/flatsome/docs/plans/announcement-bar-single-line.md"
+            "/Users/me/Dev/flatsome/docs/notes/announcement-bar-single-line.md"
         )
         XCTAssertEqual(probed, [resolved!])
     }

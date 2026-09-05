@@ -55,7 +55,11 @@ this repository is the server.
 
 This repository holds the Host service, the shared PTY core, the unified
 `unpeel` MCP server, the built-in agent runtimes, the CLI, and the Host
-protocol. The clients consume its tagged releases and CLI archives.
+protocol — and the Mac and iOS app sources under
+[`apps/`](apps/) (`apps/native`, `apps/ios`, `apps/shared`) plus the C-ABI
+bridge crate the Mac app links, so app and server always build from one tree.
+How to build and test them: the "Apple clients" section of
+[`AGENTS.md`](AGENTS.md#apple-clients).
 
 ## Install
 
@@ -174,12 +178,13 @@ the phone exactly like a Mac Host: [unpeel.com/docs/headless-host](https://unpee
 
 The server — this repository — is public under the MIT license
 (`LICENSE`), with the Unpeel name, logo, icon, and mascot covered by
-[`TRADEMARK.md`](TRADEMARK.md). The Apple clients are closed for now and
-consume this repository's tagged releases and CLI archives. Long-term the only
-closed component is the backend of the operated Unpeel Link service
-(accounts, seats, entitlements, rendezvous, relay, push): everything local and
-direct is free and has no Link dependency. Design records and plans live in
-a private docs repository; this repository documents what ships.
+[`TRADEMARK.md`](TRADEMARK.md). The Mac and iOS app sources are here too
+(`apps/`); official signed builds are published only by the Unpeel team (see
+the "Official builds" note in `TRADEMARK.md`). The only closed component is
+the backend of the operated Unpeel Link service (accounts, seats,
+entitlements, rendezvous, relay, push): everything local and direct is free
+and has no Link dependency. Design records and plans live in a private
+archive repository; this repository documents what ships.
 
 ## Development
 

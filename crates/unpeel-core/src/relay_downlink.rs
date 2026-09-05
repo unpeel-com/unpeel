@@ -1,5 +1,5 @@
 //! Minimal Rust Controller relay downlink — route 1 of the direct-path
-//! lab proof (`unpeel-apple:docs/plans/relay-direct-upgrade.md` increment 2), and the
+//! lab proof (the private "relay-direct-upgrade" design record increment 2), and the
 //! first Rust sender of the shipped client-side relay protocol: the same
 //! `/v1/client/` route, client hello, transcript MAC verification, and
 //! sealed tunnel envelope the iOS app speaks (`RelayProtocol.swift`), so

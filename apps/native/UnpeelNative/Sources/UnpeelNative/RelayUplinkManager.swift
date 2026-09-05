@@ -10,7 +10,7 @@
 //  worker delegates through the `link.entitlement.refresh` platform
 //  callback (the license key never leaves Keychain/this process), and APNs
 //  push through the Link service. Entitlements are cached in
-//  ~/.unpeel/mobile/relay-entitlement.json. See docs/feature/unpeel-remote.md.
+//  ~/.unpeel/mobile/relay-entitlement.json.
 //
 
 import AppKit

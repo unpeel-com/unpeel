@@ -589,7 +589,7 @@ enum ProcessLaunch {
 }
 
 /// The workspace-gateway flavor of the shared child-process transport
-/// (unpeel-apple:docs/plans/workspaces-unification.md phase 2). Construct it with
+/// (the private "workspaces-unification" design record phase 2). Construct it with
 /// [`SshHostConnection::local_gateway`].
 pub type LocalProcessConnection = SshHostConnection;
 

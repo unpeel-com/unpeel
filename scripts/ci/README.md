@@ -1,7 +1,7 @@
 # Computer-use CI / proof fixtures
 
 Reusable pieces behind the Computer Use 0.5.0 proof
-(`unpeel-apple:docs/plans/computer-use-release.md`, Lanes C and E). No secrets, no real
+(the private "computer-use-release" design record, Lanes C and E). No secrets, no real
 `~/.unpeel`.
 
 - **`fake-cua-driver.sh`** — a stand-in for `cua-driver`: `serve`/`status`/

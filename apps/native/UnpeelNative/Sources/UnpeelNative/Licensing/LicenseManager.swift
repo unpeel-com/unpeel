@@ -3,7 +3,7 @@
 //  UnpeelNative
 //
 //  Client side of the Stripe → license → activation flow (see
-//  docs/feature/licensing.md and the issuing Worker in apps/website).
+//  the issuing service in the website repository).
 //
 //  A Unpeel Pro license is an Ed25519-signed token:
 //

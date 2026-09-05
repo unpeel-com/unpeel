@@ -2,8 +2,8 @@
 //  SidebarSessionDrag.swift
 //  UnpeelNative
 //
-//  Detached drag ("Dia feel") for sidebar SESSION and PROJECT rows — step 2 of
-//  docs/plans/sidebar-drag-and-split.md.
+//  Detached drag ("Dia feel") for sidebar SESSION and PROJECT rows, the
+//  second step of the drag-and-split design (drag-into-group, edge-drop split).
 //
 //  Rows no longer start a system `.onDrag` session. Instead a local NSEvent
 //  monitor watches mouse-down anywhere on a registered row; ~6pt of movement

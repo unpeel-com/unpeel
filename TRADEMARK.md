@@ -31,4 +31,15 @@ mistaken for the real thing.
   official binaries come only from unpeel.com and the official app stores,
   and are the only builds our update and Link infrastructure serves.
 
+## Official builds
+
+The Mac and iOS app sources live in this repository (`apps/`), but official
+signed builds — the notarized Mac app served from unpeel.com and its Sparkle
+feed, and the iOS app on TestFlight and the App Store — are published only by
+the Unpeel team at UX Themes AS with its signing identities. Anyone may build
+the apps from source for their own machines. A fork that distributes its own
+builds must not use the Unpeel name, app icon, or mascot, must not present
+itself as an official build, and must not point at Unpeel's update feeds,
+release endpoints, or Link infrastructure.
+
 Questions or permission requests: support@unpeel.com.
