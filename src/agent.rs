@@ -466,6 +466,18 @@ fn label_or(value: &Value, key: &str, fallback: &str) -> String {
     }
 }
 
+/// The `unpeel-host` that hosts this App. The Host exports its own binary
+/// path to every hosted child (`UNPEEL_HOST_BIN`; the older `UNPEEL_MCP_BIN`
+/// on Codex launches) — prefer it over PATH, where a stale CLI install would
+/// answer with an older protocol and hide the App's neighbors.
+fn host_binary() -> std::ffi::OsString {
+    ["UNPEEL_HOST_BIN", "UNPEEL_MCP_BIN"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .find(|value| !value.is_empty())
+        .unwrap_or_else(|| "unpeel-host".into())
+}
+
 struct McpClient {
     child: Child,
     reader: BufReader<std::process::ChildStdout>,
@@ -474,7 +486,7 @@ struct McpClient {
 
 impl McpClient {
     fn spawn() -> Result<Self, AgentError> {
-        let mut child = Command::new("unpeel-host")
+        let mut child = Command::new(host_binary())
             .arg("__mcp__")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
