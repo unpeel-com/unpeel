@@ -563,7 +563,6 @@ fn ensure_in_root(
     root: &mut Map<String, Value>,
     request: &EnsureAppPresentation,
     now_ms: u64,
-    allow_create_instance: bool,
 ) -> Result<EnsureAppPresentationResult, String> {
     validate_ensure(request)?;
     let mut envelope = validated_envelope_from_root(root)?;
@@ -625,12 +624,6 @@ fn ensure_in_root(
 
     let (instance_index, instance, created_instance) = match existing_instance {
         Some((index, stored)) => (index, stored, false),
-        None if !allow_create_instance => {
-            return Err(format!(
-                "No existing App instance matches '{}' in this project. Agents cannot create App Sessions; ask the user to open it first.",
-                request.app_id
-            ));
-        }
         None => {
             let stored = StoredAppInstance {
                 value: AppInstance {
@@ -755,40 +748,7 @@ pub fn ensure_app_presentation(
     request: &EnsureAppPresentation,
 ) -> Result<EnsureAppPresentationResult, String> {
     let now_ms = crate::state::current_timestamp_ms();
-    crate::app_state::edit(|root| ensure_in_root(root, request, now_ms, true))
-}
-
-/// Attach/reveal an App instance that a user-created Controller or CLI flow
-/// already established. This is the agent boundary: MCP may add a semantic
-/// binding to an existing instance, but it never mints the companion Session
-/// identity that would allow a later launch.
-pub fn ensure_existing_app_presentation(
-    request: &EnsureAppPresentation,
-) -> Result<EnsureAppPresentationResult, String> {
-    let now_ms = crate::state::current_timestamp_ms();
-    crate::app_state::edit(|root| ensure_in_root(root, request, now_ms, false))
-}
-
-/// Read the exact existing App instance an agent open would be allowed to
-/// attach to. This performs no state edit and is used before presenting an
-/// approval prompt.
-pub fn existing_app_instance(
-    request: &EnsureAppPresentation,
-) -> Result<Option<AppInstance>, String> {
-    validate_ensure(request)?;
-    let value = crate::app_state::load()?;
-    let root = value.as_object().ok_or("app-state.json is not an object")?;
-    let envelope = validated_envelope_from_root(root)?;
-    Ok(envelope
-        .instances
-        .iter()
-        .filter_map(parse_instance)
-        .map(|stored| stored.value)
-        .find(|instance| {
-            instance.app_id == request.app_id
-                && instance.project_id == request.project_id
-                && instance.resource == request.resource
-        }))
+    crate::app_state::edit(|root| ensure_in_root(root, request, now_ms))
 }
 
 #[cfg(test)]
@@ -797,7 +757,7 @@ fn ensure_app_presentation_at(
     request: &EnsureAppPresentation,
     now_ms: u64,
 ) -> Result<EnsureAppPresentationResult, String> {
-    crate::app_state::edit_at(path, |root| ensure_in_root(root, request, now_ms, true))
+    crate::app_state::edit_at(path, |root| ensure_in_root(root, request, now_ms))
 }
 
 fn context_from_root(
@@ -1200,29 +1160,21 @@ mod tests {
     }
 
     #[test]
-    fn agent_ensure_reuses_an_instance_and_never_mints_a_companion_session() {
+    fn a_second_caller_shares_the_instance_and_its_companion_session() {
         let mut root = Map::new();
         let first_request = request("user-caller", "project-1", Some("user-open"));
+        let first = ensure_in_root(&mut root, &first_request, 100).unwrap();
+        assert!(first.created_instance);
+        let companion_id = first.instance.companion_session_id.clone();
 
-        let error = ensure_in_root(&mut root, &first_request, 100, false).unwrap_err();
-        assert!(
-            error.contains("Agents cannot create App Sessions"),
-            "{error}"
-        );
-        assert!(
-            root.is_empty(),
-            "a refused agent open must not mutate state"
-        );
-
-        let user_created = ensure_in_root(&mut root, &first_request, 100, true).unwrap();
-        assert!(user_created.created_instance);
-        let companion_id = user_created.instance.companion_session_id.clone();
-
+        // An agent in the same project opening the same resource binds its
+        // own panel to the one existing instance: one App process per
+        // project/resource, never a second companion.
         let agent_request = request("agent-caller", "project-1", Some("agent-open"));
-        let agent_attached = ensure_in_root(&mut root, &agent_request, 200, false).unwrap();
+        let agent_attached = ensure_in_root(&mut root, &agent_request, 200).unwrap();
         assert!(!agent_attached.created_instance);
         assert!(agent_attached.created_presentation);
-        assert_eq!(agent_attached.instance.id, user_created.instance.id);
+        assert_eq!(agent_attached.instance.id, first.instance.id);
         assert_eq!(agent_attached.instance.companion_session_id, companion_id);
     }
 

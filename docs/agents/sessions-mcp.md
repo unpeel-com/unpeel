@@ -262,27 +262,30 @@ remains — and always framed as app-authored data, never instructions; each
 App's public documentation defines its own `context` schema (Unpeel Design:
 selected file + line span; a markdown App: current file/heading). `open`
 resolves only an installed catalog entry, derives caller/project/cwd Host-side,
-requires remembered user approval per caller/App pair, and attaches/reveals
-only a project/resource App instance that a user Controller or CLI action
-already created. MCP never installs an App and never creates, restarts, or
-removes its companion Session; a missing App or instance returns exact guidance
-to ask the user. A caller-scoped `request_id` deduplicates retries;
+requires remembered user approval per caller/App pair (the first open of each
+App prompts once), then creates or reuses the project/resource App instance,
+starts its companion Session when it is missing or exited, and binds the
+caller's semantic panel. This is the one bounded exception to user-only
+Session creation (decided 2026-09-06: agents may open files in panes). MCP
+never installs an App and never removes a companion; a missing App returns
+exact guidance to ask the user to install it. A caller-scoped `request_id` deduplicates retries;
 `reveal:false` attaches without advancing the reveal revision. The root `skills` domain provides
 `list`, `search`, and `get`; future App package guidance uses namespaced ids
 there rather than adding an Apps action. Every App action rechecks the Host's
 resolved PATH, so a mid-session install is visible without a restart.
 
 `apps.open` and the Controller's user-initiated `apps.open` Host effect share
-the typed resolver and presentation model in `app_open`; only the direct user
-path may create/restart a companion. An explicit `resource` plus `media_type`
+the typed resolver, presentation model, and companion lifecycle in
+`app_open::open_app`; the agent path differs only in the approval gate in
+front of it and in `validate_open_app`, which fails a request that could never
+run before the prompt is shown. An explicit `resource` plus `media_type`
 defaults to `resource_kind:file`; otherwise callers use a declared typed kind
 such as `folder` or `git.working-tree`. Future kinds such as
 `github.pull-request` use the same wire. The Host passes any resource as one
-shell-safe argument to the resolved App executable. Agent MCP opens retain the
-per-caller/App prompt for attaching/revealing an existing instance, while
-cmd-click is already a direct user action and may install then create it.
+shell-safe argument to the resolved App executable. Cmd-click is a direct user
+action and may additionally install a missing App first.
 
-That lifecycle boundary is enforced on the supported MCP adapter, not as an
+The install boundary is enforced on the supported MCP adapter, not as an
 OS sandbox around arbitrary commands. A hosted process runs as the user's
 account and can invoke the ordinary `unpeel` CLI; noninteractive
 `unpeel apps install` requires an explicit `--yes`, but the cooperative-policy

@@ -1084,8 +1084,11 @@ fn require_app_open_approval(
     ))
 }
 
-/// Attach/reuse an existing user-created App instance and ask Controllers to
-/// reveal it. MCP never creates or restarts the companion Session.
+/// Open a resource in an App beside the caller: create or reuse the
+/// project/resource App instance, start its companion Session when needed,
+/// and ask Controllers to reveal the caller's panel. This is the one bounded
+/// exception to user-only Session creation, gated by the remembered
+/// per-caller/App approval; installing a missing App stays user-only.
 /// `target: panel` is the whole placement contract: a Mac Controller projects
 /// it on the trailing/right edge, while other Controllers choose their native
 /// equivalent.
@@ -1137,17 +1140,18 @@ fn tool_apps_open(args: &Value) -> Result<String, String> {
         request_id: optional_trimmed_str(args, "request_id").map(str::to_string),
     };
 
-    // A missing/stopped user-owned instance must fail before consuming the
-    // user's attention or recording an approval that cannot be used.
-    crate::app_open::validate_existing_app(&request)?;
-    // Revealing an installed App is an effect distinct from terminal writes.
-    // Remember approval per caller/App pair before committing the caller's
-    // presentation binding, so a decline cannot leave a phantom attachment.
+    // A request that could never run (App not installed, unsupported media
+    // type, relative path) must fail before consuming the user's attention
+    // or recording an approval that cannot be used.
+    crate::app_open::validate_open_app(&request)?;
+    // Launching an installed App is an effect distinct from terminal writes.
+    // Remember approval per caller/App pair before committing new Host
+    // state, so a decline cannot leave a phantom instance or companion.
     require_app_open_approval(&caller.session.id, &app.id, &app.name)?;
     // An approval answered after the client cancelled this call must not
     // still commit Host state or launch the companion.
     crate::mcp_cancel::bail_if_cancelled()?;
-    let result = crate::app_open::open_existing_app(&request)?;
+    let result = crate::app_open::open_app(&request, companion_hook_port())?;
     let receipt = result.presentation.agent_receipt();
     serde_json::to_string_pretty(&json!({
         "app": { "id": result.app_id, "name": result.app_name },
@@ -1156,6 +1160,18 @@ fn tool_apps_open(args: &Value) -> Result<String, String> {
         "projection": "Host recorded a semantic panel request. Controller geometry and current visibility are intentionally not reported here.",
     }))
     .map_err(|error| format!("Failed to render App open receipt: {error}"))
+}
+
+/// The hook port a companion App Session reports its status to: the
+/// workspace worker's advertised port, else the port this MCP server was
+/// launched with (the same worker, seen from the caller's environment).
+fn companion_hook_port() -> Option<u16> {
+    serve_hook_port().or_else(|| {
+        std::env::var("UNPEEL_APP_PORT")
+            .ok()
+            .and_then(|value| value.trim().parse().ok())
+            .filter(|port| *port != 0)
+    })
 }
 
 /// Skills are read-only progressive-disclosure documents. Like Apps

@@ -984,12 +984,12 @@ pub fn action_docs() -> Vec<Value> {
         }),
         json!({
             "name": "open",
-            "description": "Attach or reveal an existing user-created App instance and semantic \
-        panel. Files use media_type; non-file resources use \
-        declared kinds such as folder or git.working-tree. The Host derives caller/project/cwd; \
-        Controllers choose placement and geometry. MCP never installs Apps or creates/restarts \
-        App Sessions; ask the user to install and open a missing companion first. Revealing or \
-        attaching the existing instance remains approval-gated.",
+            "description": "Open a resource in an installed App as a semantic panel beside the \
+        caller: creates or reuses the project/resource App instance and starts its companion \
+        when needed. Files use media_type; non-file resources use declared kinds such as folder \
+        or git.working-tree. The Host derives caller/project/cwd; Controllers choose placement \
+        and geometry. The first open per App asks the user once and is remembered. MCP never \
+        installs Apps; ask the user to install a missing one first.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

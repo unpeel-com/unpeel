@@ -2,8 +2,10 @@
 //!
 //! Callers decide how the App was selected and whether user approval is
 //! required. This module resolves the installed App and derives the caller's
-//! effective project/cwd for both paths. Direct-user paths may create or
-//! restart the companion Session; MCP may only attach/reveal an existing one.
+//! effective project/cwd for both paths. Both paths create or reuse the
+//! project/resource companion Session; an agent (MCP) caller must first clear
+//! the user's remembered per-caller/App approval, and `validate_open_app`
+//! lets it fail a bad request before that prompt is ever shown.
 
 use crate::app_presentations::{
     AppPresentationTarget, AppResourceRef, EnsureAppPresentation, EnsureAppPresentationResult,
@@ -207,7 +209,21 @@ fn ensure_companion_running(
     Ok("starting")
 }
 
-pub fn open_app(request: &OpenAppRequest, hook_port: Option<u16>) -> Result<OpenAppResult, String> {
+/// Resolve everything an open needs without touching Host state: the
+/// running caller, the installed App and its launch command, and the
+/// presentation request. Shared by the effect and by the side-effect-free
+/// validation an agent runs before the approval prompt.
+fn prepare_open(
+    request: &OpenAppRequest,
+) -> Result<
+    (
+        HostedSessionManifest,
+        crate::apps_mcp::InstalledApp,
+        String,
+        EnsureAppPresentation,
+    ),
+    String,
+> {
     let caller = session_host::load_manifest(&request.caller_session_id)
         .ok_or_else(|| format!("Unknown caller session id '{}'.", request.caller_session_id))?;
     if caller.state != HostedSessionState::Running {
@@ -231,6 +247,23 @@ pub fn open_app(request: &OpenAppRequest, hook_port: Option<u16>) -> Result<Open
         reveal: request.reveal,
         request_id: request.request_id.clone(),
     };
+    Ok((caller, app, command, ensure))
+}
+
+/// Validate an open request without any side effect, so an agent's missing
+/// App, unsupported media type, or relative path fails before the user is
+/// asked to approve anything (and before an approval is remembered for a
+/// request that could never run).
+pub fn validate_open_app(request: &OpenAppRequest) -> Result<(), String> {
+    prepare_open(request).map(|_| ())
+}
+
+/// Create or reuse the project/resource App instance, bind the caller's
+/// semantic panel, and make sure the companion Session is running (starting
+/// it, or replacing an exited one). Direct user paths and approved agent
+/// opens share this one effect.
+pub fn open_app(request: &OpenAppRequest, hook_port: Option<u16>) -> Result<OpenAppResult, String> {
+    let (caller, app, command, ensure) = prepare_open(request)?;
     let mut presentation = crate::app_presentations::ensure_app_presentation(&ensure)?;
     let process_state = ensure_companion_running(
         &mut presentation,
@@ -248,88 +281,6 @@ pub fn open_app(request: &OpenAppRequest, hook_port: Option<u16>) -> Result<Open
     })
 }
 
-/// Agent-owned entry: attach/reveal only a companion Session that a user
-/// already created through a Controller or the CLI. Unlike `open_app`, this
-/// path deliberately has no spawn/remove/restart branch.
-fn prepare_existing_app(
-    request: &OpenAppRequest,
-) -> Result<
-    (
-        crate::apps_mcp::InstalledApp,
-        EnsureAppPresentation,
-        crate::app_presentations::AppInstance,
-    ),
-    String,
-> {
-    let caller = session_host::load_manifest(&request.caller_session_id)
-        .ok_or_else(|| format!("Unknown caller session id '{}'.", request.caller_session_id))?;
-    if caller.state != HostedSessionState::Running {
-        return Err(format!(
-            "Caller Session '{}' is not running.",
-            request.caller_session_id
-        ));
-    }
-    let (app, _) = resolve_launch(
-        &request.app_id,
-        request.resource.as_ref(),
-        request.media_type.as_deref(),
-    )?;
-    let ensure = EnsureAppPresentation {
-        caller_session_id: caller.session.id.clone(),
-        project_id: effective_project_id(&caller),
-        app_id: app.id.clone(),
-        view_id: request.view_id.clone(),
-        resource: request.resource.clone(),
-        target: AppPresentationTarget::Panel,
-        reveal: request.reveal,
-        request_id: request.request_id.clone(),
-    };
-    let instance = crate::app_presentations::existing_app_instance(&ensure)?.ok_or_else(|| {
-        format!(
-            "No existing App instance matches '{}' in this project. Agents cannot create App Sessions; ask the user to open it first.",
-            ensure.app_id
-        )
-    })?;
-    if companion_manifest_state(&instance.companion_session_id) != Some(HostedSessionState::Running)
-    {
-        return Err(format!(
-            "The existing {} companion is not running. Agents cannot create or restart App Sessions; ask the user to open it first.",
-            app.name
-        ));
-    }
-    Ok((app, ensure, instance))
-}
-
-/// Validate that MCP open has a matching running, user-created instance.
-/// This is deliberately side-effect free so a missing target fails before an
-/// approval request is presented.
-pub fn validate_existing_app(request: &OpenAppRequest) -> Result<(), String> {
-    prepare_existing_app(request).map(|_| ())
-}
-
-pub fn open_existing_app(request: &OpenAppRequest) -> Result<OpenAppResult, String> {
-    let (app, ensure, instance) = prepare_existing_app(request)?;
-    let _lifecycle_lock =
-        crate::session_ops::lock_session_lifecycle(&instance.companion_session_id)?;
-    if companion_manifest_state(&instance.companion_session_id) != Some(HostedSessionState::Running)
-    {
-        return Err(format!(
-            "The existing {} companion is not running. Agents cannot create or restart App Sessions; ask the user to open it first.",
-            app.name
-        ));
-    }
-    let presentation = crate::app_presentations::ensure_existing_app_presentation(&ensure)?;
-    Ok(OpenAppResult {
-        app_id: app.id,
-        app_name: app.name,
-        presentation,
-        process_state: "running",
-    })
-}
-
-/// User-owned CLI entry when there is no caller pane: resolve the exact same
-/// App launch as `open_app`, but make the App itself a top-level hosted
-/// Session. MCP never calls this because agent-created Sessions are forbidden.
 pub fn open_standalone_app(
     request: &OpenStandaloneAppRequest,
     hook_port: Option<u16>,
