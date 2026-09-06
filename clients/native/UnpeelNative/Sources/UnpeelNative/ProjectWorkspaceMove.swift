@@ -155,6 +155,14 @@ enum ProjectWorkspaceMove {
                 keys: subtreeIDs,
                 into: &object
             )
+            // Disk-carried folder colors (workspaces without a native
+            // overlay); the UserDefaults copy moves in transferWorkspaceOverlays.
+            mergeStringMap(
+                key: "project_colors",
+                from: sourceState,
+                keys: subtreeIDs,
+                into: &object
+            )
             mergeMcpOrchestrators(
                 from: sourceState,
                 sessionIDs: Set(sessionIDs),
@@ -193,6 +201,7 @@ enum ProjectWorkspaceMove {
             stripProjects(subtreeIDs, from: &object)
             stripPinnedSessions(projectIDs: subtreeIDs, from: &object)
             stripStringMap(key: "session_sort_modes", keys: subtreeIDs, from: &object)
+            stripStringMap(key: "project_colors", keys: subtreeIDs, from: &object)
             stripMcpOrchestrators(sessionIDs: Set(sessionIDs), from: &object)
             stripBlockedProjects(projectIDs: subtreeIDs, from: &object)
             if (object["active_project_id"] as? String).map(subtreeIDs.contains) == true {
