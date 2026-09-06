@@ -181,7 +181,10 @@ fn ensure_companion_running(
         id: companion_id.clone(),
         project_id: ensure.project_id.clone(),
         label: app_name.to_string(),
-        custom_title: true,
+        // Not a user title: the App name is only the seed label. Apps report
+        // what they show (`app-title.json`, e.g. the opened file's name) and
+        // `apply_app_title` folds that in until the user renames the row.
+        custom_title: false,
         command: command.to_string(),
         created_at: current_timestamp_ms(),
         owner_principal_id: caller.session.owner_principal_id.clone(),
@@ -291,7 +294,10 @@ pub fn open_standalone_app(
         id: String::new(),
         project_id: request.project_id.clone(),
         label: app.name.clone(),
-        custom_title: true,
+        // Not a user title: the App name is only the seed label. Apps report
+        // what they show (`app-title.json`, e.g. the opened file's name) and
+        // `apply_app_title` folds that in until the user renames the row.
+        custom_title: false,
         command,
         created_at: current_timestamp_ms(),
         owner_principal_id: None,
