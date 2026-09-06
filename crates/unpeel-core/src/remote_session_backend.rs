@@ -378,6 +378,9 @@ pub struct RemoteAppSummary {
     pub description: String,
     #[serde(default)]
     pub tint: Option<String>,
+    /// Registry-authored monochrome SVG mark (additive 2026-09-06).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_svg: Option<String>,
     pub command: String,
     #[serde(default)]
     pub media_types: Vec<String>,
