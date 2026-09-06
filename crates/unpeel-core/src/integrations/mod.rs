@@ -270,6 +270,33 @@ pub fn configure_host_command(
         shared::shell_quote(&trace_value),
     ));
 
+    // Installed Unpeel Apps live in the Host's own `apps/bin`, which no
+    // shell startup file knows about. Put it first in PATH — on the child
+    // process for blank terminals (rc files may reorder it but keep it) and
+    // through the prelude for command launches (which run after rc files) —
+    // so an App launched by name from the launch list, a script, or an agent
+    // resolves. The directory holds only App binaries, so it shadows nothing.
+    let apps_bin = crate::app_installer::install_dir(&home)
+        .to_string_lossy()
+        .to_string();
+    let inherited_path = cmd
+        .get_env("PATH")
+        .map(|value| value.to_string_lossy().to_string())
+        .or_else(|| std::env::var("PATH").ok())
+        .unwrap_or_default();
+    let child_path = if inherited_path.split(':').any(|dir| dir == apps_bin) {
+        inherited_path
+    } else if inherited_path.is_empty() {
+        apps_bin.clone()
+    } else {
+        format!("{apps_bin}:{inherited_path}")
+    };
+    cmd.env("PATH", &child_path);
+    shell_prelude.push(format!(
+        "export PATH={}:\"$PATH\"",
+        shared::shell_quote(&apps_bin),
+    ));
+
     // Every hosted child must reach THIS Host's own binary — never whatever
     // `unpeel-host` happens to sit on the user's PATH (a stale CLI install
     // there answers with an older protocol). Unpeel Apps use it to spawn the
@@ -721,6 +748,11 @@ mod tests {
         assert_eq!(cmd.get_env(APP_ACCENT_ENV), None);
         let host_bin = crate::session_host::resolve_current_executable().expect("current exe");
         assert_eq!(cmd.get_env(HOST_BIN_ENV), Some(host_bin.as_os_str()));
+        let apps_bin = crate::app_installer::install_dir(&home)
+            .to_string_lossy()
+            .to_string();
+        let child_path = cmd.get_env("PATH").unwrap().to_string_lossy().to_string();
+        assert_eq!(child_path.split(':').next(), Some(apps_bin.as_str()));
 
         let exports = prelude.join("\n");
         assert!(exports.contains("UNPEEL_SESSION_ID='headless-session'"));
@@ -732,6 +764,10 @@ mod tests {
         assert!(exports.contains(&format!(
             "export UNPEEL_HOST_BIN={}",
             shared::shell_quote(&host_bin.to_string_lossy())
+        )));
+        assert!(exports.contains(&format!(
+            "export PATH={}:\"$PATH\"",
+            shared::shell_quote(&apps_bin)
         )));
     }
 
