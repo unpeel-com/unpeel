@@ -429,14 +429,39 @@ non-empty `UNPEEL_HOME` intentionally run one foreground workspace Host. This
 is the container/specialized service-unit form. It does not take the machine
 lease or enumerate sibling workspaces.
 
-The native `HostServiceManager` launches bundled `unpeel-host __serve__` and
-does not retain or terminate it; the service survives app/window exit. The
-lease makes simultaneous launches harmless. Launch rules are load-bearing:
+The native `HostServiceManager` starts bundled `unpeel-host __serve__`
+**through launchd**, never as its own child (`HostServiceAgent`): it writes
+`~/Library/LaunchAgents/com.unpeel.native.serve.plist` (dev builds:
+`com.unpeel.native.dev.serve.plist`, so a dev bundle never re-points the
+real unit), bootstraps it into `gui/<uid>`, and kickstarts it whenever the
+Local connection cannot be made. It never retains or terminates the service;
+the service survives app/window exit. The lease makes simultaneous launches
+harmless, which is also why the app's unit has no `KeepAlive`: a losing
+second service exits at once, and launchd would otherwise respawn it every
+`ThrottleInterval`. The unit label is distinct from `unpeel serve install`'s
+`com.unpeel.serve`, so the two never rewrite each other's file.
+
+Why launchd (2026-09-06): every process carries its parent's coalition from
+fork, and `setsid` does not leave it. Force Quit terminates the app's whole
+jetsam coalition, so a service forked by the app died with the app — and so
+did every worker, session host, and PTY core forked under it since that app
+instance had started the service (the only terminal created in that window
+was killed 44 ms after the Force Quit; terminals from earlier app instances
+survived because they belonged to coalitions that no longer had an app).
+A launchd job is launchd's child with its own coalition. Verify with
+`proc_pidinfo(PROC_PIDCOALITIONINFO)`: the service and a fresh session host
+must not share the app's jetsam coalition. Launch rules are load-bearing:
 
 - the default app instance and a registry-backed workspace instance remove
-  `UNPEEL_HOME`, so every app instance addresses the same machine service;
+  `UNPEEL_HOME`, so every app instance addresses the same machine service,
+  and both use the launchd unit; if launchd refuses (a disabled login item,
+  a missing `gui/<uid>` domain) the app forks the service as before and
+  writes `launchd refused` to the trace, so terminals still come up, only
+  without Force Quit protection; `UNPEEL_NATIVE_SERVICE_LAUNCHER=direct`
+  forces the fork for diagnostics;
 - an unregistered dev/blank home preserves `UNPEEL_HOME` and gets one scoped
-  worker, keeping test state out of the real registry;
+  worker forked by the app, keeping test state out of the real registry and
+  never registering a login item for a throwaway home;
 - `UNPEEL_TEST_*` and `UNPEEL_SNAPSHOT*` launches never start a persistent
   service;
 - stdout/stderr are null for app launches, so durable trace logging below is

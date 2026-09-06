@@ -6,6 +6,12 @@
 //  service intentionally outlives the window/app process: hosted Sessions
 //  and Controller reachability are Host concerns, not renderer concerns.
 //
+//  The machine service is started through launchd (`HostServiceAgent`), never
+//  forked by the app: a forked service shares the app's coalition and Force
+//  Quit takes the whole coalition down, terminals included. Forking remains
+//  only for private unregistered homes (dev-blank, tests) and as the fallback
+//  when launchd refuses.
+//
 
 import CUnpeelNativeBridge
 import Foundation
@@ -86,13 +92,64 @@ final class HostServiceManager: ObservableObject {
         // machine service. It discovers the shared workspace registry and
         // supervises one isolated worker per home. An unregistered home is a
         // dev-blank/test-style private instance, so preserve its UNPEEL_HOME
-        // and start only that one scoped worker.
+        // and start only that one scoped worker (forked: a private instance
+        // must never register a login item).
         if UnpeelWorkspaceContext.isDefaultInstance
             || UnpeelWorkspaceContext.currentWorkspace() != nil
         {
             environment.removeValue(forKey: "UNPEEL_HOME")
+            if !HostServiceAgent.usesDirectLaunch(environment: environment) {
+                startThroughLaunchd(binary: binary, fallbackEnvironment: environment)
+                return
+            }
+            NSLog("[UnpeelNative] Host service: %@=direct, forking the service", HostServiceAgent.launcherOverrideEnvVar)
         }
 
+        Self.spawnDirectly(binary: binary, environment: environment)
+    }
+
+    /// Serializes the launchctl round trips so a Retry during a slow first
+    /// bootstrap cannot interleave bootout/bootstrap with the launch call.
+    private static let launchdQueue = DispatchQueue(
+        label: "com.unpeel.native.host-service-agent",
+        qos: .userInitiated
+    )
+
+    /// Install/refresh the app's LaunchAgent and kickstart it, off the main
+    /// thread. Nothing waits on the result: the launch probe polls host.sock
+    /// regardless. If launchd refuses, fork the service as before so the app
+    /// still comes up, and say so in the trace.
+    private func startThroughLaunchd(binary: String, fallbackEnvironment: [String: String]) {
+        let label = HostServiceAgent.currentLabel
+        let agentsDirectory = HostServiceAgent.launchAgentsDirectory()
+        let uid = getuid()
+        Self.launchdQueue.async {
+            let outcome = HostServiceAgent.ensureRunning(
+                label: label,
+                hostBinary: binary,
+                agentsDirectory: agentsDirectory,
+                uid: uid,
+                launchctl: HostServiceAgent.runLaunchctl
+            )
+            switch outcome {
+            case .running(let label, let rewrote):
+                let line = "Host service launch requested through launchd (\(label)\(rewrote ? ", unit written" : ""))"
+                NSLog("[UnpeelNative] %@", line)
+                LaunchTrace.append("native-app \(line)")
+            case .failed(let reason):
+                let line = "Host service: launchd refused (\(reason)); forking the service instead"
+                NSLog("[UnpeelNative] %@", line)
+                LaunchTrace.append("native-app \(line)")
+                Self.spawnDirectly(binary: binary, environment: fallbackEnvironment)
+            }
+        }
+    }
+
+    /// The pre-launchd launcher: fork `unpeel-host __serve__` detached from
+    /// this process. The child shares this app's coalition, so it (and every
+    /// terminal it hosts) dies on Force Quit — private instances and the
+    /// launchd fallback only.
+    private nonisolated static func spawnDirectly(binary: String, environment: [String: String]) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binary)
         process.arguments = ["__serve__"]
