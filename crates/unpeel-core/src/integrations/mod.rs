@@ -4,6 +4,9 @@ pub mod shared;
 
 use crate::session_host::SessionHostLaunch;
 
+/// Absolute path of the `unpeel-host` that hosts a session, exported to every
+/// hosted child so Apps and scripts talk to the Host they run under.
+pub const HOST_BIN_ENV: &str = "UNPEEL_HOST_BIN";
 const APP_ACCENT_ENV: &str = "UNPEEL_APP_ACCENT";
 
 type ConfigureHostCommand =
@@ -266,6 +269,19 @@ pub fn configure_host_command(
         shared::shell_quote(&registry_value),
         shared::shell_quote(&trace_value),
     ));
+
+    // Every hosted child must reach THIS Host's own binary — never whatever
+    // `unpeel-host` happens to sit on the user's PATH (a stale CLI install
+    // there answers with an older protocol). Unpeel Apps use it to spawn the
+    // unified MCP server for peer discovery and agent handoff.
+    if let Ok(host_bin) = crate::session_host::resolve_current_executable() {
+        let host_bin = host_bin.to_string_lossy().to_string();
+        cmd.env(HOST_BIN_ENV, &host_bin);
+        shell_prelude.push(format!(
+            "export {HOST_BIN_ENV}={}",
+            shared::shell_quote(&host_bin),
+        ));
+    }
 
     // Frontends resolve the most local applicable color before launch:
     // project folder first, then workspace. Keep this an explicit hosted
@@ -703,6 +719,8 @@ mod tests {
         );
         assert_eq!(cmd.get_env("UNPEEL_APP_PORT"), None);
         assert_eq!(cmd.get_env(APP_ACCENT_ENV), None);
+        let host_bin = crate::session_host::resolve_current_executable().expect("current exe");
+        assert_eq!(cmd.get_env(HOST_BIN_ENV), Some(host_bin.as_os_str()));
 
         let exports = prelude.join("\n");
         assert!(exports.contains("UNPEEL_SESSION_ID='headless-session'"));
@@ -711,6 +729,10 @@ mod tests {
         assert!(exports.contains("UNPEEL_HOOK_TRACE_FILE="));
         assert!(exports.contains("unset UNPEEL_APP_PORT"));
         assert!(exports.contains("unset UNPEEL_APP_ACCENT"));
+        assert!(exports.contains(&format!(
+            "export UNPEEL_HOST_BIN={}",
+            shared::shell_quote(&host_bin.to_string_lossy())
+        )));
     }
 
     #[test]
