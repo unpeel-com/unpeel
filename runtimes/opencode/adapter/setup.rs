@@ -1,5 +1,7 @@
 use crate::app_paths::unpeel_home;
-use crate::hook_assets::{notify_hook_script_path, write_executable_script, NOTIFY_HOOK_SCRIPT};
+use crate::hook_assets::{
+    notify_hook_script_path, write_executable_script, write_file_atomic, NOTIFY_HOOK_SCRIPT,
+};
 use std::fs;
 use std::path::PathBuf;
 
@@ -21,8 +23,7 @@ pub fn install_opencode_plugin() -> Result<(), String> {
     })?;
     let plugin =
         OPENCODE_PLUGIN_SCRIPT.replace("{{NOTIFY_PATH}}", notify_path.to_string_lossy().as_ref());
-    fs::write(opencode_plugin_path(), plugin)
-        .map_err(|e| format!("Failed to write OpenCode plugin: {e}"))?;
+    write_file_atomic(&opencode_plugin_path(), &plugin, "OpenCode plugin")?;
     Ok(())
 }
 pub fn opencode_config_dir() -> PathBuf {

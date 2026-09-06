@@ -12,16 +12,27 @@ EVENT_TYPE=$(printf '%s' "$INPUT" | grep -oE '"hook_event_name"[[:space:]]*:[[:s
 if [ -z "$EVENT_TYPE" ]; then
   CODEX_TYPE=$(printf '%s' "$INPUT" | grep -oE '"type"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
   case "$CODEX_TYPE" in
-    agent-turn-complete|task_complete|turn_aborted)
+    agent-turn-complete|task_complete)
       EVENT_TYPE="Stop"
       ;;
-    task_started|exec_command_begin)
+    turn_aborted)
+      EVENT_TYPE="StopCancelled"
+      ;;
+    task_started)
       EVENT_TYPE="Start"
+      ;;
+    exec_command_begin)
+      EVENT_TYPE="HookSeen"
       ;;
     request_permissions|exec_approval_request|apply_patch_approval_request|approval-requested)
       EVENT_TYPE="PermissionRequest"
       ;;
   esac
+fi
+
+if [ "$EVENT_TYPE" = "Interrupt" ]; then
+  EVENT_TYPE="StopCancelled"
+  INPUT=$(printf '%s' "$INPUT" | sed 's/"hook_event_name"[[:space:]]*:[[:space:]]*"Interrupt"/"hook_event_name":"StopCancelled"/')
 fi
 
 [ -n "$EVENT_TYPE" ] || exit 0

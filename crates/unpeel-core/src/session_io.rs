@@ -610,12 +610,22 @@ impl SessionIo {
             let mut blocked = false;
             while !self.pending_input.is_empty() {
                 let (head, _) = self.pending_input.as_slices();
+                let menu_active = head.contains(&0x1b)
+                    && viewport_has_menu_prompt(
+                        &shared.viewport.lock().unwrap().current_screen_text(),
+                    );
                 match guard.writer.try_write(head) {
                     Ok(0) => {
                         blocked = true;
                         break;
                     }
                     Ok(n) => {
+                        guard.hook_input.feed(
+                            &head[..n],
+                            shared.runtime_generation.load(Ordering::Acquire),
+                            current_timestamp_ms(),
+                            menu_active,
+                        );
                         self.pending_input.drain(..n);
                         wrote_any = true;
                     }
@@ -1322,10 +1332,28 @@ pub(crate) fn dispatch_client_command(
                         if write_id.is_some_and(|id| guard.recent_write_ids.contains(id)) {
                             false
                         } else {
-                            guard
-                                .writer
-                                .write_all(data.as_bytes())
-                                .map_err(|e| format!("Write error: {e}"))?;
+                            let mut remaining = data.as_bytes();
+                            let menu_active = remaining.contains(&0x1b)
+                                && viewport_has_menu_prompt(
+                                    &shared.viewport.lock().unwrap().current_screen_text(),
+                                );
+                            while !remaining.is_empty() {
+                                let written = match guard.writer.write(remaining) {
+                                    Ok(0) => return Err("PTY input write returned zero".into()),
+                                    Ok(written) => written,
+                                    Err(error) if error.kind() == ErrorKind::Interrupted => {
+                                        continue
+                                    }
+                                    Err(error) => return Err(format!("Write error: {error}")),
+                                };
+                                guard.hook_input.feed(
+                                    &remaining[..written],
+                                    shared.runtime_generation.load(Ordering::Acquire),
+                                    current_timestamp_ms(),
+                                    menu_active,
+                                );
+                                remaining = &remaining[written..];
+                            }
                             if let Some(write_id) = write_id {
                                 guard.recent_write_ids.record_applied(write_id);
                             }
@@ -1555,6 +1583,8 @@ pub(crate) struct SessionHandoff {
     pub snapshot_rows: u16,
     pub snapshot_len: u64,
     pub pending_pty_input: Vec<u8>,
+    #[serde(default)]
+    pub hook_input: crate::hook_cancellation::InputTracker,
     pub session_socket_path: String,
     pub clients: Vec<ClientHandoff>,
 }
@@ -1680,6 +1710,7 @@ impl SessionIo {
             snapshot_rows: snapshot.rows,
             snapshot_len: snapshot.bytes.len() as u64,
             pending_pty_input: self.pending_input.iter().copied().collect(),
+            hook_input: self.shared.runtime.lock().unwrap().hook_input.clone(),
             session_socket_path: self
                 .exit
                 .as_ref()
@@ -1956,6 +1987,7 @@ pub(crate) fn rebuild_from_handoff(
         shell_executable: PathBuf::from(&meta.shell),
         last_runtime_observation: None,
         recent_write_ids: RecentWriteIds::default(),
+        hook_input: meta.hook_input.clone(),
     }));
 
     let mut viewport_state = TerminalViewportState::new(meta.snapshot_cols, meta.snapshot_rows);
@@ -2001,7 +2033,13 @@ pub(crate) fn rebuild_from_handoff(
         title_done: Arc::new(AtomicBool::new(meta.title_done)),
         has_been_written_to: Arc::new(AtomicBool::new(meta.has_been_written_to)),
         agent_restart_lock: Arc::new(Mutex::new(())),
-        runtime_generation: Arc::new(AtomicU64::new(meta.runtime_launch_generation)),
+        // Older cores handed over an observation-change counter here. The
+        // durable launch generation is authoritative across that upgrade.
+        runtime_generation: Arc::new(AtomicU64::new(
+            load_manifest(&meta.id)
+                .map(|manifest| manifest.runtime_launch_generation)
+                .unwrap_or(meta.runtime_launch_generation),
+        )),
         pending_runtime_generation: Arc::new(AtomicU64::new(meta.pending_runtime_generation)),
         reactor: services.reactor.clone(),
         slot: AtomicUsize::new(usize::MAX),

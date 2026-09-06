@@ -1,5 +1,5 @@
 use crate::app_paths::unpeel_home;
-use crate::hook_assets::write_executable_script;
+use crate::hook_assets::{write_executable_script, write_file_atomic};
 use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -78,13 +78,9 @@ pub(crate) fn ensure_grok_hooks(script_path: &Path) -> Result<(), String> {
             .map_err(|e| format!("Failed to create Grok hooks dir {}: {e}", parent.display()))?;
     }
 
+    let _lock = crate::app_state::lock_exclusive(&hooks_path)?;
     let json = grok_hooks_json(script_path)?;
-    fs::write(&hooks_path, format!("{json}\n")).map_err(|e| {
-        format!(
-            "Failed to write Grok hooks file {}: {e}",
-            hooks_path.display()
-        )
-    })?;
+    write_file_atomic(&hooks_path, &format!("{json}\n"), "Grok hooks")?;
 
     Ok(())
 }
@@ -112,7 +108,13 @@ pub(crate) fn grok_hooks_json(script_path: &Path) -> Result<String, String> {
                 { "hooks": [ { "type": "command", "command": format!("{command} Stop") } ] }
             ],
             "StopFailure": [
-                { "hooks": [ { "type": "command", "command": format!("{command} Stop") } ] }
+                { "hooks": [ { "type": "command", "command": format!("{command} StopFailure") } ] }
+            ],
+            // Grok deliberately skips Stop on ESC, Ctrl+C, and client stops.
+            // Its native cancellation event also avoids mistaking an ESC
+            // that dismisses a menu or edits the composer for an interrupt.
+            "StopCancelled": [
+                { "hooks": [ { "type": "command", "command": format!("{command} StopCancelled") } ] }
             ],
             "SessionEnd": [
                 { "hooks": [ { "type": "command", "command": format!("{command} Stop") } ] }

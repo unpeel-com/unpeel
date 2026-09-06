@@ -40,7 +40,9 @@ export default function registerUnpeelAmpPlugin(amp) {
   });
 
   amp.on("agent.end", async (event) => {
-    await notify("Stop", {
+    const outcome = event?.status === "cancelled" ? "StopCancelled"
+      : event?.status === "error" ? "StopFailure" : "Stop";
+    await notify(outcome, {
       session_id: threadIDFrom(event),
     });
   });

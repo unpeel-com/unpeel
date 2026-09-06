@@ -772,6 +772,7 @@ pub(crate) struct HostRuntime {
     /// until a complete session scan proves the old job is gone.
     last_runtime_observation: Option<ActiveRuntimeObservation>,
     recent_write_ids: RecentWriteIds,
+    hook_input: crate::hook_cancellation::InputTracker,
 }
 
 #[cfg(unix)]
@@ -1388,7 +1389,7 @@ fn resume_agent_in_place(
     // reset it after a failed commit: the PTY submission is already
     // irreversible, and a fresh observation is safer than retaining the old
     // process identity in memory.
-    runtime_generation.fetch_add(1, Ordering::AcqRel);
+    runtime_generation.store(next_generation, Ordering::Release);
     // Once the relaunch bytes were accepted, old-generation markers must
     // never be restored, even if the subsequent manifest commit failed. Drop
     // the staged tombstones on every post-submit path so a rare I/O failure
@@ -5285,6 +5286,56 @@ pub(crate) fn build_session_timer_jobs(inputs: SessionJobInputs) -> Vec<HostTime
         },
     );
 
+    let cancellation_session_id = session_id.clone();
+    let cancellation_runtime = Arc::clone(&runtime);
+    let cancellation_viewport = Arc::clone(&viewport);
+    let escape_cancels_turn = integrations::integration_for_command(&command)
+        .is_some_and(|integration| integration.escape_cancels_turn);
+    let cancellation_job = HostTimerJob::new(
+        Duration::from_millis(100),
+        Duration::from_millis(100),
+        move || {
+            let pending = {
+                let Ok(mut runtime) = cancellation_runtime.try_lock() else {
+                    return true;
+                };
+                runtime.hook_input.take_pending(current_timestamp_ms())
+            };
+            let (generation, mut cancelled_at, submitted_at) = pending;
+            if !escape_cancels_turn || (cancelled_at.is_none() && submitted_at.is_none()) {
+                return true;
+            }
+            let Some(manifest) = load_manifest(&cancellation_session_id) else {
+                return false;
+            };
+            if manifest.runtime_launch_generation != generation
+                || manifest.state != HostedSessionState::Running
+            {
+                return true;
+            }
+            // Escape dismissing a parsed menu has no turn-cancellation
+            // authority. Read the current viewport, not a stale scan flag.
+            if cancelled_at.is_some()
+                && viewport_has_menu_prompt(
+                    &cancellation_viewport.lock().unwrap().current_screen_text(),
+                )
+            {
+                cancelled_at = None;
+            }
+            match crate::hook_cancellation::record_in(
+                &session_dir(&cancellation_session_id),
+                generation,
+                cancelled_at,
+                submitted_at,
+            ) {
+                Ok(true) => crate::state_bus::announce(crate::state_bus::Change::Lifecycle, None),
+                Ok(false) => {}
+                Err(error) => log::warn!("Failed to record hook cancellation: {error}"),
+            }
+            true
+        },
+    );
+
     // Live runtime observation is PTY-owned and display-only. In
     // particular, a blank shell that later runs `claude` gains Claude's
     // sidebar identity without changing the saved blank launch command or
@@ -5607,6 +5658,9 @@ pub(crate) fn build_session_timer_jobs(inputs: SessionJobInputs) -> Vec<HostTime
         )
     };
     let mut jobs: Vec<HostTimerJob> = vec![heartbeat_job, menu_job];
+    if escape_cancels_turn {
+        jobs.push(cancellation_job);
+    }
     jobs.extend(runtime_observer_job);
     jobs
 }
@@ -6021,13 +6075,14 @@ pub(crate) fn start_host(
             shell_executable: PathBuf::from(&shell),
             last_runtime_observation: None,
             recent_write_ids: RecentWriteIds::default(),
+            hook_input: crate::hook_cancellation::InputTracker::default(),
         }));
         // Raw local socket clients can bypass the lifecycle-file lock used by
         // `session_ops`; serialize in-place relaunches here as the final
         // authority. Ordinary PTY writes take this lock too, preventing input
         // from being interleaved between stop, shell recovery, and relaunch.
         let agent_restart_lock = Arc::new(Mutex::new(()));
-        let runtime_generation = Arc::new(AtomicU64::new(0));
+        let runtime_generation = Arc::new(AtomicU64::new(u64::from(launches_stable_runtime)));
         let pending_runtime_generation =
             Arc::new(AtomicU64::new(if launches_resume_agent_runtime {
                 1

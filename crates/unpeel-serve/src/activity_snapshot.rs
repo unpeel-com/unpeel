@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::Serialize;
 
-use crate::activity::{ActivityEngine, HookState};
+use crate::activity::ActivityEngine;
 use crate::sessions::{SessionRow, SidebarModel, Status};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -124,7 +124,7 @@ fn signature(
                 activity_status,
                 raw_status,
                 unread,
-                completed: engine.hook_owned_state(&row.id) == Some(HookState::Idle),
+                completed: engine.is_completed(&row.id),
             }
         })
         .collect::<Vec<_>>();

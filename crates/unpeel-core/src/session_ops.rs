@@ -239,7 +239,14 @@ fn has_real_provider_lifecycle(session_id: &str) -> bool {
         });
     matches!(
         event.as_deref(),
-        Some("Start" | "UserPromptSubmit" | "Stop" | "StopFailure" | "PermissionRequest")
+        Some(
+            "Start"
+                | "UserPromptSubmit"
+                | "Stop"
+                | "StopFailure"
+                | "StopCancelled"
+                | "PermissionRequest"
+        )
     )
 }
 

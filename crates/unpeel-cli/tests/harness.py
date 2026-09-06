@@ -1,9 +1,9 @@
 """Shared scaffolding for the CLI + `unpeel serve` end-to-end tests.
 
-Every case runs the real `unpeel` binary inside a real PTY against a private
-`UNPEEL_HOME` built from scratch, so cases can neither see nor corrupt each
-other's fixtures — the failure mode that made the original throwaway suites
-produce phantom passes.
+Every case runs the real `unpeel` binary inside a real PTY against private
+`HOME`, `UNPEEL_HOME`, and provider config roots. Isolating only Unpeel state
+is insufficient: launching a provider also installs hooks in its settings.
+Those settings must never belong to the person running the suite.
 
 Three things here are load-bearing and easy to get wrong:
 
@@ -1448,6 +1448,38 @@ class Case:
             )
         shutil.rmtree(root, ignore_errors=True)
         self.home = Home(root)
+        # Each case has its own process. Set the environment before its body
+        # can launch anything, including custom Popen paths outside Serve/Pty.
+        # The Host conformance fixture installs real Claude hooks; inheriting
+        # the operator's HOME would register deleted /tmp scripts globally.
+        # Rust conformance cases still need the installed toolchain. Keep its
+        # explicit roots before isolating HOME, without exposing provider data.
+        original_home = os.path.expanduser("~")
+        os.environ.setdefault("RUSTUP_HOME", os.path.join(original_home, ".rustup"))
+        os.environ.setdefault("CARGO_HOME", os.path.join(original_home, ".cargo"))
+        os.environ.update({
+            "HOME": root,
+            "UNPEEL_HOME": root,
+            "XDG_CONFIG_HOME": self.home.path(".config"),
+            "XDG_DATA_HOME": self.home.path(".local", "share"),
+            "XDG_STATE_HOME": self.home.path(".local", "state"),
+            "XDG_CACHE_HOME": self.home.path(".cache"),
+            "CLAUDE_CONFIG_DIR": self.home.path(".claude"),
+            "GROK_HOME": self.home.path(".grok"),
+            "CODEX_HOME": self.home.path(".codex"),
+            "KIRO_HOME": self.home.path(".kiro"),
+            "KIMI_CODE_HOME": self.home.path(".kimi-code"),
+            "KIMI_SHARE_DIR": self.home.path(".kimi-legacy"),
+            "CLINE_DIR": self.home.path(".cline"),
+            "CLINE_DATA_DIR": self.home.path(".cline", "data"),
+            "CLINE_SESSION_DATA_DIR": self.home.path(".cline", "data", "sessions"),
+        })
+        for key in (
+            "UNPEEL_SESSION_ID", "UNPEEL_SESSION_DIR", "UNPEEL_APP_PORT",
+            "UNPEEL_APP_PORT_REGISTRY_FILE", "UNPEEL_RUNTIME_GENERATION",
+            "UNPEEL_HOOK_TRACE_FILE",
+        ):
+            os.environ.pop(key, None)
         self._closables = []
 
     def check(self, name, passed, detail=""):
@@ -1486,10 +1518,8 @@ class Case:
                 except Exception:
                     pass
         self.home.cleanup()
-        # mDNS advertisers are spawned children, not tracked objects.
-        subprocess.run(
-            ["pkill", "-f", "dns-sd -R"], capture_output=True, check=False
-        )
+        # Each Host owns and reaps its advertiser. A global dns-sd pkill would
+        # stop advertisements from the operator's other running applications.
         # After the case's own tracked cleanup, no host/sidecar/core may still
         # be bound to this home. A stray one is a leak: fail the case, then
         # kill it so it cannot poison the next case's home.

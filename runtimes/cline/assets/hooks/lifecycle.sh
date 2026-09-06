@@ -2,8 +2,10 @@
 umask 077
 SOURCE_EVENT="$1"
 INPUT="${2:-$(cat)}"
-TRACE_FILE="${UNPEEL_HOOK_TRACE_FILE:-$HOME/.unpeel/hooks/trace.log}"
-UNPEEL_PORT_REGISTRY_FILE="${UNPEEL_APP_PORT_REGISTRY_FILE:-$HOME/.unpeel/app-ports}"
+# Global provider hooks must be inert outside a hosted Unpeel Session.
+[ -n "${UNPEEL_SESSION_ID:-}" ] || exit 0
+TRACE_FILE="${UNPEEL_HOOK_TRACE_FILE:-${UNPEEL_HOME:-$HOME/.unpeel}/hooks/trace.log}"
+UNPEEL_PORT_REGISTRY_FILE="${UNPEEL_APP_PORT_REGISTRY_FILE:-${UNPEEL_HOME:-$HOME/.unpeel}/app-ports}"
 mkdir -p "$(dirname "$TRACE_FILE")" >/dev/null 2>&1 || true
 
 json_escape_string() {
@@ -26,7 +28,7 @@ record_last_hook_event() {
   _record_event_name="$1"
   _record_tool_name="$2"
   [ -n "${UNPEEL_SESSION_ID:-}" ] || return 0
-  _record_dir="${UNPEEL_SESSION_DIR:-$HOME/.unpeel/app-sessions/$UNPEEL_SESSION_ID}"
+  _record_dir="${UNPEEL_SESSION_DIR:-${UNPEEL_HOME:-$HOME/.unpeel}/app-sessions/$UNPEEL_SESSION_ID}"
   [ -d "$_record_dir" ] || return 0
   _record_payload=$(printf '{"hook_event_name":"%s"' "$(json_escape_string "$_record_event_name")")
   if [ -n "$_record_tool_name" ]; then
@@ -43,28 +45,52 @@ record_last_hook_event() {
 
 current_unpeel_ports() {
   [ -f "$UNPEEL_PORT_REGISTRY_FILE" ] || return 1
-  tr -cs '0-9' '\n' < "$UNPEEL_PORT_REGISTRY_FILE" 2>/dev/null \
-    | awk 'NF && !seen[$0]++ { print }'
+  awk '/^[[:space:]]*[0-9]+[[:space:]]*$/ && $1 > 0 && $1 <= 65535 && !seen[$1 + 0]++ { print $1 + 0 }' \
+    "$UNPEEL_PORT_REGISTRY_FILE" 2>/dev/null
 }
 
+# POST one hook payload synchronously and record the outcome in
+# _hook_post_results ("<port>=<http-code>,..."). Loopback posts finish in
+# milliseconds; the tight timeouts bound the worst case when a registry port
+# is stale so a hook never burns its whole timeout budget on delivery.
 post_hook_payload() {
   _hook_payload="$1"
   _hook_session_id="$2"
   _hook_port="$3"
   [ -n "$_hook_port" ] || return 1
-  printf '%s' "$_hook_payload" | curl -sS --max-time 2 -X POST -H "Content-Type: application/json" \
-    -d @- "http://127.0.0.1:$_hook_port/hook/$_hook_session_id" >/dev/null 2>&1
+  _hook_http_code=$(printf '%s' "$_hook_payload" | curl -s -o /dev/null -w '%{http_code}' \
+    --noproxy '*' --connect-timeout 0.2 --max-time 1 -X POST -H "Content-Type: application/json" \
+    -d @- "http://127.0.0.1:$_hook_port/hook/$_hook_session_id" 2>/dev/null) \
+    || _hook_http_code="curl-fail"
+  [ -n "$_hook_http_code" ] || _hook_http_code="curl-fail"
+  if [ -z "${_hook_post_results:-}" ]; then
+    _hook_post_results="$_hook_port=$_hook_http_code"
+  else
+    _hook_post_results="$_hook_post_results,$_hook_port=$_hook_http_code"
+  fi
+  printf 'hook-post session=%s port=%s status=%s\n' \
+    "$_hook_session_id" "$_hook_port" "$_hook_http_code" >> "$TRACE_FILE" 2>/dev/null || true
+  case "$_hook_http_code" in
+    2*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 post_hook_payload_to_current_ports() {
   _hook_payload="$1"
   _hook_session_id="$2"
   _hook_skip_port="$3"
+  _hook_post_pids=""
   for _hook_candidate_port in $(current_unpeel_ports); do
     [ -n "$_hook_candidate_port" ] || continue
     [ "$_hook_candidate_port" = "$_hook_skip_port" ] && continue
-    post_hook_payload "$_hook_payload" "$_hook_session_id" "$_hook_candidate_port" || true
+    ( post_hook_payload "$_hook_payload" "$_hook_session_id" "$_hook_candidate_port" || true ) &
+    _hook_post_pids="$_hook_post_pids $!"
   done
+  for _hook_post_pid in $_hook_post_pids; do
+    wait "$_hook_post_pid" || true
+  done
+  return 0
 }
 
 case "$SOURCE_EVENT" in
@@ -74,8 +100,9 @@ case "$SOURCE_EVENT" in
   # available.
   TaskStart|TaskResume) EVENT_TYPE="UserPromptSubmit" ;;
   UserPromptSubmit) EVENT_TYPE="UserPromptSubmit" ;;
-  PreToolUse|PostToolUse) EVENT_TYPE="Start" ;;
-  TaskComplete|TaskCancel|SessionShutdown) EVENT_TYPE="Stop" ;;
+  PreToolUse|PostToolUse) EVENT_TYPE="HookSeen" ;;
+  TaskComplete|SessionShutdown) EVENT_TYPE="Stop" ;;
+  TaskCancel) EVENT_TYPE="StopCancelled" ;;
   TaskError) EVENT_TYPE="StopFailure" ;;
   *) exit 0 ;;
 esac
@@ -112,24 +139,35 @@ PAYLOAD="$PAYLOAD$(runtime_generation_json_field)"
 PAYLOAD="$PAYLOAD}"
 
 case "$EVENT_TYPE" in
-  UserPromptSubmit|Start|Stop|StopFailure)
+  UserPromptSubmit|Start|Stop|StopFailure|StopCancelled)
     record_last_hook_event "$EVENT_TYPE" "$TOOL_NAME"
     ;;
 esac
 
 # Cline's hook files are global. Outside an Unpeel-hosted terminal they must be
 # silent no-ops so ordinary Cline sessions keep their native behavior.
+_hook_post_results=""
 if [ -n "${UNPEEL_SESSION_ID:-}" ]; then
-  (
+  # Posts go out synchronously and in order: backgrounded fire-and-forget
+  # posts could be reaped when the hook process exited (silently losing the
+  # event), and concurrent posts could arrive out of order. Set
+  # UNPEEL_HOOK_POST_SYNC=0 to restore backgrounded posts.
+  if [ "${UNPEEL_HOOK_POST_SYNC:-1}" = "1" ]; then
     post_hook_payload "$PAYLOAD" "$UNPEEL_SESSION_ID" "${UNPEEL_APP_PORT:-}" || true
-    post_hook_payload_to_current_ports "$PAYLOAD" "$UNPEEL_SESSION_ID" "${UNPEEL_APP_PORT:-}"
-  ) &
-  printf '%s cline-hook session=%s port=%s event=%s provider_session=%s\n' \
+    post_hook_payload_to_current_ports "$PAYLOAD" "$UNPEEL_SESSION_ID" "${UNPEEL_APP_PORT:-}" || true
+  else
+    (
+      post_hook_payload "$PAYLOAD" "$UNPEEL_SESSION_ID" "${UNPEEL_APP_PORT:-}" || true
+      post_hook_payload_to_current_ports "$PAYLOAD" "$UNPEEL_SESSION_ID" "${UNPEEL_APP_PORT:-}" || true
+    ) &
+  fi
+  printf '%s cline-hook session=%s port=%s event=%s provider_session=%s post=%s\n' \
     "$(date '+%Y-%m-%d %H:%M:%S')" \
     "$UNPEEL_SESSION_ID" \
     "${UNPEEL_APP_PORT:-}" \
     "$EVENT_TYPE" \
-    "$PROVIDER_SESSION_ID" >> "$TRACE_FILE" 2>/dev/null || true
+    "$PROVIDER_SESSION_ID" \
+    "${_hook_post_results:-none}" >> "$TRACE_FILE" 2>/dev/null || true
 fi
 
 exit 0

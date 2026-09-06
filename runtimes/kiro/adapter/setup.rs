@@ -130,6 +130,7 @@ pub(crate) fn write_kiro_mcp_config() -> Result<(), String> {
         fs::create_dir_all(parent)
             .map_err(|error| format!("Failed to create Kiro MCP dir: {error}"))?;
     }
+    let _settings_lock = crate::app_state::lock_exclusive(&path)?;
     let Some(mut config) = read_mergeable_json_object(&path, "Kiro mcp.json")? else {
         return Ok(());
     };

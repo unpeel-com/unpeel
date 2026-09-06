@@ -37,6 +37,10 @@ pub struct BuiltinPresetDefinition {
 
 #[derive(Clone, Copy)]
 pub struct Integration {
+    /// Escape interrupts the foreground turn in this runtime. Opt in only
+    /// from a documented provider contract; generic terminal input has no
+    /// lifecycle authority.
+    pub escape_cancels_turn: bool,
     pub install_runtime_support: Option<fn() -> Result<(), String>>,
     pub configure_host_command: Option<ConfigureHostCommand>,
     pub prepare_startup_command: Option<PrepareStartupCommand>,
@@ -53,6 +57,7 @@ impl Integration {
         configure_host_command: Option<ConfigureHostCommand>,
     ) -> Self {
         Self {
+            escape_cancels_turn: false,
             install_runtime_support,
             configure_host_command,
             prepare_startup_command: None,
@@ -62,6 +67,11 @@ impl Integration {
             legacy_mcp_gate_kind: None,
             legacy_mcp_gate_granted: None,
         }
+    }
+
+    pub const fn with_escape_cancellation(mut self) -> Self {
+        self.escape_cancels_turn = true;
+        self
     }
 
     pub const fn with_startup_command(

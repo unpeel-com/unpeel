@@ -59,18 +59,55 @@ pub(crate) fn read_mergeable_json_object(
     }
 }
 
-/// Write `contents` to `path` atomically: write a per-process temp file in the
+/// Write `contents` to `path` atomically: write a unique temp file in the
 /// same directory, then rename over the target. Prevents a concurrent reader
 /// (or a concurrent Unpeel host spawning another session) from observing a torn
 /// half-written settings file.
 pub(crate) fn write_file_atomic(path: &Path, contents: &str, label: &str) -> Result<(), String> {
+    write_file_atomic_with_mode(path, contents, label, 0o600)
+}
+
+fn write_file_atomic_with_mode(
+    path: &Path,
+    contents: &str,
+    label: &str,
+    mode: u32,
+) -> Result<(), String> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
     let file_name = path
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("unpeel-settings");
-    let tmp = path.with_file_name(format!(".{file_name}.unpeel-tmp.{}", std::process::id()));
-    fs::write(&tmp, contents).map_err(|e| format!("Failed to write {label}: {e}"))?;
-    if let Err(e) = fs::rename(&tmp, path) {
+    let (tmp, mut file) = loop {
+        let tmp = path.with_file_name(format!(
+            ".{file_name}.unpeel-tmp.{}.{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(mode);
+        }
+        match options.open(&tmp) {
+            Ok(file) => break (tmp, file),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(format!("Failed to write {label}: {error}")),
+        }
+    };
+    let result = (|| -> std::io::Result<()> {
+        file.write_all(contents.as_bytes())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(fs::Permissions::from_mode(mode))?;
+        }
+        fs::rename(&tmp, path)
+    })();
+    if let Err(e) = result {
         let _ = fs::remove_file(&tmp);
         return Err(format!("Failed to write {label}: {e}"));
     }
@@ -410,19 +447,84 @@ pub(crate) fn write_executable_script(
         fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create {} dir {}: {e}", label, parent.display()))?;
     }
-    fs::write(path, contents).map_err(|e| format!("Failed to write {label}: {e}"))?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(path)
-            .map_err(|e| format!("Failed to stat {label}: {e}"))?
-            .permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(path, perms).map_err(|e| format!("Failed to chmod {label}: {e}"))?;
+    let _lock = crate::app_state::lock_exclusive(path)?;
+    if fs::read(path).is_ok_and(|current| current == contents.as_bytes()) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(path)
+                .map_err(|error| error.to_string())?
+                .permissions()
+                .mode();
+            if mode & 0o777 != 0o755 {
+                fs::set_permissions(path, fs::Permissions::from_mode(0o755))
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+        return Ok(());
     }
 
+    // A running shell can still be reading this inode. Never truncate it:
+    // publish a complete replacement with its executable mode already set.
+    write_file_atomic_with_mode(path, contents, label, 0o755)?;
+
     Ok(())
+}
+
+#[cfg(test)]
+mod atomic_install_tests {
+    use super::*;
+    use std::io::Read;
+
+    #[test]
+    fn reinstall_preserves_an_open_script_and_unchanged_installs_keep_inode() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hook.sh");
+        write_executable_script(&path, "#!/bin/sh\nprintf old", "test hook").unwrap();
+        let mut running_script = fs::File::open(&path).unwrap();
+        write_executable_script(&path, "#!/bin/sh\nprintf new", "test hook").unwrap();
+        let mut previous = String::new();
+        running_script.read_to_string(&mut previous).unwrap();
+        assert_eq!(previous, "#!/bin/sh\nprintf old");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "#!/bin/sh\nprintf new");
+        let before = fs::metadata(&path).unwrap();
+        write_executable_script(&path, "#!/bin/sh\nprintf new", "test hook").unwrap();
+        let after = fs::metadata(path).unwrap();
+        assert_eq!(before.ino(), after.ino());
+        assert_eq!(after.mode() & 0o777, 0o755);
+    }
+
+    #[test]
+    fn concurrent_atomic_writers_in_one_process_never_share_a_temp_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let workers = (0..8)
+            .map(|index| {
+                let path = path.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    let contents = index.to_string().repeat(8192);
+                    barrier.wait();
+                    for _ in 0..10 {
+                        write_file_atomic(&path, &contents, "test settings").unwrap();
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        let result = fs::read(&path).unwrap();
+        assert_eq!(result.len(), 8192);
+        assert!(result.iter().all(|byte| *byte == result[0]));
+        assert_eq!(
+            fs::read_dir(dir.path()).unwrap().count(),
+            1,
+            "all temporary files were removed"
+        );
+    }
 }
 
 pub(crate) fn ensure_project_exclude_entry(cwd: &str, entry: &str) {

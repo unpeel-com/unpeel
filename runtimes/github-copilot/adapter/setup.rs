@@ -17,13 +17,17 @@ pub fn install_copilot_hook() -> Result<(), String> {
 }
 pub fn prepare_copilot_project_hooks(cwd: &str) -> Result<(), String> {
     let hook_script_path = copilot_hook_script_path();
+    let hook_script_path =
+        crate::integrations::shared::shell_quote(&hook_script_path.to_string_lossy());
     let hook_json = json!({
         "version": 1,
         "hooks": {
-            "sessionStart": [{ "type": "command", "bash": format!("{} sessionStart", hook_script_path.display()), "timeoutSec": 5 }],
-            "sessionEnd": [{ "type": "command", "bash": format!("{} sessionEnd", hook_script_path.display()), "timeoutSec": 5 }],
-            "userPromptSubmitted": [{ "type": "command", "bash": format!("{} userPromptSubmitted", hook_script_path.display()), "timeoutSec": 5 }],
-            "postToolUse": [{ "type": "command", "bash": format!("{} postToolUse", hook_script_path.display()), "timeoutSec": 5 }]
+            "sessionStart": [{ "type": "command", "bash": format!("{} sessionStart", hook_script_path), "timeoutSec": 5 }],
+            "sessionEnd": [{ "type": "command", "bash": format!("{} sessionEnd", hook_script_path), "timeoutSec": 5 }],
+            "agentStop": [{ "type": "command", "bash": format!("{} agentStop", hook_script_path), "timeoutSec": 5 }],
+            "permissionRequest": [{ "type": "command", "bash": format!("{} permissionRequest", hook_script_path), "timeoutSec": 5 }],
+            "userPromptSubmitted": [{ "type": "command", "bash": format!("{} userPromptSubmitted", hook_script_path), "timeoutSec": 5 }],
+            "postToolUse": [{ "type": "command", "bash": format!("{} postToolUse", hook_script_path), "timeoutSec": 5 }]
         }
     });
     let serialized = serde_json::to_string_pretty(&hook_json)

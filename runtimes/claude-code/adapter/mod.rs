@@ -46,6 +46,9 @@ fn has_automatic_mcp_setup(command: &str) -> bool {
 
 pub(crate) const INTEGRATION: Integration =
     Integration::new(Some(setup::install_claude_hooks), None)
+        // https://code.claude.com/docs/en/interactive-mode: Escape interrupts
+        // a response/tool call, but the Stop hook does not fire on interrupts.
+        .with_escape_cancellation()
         .with_startup_command(prepare_startup_command)
         .with_automatic_mcp_setup(has_automatic_mcp_setup)
         .with_resume_adapter(resume::ADAPTER);

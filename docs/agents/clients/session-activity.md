@@ -57,6 +57,12 @@ Hook-driven sessions:
 - `Start` and `UserPromptSubmit` mark the session busy
 - `Stop` marks it idle
 - `PermissionRequest` marks attention
+- `SubagentStop` is metadata only: a child finishing never completes its parent.
+- Only a successful `Stop` counts as completed work. `StopFailure`, the idle
+  timeout, and a user cancellation settle activity without a Finished event or
+  a completion notification.
+- `StopCancelled` is a provider-confirmed cancellation: it settles activity
+  and suppresses late attention/completion hooks until the next opening hook.
 - An installed App may separately POST a bounded `alert` to
   `/notify/<session_id>`. This appends shared Recent/unread activity and may
   deliver macOS/phone notifications, but it never enters this lifecycle
@@ -65,9 +71,10 @@ Hook-driven sessions:
   Kiro, OpenCode, Amp, Gemini, Copilot) do not use raw output growth to enter busy while waiting for
   the first hook event. This avoids false spinners when a full-screen TUI
   repaints during user scroll or window resize after an app restart.
-- The first hook event latches the session as hook-owned; from then on raw
-  terminal input never changes its busy/idle state — only hooks and the
-  5-minute output-rearmed timeout do.
+- The first hook event latches the session as hook-owned; ordinary terminal
+  input never starts Busy. Activity follows hooks, the explicit runtime-owned
+  Escape cancellation contract below, and the
+  5-minute output-rearmed timeout.
 - **Codex exception — the stop-distrust guard (2026-08-11):** codex fires
   agent-turn-complete `Stop` notifications for *internal sub-turns* of one
   long run, so its long agentic turns used to show idle the whole time. For
@@ -138,6 +145,136 @@ Agent-drawn select menus (attention, host-side):
   into attention. Keep the Rust and Swift regression cases aligned.
 
 Unread badges integrate with hook events and activity transitions (settles while unobserved → unread).
+
+### Escape cancellation and hook delivery
+
+Claude documents that Escape interrupts a response or tool call and that its
+Stop hook **does not fire on a user interrupt**. Its runtime adapter opts into
+`Integration::with_escape_cancellation()` for this missing lifecycle edge.
+Other runtimes keep their own hook contracts until their Escape behavior is
+verified and explicitly opted in. This currently covers managed Claude, Muse, and Gemini
+launches; an agent typed into a blank terminal does not inherit this policy.
+Sources: [interactive mode](https://code.claude.com/docs/en/interactive-mode)
+and [hook reference](https://code.claude.com/docs/en/hooks).
+
+Muse 1.0.3 was verified with its real `--provider echo` TUI: ESC ends the
+foreground turn without firing Stop, so its adapter uses the same fallback.
+This settles foreground activity; Muse's background tasks have their own
+controls. Ctrl+C depends on composer contents and is not inferred as cancel.
+See [Muse's interrupt behavior](https://dev.meta.ai/docs/muse-code/interactive#steering).
+
+Gemini 0.57.0's installed `useGeminiStream` handler aborts on bare Escape.
+Its request generator returns early on `signal.aborted`/AbortError, before
+`AfterAgent`, so Gemini opts into the same fallback. `AfterTool` is metadata,
+not a new turn: a delayed tool callback must not revive cancelled activity.
+See [Gemini's source](https://github.com/google-gemini/gemini-cli).
+
+Grok reports cancellation through its native `StopCancelled` hook (ESC,
+Ctrl+C, and client stop buttons); `Stop` deliberately does not fire then.
+Its installer registers `StopCancelled` separately from `Stop` and preserves
+`StopFailure` as a failure. Grok uses these native lifecycle events, so ESC
+dismissing a menu, leaving a composer mode, or navigating in vim mode cannot
+falsely cancel Host activity. A native cancellation needs only the next
+opening hook to resume, including prompts sent by another client.
+See [Grok's hook contract](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/10-hooks.md#hook-events).
+
+The attach client releases a standalone Escape after a 250 ms wait for a
+possible focus-report continuation. The PTY Host independently tracks only
+successfully delivered user input, across Write commands and StreamInput
+frames. It waits 150 ms to distinguish bare Escape from a fragmented terminal
+sequence, ignores bracketed paste and modified keys, and recognizes unmodified
+Kitty Escape presses. Parsed menus have no cancellation authority. Input
+parser state survives core handoff; query replies and launch commands bypass
+the parser. The actual input bytes are neither consumed nor rewritten.
+
+For an opted-in runtime, the Host writes `hook-cancellation.json` under the
+Session directory, using the shared file lock and state bus. It records the
+launch generation, cancellation time, and first later submitted Enter. The
+worker settles an existing hook latch and rejects late activity hooks until a
+new opening hook follows that submission. Enter alone never starts Busy. A
+fast opening hook may arrive before the timer persists Enter; the reducer
+retains it until submission evidence arrives. The paste recipe's second Enter
+does not replace the first submission time. Cancellation survives worker
+restart and never crosses a runtime generation.
+
+This is cancellation **intent**, not process-exit proof: it sends no signal,
+does not kill hook processes or uninstall hooks, and does not infer completion
+from terminal text. Unrecognized provider modes that repurpose Escape remain
+a limitation; menu detection only excludes the prompts it can identify.
+
+Shell reporters are inert outside a hosted Session, honor `UNPEEL_HOME`, and
+bypass HTTP proxy settings for loopback delivery. They finish delivery before
+returning by default: the direct port gets a bounded attempt, then registry
+ports are contacted concurrently and awaited. Invalid and duplicate registry
+ports are ignored. Claude's installer migrates its owned `async: true` entries
+to synchronous reporting while preserving unrelated user hooks. The explicit
+`UNPEEL_HOOK_POST_SYNC=0` legacy opt-out forfeits ordering guarantees.
+Script installation uses a locked, atomic replacement with executable
+permissions set before publication; unchanged scripts keep their inode.
+Concurrent writers use distinct temporary files, and shared hook settings
+hold their file lock across the entire merge and replacement.
+
+The worker also checks the durable lifecycle seed after hooks have latched,
+so a lost HTTP Stop can recover on the next scan. It reads bounded bytes and
+metadata from the same open file, rejects older generations and seeds older
+than accepted activity transitions, and applies cancellation fences during recovery.
+Metadata-only Notify events cannot erase the last durable lifecycle event.
+
+Regression coverage: `hook_cancellation.py`, `muse_cancellation.py`, `gemini_cancellation.py`, and
+`grok_cancellation.py` in the
+CLI PTY matrix (input fallback and installed native hooks), the attach test `lone_escape_reaches_host_without_a_second_key_or_eof`, the core input
+parser/marker tests, activity reducer tests, and runtime reporter conformance
+tests (broadcast delivery, proxy isolation, silent peers, and no-op behavior).
+The PTY harness isolates `HOME` and provider/XDG config roots as well as
+`UNPEEL_HOME`: a private Unpeel directory alone does not prevent a real
+provider settings file from receiving temporary hook registrations.
+Set `UNPEEL_MUSE_TEST_BINARY` to an installed Muse binary when running
+`crates/unpeel-cli/tests/run.sh muse_cancellation` to exercise the real echo
+provider instead of the deterministic substitute, still in a private HOME.
+
+### Runtime cancellation coverage
+
+Audited 2026-09-06 against all 14 shipped runtime packages. Native event
+normalization belongs in each package; the Host only consumes the common
+`Stop`, `StopFailure`, and `StopCancelled` outcomes. Neither cancellation nor
+failure produces a Finished notification. Tool/session metadata does not
+replace a durable cancellation seed or reopen the cancelled turn.
+
+| Runtime | Cancellation and completion contract | Verification |
+| --- | --- | --- |
+| Amp | `agent.end.status`: `done`, `cancelled`, `error` become success, cancellation, failure. | [Plugin API](https://ampcode.com/docs/plugin-api); executable plugin tests. |
+| Claude Code | Managed-launch ESC fallback because user interrupts skip Stop. | Hook reference; real Host/PTY regression. |
+| Cline | `TaskCancel` becomes cancellation; `TaskError` failure; task completion stays success. Tool callbacks only carry metadata. | Installed hook contract; real reporter HTTP/seed tests. |
+| Codex | Registers native `Interrupt` with a three-second timeout; legacy `turn_aborted` also becomes cancellation. | [Hooks reference](https://learn.chatgpt.com/docs/hooks); installed binary contract; real normalizer/transport tests. |
+| Cursor Agent | `stop.status=aborted` becomes cancellation; `error` failure; `completed` success. | [Hooks reference](https://prod.cursor.com/docs/hooks); real reporter tests. |
+| fx | No lifecycle authority; no animated busy state. | Shipped catalog and Host authority guards. |
+| Gemini | Managed-launch ESC fallback for aborts that skip AfterAgent. | Installed 0.57.0 source; real Host/PTY regression with substitute provider. |
+| GitHub Copilot | Registers per-turn `agentStop` and `permissionRequest`; `sessionEnd.reason` distinguishes cancellation and failure. Single ESC does not imply cancel. | [Hook reference](https://docs.github.com/en/copilot/reference/hooks-reference); reporter tests. CLI not installed here; in-turn interrupt emission remains unverified. |
+| Grok | Native `StopCancelled` and `StopFailure` remain distinct from Stop. | Native contract; installed-hook Host/PTY regression with substitute provider. |
+| Kimi | Native Kimi Code `Interrupt` becomes cancellation. The older Python configuration does not accept that event. | [Native hooks reference](https://moonshotai.github.io/kimi-code/en/customization/hooks.md); reporter/config tests. Installed legacy Python build has no hooks; native Kimi Code not live-tested. |
+| Kiro | Uses native Stop; no inferred ESC because cancel can immediately submit queued steering. | Reporter/transport tests; [queue steering contract](https://kiro.dev/docs/cli/chat/queue-steering/). CLI absent; cancellation Stop emission remains unverified. |
+| Muse | Managed-launch ESC fallback; background work retains provider-owned controls. | Real 1.0.3 echo-provider cancellation and next prompt, plus Host/PTY regression. |
+| OpenCode | Root `session.error` records cancellation/failure; the following idle settles it. A successful response after recovery clears the error. Child sessions and duplicate idle events are ignored. | [Session processor](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/session/processor.ts); executable ordered-event plugin tests. |
+| Pi | No lifecycle authority; no animated busy state. | Shipped catalog and Host authority guards. |
+
+Copilot's [cancel controls](https://docs.github.com/en/copilot/concepts/agents/copilot-cli/cancel-and-roll-back)
+use a second ESC, with queued prompts and dialogs taking precedence. Kiro also
+has configurable interruption and automatic queued-prompt submission. Neither
+can safely reuse a bare-ESC/next-Enter policy. Kiro's current hook docs and
+the v3 migration table disagree on AgentSpawn versus SessionStart; retain the
+migration-table registration until a real supported binary verifies a change.
+
+`bun run test:runtimes` executes the Amp/OpenCode plugin callbacks, including
+overlapping parent/child events, cancelled/error outcomes, and retry recovery.
+Rust reporter tests exercise all ten shell transports against multiple stalled
+ports, proxy variables, duplicate ports, generation tags, and restart seeds.
+These tests exercise shipped integration code; they do not imply authenticated
+end-to-end tests against every provider service.
+
+After upgrading, provider hooks loaded at startup require a new provider
+session or the provider's hook reload command. The ESC policy lives in the
+persistent PTY Host: an old PTY keeps its old policy across a Controller/worker
+restart, so test newly added fallback support in a newly created Session.
 
 ### Recent ordering and automatic cleanup
 

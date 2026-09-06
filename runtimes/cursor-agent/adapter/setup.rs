@@ -106,6 +106,7 @@ pub(crate) fn ensure_cursor_hooks(script_path: &Path) -> Result<(), String> {
         })?;
     }
 
+    let _settings_lock = crate::app_state::lock_exclusive(&hooks_path)?;
     let Some(mut hooks_json) = read_mergeable_json_object(&hooks_path, "Cursor hooks.json")? else {
         return Ok(());
     };

@@ -778,7 +778,7 @@ impl FocusEventFilter {
     }
 
     /// Release any held-back prefix (a trailing lone `ESC` or `ESC [` that no
-    /// further byte will ever resolve). Call on stdin EOF.
+    /// further byte has resolved). Call on EOF or a short input timeout.
     pub fn flush(&mut self) -> Vec<u8> {
         let out = match self.state {
             FocusState::Ground => Vec::new(),
@@ -787,6 +787,10 @@ impl FocusEventFilter {
         };
         self.state = FocusState::Ground;
         out
+    }
+
+    pub fn has_pending_prefix(&self) -> bool {
+        !matches!(self.state, FocusState::Ground)
     }
 }
 

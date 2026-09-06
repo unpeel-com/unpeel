@@ -342,6 +342,25 @@ def body(case):
         finally:
             launcher.close()
 
+        settings_path = case.home.path(".claude", "settings.json")
+        try:
+            with open(settings_path) as handle:
+                settings = json.load(handle)
+        except (OSError, ValueError):
+            settings = {}
+        commands = [
+            hook.get("command")
+            for entries in settings.get("hooks", {}).values()
+            for entry in entries
+            for hook in entry.get("hooks", [])
+        ]
+        case.check(
+            f"{name} installs provider hooks only in the private test HOME",
+            os.environ.get("HOME") == case.home.root
+            and home.path("hooks", "claude-hooks.sh") in commands,
+            settings_path,
+        )
+
     native = results.get("native", [])
     headless = results.get("headless", [])
     mismatches = [

@@ -35,6 +35,7 @@ pub(crate) fn ensure_gemini_settings_hook(script_path: &Path) -> Result<(), Stri
         })?;
     }
 
+    let _settings_lock = crate::app_state::lock_exclusive(&settings_path)?;
     let Some(mut settings) = read_mergeable_json_object(&settings_path, "Gemini settings")? else {
         return Ok(());
     };

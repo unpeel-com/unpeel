@@ -144,7 +144,9 @@ pub(crate) fn build_hook_entry(event: &str, command: &str) -> Value {
         "hooks": [{
             "type": "command",
             "command": command,
-            "async": true,
+            // The provider must await our bounded reporter: background
+            // UserPromptSubmit/Stop processes can arrive in reverse order.
+            "async": false,
             "timeout": 5
         }]
     });
@@ -205,13 +207,25 @@ pub(crate) fn ensure_claude_settings_hook(script_path: &Path) -> Result<(), Stri
         })?;
     }
 
+    let _settings_lock = crate::app_state::lock_exclusive(&settings_path)?;
     let Some(mut settings) = read_mergeable_json_object(&settings_path, "Claude settings")? else {
         // Existing settings.json is not a valid JSON object; skip rather than
         // clobber the user's real settings with an Unpeel-only file.
         return Ok(());
     };
 
-    let command = script_path.to_string_lossy().to_string();
+    let changed = reconcile_claude_hooks(&mut settings, &script_path.to_string_lossy());
+
+    if changed {
+        let json = serde_json::to_string_pretty(&settings)
+            .map_err(|e| format!("Failed to serialize Claude settings: {e}"))?;
+        write_file_atomic(&settings_path, &format!("{json}\n"), "Claude settings")?;
+    }
+
+    Ok(())
+}
+
+fn reconcile_claude_hooks(settings: &mut Value, command: &str) -> bool {
     let hooks = settings
         .as_object_mut()
         .unwrap()
@@ -231,31 +245,51 @@ pub(crate) fn ensure_claude_settings_hook(script_path: &Path) -> Result<(), Stri
             *entries = json!([]);
         }
         let array = entries.as_array_mut().unwrap();
-        if prune_stale_unpeel_claude_hooks(array, &command) {
+        if prune_stale_unpeel_claude_hooks(array, command) {
             changed = true;
         }
-        let already_installed = array.iter().any(|entry| {
-            entry
-                .get("hooks")
-                .and_then(|value| value.as_array())
-                .is_some_and(|hooks| {
-                    hooks.iter().any(|hook| {
-                        hook.get("command").and_then(|value| value.as_str())
-                            == Some(command.as_str())
-                    })
-                })
-        });
+        let mut already_installed = false;
+        for entry in array.iter_mut() {
+            if let Some(hooks) = entry.get_mut("hooks").and_then(Value::as_array_mut) {
+                for hook in hooks {
+                    if hook.get("command").and_then(Value::as_str) == Some(command) {
+                        already_installed = true;
+                        if hook.get("async").and_then(Value::as_bool) != Some(false) {
+                            hook["async"] = json!(false);
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
         if !already_installed {
-            array.push(build_hook_entry(event, &command));
+            array.push(build_hook_entry(event, command));
             changed = true;
         }
     }
 
-    if changed {
-        let json = serde_json::to_string_pretty(&settings)
-            .map_err(|e| format!("Failed to serialize Claude settings: {e}"))?;
-        write_file_atomic(&settings_path, &format!("{json}\n"), "Claude settings")?;
-    }
+    changed
+}
 
-    Ok(())
+#[cfg(test)]
+mod hook_reconciliation_tests {
+    use super::*;
+
+    #[test]
+    fn migrates_owned_async_hooks_without_changing_foreign_hooks() {
+        let command = "/owned/claude-hooks.sh";
+        let foreign = json!({"type": "command", "command": "/user/audit.sh", "async": true});
+        let mut settings = json!({
+            "theme": "dark",
+            "hooks": {"Stop": [{"hooks": [
+                {"type": "command", "command": command, "async": true, "timeout": 5},
+                foreign.clone()
+            ]}]}
+        });
+        assert!(reconcile_claude_hooks(&mut settings, command));
+        assert_eq!(settings["hooks"]["Stop"][0]["hooks"][0]["async"], false);
+        assert_eq!(settings["hooks"]["Stop"][0]["hooks"][1], foreign);
+        assert_eq!(settings["theme"], "dark");
+        assert!(!reconcile_claude_hooks(&mut settings, command));
+    }
 }

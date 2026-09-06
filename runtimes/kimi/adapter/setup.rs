@@ -108,7 +108,7 @@ pub(crate) fn kimi_managed_hooks_block(kimi_code: bool) -> String {
         // These observation hooks are native to standalone Kimi Code. Keep
         // them out of the legacy Python CLI config, whose event enum predates
         // both names and may reject unknown values.
-        definitions.push(("Interrupt", None, "Stop"));
+        definitions.push(("Interrupt", None, "StopCancelled"));
         definitions.push(("PermissionRequest", None, "Attention"));
     }
     let mut block = String::new();
@@ -196,6 +196,7 @@ pub(crate) fn ensure_kimi_config_hooks_at(
         fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create Kimi config dir {}: {e}", parent.display()))?;
     }
+    let _settings_lock = crate::app_state::lock_exclusive(config_path)?;
     let raw = if config_path.exists() {
         fs::read_to_string(config_path)
             .map_err(|e| format!("Failed to read Kimi config.toml: {e}"))?

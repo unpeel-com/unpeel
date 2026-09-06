@@ -1002,11 +1002,40 @@ fn spawn_stdin_pump(
         let mut input_stream = connect_input_stream(&socket_path).ok();
 
         loop {
-            let (raw, eof): (&[u8], bool) = match stdin.read(&mut buf) {
-                Ok(0) => (&[], true),
-                Ok(n) => (&buf[..n], false),
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(_) => (&[], true),
+            // A lone Escape is a real interrupt key. Focus filtering holds
+            // ESC/ESC[ only briefly to assemble fragmented focus reports;
+            // waiting for another key or EOF would prevent cancellation.
+            let prefix_expired = if focus_filter
+                .as_ref()
+                .is_some_and(|filter| filter.has_pending_prefix())
+            {
+                let mut descriptor = libc::pollfd {
+                    fd: libc::STDIN_FILENO,
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                // Preserve the supported 100 ms fragmented-focus transport
+                // while bounding a standalone key well below one second.
+                let result = unsafe { libc::poll(&mut descriptor, 1, 250) };
+                if result < 0 {
+                    if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                    break;
+                }
+                result == 0
+            } else {
+                false
+            };
+            let (raw, eof): (&[u8], bool) = if prefix_expired {
+                (&[], false)
+            } else {
+                match stdin.read(&mut buf) {
+                    Ok(0) => (&[], true),
+                    Ok(n) => (&buf[..n], false),
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(_) => (&[], true),
+                }
             };
 
             // Permanently strip focus in/out reports (ESC[I / ESC[O) the new
@@ -1024,7 +1053,7 @@ fn spawn_stdin_pump(
             let chunk: Vec<u8> = match focus_filter.as_mut() {
                 Some(filter) if !forward_focus => {
                     let mut chunk = filter.filter(raw);
-                    if eof {
+                    if eof || prefix_expired {
                         chunk.extend_from_slice(&filter.flush());
                     }
                     chunk
@@ -1044,7 +1073,11 @@ fn spawn_stdin_pump(
             // reaction to replayed queries; plain keystrokes pass through.
             // Keep filtering past the deadline while mid-sequence so a
             // response spanning the window edge is not half-forwarded.
-            if Instant::now() < mute_until || !mute_filter.is_ground() {
+            if prefix_expired && chunk == b"\x1b" {
+                // The timeout established a standalone key, not a replay
+                // query response. Do not swallow it during startup muting.
+                pending.extend_from_slice(&chunk);
+            } else if Instant::now() < mute_until || !mute_filter.is_ground() {
                 pending.extend_from_slice(&mute_filter.filter(&chunk));
             } else {
                 pending.extend_from_slice(&chunk);

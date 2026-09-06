@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
@@ -36,6 +37,15 @@ pub enum HookState {
 
 #[derive(Default)]
 struct Entry {
+    /// A provider-reported cancellation needs only its next opening hook to
+    /// rearm; unlike inferred input cancellation, it also covers client stops.
+    native_cancelled: bool,
+    last_cancelled_at: Option<u64>,
+    cancelled_at: Option<u64>,
+    submitted_at: Option<u64>,
+    pending_opener: Option<(String, Option<String>, SystemTime)>,
+    last_turn_started_at: Option<u64>,
+    completed: bool,
     /// Host-owned generation of the managed runtime inside this PTY. An
     /// in-place agent restart increments it while the Session id remains the
     /// same, so the old runtime's hook latch must not bleed into the new one.
@@ -49,10 +59,9 @@ struct Entry {
     /// When the latest Stop/StopFailure landed; the stop-distrust guard only
     /// re-arms busy inside [grace, window] after this instant.
     stopped_at: Option<SystemTime>,
-    /// Timestamp of the newest live/durable hook folded into this entry.
-    /// Lets a hook from the new generation win a rescan race with the
-    /// manifest generation update instead of being cleared as stale.
-    last_hook_at: Option<SystemTime>,
+    /// Newest accepted live/durable activity transition. Metadata-only hooks
+    /// do not supersede a missed durable transition.
+    last_transition_at: Option<SystemTime>,
     /// Exact provenance for current hook assets. When present, this wins over
     /// wall-clock ordering across a manifest-commit race.
     last_hook_generation: Option<u64>,
@@ -95,8 +104,11 @@ pub fn normalize_event_name(raw: &str) -> String {
         "userpromptsubmit" | "userpromptsubmitted" | "beforesubmitprompt" => {
             "UserPromptSubmit".into()
         }
-        "stop" | "sessionend" | "subagentstop" => "Stop".into(),
+        "stop" | "sessionend" => "Stop".into(),
+        // A child finishing cannot finish the parent turn.
+        "subagentstop" => "HookSeen".into(),
         "stopfailure" => "StopFailure".into(),
+        "stopcancelled" | "stopcanceled" => "StopCancelled".into(),
         "permissionrequest" => "PermissionRequest".into(),
         _ => raw.trim().to_string(),
     }
@@ -110,7 +122,7 @@ fn starts_turn(canonical: &str) -> bool {
 /// state (the question renders in-terminal; attention would double-signal).
 fn is_latch_only(canonical: &str, tool_name: Option<&str>) -> bool {
     match canonical {
-        "Start" | "UserPromptSubmit" | "Stop" | "StopFailure" => false,
+        "Start" | "UserPromptSubmit" | "Stop" | "StopFailure" | "StopCancelled" => false,
         "PermissionRequest" => tool_name == Some("AskUserQuestion"),
         _ => true,
     }
@@ -138,27 +150,64 @@ impl ActivityEngine {
         raw_name: &str,
         tool_name: Option<&str>,
         now: SystemTime,
-    ) {
+    ) -> bool {
         let canonical = normalize_event_name(raw_name);
         let latch_only = is_latch_only(&canonical, tool_name);
         let entry = self.entries.entry(session_id.to_string()).or_default();
-        entry.hook_seen = true;
-        entry.last_hook_at = Some(now);
-        if latch_only {
-            return;
+        if entry.native_cancelled {
+            if starts_turn(&canonical) {
+                entry.native_cancelled = false;
+            } else {
+                return false;
+            }
         }
+        if let Some(cancelled_at) = entry.cancelled_at {
+            let event_at = unix_ms(now);
+            if starts_turn(&canonical)
+                && entry
+                    .submitted_at
+                    .is_some_and(|submitted| submitted > cancelled_at && event_at >= submitted)
+            {
+                entry.cancelled_at = None;
+                entry.pending_opener = None;
+            } else {
+                // Input is persisted by the PTY's timer. A fast provider can
+                // post its opening hook first; retain it until the matching
+                // submission marker arrives instead of losing the new turn.
+                if starts_turn(&canonical) && event_at >= cancelled_at {
+                    entry.pending_opener = Some((canonical, tool_name.map(str::to_owned), now));
+                }
+                return false;
+            }
+        }
+        entry.hook_seen = true;
+        if latch_only {
+            return true;
+        }
+        entry.last_transition_at = Some(now);
         match canonical.as_str() {
             "Start" | "UserPromptSubmit" => {
+                entry.completed = false;
+                entry.last_turn_started_at = Some(unix_ms(now));
                 entry.state = Some(HookState::Busy);
                 entry.deadline_at = Some(now + HOOK_IDLE_TIMEOUT);
                 entry.stopped_at = None;
             }
             "Stop" | "StopFailure" => {
+                entry.completed = canonical == "Stop";
                 entry.state = Some(HookState::Idle);
                 entry.deadline_at = None;
                 entry.stopped_at = Some(now);
             }
+            "StopCancelled" => {
+                entry.native_cancelled = true;
+                entry.completed = false;
+                entry.state = Some(HookState::Idle);
+                entry.deadline_at = None;
+                entry.stopped_at = None;
+            }
             "PermissionRequest" => {
+                entry.completed = false;
                 entry.state = Some(HookState::Attention);
                 entry.deadline_at = None;
                 entry.stopped_at = None;
@@ -168,6 +217,7 @@ impl ActivityEngine {
             }
             _ => {}
         }
+        true
     }
 
     /// Apply one hook only when its runtime provenance can belong to the
@@ -212,7 +262,7 @@ impl ActivityEngine {
             if event_generation.is_none() {
                 entry.legacy_turn_started_at = Some(now);
             }
-        } else if matches!(canonical.as_str(), "Stop" | "StopFailure")
+        } else if matches!(canonical.as_str(), "Stop" | "StopFailure" | "StopCancelled")
             && event_generation.is_none()
             && current_generation > 1
             && entry.confirmed_turn_generation != Some(current_generation)
@@ -223,7 +273,9 @@ impl ActivityEngine {
             return false;
         }
 
-        self.apply_hook_event_unchecked(session_id, &canonical, tool_name, now);
+        if !self.apply_hook_event_unchecked(session_id, &canonical, tool_name, now) {
+            return false;
+        }
         if let Some(entry) = self.entries.get_mut(session_id) {
             entry.last_hook_generation = event_generation;
         }
@@ -243,6 +295,63 @@ impl ActivityEngine {
             return None;
         }
         entry.state
+    }
+
+    pub fn is_cancelled(&self, session_id: &str) -> bool {
+        self.entries
+            .get(session_id)
+            .is_some_and(|entry| entry.cancelled_at.is_some() || entry.native_cancelled)
+    }
+
+    pub fn is_completed(&self, session_id: &str) -> bool {
+        self.entries.get(session_id).is_some_and(|entry| {
+            entry.hook_seen && entry.state == Some(HookState::Idle) && entry.completed
+        })
+    }
+
+    pub fn sync_cancellation_from_disk(&mut self, session_id: &str, dir: &Path, generation: u64) {
+        if let Some(marker) = unpeel_core::hook_cancellation::read_in(dir) {
+            self.observe_cancellation(session_id, &marker, generation);
+        }
+    }
+
+    fn observe_cancellation(
+        &mut self,
+        session_id: &str,
+        marker: &unpeel_core::hook_cancellation::Cancellation,
+        generation: u64,
+    ) {
+        if marker.runtime_generation != generation {
+            return;
+        }
+        let entry = self.entries.entry(session_id.to_string()).or_default();
+        if entry
+            .last_cancelled_at
+            .is_none_or(|at| marker.cancelled_at > at)
+        {
+            entry.last_cancelled_at = Some(marker.cancelled_at);
+            entry.pending_opener = None;
+            let already_started_next_turn = marker.submitted_at.is_some_and(|submitted| {
+                submitted > marker.cancelled_at
+                    && entry
+                        .last_turn_started_at
+                        .is_some_and(|started| started >= submitted)
+            });
+            if !already_started_next_turn {
+                entry.completed = false;
+                entry.cancelled_at = Some(marker.cancelled_at);
+                if entry.hook_seen {
+                    entry.state = Some(HookState::Idle);
+                }
+                entry.deadline_at = None;
+                entry.stopped_at = None;
+            }
+        }
+        entry.submitted_at = marker.submitted_at;
+        let pending = entry.pending_opener.take();
+        if let Some((name, tool, at)) = pending {
+            self.apply_hook_event_unchecked(session_id, &name, tool.as_deref(), at);
+        }
     }
 
     pub fn runtime_launch_generation(&self, session_id: &str) -> Option<u64> {
@@ -322,6 +431,9 @@ impl ActivityEngine {
         now: SystemTime,
     ) {
         let entry = self.entries.entry(session_id.to_string()).or_default();
+        if entry.cancelled_at.is_some() || entry.native_cancelled {
+            return;
+        }
         let grew = entry
             .last_signal
             .is_some_and(|previous| previous != activity_signal);
@@ -335,6 +447,7 @@ impl ActivityEngine {
                 if grew {
                     entry.deadline_at = Some(now + HOOK_IDLE_TIMEOUT);
                 } else if entry.deadline_at.is_some_and(|d| d <= now) {
+                    entry.completed = false;
                     entry.state = Some(HookState::Idle);
                     entry.deadline_at = None;
                 }
@@ -344,6 +457,7 @@ impl ActivityEngine {
                     let since_stop = now.duration_since(stopped_at).unwrap_or_default();
                     if since_stop >= STOP_REARM_GRACE && since_stop <= STOP_REARM_WINDOW {
                         entry.state = Some(HookState::Busy);
+                        entry.completed = false;
                         entry.deadline_at = Some(now + HOOK_IDLE_TIMEOUT);
                     }
                 }
@@ -375,13 +489,25 @@ impl ActivityEngine {
         not_before_unix_ms: Option<u64>,
         current_generation: u64,
     ) {
-        if self.is_latched(session_id) {
-            return;
-        }
+        self.observe_runtime_launch(session_id, current_generation, not_before_unix_ms);
+        self.sync_cancellation_from_disk(session_id, session_dir, current_generation);
         let seed_path = session_dir.join("last-hook-event.json");
-        let Ok(meta) = fs::metadata(&seed_path) else {
+        let Ok(seed) = fs::File::open(&seed_path) else {
             return;
         };
+        let Ok(meta) = seed.metadata() else {
+            return;
+        };
+        // Recover a missed POST even after live hooks have latched. A durable
+        // event older than the latest accepted live hook cannot roll it back.
+        if self
+            .entries
+            .get(session_id)
+            .and_then(|entry| entry.last_transition_at)
+            .is_some_and(|at| meta.modified().is_ok_and(|modified| modified <= at))
+        {
+            return;
+        }
         if let Some(not_before) = not_before_unix_ms {
             let seed_millis = meta
                 .modified()
@@ -393,9 +519,16 @@ impl ActivityEngine {
                 return;
             }
         }
-        let Ok(raw) = fs::read_to_string(&seed_path) else {
+        // Read metadata and bytes from the same inode across atomic renames.
+        // A stat(path) + read(path) pair can timestamp a new Stop as an older
+        // Start and reverse the ordering against a live hook.
+        if meta.len() > 64 * 1024 {
             return;
-        };
+        }
+        let mut raw = String::new();
+        if seed.take(64 * 1024).read_to_string(&mut raw).is_err() {
+            return;
+        }
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
             return;
         };
@@ -418,7 +551,7 @@ impl ActivityEngine {
             "Start" => anchor_start_to_output,
             _ => false,
         };
-        if starts_turn(&canonical) && anchor {
+        if starts_turn(&canonical) && anchor && !self.is_cancelled(session_id) {
             if let Ok(output_meta) = fs::metadata(session_dir.join("output.bin")) {
                 if let Ok(output_mtime) = output_meta.modified() {
                     seed_at = seed_at.max(output_mtime);
@@ -445,9 +578,213 @@ impl ActivityEngine {
     }
 }
 
+fn unix_ms(time: SystemTime) -> u64 {
+    time.duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn at(ms: u64) -> SystemTime {
+        SystemTime::UNIX_EPOCH + Duration::from_millis(ms)
+    }
+
+    #[test]
+    fn cancellation_fences_late_hooks_until_a_submitted_new_turn() {
+        let mut engine = ActivityEngine::default();
+        engine.observe_runtime_launch("s", 1, None);
+        engine.apply_hook_event("s", "UserPromptSubmit", None, at(1000));
+        let mut cancellation = unpeel_core::hook_cancellation::Cancellation {
+            runtime_generation: 1,
+            cancelled_at: 2000,
+            submitted_at: None,
+        };
+        engine.observe_cancellation("s", &cancellation, 1);
+        for event in ["PermissionRequest", "Stop", "Start", "UserPromptSubmit"] {
+            assert!(!engine.apply_hook_event_for_runtime(
+                "s",
+                event,
+                None,
+                at(2100),
+                Some(1),
+                1,
+                None
+            ));
+        }
+        engine.note_output_and_sweep("s", 1, true, true, at(3000));
+        engine.note_output_and_sweep("s", 2, true, true, at(9000));
+        assert_eq!(engine.hook_owned_state("s"), Some(HookState::Idle));
+        assert!(engine.is_cancelled("s"));
+
+        cancellation.submitted_at = Some(10000);
+        engine.observe_cancellation("s", &cancellation, 1);
+        assert!(engine.is_cancelled("s"), "an Enter alone never starts Busy");
+        assert!(engine.apply_hook_event_for_runtime(
+            "s",
+            "UserPromptSubmit",
+            None,
+            at(10100),
+            Some(1),
+            1,
+            None
+        ));
+        assert_eq!(engine.hook_owned_state("s"), Some(HookState::Busy));
+        assert!(!engine.is_cancelled("s"));
+        engine.observe_cancellation("s", &cancellation, 1);
+        assert_eq!(engine.hook_owned_state("s"), Some(HookState::Busy));
+    }
+
+    #[test]
+    fn fast_opening_hook_can_beat_submission_marker_in_either_order() {
+        for cancellation_arrives_first in [false, true] {
+            let mut engine = ActivityEngine::default();
+            engine.observe_runtime_launch("s", 1, None);
+            engine.apply_hook_event("s", "UserPromptSubmit", None, at(1000));
+            let mut cancellation = unpeel_core::hook_cancellation::Cancellation {
+                runtime_generation: 1,
+                cancelled_at: 2000,
+                submitted_at: None,
+            };
+            if cancellation_arrives_first {
+                engine.observe_cancellation("s", &cancellation, 1);
+            }
+            engine.apply_hook_event("s", "UserPromptSubmit", None, at(3100));
+            cancellation.submitted_at = Some(3000);
+            engine.observe_cancellation("s", &cancellation, 1);
+            assert_eq!(engine.hook_owned_state("s"), Some(HookState::Busy));
+            assert!(!engine.is_cancelled("s"));
+        }
+    }
+
+    #[test]
+    fn cancellation_never_latches_hookless_sessions_or_crosses_generation() {
+        let mut engine = ActivityEngine::default();
+        engine.observe_cancellation(
+            "s",
+            &unpeel_core::hook_cancellation::Cancellation {
+                runtime_generation: 1,
+                cancelled_at: 2000,
+                submitted_at: None,
+            },
+            1,
+        );
+        assert!(!engine.is_latched("s"));
+        assert_eq!(engine.hook_owned_state("s"), None);
+        engine.observe_runtime_launch("s", 2, Some(3000));
+        engine.observe_cancellation(
+            "s",
+            &unpeel_core::hook_cancellation::Cancellation {
+                runtime_generation: 1,
+                cancelled_at: 2000,
+                submitted_at: None,
+            },
+            2,
+        );
+        assert!(!engine.is_cancelled("s"));
+        assert!(engine.apply_hook_event_for_runtime(
+            "s",
+            "UserPromptSubmit",
+            None,
+            at(3100),
+            Some(2),
+            2,
+            Some(3000)
+        ));
+    }
+
+    #[test]
+    fn subagent_stop_cannot_complete_parent_turn() {
+        let mut engine = ActivityEngine::default();
+        engine.apply_hook_event("s", "UserPromptSubmit", None, at(1000));
+        engine.apply_hook_event("s", "SubagentStop", None, at(2000));
+        assert_eq!(engine.hook_owned_state("s"), Some(HookState::Busy));
+    }
+
+    #[test]
+    fn native_cancel_settles_without_completion_and_rearms_on_next_opening_hook() {
+        let mut engine = ActivityEngine::default();
+        engine.apply_hook_event("s", "UserPromptSubmit", None, at(1000));
+        engine.apply_hook_event("s", "stop_cancelled", None, at(2000));
+        assert!(engine.is_cancelled("s"));
+        assert_eq!(engine.hook_owned_state("s"), Some(HookState::Idle));
+        assert!(!engine.is_completed("s"));
+        engine.apply_hook_event("s", "PermissionRequest", None, at(2100));
+        engine.apply_hook_event("s", "Stop", None, at(2200));
+        engine.note_output_and_sweep("s", 1, true, true, at(2300));
+        assert_eq!(engine.hook_owned_state("s"), Some(HookState::Idle));
+        assert!(!engine.is_completed("s"));
+        // Native lifecycle proof works for client stops and auto-wake turns
+        // too: a submitted Enter is not required to resume hook authority.
+        engine.apply_hook_event("s", "UserPromptSubmit", None, at(3000));
+        assert!(!engine.is_cancelled("s"));
+        assert_eq!(engine.hook_owned_state("s"), Some(HookState::Busy));
+        engine.apply_hook_event("s", "Stop", None, at(4000));
+        assert!(engine.is_completed("s"));
+    }
+
+    #[test]
+    fn failure_and_timeout_are_idle_without_successful_completion() {
+        let mut engine = ActivityEngine::default();
+        engine.apply_hook_event("s", "Stop", None, at(1000));
+        assert!(engine.is_completed("s"));
+        engine.apply_hook_event("s", "UserPromptSubmit", None, at(2000));
+        assert!(!engine.is_completed("s"));
+        engine.apply_hook_event("s", "StopFailure", None, at(3000));
+        assert_eq!(engine.hook_owned_state("s"), Some(HookState::Idle));
+        assert!(!engine.is_completed("s"));
+        engine.apply_hook_event("s", "UserPromptSubmit", None, at(4000));
+        engine.note_output_and_sweep("s", 0, true, false, at(4000) + HOOK_IDLE_TIMEOUT);
+        assert_eq!(engine.hook_owned_state("s"), Some(HookState::Idle));
+        assert!(!engine.is_completed("s"));
+    }
+
+    #[test]
+    fn durable_stop_recovers_a_missed_post_after_live_hooks_have_latched() {
+        let dir = std::env::temp_dir().join(format!("unpeel-hook-recovery-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let seed = dir.join("last-hook-event.json");
+        fs::write(
+            &seed,
+            r#"{"hook_event_name":"Stop","unpeel_runtime_generation":1}"#,
+        )
+        .unwrap();
+        fs::File::open(&seed)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(at(2000)))
+            .unwrap();
+        let mut engine = ActivityEngine::default();
+        engine.apply_hook_event_for_runtime(
+            "s",
+            "UserPromptSubmit",
+            None,
+            at(1000),
+            Some(1),
+            1,
+            None,
+        );
+        engine.apply_hook_event_for_runtime("s", "HookSeen", None, at(2500), Some(1), 1, None);
+        engine.seed_from_disk("s", &dir, true, None, 1);
+        assert_eq!(engine.hook_owned_state("s"), Some(HookState::Idle));
+        engine.apply_hook_event_for_runtime(
+            "s",
+            "UserPromptSubmit",
+            None,
+            at(3000),
+            Some(1),
+            1,
+            None,
+        );
+        engine.seed_from_disk("s", &dir, true, None, 1);
+        assert_eq!(
+            engine.hook_owned_state("s"),
+            Some(HookState::Busy),
+            "old seed cannot roll back a new live hook"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn normalizes_wire_variants() {
@@ -459,7 +796,7 @@ mod tests {
             normalize_event_name("before_submit_prompt"),
             "UserPromptSubmit"
         );
-        assert_eq!(normalize_event_name("SubagentStop"), "Stop");
+        assert_eq!(normalize_event_name("SubagentStop"), "HookSeen");
         assert_eq!(normalize_event_name("STOP FAILURE"), "StopFailure");
         assert_eq!(
             normalize_event_name("permission_request"),

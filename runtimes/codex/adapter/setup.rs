@@ -24,10 +24,8 @@ pub fn install_codex_wrapper() -> Result<(), String> {
         "shared notify transport",
     )?;
     let notify_path = codex_notify_hook_script_path();
-    let normalizer = CODEX_NOTIFY_NORMALIZER_SCRIPT.replace(
-        "{{NOTIFY_PATH}}",
-        transport_path.to_string_lossy().as_ref(),
-    );
+    let normalizer = CODEX_NOTIFY_NORMALIZER_SCRIPT
+        .replace("{{NOTIFY_PATH}}", transport_path.to_string_lossy().as_ref());
     write_executable_script(&notify_path, &normalizer, "Codex notify normalizer")?;
 
     let wrapper_path = codex_wrapper_path();
@@ -271,6 +269,9 @@ pub(crate) fn build_codex_hook_entry(event_name: &str, script_path: &Path) -> Va
     if event_name == "PermissionRequest" {
         entry["matcher"] = Value::String("*".into());
     }
+    if event_name == "Interrupt" {
+        entry["hooks"][0]["timeout"] = json!(3);
+    }
     entry
 }
 
@@ -294,6 +295,7 @@ pub(crate) fn reconcile_codex_hooks_json(
         "UserPromptSubmit",
         "PermissionRequest",
         "Stop",
+        "Interrupt",
     ] {
         let entries = hooks_obj
             .entry(event_name.to_string())
@@ -364,6 +366,7 @@ pub(crate) fn ensure_codex_hooks_json(notify_script_path: &Path) -> Result<(), S
             .map_err(|e| format!("Failed to create Codex hooks dir {}: {e}", parent.display()))?;
     }
 
+    let _settings_lock = crate::app_state::lock_exclusive(&hooks_path)?;
     let Some(mut hooks_json) = read_mergeable_json_object(&hooks_path, "Codex hooks.json")? else {
         return Ok(());
     };

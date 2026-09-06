@@ -9,6 +9,8 @@ export const UnpeelNotifyPlugin = async ({ $, client }) => {
   let currentState = 'idle';
   let rootSessionID = null;
   let stopSent = false;
+  let stopEvent = 'Stop';
+  let eventQueue = Promise.resolve();
   const childSessionCache = new Map();
 
   const notify = async (hookEventName, sessionID = rootSessionID) => {
@@ -31,6 +33,7 @@ export const UnpeelNotifyPlugin = async ({ $, client }) => {
     try {
       const sessions = await client.session.list();
       const session = sessions.data?.find((value) => value.id === sessionID);
+      if (!session) return true;
       const isChild = !!session?.parentID;
       childSessionCache.set(sessionID, isChild);
       return isChild;
@@ -45,6 +48,7 @@ export const UnpeelNotifyPlugin = async ({ $, client }) => {
     if (currentState === 'idle') {
       currentState = 'busy';
       stopSent = false;
+      stopEvent = 'Stop';
       await notify('Start', sessionID);
     }
   };
@@ -54,14 +58,13 @@ export const UnpeelNotifyPlugin = async ({ $, client }) => {
     if (currentState === 'busy' && !stopSent) {
       currentState = 'idle';
       stopSent = true;
-      await notify('Stop', sessionID);
+      await notify(stopEvent, sessionID);
       rootSessionID = null;
     }
   };
 
-  return {
-    event: async ({ event }) => {
-      const sessionID = event.properties?.sessionID;
+  const handleEvent = async ({ event }) => {
+      const sessionID = event.properties?.sessionID ?? event.properties?.info?.sessionID;
       if (await isChildSession(sessionID)) return;
 
       if (event.type === 'session.status') {
@@ -76,9 +79,31 @@ export const UnpeelNotifyPlugin = async ({ $, client }) => {
       if (event.type === 'session.busy') {
         await handleBusy(sessionID);
       }
-      if (event.type === 'session.idle' || event.type === 'session.error') {
+      if (event.type === 'session.error' && sessionID === rootSessionID) {
+        // Errors can be followed by retries/compaction. Remember the outcome
+        // and wait for the provider's idle event before settling the turn.
+        stopEvent = event.properties?.error?.name === 'MessageAbortedError'
+          ? 'StopCancelled' : 'StopFailure';
+      }
+      if (event.type === 'message.updated' && sessionID === rootSessionID) {
+        const info = event.properties?.info;
+        // A successful response after retry/compaction replaces its earlier
+        // recoverable error. Tool messages and incomplete chunks do not.
+        if (stopEvent === 'StopFailure' && info?.role === 'assistant' && info?.time?.completed && !info.error) {
+          stopEvent = 'Stop';
+        }
+      }
+      if (event.type === 'session.idle') {
         await handleStop(sessionID);
       }
+  };
+
+  return {
+    event: (input) => {
+      // Provider event callbacks can overlap while session lookup/notify waits.
+      // Preserve error -> idle ordering and never let a child end the root turn.
+      eventQueue = eventQueue.then(() => handleEvent(input), () => handleEvent(input));
+      return eventQueue;
     },
     'permission.ask': async (_permission, output) => {
       if (output.status === 'ask') {

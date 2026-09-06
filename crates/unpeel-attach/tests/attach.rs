@@ -717,6 +717,42 @@ fn stdin_prefers_persistent_input_stream_over_write_commands() {
 }
 
 #[test]
+fn lone_escape_reaches_host_without_a_second_key_or_eof() {
+    for mute_ms in [0, 10_000] {
+        let sessions_dir = unique_temp_dir("lone-escape");
+        let session_dir = sessions_dir.join("test-session");
+        fs::create_dir_all(&session_dir).unwrap();
+        fs::write(session_dir.join("output.bin"), b"working> ").unwrap();
+        write_manifest(&session_dir, "running", Some(std::process::id()));
+        let received = spawn_fake_socket_server_with_input_stream(&session_dir);
+        let mut attach = spawn_attach(&sessions_dir, 1024 * 1024, mute_ms);
+        assert!(wait_for(Duration::from_secs(5), || !attach
+            .stdout_bytes
+            .lock()
+            .unwrap()
+            .is_empty()));
+        let mut stdin = attach.child.stdin.take().unwrap();
+        stdin.write_all(b"\x1b").unwrap();
+        stdin.flush().unwrap();
+        assert!(
+            wait_for(Duration::from_secs(2), || received
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|command| {
+                    command["type"] == "input_stream_frame" && command["data"] == "\u{1b}"
+                })),
+            "Escape must reach the Host while stdin stays open, including during replay muting"
+        );
+        assert!(attach.child.try_wait().unwrap().is_none());
+        drop(stdin);
+        write_manifest(&session_dir, "exited", None);
+        wait_bounded(&mut attach.child);
+        fs::remove_dir_all(sessions_dir).unwrap();
+    }
+}
+
+#[test]
 fn follows_output_file_created_after_attach_starts() {
     let sessions_dir = unique_temp_dir("late-output");
     let session_dir = sessions_dir.join("test-session");

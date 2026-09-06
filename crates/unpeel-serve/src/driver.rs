@@ -843,6 +843,13 @@ impl HostRuntime {
             let canonical = crate::activity::normalize_event_name(&message.event_name);
             let runtime = runtime_launch_metadata(&message.session_id);
             let accepted = if let Some(generation) = runtime.0 {
+                self.engine
+                    .observe_runtime_launch(&message.session_id, generation, runtime.1);
+                self.engine.sync_cancellation_from_disk(
+                    &message.session_id,
+                    &unpeel_core::app_paths::app_sessions_root().join(&message.session_id),
+                    generation,
+                );
                 self.engine.apply_hook_event_for_runtime(
                     &message.session_id,
                     &canonical,
@@ -1072,6 +1079,7 @@ impl HostRuntime {
             } else if row.status == Status::Attention && old != Some(Status::Attention) {
                 Some(unpeel_core::activity_log::ActivityLogKind::NeedsInput)
             } else if row.status == Status::Idle
+                && (!self.engine.is_latched(&row.id) || self.engine.is_completed(&row.id))
                 && matches!(
                     old,
                     Some(Status::Starting | Status::Busy | Status::Attention)

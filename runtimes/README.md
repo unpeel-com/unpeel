@@ -107,6 +107,13 @@ active runtime.
    `unpeel_runtime_generation`. It must no-op outside an Unpeel Session,
    report to the direct hook port and current port registry, and forward only
    the provider conversation ID/path fields the Host knows how to validate.
+   Finish bounded delivery before returning; provider-level asynchronous
+   hooks can reorder opening and closing events even when the script waits
+   for its own HTTP requests. An adapter may opt into
+   `Integration::with_escape_cancellation()` only when Escape is a verified
+   turn interrupt. The Host owns input parsing, durable cancellation fences,
+   and rearming on the next submitted opening hook; see
+   [Session activity](../docs/agents/clients/session-activity.md#escape-cancellation-and-hook-delivery).
 6. Automatic MCP setup must use the provider's additive mechanism and must
    report registration evidence per domain. A Session grant is not proof that
    an MCP client was configured.
