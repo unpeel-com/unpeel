@@ -4260,6 +4260,7 @@ mod tests {
             dir: std::path::PathBuf::from("/tmp"),
             detection_aliases: vec![],
             tint: None,
+            icon_svg: None,
             spinner_tint: None,
         };
         let binding = crate::app_presentations::ControllerAppPresentation {

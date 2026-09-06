@@ -42,9 +42,16 @@ struct ToolIconView: View {
     }
 
     init(command: String, size: CGFloat = 14) {
+        self.init(appID: nil, command: command, size: size)
+    }
+
+    /// Session/preset mark: runtime art, else the installed App's catalog
+    /// mark (Host-stamped `appID` first, then the command's binary), else
+    /// the terminal.
+    init(appID: String?, command: String, size: CGFloat = 14) {
         let runtime = UnpeelRuntimeCatalog.runtime(command: command)
-        icon = runtime.map(UnpeelToolIcon.forRuntime) ?? .terminal
-        displayName = runtime?.label ?? "Terminal"
+        icon = UnpeelToolIcon.resolving(appID: appID, providerID: nil, command: command)
+        displayName = runtime?.label ?? icon.label
         colorCommand = runtime?.presentationCommand ?? ""
         self.size = size
     }

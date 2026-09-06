@@ -245,6 +245,7 @@ mod tests {
             // is a reserved wrapper name.
             detection_aliases: vec!["design".into(), "claude".into(), "bash".into()],
             tint: Some("#8B5CF6".into()),
+            icon_svg: None,
             spinner_tint: None,
         };
         let index = build_index_from(&[app]);

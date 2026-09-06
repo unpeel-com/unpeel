@@ -37,8 +37,8 @@ struct SharedToolIconView: View {
     let icon: UnpeelToolIcon
     var size: CGFloat = 16
 
-    init(providerID: String?, command: String, size: CGFloat = 16) {
-        icon = UnpeelToolIcon.resolving(providerID: providerID, command: command)
+    init(appID: String? = nil, providerID: String?, command: String, size: CGFloat = 16) {
+        icon = UnpeelToolIcon.resolving(appID: appID, providerID: providerID, command: command)
         self.size = size
     }
 

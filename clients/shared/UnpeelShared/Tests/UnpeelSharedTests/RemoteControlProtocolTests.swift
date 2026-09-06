@@ -86,6 +86,38 @@ final class RemoteControlProtocolTests: XCTestCase {
         )
     }
 
+    func testAppIconsResolveFromTheHostCatalogByIDAndByCommand() throws {
+        let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 208 128\"><path d=\"M0 0h1v1H0z\"/></svg>"
+        let json = try JSONSerialization.data(withJSONObject: [
+            "id": "unpeel.app.markdown",
+            "name": "Markdown",
+            "command": "unpeel-markdown",
+            "iconSvg": svg,
+            "installed": true,
+        ])
+        let app = try JSONDecoder().decode(RemoteAppSummary.self, from: json)
+        XCTAssertEqual(app.iconSvg, svg)
+        UnpeelAppIconCatalog.update([app])
+        defer { UnpeelAppIconCatalog.update([]) }
+
+        let byID = UnpeelToolIcon.resolving(appID: "unpeel.app.markdown", providerID: nil, command: "")
+        XCTAssertEqual(byID.kind, .app)
+        XCTAssertEqual(byID.svgSource, svg)
+        XCTAssertTrue(byID.isTemplate)
+
+        // A Host launch names the absolute installed binary and quotes it.
+        let byCommand = UnpeelToolIcon.resolving(
+            providerID: nil,
+            command: "'/Users/me/.unpeel/apps/bin/unpeel-markdown' '/tmp/README.md'"
+        )
+        XCTAssertEqual(byCommand.id, byID.id)
+        XCTAssertEqual(UnpeelToolIcon.resolving(providerID: nil, command: "unpeel-markdown").id, byID.id)
+
+        // Runtime art still wins, and an unknown command stays the terminal.
+        XCTAssertEqual(UnpeelToolIcon.resolving(providerID: nil, command: "claude").kind, .agent)
+        XCTAssertEqual(UnpeelToolIcon.resolving(providerID: nil, command: "unpeel-nope").id, "terminal")
+    }
+
     func testAppSummaryDefaultsNewHandlerFieldsFromOlderHosts() throws {
         let json = #"{"id":"unpeel.app.markdown","name":"Markdown","command":"unpeel-markdown","mediaTypes":["text/markdown"],"installed":true}"#
         let app = try JSONDecoder().decode(RemoteAppSummary.self, from: Data(json.utf8))

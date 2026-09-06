@@ -203,6 +203,7 @@ mod tests {
             dir,
             detection_aliases: Vec::new(),
             tint: None,
+            icon_svg: None,
             spinner_tint: None,
         }
     }

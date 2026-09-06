@@ -244,6 +244,7 @@ final class RemoteHostRuntime: ObservableObject {
         if let pinnedHostID, let seedHostID = seed.macID, seedHostID != pinnedHostID {
             return
         }
+        UnpeelAppIconCatalog.update(seed.availableApps ?? [])
         snapshot = seed
         if selectedSessionID == nil, !replacementDefaultSelectionSuppressed {
             selectedSessionID = Self.defaultSessionID(in: seed)
@@ -1995,6 +1996,9 @@ final class RemoteHostRuntime: ObservableObject {
                 pendingCreatedSelectionID = nil
             }
         }
+        // App marks are data from the Host's catalog; keep the icon
+        // resolvers current before any row re-renders against `next`.
+        UnpeelAppIconCatalog.update(next.availableApps ?? [])
         if snapshot.map({ !Self.snapshotContentEqual($0, next) }) ?? true {
             snapshot = next
         }

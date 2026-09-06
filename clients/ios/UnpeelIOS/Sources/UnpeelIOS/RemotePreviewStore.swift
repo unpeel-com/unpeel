@@ -663,6 +663,7 @@ public final class RemotePreviewStore {
         selectWorkspaceOverride: ((String) async throws -> RemoteWorkspaceSelectResponse)? = nil,
         defaults: UserDefaults = .standard
     ) {
+        UnpeelAppIconCatalog.update(snapshot.availableApps ?? [])
         self.snapshot = snapshot
         self.client = client
         self.createSessionOverride = createSessionOverride
@@ -1073,6 +1074,7 @@ public final class RemotePreviewStore {
             capturedAtUnixMs: capturedAtUnixMs
         )
         if !Self.snapshotContentEqual(snapshot, next) {
+            UnpeelAppIconCatalog.update(next.availableApps ?? [])
             snapshot = next
             sidebarTree = IOSSidebarProjectTree(snapshot: next)
             projectsByID = Dictionary(uniqueKeysWithValues: next.projects.map { ($0.id, $0) })
@@ -1239,6 +1241,7 @@ public final class RemotePreviewStore {
             hostDeviceModel: snapshot.hostDeviceModel,
             hostWorkspaces: snapshot.hostWorkspaces
         )
+        UnpeelAppIconCatalog.update(next.availableApps ?? [])
         snapshot = next
         sidebarTree = IOSSidebarProjectTree(snapshot: next)
     }
@@ -1531,6 +1534,7 @@ public final class RemotePreviewStore {
             // only content changes are adopted.
             if !Self.snapshotContentEqual(snapshot, remote) {
                 RefreshDiagnostics.log("snapshot APPLIED (\(remote.sessions.count) sessions)")
+                UnpeelAppIconCatalog.update(remote.availableApps ?? [])
                 snapshot = remote
                 sidebarTree = IOSSidebarProjectTree(snapshot: remote)
                 projectsByID = Dictionary(uniqueKeysWithValues: remote.projects.map { ($0.id, $0) })

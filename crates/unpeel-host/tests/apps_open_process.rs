@@ -117,7 +117,12 @@ fn install_fixture_app(home: &Path) -> &'static str {
 }
 
 fn manifest_state(home: &Path, session_id: &str) -> Option<String> {
-    let raw = fs::read(home.join("app-sessions").join(session_id).join("manifest.json")).ok()?;
+    let raw = fs::read(
+        home.join("app-sessions")
+            .join(session_id)
+            .join("manifest.json"),
+    )
+    .ok()?;
     let manifest: Value = serde_json::from_slice(&raw).ok()?;
     manifest["state"].as_str().map(str::to_string)
 }
@@ -190,8 +195,7 @@ fn apps_open_creates_the_companion_session_without_approval() {
         .iter()
         .map(|response| {
             assert_ne!(
-                response["result"]["isError"],
-                true,
+                response["result"]["isError"], true,
                 "open failed: {}",
                 response["result"]["content"][0]["text"]
             );
@@ -255,13 +259,21 @@ fn apps_open_creates_the_companion_session_without_approval() {
         manifest_state(&home, &companion_id)
     );
     let companion_manifest: Value = serde_json::from_slice(
-        &fs::read(home.join("app-sessions").join(&companion_id).join("manifest.json")).unwrap(),
+        &fs::read(
+            home.join("app-sessions")
+                .join(&companion_id)
+                .join("manifest.json"),
+        )
+        .unwrap(),
     )
     .unwrap();
     assert_eq!(companion_manifest["session"]["role"], "app-panel");
     assert_eq!(companion_manifest["session"]["spawned_by"], caller_id);
 
-    let companion_socket = home.join("app-sessions").join(&companion_id).join("session.sock");
+    let companion_socket = home
+        .join("app-sessions")
+        .join(&companion_id)
+        .join("session.sock");
     assert!(wait_until(Duration::from_secs(10), || companion_socket.exists()));
     let _ = socket_command(&home, &companion_id, json!({ "type": "kill" }));
     let _ = wait_until(Duration::from_secs(5), || {

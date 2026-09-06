@@ -3151,6 +3151,7 @@ struct SessionRowView: View {
                 }
 
                 SessionCommandIconPresentation(
+                    appID: session.activeApp?.id,
                     command: session.presentationCommand,
                     items: paneItems,
                     onFocus: onFocusPane
@@ -3614,10 +3615,11 @@ private struct RestartActionButton: View {
 /// from the runtime catalog
 /// (`display.kind` + optional `icon_asset`), not a client provider table.
 private struct SessionCommandIcon: View {
+    var appID: String? = nil
     let command: String
 
     var body: some View {
-        ToolIconView(command: command, size: 12)
+        ToolIconView(appID: appID, command: command, size: 12)
             .opacity(0.82)
             .frame(width: 14, height: 14)
             .help(command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -3629,6 +3631,7 @@ private struct SessionCommandIcon: View {
 /// Keeps the standalone mark and merged stack in one persistent layout slot,
 /// so merging and separating panes can animate without a hard width jump.
 private struct SessionCommandIconPresentation: View {
+    var appID: String? = nil
     let command: String
     let items: [UnpeelStore.PaneSidebarItem]
     let onFocus: (String) -> Void
@@ -3636,7 +3639,7 @@ private struct SessionCommandIconPresentation: View {
     var body: some View {
         Group {
             if items.isEmpty {
-                SessionCommandIcon(command: command)
+                SessionCommandIcon(appID: appID, command: command)
                     .transition(.scale(scale: 0.82).combined(with: .opacity))
             } else {
                 SessionCommandIconStack(items: items, onFocus: onFocus)

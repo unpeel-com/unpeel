@@ -259,6 +259,7 @@ pub fn catalog_wire() -> Value {
                     "name": app.name,
                     "description": app.description,
                     "tint": app.tint,
+                    "iconSvg": app.icon_svg,
                     "command": app.binary,
                     "mediaTypes": app.media_types,
                     "fileExtensions": app.file_extensions,
@@ -281,6 +282,7 @@ pub fn installed_wire() -> Value {
                     "name": app.name,
                     "description": app.description,
                     "tint": app.tint,
+                    "iconSvg": app.icon_svg,
                     "command": app.command?,
                     "mediaTypes": app.media_types,
                     "fileExtensions": app.file_extensions,
@@ -306,6 +308,7 @@ mod tests {
             channel: "stable".into(),
             description: String::new(),
             tint: None,
+            icon_svg: None,
             media_types: vec!["text/markdown".into()],
             file_extensions: [("md".into(), "text/markdown".into())]
                 .into_iter()

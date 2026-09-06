@@ -17,10 +17,38 @@ public struct UnpeelToolIcon: Equatable, Hashable, Identifiable, Sendable, CaseI
         UnpeelRuntimeCatalog.runtimes.map(forRuntime) + [.terminal]
     }
 
-    public static func resolving(providerID: String?, command: String) -> UnpeelToolIcon {
+    /// Runtime art first, then an installed Unpeel App (by Host-stamped App
+    /// id, else by the command's leading binary), else the terminal mark.
+    public static func resolving(
+        appID: String? = nil,
+        providerID: String?,
+        command: String
+    ) -> UnpeelToolIcon {
         let runtime = UnpeelRuntimeCatalog.runtime(id: providerID)
             ?? UnpeelRuntimeCatalog.runtime(command: command)
-        return runtime.map(forRuntime) ?? .terminal
+        if let runtime {
+            return forRuntime(runtime)
+        }
+        return UnpeelAppIconCatalog.icon(appID: appID)
+            ?? UnpeelAppIconCatalog.icon(command: command)
+            ?? .terminal
+    }
+
+    /// An installed Unpeel App's mark from the Host's catalog: the
+    /// registry-authored SVG when it ships one, else the generic App mark.
+    public static func forApp(id: String, name: String, iconSVG: String?) -> UnpeelToolIcon {
+        let authored = iconSVG?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasAuthored = authored?.isEmpty == false
+        return UnpeelToolIcon(
+            id: "app:\(id)",
+            key: id,
+            label: name,
+            kind: .app,
+            svgSource: hasAuthored ? authored! : genericSVG(for: .app),
+            isTemplate: true,
+            fallbackSystemName: fallbackSystemName(for: .app),
+            usesRuntimeAsset: hasAuthored
+        )
     }
 
     public static func forRuntime(_ runtime: UnpeelRuntimeMetadata) -> UnpeelToolIcon {
@@ -75,3 +103,54 @@ public struct UnpeelToolIcon: Equatable, Hashable, Identifiable, Sendable, CaseI
         }
     }
 }
+
+/// The Host's App catalog as icons. Fed from every bootstrap snapshot
+/// (`availableApps`) by each client's store; read from any thread by the
+/// icon resolvers, which is why it is lock-protected rather than actor-bound.
+public enum UnpeelAppIconCatalog {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var byAppID: [String: UnpeelToolIcon] = [:]
+    nonisolated(unsafe) private static var byBinary: [String: UnpeelToolIcon] = [:]
+
+    public static func update(_ apps: [RemoteAppSummary]) {
+        var nextByID: [String: UnpeelToolIcon] = [:]
+        var nextByBinary: [String: UnpeelToolIcon] = [:]
+        for app in apps {
+            let icon = UnpeelToolIcon.forApp(id: app.id, name: app.name, iconSVG: app.iconSvg)
+            nextByID[app.id.lowercased()] = icon
+            let binary = (app.command as NSString).lastPathComponent.lowercased()
+            if !binary.isEmpty {
+                nextByBinary[binary] = icon
+            }
+        }
+        lock.lock()
+        byAppID = nextByID
+        byBinary = nextByBinary
+        lock.unlock()
+    }
+
+    public static func icon(appID: String?) -> UnpeelToolIcon? {
+        guard let appID, !appID.isEmpty else { return nil }
+        lock.lock()
+        defer { lock.unlock() }
+        return byAppID[appID.lowercased()]
+    }
+
+    /// Match the command's leading word by binary name, so both the bare
+    /// launch-list command and a Host launch by absolute path resolve.
+    public static func icon(command: String) -> UnpeelToolIcon? {
+        guard let token = command
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(whereSeparator: { $0.isWhitespace })
+            .first
+            .map(String.init)
+        else { return nil }
+        let unquoted = token.trimmingCharacters(in: CharacterSet(charactersIn: "'\""))
+        let binary = (unquoted as NSString).lastPathComponent.lowercased()
+        guard !binary.isEmpty else { return nil }
+        lock.lock()
+        defer { lock.unlock() }
+        return byBinary[binary]
+    }
+}
+

@@ -38,6 +38,9 @@ const MAX_APPS: usize = 100;
 const MAX_MEDIA_TYPES_PER_APP: usize = 32;
 const MAX_FILE_EXTENSIONS_PER_APP: usize = 64;
 const MAX_RESOURCE_KINDS_PER_APP: usize = 32;
+/// An App's sidebar mark: one small inline SVG the clients template like a
+/// runtime icon. Registry-authored, so bound it hard.
+const ICON_SVG_CAP_BYTES: usize = 8 * 1024;
 /// Past this many installed apps the live tool description lists names only.
 const DESCRIPTION_LIST_FULL_BOUND: usize = 8;
 /// Canonical official-App CLI allowlist. The release Worker consumes this
@@ -68,6 +71,8 @@ pub struct InstalledApp {
     pub detection_aliases: Vec<String>,
     /// Catalog tint, validated `#RRGGBB`.
     pub tint: Option<String>,
+    /// Registry-authored monochrome SVG mark, when the App ships one.
+    pub icon_svg: Option<String>,
     /// Optional spinner tint, validated `#RRGGBB`; falls back to `tint`.
     pub spinner_tint: Option<String>,
 }
@@ -94,6 +99,10 @@ pub struct CatalogApp {
     pub description: String,
     #[serde(default)]
     pub tint: Option<String>,
+    /// Monochrome inline SVG mark (fills/strokes white, any viewBox);
+    /// clients render it as a template like a runtime icon.
+    #[serde(default)]
+    pub icon_svg: Option<String>,
     #[serde(default)]
     pub media_types: Vec<String>,
     #[serde(default)]
@@ -116,6 +125,8 @@ struct RawCatalogApp {
     #[serde(default)]
     tint: Option<String>,
     #[serde(default)]
+    icon_svg: Option<String>,
+    #[serde(default)]
     media_types: Vec<String>,
     #[serde(default)]
     file_extensions: BTreeMap<String, String>,
@@ -127,6 +138,23 @@ struct RawCatalogApp {
 
 fn default_release_channel() -> String {
     "stable".into()
+}
+
+/// Accept only a small, plain inline `<svg>` document: no scripts, no
+/// external references, nothing but a mark the client can template.
+fn valid_icon_svg(raw: &str) -> Option<String> {
+    let svg = raw.trim();
+    let lower = svg.to_ascii_lowercase();
+    (svg.len() <= ICON_SVG_CAP_BYTES
+        && lower.starts_with("<svg")
+        && lower.ends_with("</svg>")
+        && !lower.contains("<script")
+        && !lower.contains("javascript:")
+        && !lower.contains("<foreignobject")
+        && !lower.contains("href=")
+        && !lower.contains("url(")
+        && !svg.contains('\0'))
+    .then(|| svg.to_string())
 }
 
 fn cap_chars(text: &str, cap: usize) -> String {
@@ -267,6 +295,7 @@ fn catalog_apps_from(raw: &str) -> Vec<CatalogApp> {
                 .map(str::trim)
                 .filter(|value| valid_hex_color(value))
                 .map(str::to_ascii_uppercase);
+            let icon_svg = entry.icon_svg.as_deref().and_then(valid_icon_svg);
             let media_types = entry
                 .media_types
                 .into_iter()
@@ -310,6 +339,7 @@ fn catalog_apps_from(raw: &str) -> Vec<CatalogApp> {
                 resource_kinds,
                 default_for: Vec::new(),
                 tint,
+                icon_svg,
             };
             app.default_for = entry
                 .default_for
@@ -354,6 +384,7 @@ fn installed_apps_at(catalog: &[CatalogApp], search_dirs: &[PathBuf]) -> Vec<Ins
                     .unwrap_or_default(),
                 detection_aliases: vec![entry.binary.to_ascii_lowercase()],
                 tint: entry.tint.clone(),
+                icon_svg: entry.icon_svg.clone(),
                 spinner_tint: None,
             })
         })
@@ -1033,6 +1064,7 @@ mod tests {
             dir: dir.to_path_buf(),
             detection_aliases: vec!["unpeel-design".into()],
             tint: Some("#8B5CF6".into()),
+            icon_svg: None,
             spinner_tint: None,
         }
     }
@@ -1070,6 +1102,42 @@ mod tests {
         assert_eq!(apps[0].detection_aliases, ["unpeel-notes"]);
         assert_eq!(apps[0].tint.as_deref(), Some("#3B82F6"));
         assert_eq!(apps[0].media_types, ["text/markdown"]);
+    }
+
+    #[test]
+    fn registry_icons_are_small_plain_svg_marks_or_dropped() {
+        let entry = |icon: &str| {
+            format!(
+                r#"{{"markdown":{{"id":"unpeel.app.markdown","binary":"unpeel-markdown","name":"Markdown","icon_svg":{}}}}}"#,
+                serde_json::to_string(icon).unwrap()
+            )
+        };
+        let good = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 208 128"><path d="M0 0h1v1H0z"/></svg>"#;
+        let apps = catalog_apps_from(&entry(good));
+        assert_eq!(apps[0].icon_svg.as_deref(), Some(good));
+
+        for bad in [
+            r#"<svg><script>alert(1)</script></svg>"#,
+            r#"<svg><image href="https://x/y.png"/></svg>"#,
+            r#"<svg><foreignObject/></svg>"#,
+            "<div>not svg</div>",
+            &format!("<svg>{}</svg>", "x".repeat(ICON_SVG_CAP_BYTES)),
+        ] {
+            let apps = catalog_apps_from(&entry(bad));
+            assert_eq!(apps.len(), 1, "the App itself stays listed");
+            assert!(apps[0].icon_svg.is_none(), "dropped: {bad:.40}");
+        }
+
+        // The shipped registry's Markdown mark passes its own gate.
+        let shipped = catalog_apps_from(APP_CLI_REGISTRY);
+        let markdown = shipped
+            .iter()
+            .find(|app| app.id == "unpeel.app.markdown")
+            .unwrap();
+        assert!(markdown
+            .icon_svg
+            .as_deref()
+            .is_some_and(|svg| svg.starts_with("<svg")));
     }
 
     #[test]
@@ -1124,6 +1192,7 @@ mod tests {
             channel: "stable".into(),
             description: String::new(),
             tint: None,
+            icon_svg: None,
             media_types: vec!["text/markdown".into()],
             file_extensions: [("md".into(), "text/markdown".into())]
                 .into_iter()

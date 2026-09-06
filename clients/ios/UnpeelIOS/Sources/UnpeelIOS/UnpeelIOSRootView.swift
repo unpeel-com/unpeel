@@ -2212,6 +2212,7 @@ private struct MacStyleSessionRow: View {
                 // Agent-CLI mark right of the date, matching the desktop
                 // sidebar's SessionCommandIcon (12pt in a fixed 14×14 slot).
                 SharedToolIconView(
+                    appID: session.activeAppID,
                     providerID: session.presentationProviderID,
                     command: session.command,
                     size: 12

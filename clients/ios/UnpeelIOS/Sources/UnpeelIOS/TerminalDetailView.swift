@@ -859,6 +859,7 @@ struct ActivityPanelRow: View {
                     }
 
                     SharedToolIconView(
+                        appID: session.activeAppID,
                         providerID: session.presentationProviderID,
                         command: session.command,
                         size: 16

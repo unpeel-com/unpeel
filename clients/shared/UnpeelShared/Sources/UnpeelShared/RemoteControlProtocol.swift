@@ -1064,6 +1064,10 @@ public struct RemoteAppSummary: Codable, Equatable, Identifiable, Sendable {
     public let name: String
     public let description: String
     public let tint: String?
+    /// Registry-authored monochrome SVG mark, rendered as a template like a
+    /// runtime icon. Absent on Hosts older than 2026-09-06 and for Apps
+    /// that ship none; clients fall back to the generic App mark.
+    public let iconSvg: String?
     public let command: String
     public let mediaTypes: [String]
     public let fileExtensions: [String: String]
@@ -1076,6 +1080,7 @@ public struct RemoteAppSummary: Codable, Equatable, Identifiable, Sendable {
         name: String,
         description: String = "",
         tint: String? = nil,
+        iconSvg: String? = nil,
         command: String,
         mediaTypes: [String] = [],
         fileExtensions: [String: String] = [:],
@@ -1087,6 +1092,7 @@ public struct RemoteAppSummary: Codable, Equatable, Identifiable, Sendable {
         self.name = name
         self.description = description
         self.tint = tint
+        self.iconSvg = iconSvg
         self.command = command
         self.mediaTypes = mediaTypes
         self.fileExtensions = fileExtensions
@@ -1096,7 +1102,7 @@ public struct RemoteAppSummary: Codable, Equatable, Identifiable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, description, tint, command, mediaTypes
+        case id, name, description, tint, iconSvg, command, mediaTypes
         case fileExtensions, resourceKinds, defaultFor, installed
     }
 
@@ -1106,6 +1112,7 @@ public struct RemoteAppSummary: Codable, Equatable, Identifiable, Sendable {
         name = try container.decode(String.self, forKey: .name)
         description = try container.decodeIfPresent(String.self, forKey: .description) ?? ""
         tint = try container.decodeIfPresent(String.self, forKey: .tint)
+        iconSvg = try container.decodeIfPresent(String.self, forKey: .iconSvg)
         command = try container.decode(String.self, forKey: .command)
         mediaTypes = try container.decodeIfPresent([String].self, forKey: .mediaTypes) ?? []
         fileExtensions = try container.decodeIfPresent(
