@@ -35,6 +35,62 @@ final class SidebarGroupDropTests: XCTestCase {
         )
     }
 
+    func testFolderSelectionIncludesNestedGroupAndWorktreeSessions() {
+        let direct = SessionEntry(
+            id: "direct",
+            projectID: "group",
+            label: "Direct",
+            command: "codex",
+            createdAt: 0,
+            status: .idle
+        )
+        let nested = SessionEntry(
+            id: "nested",
+            projectID: "worktree",
+            label: "Nested",
+            command: "codex",
+            createdAt: 0,
+            status: .idle
+        )
+        let worktree = ProjectNode(
+            project: Project(
+                id: "worktree",
+                name: "Worktree",
+                path: "/tmp/worktree",
+                parentProjectID: "group",
+                sortOrder: nil,
+                isFolder: nil,
+                worktreeBranch: "feature",
+                workspacesEnabled: nil,
+                mcpBlocked: nil
+            ),
+            sessions: [nested],
+            worktrees: []
+        )
+        let group = ProjectNode(
+            project: Project(
+                id: "group",
+                name: "Group",
+                path: "/tmp/group",
+                parentProjectID: "root",
+                sortOrder: nil,
+                isFolder: true,
+                worktreeBranch: nil,
+                workspacesEnabled: nil,
+                mcpBlocked: nil
+            ),
+            sessions: [direct],
+            worktrees: [worktree]
+        )
+
+        XCTAssertTrue(group.containsSidebarSession("direct"))
+        XCTAssertTrue(group.containsSidebarSession("nested"))
+        XCTAssertFalse(group.containsSidebarSession("elsewhere"))
+        XCTAssertFalse(group.containsSidebarSession(nil))
+        XCTAssertFalse(worktree.containsSidebarSession("direct"))
+        XCTAssertTrue(worktree.containsSidebarSession("nested"))
+    }
+
     @MainActor
     func testSessionDropHighlightClearsWithDragState() {
         let state = SidebarDragState()

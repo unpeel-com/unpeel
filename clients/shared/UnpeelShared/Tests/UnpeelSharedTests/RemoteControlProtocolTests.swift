@@ -24,6 +24,74 @@ final class RemoteControlProtocolTests: XCTestCase {
         // Pane grouping is an additive sidebar projection. Older Controllers
         // omit it and the phone keeps the legacy flat Session list.
         XCTAssertNil(decoded.paneGroups)
+        XCTAssertNil(decoded.availableApps)
+        XCTAssertNil(decoded.installedApps)
+        XCTAssertNil(decoded.openers)
+        XCTAssertNil(decoded.appPresentations)
+    }
+
+    func testBootstrapRoundTripsAppCatalogAndTypedOpeners() throws {
+        let markdown = RemoteAppSummary(
+            id: "unpeel.app.markdown",
+            name: "Markdown",
+            command: "unpeel-markdown",
+            mediaTypes: ["text/markdown"],
+            fileExtensions: ["md": "text/markdown"],
+            resourceKinds: ["folder"],
+            defaultFor: ["file:text/markdown"],
+            installed: true
+        )
+        let snapshot = RemoteBootstrapSnapshot(
+            folders: [],
+            projects: [],
+            presets: [],
+            availableApps: [markdown],
+            installedApps: [markdown],
+            openers: ["file:text/markdown": "app:unpeel.app.markdown"],
+            appPresentations: RemoteAppPresentationsFile(
+                version: 1,
+                instances: [.init(
+                    id: "instance-1",
+                    appID: markdown.id,
+                    companionSessionID: "companion-1"
+                )],
+                presentations: [.init(
+                    id: "presentation-1",
+                    callerSessionID: "caller-1",
+                    instanceID: "instance-1",
+                    target: "panel",
+                    revealRevision: 2
+                )]
+            ),
+            sessions: [],
+            capturedAtUnixMs: 42
+        )
+        let decoded = try roundTrip(snapshot)
+        XCTAssertEqual(decoded.availableApps, [markdown])
+        XCTAssertEqual(decoded.installedApps, [markdown])
+        XCTAssertEqual(
+            decoded.openers?["file:text/markdown"],
+            "app:unpeel.app.markdown"
+        )
+        XCTAssertEqual(RemoteAppSummary.mediaType(forPath: "/tmp/README.MD", in: [markdown]), "text/markdown")
+        XCTAssertTrue(markdown.handles(selector: "file:text/markdown"))
+        XCTAssertTrue(markdown.handles(selector: "resource:folder"))
+        XCTAssertEqual(
+            decoded.appPresentations?.instances.first?.companionSessionID,
+            "companion-1"
+        )
+        XCTAssertEqual(
+            decoded.appPresentations?.presentations.first?.revealRevision,
+            2
+        )
+    }
+
+    func testAppSummaryDefaultsNewHandlerFieldsFromOlderHosts() throws {
+        let json = #"{"id":"unpeel.app.markdown","name":"Markdown","command":"unpeel-markdown","mediaTypes":["text/markdown"],"installed":true}"#
+        let app = try JSONDecoder().decode(RemoteAppSummary.self, from: Data(json.utf8))
+        XCTAssertEqual(app.fileExtensions, [:])
+        XCTAssertEqual(app.resourceKinds, [])
+        XCTAssertEqual(app.defaultFor, [])
     }
 
     func testBootstrapRoundTripsSidebarPaneGroups() throws {

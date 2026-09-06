@@ -102,6 +102,16 @@ enum ClickablePath {
                 && !isDirectory.boolValue
         }
     ) -> String? {
+        guard let path = absolutePath(raw, workingDirectory: workingDirectory) else {
+            return nil
+        }
+        return fileExists(path) ? path : nil
+    }
+
+    /// Resolve syntax only. Remote Host paths must never be checked against
+    /// the Controller's filesystem; their existence is established by the
+    /// Host-side command that opens them.
+    static func absolutePath(_ raw: String, workingDirectory: String?) -> String? {
         var path = raw
         if path.hasPrefix("~") {
             path = (path as NSString).expandingTildeInPath
@@ -111,7 +121,7 @@ enum ClickablePath {
             path = (cwd as NSString).appendingPathComponent(path)
         }
         path = (path as NSString).standardizingPath
-        return fileExists(path) ? path : nil
+        return path
     }
 
     private static func parse(_ token: String) -> Match {

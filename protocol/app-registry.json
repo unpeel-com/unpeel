@@ -1,11 +1,17 @@
 {
   "design": {
     "id": "unpeel.app.design",
+    "channel": "stable",
     "binary": "unpeel-design",
     "name": "Unpeel Design",
     "description": "Terminal visual designer over a folder of HTML artboards; files are the truth and edits write straight back to disk",
     "tint": "#8B5CF6",
     "media_types": ["text/html"],
+    "file_extensions": {
+      "html": "text/html",
+      "htm": "text/html"
+    },
+    "resource_kinds": ["folder"],
     "try": [
       "unpeel-design path/to/html-files",
       "(needs a Kitty-graphics terminal: Ghostty or Unpeel)"
@@ -13,42 +19,60 @@
   },
   "diffs": {
     "id": "unpeel.app.diffs",
+    "channel": "stable",
     "binary": "unpeel-diffs",
     "name": "Diffs",
     "description": "Standalone borderless Git working-tree viewer with a changed-file list and diff detail",
     "tint": "#64748B",
-    "media_types": ["inode/directory"],
+    "media_types": [],
+    "resource_kinds": ["git.working-tree"],
+    "default_for": ["resource:git.working-tree"],
     "try": ["unpeel-diffs path/to/project"]
   },
   "filetree": {
     "id": "unpeel.app.filetree",
+    "channel": "stable",
     "binary": "unpeel-filetree",
     "name": "Files",
     "description": "Borderless project-scoped file explorer with filtering and native path dragging",
     "tint": "#D97706",
-    "media_types": ["inode/directory"],
+    "media_types": [],
+    "resource_kinds": ["folder"],
+    "default_for": ["resource:folder"],
     "try": ["unpeel-filetree path/to/project"]
   },
   "github-issues": {
     "id": "unpeel.app.github-issues",
+    "channel": "stable",
     "binary": "unpeel-github-issues",
     "name": "GitHub Issues",
     "description": "Borderless GitHub issue list and detail browser for the current Git project",
     "tint": "#6E5494",
-    "media_types": ["application/vnd.github.issue"],
+    "media_types": [],
+    "resource_kinds": ["github.repository"],
     "try": ["unpeel-github-issues path/to/project"]
   },
   "markdown": {
     "id": "unpeel.app.markdown",
+    "channel": "stable",
     "binary": "unpeel-markdown",
     "name": "Markdown",
     "description": "Terminal Markdown editor with live styling, slash commands, mouse editing, and note-vault browsing",
     "tint": "#3B82F6",
     "media_types": ["text/markdown"],
+    "file_extensions": {
+      "md": "text/markdown",
+      "markdown": "text/markdown",
+      "mdown": "text/markdown",
+      "mkd": "text/markdown"
+    },
+    "resource_kinds": ["folder"],
+    "default_for": ["file:text/markdown"],
     "try": ["unpeel-markdown path/to/notes"]
   },
   "usage": {
     "id": "unpeel.app.usage",
+    "channel": "stable",
     "binary": "unpeel-usage",
     "name": "Usage",
     "description": "Codex, Claude, Grok, and Muse usage with monthly token totals and alerts",

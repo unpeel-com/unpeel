@@ -52,10 +52,8 @@ jobs:
           cargo fmt --manifest-path crates/unpeel-attach/Cargo.toml -- --check
           cargo clippy --manifest-path crates/unpeel-attach/Cargo.toml --all-targets --locked -- -D warnings
           cargo test --manifest-path crates/unpeel-attach/Cargo.toml --all-targets --locked
-      - name: Portable Controller core tests
-        run: cargo test --manifest-path crates/Cargo.toml -p unpeel-core --no-default-features --features controller-core --locked
-      - name: Portable Controller core WebAssembly check
-        run: cargo clippy --manifest-path crates/Cargo.toml -p unpeel-core --target wasm32-unknown-unknown --all-targets --no-default-features --features controller-core --locked -- -D warnings
+      - name: Portable Controller core (tests + WebAssembly clippy)
+        run: scripts/ci/check-portable-core.sh
       - name: PTY behavioral suite (headless-host slice)
         run: |
           cd crates && cargo build -q --locked -p unpeel-cli -p unpeel-host

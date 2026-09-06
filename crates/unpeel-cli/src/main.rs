@@ -8,10 +8,12 @@
 //! bare `unpeel` prints usage. The Controllers are the Unpeel app, the phone,
 //! and the web Controller — all clients of `unpeel serve`.
 
+mod apps_cli;
 mod browser_cli;
 mod cli;
 mod computer_cli;
 mod link_cli;
+mod open_cli;
 mod settings_cli;
 mod state_cli;
 mod workspaces;

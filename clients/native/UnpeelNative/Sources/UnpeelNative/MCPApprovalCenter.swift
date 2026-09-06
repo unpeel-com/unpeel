@@ -23,6 +23,7 @@
 
 import AppKit
 import Foundation
+import UnpeelShared
 
 /// One pending ask-mode approval request, unified across the three kinds.
 struct PendingMcpApproval: Identifiable, Equatable {
@@ -107,16 +108,45 @@ extension UnpeelStore {
     /// prompt surface. The callback is a snapshot, not an effect: an approval
     /// answered by a phone simply disappears here on the next generation.
     func reconcileHostApprovals(_ presented: [PlatformPresentedApproval]) {
+        reconcileApprovals(presented, scoped: false)
+    }
+
+    /// Same reconciliation for the SELECTED non-Local scope's bootstrap
+    /// (`pendingApprovals`): a scoped local workspace's or a remote Host's
+    /// worker has no platform adapter into this app, so its prompts ride the
+    /// snapshot exactly as they do on the phone. Pass an empty list when the
+    /// selection returns to Local so the projected rows disappear.
+    func reconcileScopedHostApprovals(_ presented: [RemotePendingApproval]) {
+        reconcileApprovals(presented.map { item in
+            PlatformPresentedApproval(
+                id: item.id,
+                kind: item.kind,
+                title: item.title,
+                body: item.body,
+                callerSessionID: item.callerSessionID,
+                targetSessionID: item.targetSessionID,
+                requestedAtUnixMs: item.requestedAtUnixMs
+            )
+        }, scoped: true)
+    }
+
+    /// One queue, two sources: the own-home adapter (`scoped == false`) and
+    /// the selected scope's bootstrap (`scoped == true`). Each source only
+    /// removes the rows it owns, so a Local prompt survives a scoped refresh
+    /// and vice versa.
+    private func reconcileApprovals(_ presented: [PlatformPresentedApproval], scoped: Bool) {
         let incomingIDs = Set(presented.map(\.id))
+        var owned = scoped ? scopedHostMcpApprovalIDs : hostOwnedMcpApprovalIDs
+        let otherOwned = scoped ? hostOwnedMcpApprovalIDs : scopedHostMcpApprovalIDs
         pendingMcpApprovals.removeAll { approval in
-            hostOwnedMcpApprovalIDs.contains(approval.id)
-                && !incomingIDs.contains(approval.id)
+            owned.contains(approval.id) && !incomingIDs.contains(approval.id)
         }
-        hostOwnedMcpApprovalIDs.formIntersection(incomingIDs)
+        owned.formIntersection(incomingIDs)
+        let retained = incomingIDs.union(otherOwned)
         hostMcpApprovalMessages = hostMcpApprovalMessages.filter {
-            incomingIDs.contains($0.key)
+            retained.contains($0.key)
         }
-        hostMcpApprovalAnswersInFlight.formIntersection(incomingIDs)
+        hostMcpApprovalAnswersInFlight.formIntersection(retained)
 
         let existingIDs = Set(pendingMcpApprovals.map(\.id))
         var didReveal = false
@@ -125,7 +155,7 @@ extension UnpeelStore {
             guard !existingIDs.contains(item.id),
                   let kind = PendingMcpApproval.Kind(rawValue: item.kind)
             else {
-                hostOwnedMcpApprovalIDs.insert(item.id)
+                owned.insert(item.id)
                 continue
             }
             let approval = PendingMcpApproval(
@@ -139,13 +169,18 @@ extension UnpeelStore {
                     timeIntervalSince1970: Double(item.requestedAtUnixMs) / 1_000
                 )
             )
-            hostOwnedMcpApprovalIDs.insert(item.id)
+            owned.insert(item.id)
             pendingMcpApprovals.append(approval)
             notifyMcpApprovalRequested(approval)
             if !didReveal {
                 revealSessionForMcpApproval(approval)
                 didReveal = true
             }
+        }
+        if scoped {
+            scopedHostMcpApprovalIDs = owned
+        } else {
+            hostOwnedMcpApprovalIDs = owned
         }
     }
 
@@ -156,6 +191,34 @@ extension UnpeelStore {
     func answerMcpApproval(id: String, approved: Bool) -> Bool {
         guard let index = pendingMcpApprovals.firstIndex(where: { $0.id == id }) else {
             return false
+        }
+        if scopedHostMcpApprovalIDs.contains(id) {
+            // The selected scope's worker owns this prompt: answer through
+            // its runtime (capability-gated `approval.answer`), and let the
+            // next bootstrap confirm the row is gone.
+            guard hostMcpApprovalAnswersInFlight.insert(id).inserted else { return true }
+            let isLocalMachine = selectedHostScope.isLocalMachine
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                do {
+                    try await self.remoteHostRuntime.answerApproval(id, approved: approved)
+                    let answered = self.pendingMcpApprovals.first { $0.id == id }
+                    self.pendingMcpApprovals.removeAll { $0.id == id }
+                    if approved, isLocalMachine, answered?.kind == .computer {
+                        self.checkComputerPermissionsAfterApproval()
+                    }
+                    self.scopedHostMcpApprovalIDs.remove(id)
+                    self.hostMcpApprovalMessages.removeValue(forKey: id)
+                    self.remoteHostRuntime.requestImmediateRefresh()
+                } catch {
+                    ToastCenter.shared.show(
+                        "Couldn’t answer the approval",
+                        systemImage: "exclamationmark.triangle"
+                    )
+                }
+                self.hostMcpApprovalAnswersInFlight.remove(id)
+            }
+            return true
         }
         if hostOwnedMcpApprovalIDs.contains(id) {
             guard hostMcpApprovalAnswersInFlight.insert(id).inserted else { return true }

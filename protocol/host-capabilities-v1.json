@@ -7,7 +7,20 @@
       "major": "must-match",
       "minor": "additive",
       "unknownCapabilities": "ignore"
-    }
+    },
+    "history": [
+      {
+        "minor": 15,
+        "release": "0.6.0",
+        "summary": "/mobile served over the pinned Host TLS certificate, and Host-owned typed resource openers (Apps): install, open, and the per-selector opener policy. One additive minor for both; a Controller still checks each id, never the minor.",
+        "capabilities": [
+          "apps.install",
+          "apps.open",
+          "host.mobile.tls",
+          "settings.openers.set"
+        ]
+      }
+    ]
   },
   "capabilities": [
     {
@@ -63,6 +76,20 @@
       "id": "artifact.upload.resumable",
       "method": "POST",
       "path": "/mobile/upload-chunk",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "apps.install",
+      "method": "POST",
+      "path": "/mobile/apps/install",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "apps.open",
+      "method": "POST",
+      "path": "/mobile/apps/open",
       "native": true,
       "tui": true
     },
@@ -280,6 +307,13 @@
       "id": "settings.presets.set",
       "method": "POST",
       "path": "/mobile/presets",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "settings.openers.set",
+      "method": "POST",
+      "path": "/mobile/openers",
       "native": true,
       "tui": true
     },

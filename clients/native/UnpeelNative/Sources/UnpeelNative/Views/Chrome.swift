@@ -70,18 +70,27 @@ struct FrameBackdrop: View {
 
     var body: some View {
         ZStack {
-            // Translucent paths stack their wash over a native glass base:
-            // NSVisualEffectView blurs the desktop with no window rim (the
-            // private CGS blur radius draws a border on macOS 26). .hudWindow
-            // is the clearest standard blur material, so low opacities read
-            // as glass rather than a gray slab.
+            // Translucent paths stack their wash over a native glass base.
+            // .hudWindow is the clearest standard material, so low opacities
+            // read as glass rather than a gray slab. WITHIN-window blending,
+            // never behind-window: a behind-window blur is re-sampled from
+            // the desktop by WindowServer on the GPU every time anything in
+            // the window changes, and a TUI redrawing at 60 fps (OpenCode's
+            // progress UI) turned that into 80-90% whole-GPU utilization on
+            // a Retina/ProMotion display (unpeel#9). Within-window frosts
+            // only the window's own content, which costs nothing while the
+            // terminal repaints.
             if !transparency.backgroundUsesDesignTone {
                 // Custom tone: flat color (dark appearance; light keeps its
                 // designed white) plus the workspace wash every area shares.
                 // The per-area neutral tints are skipped so an equal Surface
                 // tone renders the identical color.
                 if transparency.backgroundOpacity < 1 {
-                    VisualEffectBackground(material: .hudWindow, state: .active)
+                    VisualEffectBackground(
+                        material: .hudWindow,
+                        blendingMode: .withinWindow,
+                        state: .active
+                    )
                 }
                 Theme.toneColor(transparency.backgroundTone)
                     .opacity(min(transparency.backgroundOpacity, 1))
@@ -90,7 +99,11 @@ struct FrameBackdrop: View {
                 Theme.appBackground
                 Theme.sidebarTint
             } else {
-                VisualEffectBackground(material: .hudWindow, state: .active)
+                VisualEffectBackground(
+                    material: .hudWindow,
+                    blendingMode: .withinWindow,
+                    state: .active
+                )
                 Theme.appBackground.opacity(transparency.backgroundOpacity)
                 Theme.sidebarTint
             }

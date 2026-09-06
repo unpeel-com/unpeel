@@ -164,6 +164,7 @@ private final class PathDraggableTerminalView: TerminalView, NSDraggingSource {
 @MainActor
 final class GhosttyTerminalPane: NSView {
     weak var paneDelegate: GhosttyTerminalPaneDelegate?
+    var commandClickHandler: ((ClickablePath.Match, String) -> Bool)?
 
     private let terminalView: PathDraggableTerminalView
     private let controller: TerminalController
@@ -1606,9 +1607,16 @@ extension GhosttyTerminalPane:
     /// in the user's editor. Returns true only when it resolves to a real file
     /// (so a cmd-click on a URL or plain text falls through to normal handling).
     func terminalDidCommandClick(rowText: String, column: Int) -> Bool {
-        guard let match = ClickablePath.match(inRow: rowText, column: column),
-              let resolved = resolveClickedFile(match.path)
-        else { return false }
+        guard let match = ClickablePath.match(inRow: rowText, column: column) else {
+            return false
+        }
+        if let resolved = ClickablePath.absolutePath(
+            match.path,
+            workingDirectory: currentWorkingDirectory
+        ), commandClickHandler?(match, resolved) == true {
+            return true
+        }
+        guard let resolved = resolveClickedFile(match.path) else { return false }
         UnpeelStore.openFileInPreferredEditor(
             path: resolved,
             line: match.line,
@@ -1901,9 +1909,9 @@ struct RemoteTerminalLocalFeed: Equatable, Sendable {
 /// - host output enters only through ``receiveHostBytes(_:)``;
 /// - keyboard/mouse input and viewport changes leave through plain-Swift
 ///   callbacks; and
-/// - it does not implement URL/PWD delegates, and its file-click delegate is
-///   deliberately inert, so a path printed by the Host is never resolved or
-///   opened against the Controller's filesystem.
+/// - it does not implement URL/PWD delegates; file clicks are resolved from
+///   the Host-reported cwd and routed back to that Host, never opened against
+///   the Controller's filesystem.
 ///
 /// Removing this view from a hierarchy pauses rendering but deliberately
 /// keeps both the surface and its last frame alive. Reattaching the same pane
@@ -1919,6 +1927,8 @@ final class RemoteGhosttyTerminalPane: NSView {
     private var occlusionObserver: NSObjectProtocol?
     private var presentationEnabled = true
     private var needsRefitOnNextPresentation = true
+    private var currentWorkingDirectory: String?
+    private var commandClickHandler: ((ClickablePath.Match, String) -> Bool)?
 
     init(
         style: TerminalPaneStyle = .resolved(),
@@ -1989,6 +1999,14 @@ final class RemoteGhosttyTerminalPane: NSView {
             terminalView.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
         registerForDraggedTypes(GhosttyTerminalPane.dropPasteboardTypes)
+    }
+
+    func configureFileOpening(
+        workingDirectory: String?,
+        handler: ((ClickablePath.Match, String) -> Bool)?
+    ) {
+        currentWorkingDirectory = workingDirectory
+        commandClickHandler = handler
     }
 
     // MARK: File drag-and-drop (scoped-workspace terminals)
@@ -2313,8 +2331,14 @@ extension RemoteGhosttyTerminalPane:
     /// Remote paths are meaningful only on the Host. Returning false keeps
     /// ordinary selection behavior and, crucially, performs no Controller
     /// filesystem lookup or editor launch.
-    func terminalDidCommandClick(rowText _: String, column _: Int) -> Bool {
-        false
+    func terminalDidCommandClick(rowText: String, column: Int) -> Bool {
+        guard let match = ClickablePath.match(inRow: rowText, column: column),
+              let path = ClickablePath.absolutePath(
+                match.path,
+                workingDirectory: currentWorkingDirectory
+              )
+        else { return false }
+        return commandClickHandler?(match, path) == true
     }
 }
 
@@ -2375,12 +2399,18 @@ final class RemoteGhosttyPaneCache {
         for key: RemoteTerminalPaneKey,
         style: TerminalPaneStyle = .resolved(),
         onInput: @escaping RemoteTerminalInputHandler,
-        onResize: @escaping RemoteTerminalResizeHandler
+        onResize: @escaping RemoteTerminalResizeHandler,
+        workingDirectory: String? = nil,
+        onCommandClick: ((ClickablePath.Match, String) -> Bool)? = nil
     ) -> RemoteGhosttyTerminalPane {
         if let existing = panes[key] {
             existing.updateCallbacks(onInput: onInput, onResize: onResize)
             existing.applyPaneStyle(style)
             retention.noteUsed(key)
+            existing.configureFileOpening(
+                workingDirectory: workingDirectory,
+                handler: onCommandClick
+            )
             return existing
         }
 
@@ -2388,6 +2418,10 @@ final class RemoteGhosttyPaneCache {
             style: style,
             onInput: onInput,
             onResize: onResize
+        )
+        pane.configureFileOpening(
+            workingDirectory: workingDirectory,
+            handler: onCommandClick
         )
         panes[key] = pane
         retention.noteUsed(key)

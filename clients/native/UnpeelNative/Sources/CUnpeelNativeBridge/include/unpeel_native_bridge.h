@@ -449,6 +449,33 @@ int32_t unpeel_native_bridge_remote_workspace_settings_set(
     size_t *out_length
 );
 
+/* Set one Host-owned typed resource opener preference (settings.openers.set). */
+int32_t unpeel_native_bridge_remote_opener_set(
+    unpeel_native_bridge_remote_handle_t handle,
+    const uint8_t *body_json_pointer,
+    size_t body_json_length,
+    uint8_t **out_pointer,
+    size_t *out_length
+);
+
+/* Install one official App on the Host (apps.install). */
+int32_t unpeel_native_bridge_remote_app_install(
+    unpeel_native_bridge_remote_handle_t handle,
+    const uint8_t *body_json_pointer,
+    size_t body_json_length,
+    uint8_t **out_pointer,
+    size_t *out_length
+);
+
+/* Open one installed App through the Host's semantic presentation path. */
+int32_t unpeel_native_bridge_remote_app_open(
+    unpeel_native_bridge_remote_handle_t handle,
+    const uint8_t *body_json_pointer,
+    size_t body_json_length,
+    uint8_t **out_pointer,
+    size_t *out_length
+);
+
 /*
  * Organize one remote project/group (project.organization.set). patch_json
  * is the camelCase one-project patch (sortOrder?, displayName?, colorID?,

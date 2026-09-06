@@ -1394,6 +1394,15 @@ private struct RemoteAppearanceSettingsPanel: View {
                     }
 
                     Section {
+                        OpenResourcesSettingsRows(runtime: runtime)
+                    } header: {
+                        SettingsSectionHeader(
+                            title: "Open resources",
+                            description: "Choose which Host-side App opens each supported type in this workspace."
+                        )
+                    }
+
+                    Section {
                         TransparencySliderRow(
                             title: "Background",
                             value: Binding(
@@ -2348,6 +2357,142 @@ struct SettingsMainBackground: View {
 
 // MARK: - Appearance panel (settings/AppearancePanel.svelte, mode only)
 
+private struct OpenResourcesSettingsRows: View {
+    @ObservedObject var runtime: RemoteHostRuntime
+    @State private var overrides: [String: String] = [:]
+    @State private var installing: Set<String> = []
+    @State private var errorMessage: String?
+
+    private var apps: [RemoteAppSummary] {
+        runtime.snapshot?.availableApps ?? []
+    }
+
+    private var installedIDs: Set<String> {
+        Set((runtime.snapshot?.installedApps ?? []).map(\.id))
+            .union(apps.filter { $0.installed }.map(\.id))
+    }
+
+    private var selectors: [String] {
+        let fileSelectors = apps.flatMap(\.mediaTypes).map { "file:\($0)" }
+        let resourceSelectors = apps.flatMap(\.resourceKinds).map { "resource:\($0)" }
+        return Array(Set(fileSelectors + resourceSelectors)).sorted {
+            selectorTitle($0) < selectorTitle($1)
+        }
+    }
+
+    var body: some View {
+        ForEach(selectors, id: \.self) { selector in
+            HStack(spacing: 10) {
+                Text(selectorTitle(selector))
+                Spacer()
+                Picker("", selection: selection(for: selector)) {
+                    ForEach(apps.filter { $0.handles(selector: selector) }) { app in
+                        Text(app.name + (installedIDs.contains(app.id) ? "" : " (Not installed)"))
+                            .tag("app:\(app.id)")
+                    }
+                    if selector.hasPrefix("file:") {
+                        Divider()
+                        Text("Default Editor").tag("editor")
+                        Text("System Default").tag("system")
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 190)
+
+                if let app = selectedMissingApp(for: selector) {
+                    Button {
+                        install(app)
+                    } label: {
+                        if installing.contains(app.id) {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Text("Install")
+                        }
+                    }
+                    .controlSize(.small)
+                    .disabled(installing.contains(app.id))
+                }
+            }
+        }
+        if let errorMessage {
+            Text(errorMessage)
+                .font(.system(size: 11))
+                .foregroundStyle(.red)
+        }
+    }
+
+    private func selection(for selector: String) -> Binding<String> {
+        Binding(
+            get: {
+                overrides[selector]
+                    ?? runtime.snapshot?.openers?[selector]
+                    ?? apps.first(where: {
+                        $0.handles(selector: selector) && $0.defaultFor.contains(selector)
+                    })
+                        .map { "app:\($0.id)" }
+                    ?? singleHandler(for: selector)
+                        .map { "app:\($0.id)" }
+                    ?? (selector.hasPrefix("file:") ? "editor" : "")
+            },
+            set: { opener in
+                overrides[selector] = opener
+                errorMessage = nil
+                Task { @MainActor in
+                    do {
+                        try await runtime.setOpener(selector: selector, opener: opener)
+                    } catch {
+                        overrides.removeValue(forKey: selector)
+                        errorMessage = error.localizedDescription
+                    }
+                }
+            }
+        )
+    }
+
+    private func singleHandler(for selector: String) -> RemoteAppSummary? {
+        let matches = apps.filter { $0.handles(selector: selector) }
+        return matches.count == 1 ? matches[0] : nil
+    }
+
+    private func selectedMissingApp(for selector: String) -> RemoteAppSummary? {
+        let opener = selection(for: selector).wrappedValue
+        guard opener.hasPrefix("app:") else { return nil }
+        let appID = String(opener.dropFirst(4))
+        guard !installedIDs.contains(appID) else {
+            return nil
+        }
+        return apps.first { $0.id == appID }
+    }
+
+    private func install(_ app: RemoteAppSummary) {
+        installing.insert(app.id)
+        errorMessage = nil
+        Task { @MainActor in
+            defer { installing.remove(app.id) }
+            do {
+                try await runtime.installApp(app.id)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func selectorTitle(_ selector: String) -> String {
+        switch selector {
+        case "file:text/markdown": "Markdown"
+        case "file:text/html": "HTML"
+        case "file:text/csv": "CSV"
+        case "resource:folder": "Folders"
+        case "resource:git.working-tree": "Git changes"
+        case "resource:github.repository": "GitHub repositories"
+        default:
+            selector
+                .replacingOccurrences(of: "file:", with: "")
+                .replacingOccurrences(of: "resource:", with: "")
+        }
+    }
+}
+
 /// Native Appearance panel: the theme mode picker. The Svelte panel's
 /// second control (Ambience color schemes) has no native machinery yet, so
 /// it is omitted rather than faked.
@@ -2513,10 +2658,13 @@ struct AppearanceSettingsPanel: View {
                     .pickerStyle(.menu)
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.foreground)
+
+                    OpenResourcesSettingsRows(runtime: store.remoteHostRuntime)
                 } header: {
                     SettingsSectionHeader(
-                        title: "Default editor",
-                        description: "Used by \"Open in editor\" and the titlebar open button."
+                        title: "Open resources",
+                        description: "Choose what opens each supported type in this workspace. The editor is "
+                            + "also used by \"Open in editor\" and the titlebar open button."
                     )
                 }
 

@@ -1,6 +1,6 @@
 use crate::integrations;
 use serde::{Deserialize, Deserializer, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -762,6 +762,11 @@ pub struct AppState {
     /// Code editor command (e.g. "code", "cursor", "zed", "idea")
     #[serde(default = "default_code_editor")]
     pub code_editor: String,
+    /// Typed resource selector -> `app:<official id>`, `editor`, or `system`.
+    /// File selectors use `file:<media-type>`; non-file resources use
+    /// `resource:<kind>`. The alias migrates the unreleased file-only shape.
+    #[serde(default, alias = "file_openers")]
+    pub openers: BTreeMap<String, String>,
     /// project_id -> last session info (for quick resume when all sessions are closed)
     #[serde(default)]
     pub last_sessions: HashMap<String, LastSession>,
@@ -923,6 +928,7 @@ impl Default for AppState {
             theme: "system".into(),
             color_scheme: "default".into(),
             code_editor: "code".into(),
+            openers: BTreeMap::new(),
             last_sessions: HashMap::new(),
             setup_completed: false,
             mcp_orchestrators: HashMap::new(),
