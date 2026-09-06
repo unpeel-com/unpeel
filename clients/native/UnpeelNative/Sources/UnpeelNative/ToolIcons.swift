@@ -24,6 +24,17 @@ enum ToolIcons {
         if let cached = cache[key] { return cached }
         guard let image = NSImage(data: Data(icon.svgSource.utf8)) else { return nil }
         image.isTemplate = icon.isTemplate
+        // Runtime art declares a 16pt frame; a registry App mark carries only
+        // its viewBox (48×48, 208×128, …) and NSImage takes that as points,
+        // which balloons in AppKit menus that size items by the image. Fit
+        // every mark into the same 16pt box, aspect preserved.
+        let box: CGFloat = 16
+        let natural = image.size
+        let longest = max(natural.width, natural.height)
+        if longest > 0, longest != box {
+            let scale = box / longest
+            image.size = NSSize(width: natural.width * scale, height: natural.height * scale)
+        }
         cache[key] = image
         return image
     }
