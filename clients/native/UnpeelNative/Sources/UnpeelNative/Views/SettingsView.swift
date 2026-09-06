@@ -2381,36 +2381,40 @@ private struct OpenResourcesSettingsRows: View {
     }
 
     var body: some View {
+        // `LabeledContent` so the grouped Form places the control cluster on
+        // its trailing edge like every other row: a plain HStack + Spacer
+        // left the picker short of the edge by an Install button's width
+        // once the App was installed and the button dropped out.
         ForEach(selectors, id: \.self) { selector in
-            HStack(spacing: 10) {
-                Text(selectorTitle(selector))
-                Spacer()
-                Picker("", selection: selection(for: selector)) {
-                    ForEach(apps.filter { $0.handles(selector: selector) }) { app in
-                        Text(app.name + (installedIDs.contains(app.id) ? "" : " (Not installed)"))
-                            .tag("app:\(app.id)")
-                    }
-                    if selector.hasPrefix("file:") {
-                        Divider()
-                        Text("Default Editor").tag("editor")
-                        Text("System Default").tag("system")
-                    }
-                }
-                .labelsHidden()
-                .frame(width: 190)
-
-                if let app = selectedMissingApp(for: selector) {
-                    Button {
-                        install(app)
-                    } label: {
-                        if installing.contains(app.id) {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Text("Install")
+            LabeledContent(selectorTitle(selector)) {
+                HStack(spacing: 10) {
+                    Picker("", selection: selection(for: selector)) {
+                        ForEach(apps.filter { $0.handles(selector: selector) }) { app in
+                            Text(app.name + (installedIDs.contains(app.id) ? "" : " (Not installed)"))
+                                .tag("app:\(app.id)")
+                        }
+                        if selector.hasPrefix("file:") {
+                            Divider()
+                            Text("Default Editor").tag("editor")
+                            Text("System Default").tag("system")
                         }
                     }
-                    .controlSize(.small)
-                    .disabled(installing.contains(app.id))
+                    .labelsHidden()
+                    .frame(width: 190)
+
+                    if let app = selectedMissingApp(for: selector) {
+                        Button {
+                            install(app)
+                        } label: {
+                            if installing.contains(app.id) {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Text("Install")
+                            }
+                        }
+                        .controlSize(.small)
+                        .disabled(installing.contains(app.id))
+                    }
                 }
             }
         }
