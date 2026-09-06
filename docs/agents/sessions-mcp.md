@@ -7,7 +7,7 @@ whole server “Sessions MCP” or rename it “Agents MCP”: `sessions` and `a
 are sibling domains with different identities. A Session is the Host-owned
 terminal container; an agent is a recognized runtime occurrence currently
 occupying one. The other domains are `workspace`, `artifacts`, `browser`,
-`computer` (Linux Hosts in every build; the Mac's own desktop development-only), preview `apps`, and the root `skills` registry.
+preview `apps`, and the root `skills` registry.
 
 **Experimental compatibility gate:** Settings ▸ Experimental ▸ Sessions use
 (`ExperimentalFeature.sessionsMcp`, `UNPEEL_DEV_SESSIONS_MCP=1`) still owns
@@ -31,12 +31,11 @@ channel semantics.
 > entries and in the pre-rename config *file names*, which are kept so
 > restart commands recorded by older sessions keep resolving): **one action-enum
 > tool per domain** — `sessions`, `agents`, `workspace`, `artifacts`,
-> `browser`, `computer`, `apps`, and `skills` — instead of one server per domain
+> `browser`, `apps`, and `skills` — instead of one server per domain
 > with a dozen tools each. Schemas are terse (~1.5k tokens for both domains,
 > enforced by a byte-ceiling test in `mcp_host.rs`); full per-action docs load
 > lazily via `{"action":"help"}`. A domain is advertised only if the caller's
-> saved domain grant (`mcp_enabled` / `browser_mcp_enabled` /
-> `computer_mcp_enabled`) is set — a session launched without a domain never
+> saved domain grant (`mcp_enabled` / `browser_mcp_enabled`) is set — a session launched without a domain never
 > pays its context cost — and
 > per-call gates still apply live. Legacy per-tool names and the standalone
 > `__browser_mcp__` argv keep working for sessions launched pre-unification.
@@ -53,59 +52,6 @@ channel semantics.
 > `settings/mcp.json`) prune the managed pre-rename `unpeel-mcp` entry the
 > same way the unification pruned `unpeel-sessions`/`unpeel-browser`.
 >
-> **Computer domain (release rule D2, 2026-09-03: ships for Linux Hosts in
-> every build; the macOS adapter driving the Mac's own desktop stays
-> development-only under the 2026-08-14 containment; engine swapped
-> 2026-07-22):** the
-> `computer` action tool (`crates/unpeel-core/src/computer_mcp.rs`,
-> **cua-driver** engine — see the private "computer-mcp" design record) gives a session
-> **background** control of the user's REAL apps: `launch` → pid + windows,
-> `see` → accessibility tree (`[N]` element indices) + screenshot artifact,
-> then click/type/set_value by element index — no focus steal, the user's
-> cursor never moves (a per-session overlay cursor glides instead).
-> Desktop-wide scope needs an explicit `escalate` (cua's one-way window→
-> desktop ladder; each Unpeel session is cua session `unpeel-<id>`). On macOS
-> release builds hide the feature, force its launch flag off, stop stale
-> daemon state, and omit cua-driver: the unrestricted TCC-bearing socket is
-> not isolated from same-UID hosted code — that laundering does not exist on
-> Linux, where the Host installs the engine itself and the release
-> Controllers operate it. macOS development builds remain gated by
-> `ExperimentalFeature.computerUse` (`UNPEEL_DEV_COMPUTER_USE=1`),
-> `computer_default_access` (`off`/`ask` default/`allow` in state.rs), and
-> under `ask` a one-time per-session approval alert (`/mcp/approve-computer`,
-> `MCPComputerApproval.swift`; remembered in `computer_approvals`,
-> pruned/carried like write approvals). On macOS the **native app owns the
-> engine daemon** (`ComputerEngineManager.swift` spawns `cua-driver serve
-> --embedded --socket ~/.unpeel/computer/daemon.sock` as a direct child so
-> TCC attributes to Unpeel.app — never spawn it from a session host or via
-> `open`). On Linux, canonical `unpeel serve` owns the equivalent supervised
-> child only when Cua Driver, an X11/Wayland display, **and** the session
-> D-Bus (AT-SPI) are available (`computer_engine::desktop_session`; `unpeel
-> serve install --graphical` binds the service to the desktop session); it
-> advertises availability/readiness to Controllers instead of making them
-> guess from Host kind. `computer_mcp.rs` makes one-shot `cua-driver call … --socket`
-> invocations against it. Grants are probed/requested natively
-> (`ComputerPermissions.swift`); the daemon restarts on grant changes.
-> Captures land in `artifacts/computer/screenshots/` (phone gallery kind
-> `computer`). **The engine is pinned and Host-installed (Lane A,
-> 2026-09-03):** `protocol/computer-engine-v1.json` pins cua-driver 0.23.2
-> (release tarball sha256 + the extracted binary's own sha256 per platform;
-> darwin-arm64/x64 share the universal archive), `unpeel_core::computer_engine`
-> installs it into `~/.unpeel/computer/bin/cua-driver` (the serve adapter
-> does it on demand once Computer use is on; `unpeel computer install
-> [--check]` is the scripted verb; `docs/agents/serve.md`), and resolution
-> is `UNPEEL_CUA_DRIVER_BIN` → verified managed copy → next to `unpeel-host`
-> (the development app bundle) → PATH, a stale managed copy skipped. Every
-> engine process Unpeel starts sets `CUA_DRIVER_RS_TELEMETRY_ENABLED=0`.
-> Session cleanup rides `__computer_cleanup__ <id>` next to
-> `__browser_cleanup__`. Not yet: `verify-computer.sh` and a CLI-matrix
-> case (plan Lane E). Its Ask prompt is a cooperative agent control, not a
-> sandbox boundary; see the private "computer-mcp" design record and
-> the private "computer-use-release" design record. **Engine bump procedure:** update
-> `version`, every `sha256` from the release's `checksums.txt`, every
-> `binarySha256` from the extracted member, and the notice in
-> `protocol/computer-engine-v1.json`, then `cargo test -p unpeel-core
-> computer_engine` and (once it exists) `scripts/verify-computer.sh`.
 
 - Server: `crates/unpeel-core/src/mcp_host.rs`, run as `unpeel-host __mcp__`. Speaks MCP JSON-RPC over stdio; hand-rolled, no SDK dependency.
 - It talks directly to per-session artifacts (`manifest.json`, `output.bin`, `session.sock`) under `~/.unpeel/app-sessions/`; it does not need the app running, only the session hosts.

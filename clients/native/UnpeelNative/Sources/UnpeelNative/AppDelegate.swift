@@ -106,11 +106,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, SPUU
             store?.rescopeToPooledWorkspace(key: workspaceKey, sessionID: sessionID)
         }
         DesktopNotifier.shared.requestAuthorizationIfNeeded()
-        // Computer-use engine daemon (cua-driver, embedded): must be spawned
-        // by THIS app so TCC attributes to Unpeel.app. No-op unless the
-        // Computer use flag is on and access isn't Off.
-        ComputerEngineManager.shared.startIfEnabled()
-
         // ⌘1–9 switches between the active project's sessions (held ⌘ shows
         // the hints). Installed here, not in UnpeelStore.init, so the
         // self-tests' throwaway stores never register event monitors.
@@ -963,7 +958,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, SPUU
     /// scripts stop broadcasting to a dead listener (HookServer Drop parity,
     /// hook_server.rs:595-603).
     func applicationWillTerminate(_: Notification) {
-        ComputerEngineManager.shared.stop()
         store?.stopLocalHostControlClient()
         HostServiceManager.shared.stopPlatformAdapter()
         hookServer?.stop()

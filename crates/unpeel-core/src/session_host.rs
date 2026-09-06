@@ -173,11 +173,7 @@ pub struct SessionHostLaunch {
     /// reach logged-in sites, so access is opt-in per session.
     #[serde(default)]
     pub browser_mcp_enabled: bool,
-    /// True only for sessions launched with Computer access available
-    /// (Settings ▸ Computer not Off, macOS ≥ 15): the unified MCP server
-    /// advertises the `computer` domain to this session. Defaults to false —
-    /// computer use drives the user's real screen and input, so the gate is
-    /// deliberate; the app-wide Ask/Allow policy still applies per call.
+    /// Legacy launch field. Retained for compatibility; never enables a tool.
     #[serde(default)]
     pub computer_mcp_enabled: bool,
 }
@@ -410,8 +406,8 @@ impl HostedSessionManifest {
     }
 
     pub fn computer_mcp_enabled(&self) -> bool {
-        self.computer_mcp_enabled
-            .unwrap_or(self.computer_client_registered)
+        // Retired domain: persisted grants remain readable but cannot reactivate it.
+        false
     }
 }
 

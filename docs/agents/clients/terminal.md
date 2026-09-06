@@ -180,7 +180,7 @@ The phone's gallery (`BrowserGalleryPanel`, opened from the terminal's photo
 button) is a **unified per-session image view**, not just the agent's browser
 captures. It lists four artifact kinds under `~/.unpeel/app-sessions/<id>/
 artifacts/`, newest-first: `browser/screenshots` and `browser/downloads`
-(browser-MCP output), `computer/screenshots`, and `uploads` (images the user,
+(browser-MCP output), legacy `computer/screenshots`, and `uploads` (images the user,
 phone, or Sessions `add_to_gallery` action added). Settings ▸ Sessions use can
 keep ordinary Browser MCP screenshots out of the gallery; those captures land
 under unlisted `browser/captures` until explicitly published. The kind→dir mapping lives in the shared `SessionArtifactStore`
@@ -206,7 +206,7 @@ full-resolution annotated PNG into `artifacts/uploads/` (the same kind
 phone-annotated images land in) and attaches that copy, never mutating the
 original. Both gallery buttons **pulse**
 (spring scale, ~2s) when a new agent capture lands — kinds in
-`SessionArtifactStore.captureKinds` (browser + computer screenshots; never
+`SessionArtifactStore.captureKinds` (browser + legacy computer screenshots; never
 uploads/downloads). Desktop polls the artifact dirs directly
 (`SessionGalleryButton.watchForNewCaptures`); the phone polls
 `/mobile/artifacts` (`watchForNewScreenshots` in

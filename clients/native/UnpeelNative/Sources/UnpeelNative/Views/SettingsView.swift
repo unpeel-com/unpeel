@@ -75,10 +75,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         visibleCases(computerUseControllable: false)
     }
 
-    /// `computerUseControllable`: the selected Host advertises computer use
-    /// in its bootstrap (`UnpeelFeatureFlags.computerUseControllable`). The
-    /// Computer tab then shows in every build flavor for that Host; the
-    /// local Mac scope in a release build keeps today's behavior (hidden).
+    /// The legacy availability argument cannot restore a retired settings tab.
     static func visibleCases(computerUseControllable: Bool) -> [SettingsTab] {
         allCases.filter { tab in
             switch tab {
@@ -86,14 +83,11 @@ enum SettingsTab: String, CaseIterable, Identifiable {
             // Sessions MCP is experimental (Settings ▸ Experimental); its
             // panel only exists while the feature is on.
             case .sessions: return UnpeelFeatureFlags.isEnabled(.sessionsMcp)
-            // Browser and computer use are experimental too; their panels
-            // only exist while the features are on.
+            // The Browser panel follows its experimental feature.
             case .browser: return UnpeelFeatureFlags.isEnabled(.browserMcp)
-            // Keep the policy panel reachable in development even while the
-            // experiment is off; remote Hosts need it to move from Off to
-            // Ask/Allow before their adapter can become ready.
+            // Keep the saved enum case readable, but never show its old panel.
             case .computer:
-                return UnpeelFeatureFlags.isAvailable(.computerUse) || computerUseControllable
+                return false
             case .workspaces: return UnpeelFeatureFlags.isEnabled(.workspaces)
             // Git worktrees is experimental; its panel only exists while
             // the feature is on (same live gate as the sidebar folders).
@@ -702,37 +696,7 @@ private struct HostAccessSettingsPanel: View {
                             )
                         }
                     default:
-                        Section {
-                            if let experimental = settings.experimentalSettings {
-                                LabeledContent("Host adapter") {
-                                    Text(experimental.computerUseReady == true
-                                        ? "Ready"
-                                        : experimental.computerUseAvailable == true
-                                            ? "Not running"
-                                            : "Unavailable"
-                                    )
-                                    .foregroundStyle(
-                                        experimental.computerUseReady == true
-                                            ? Color.green : Theme.mutedForeground
-                                    )
-                                }
-                                if let reason = experimental.computerUseUnavailableReason,
-                                   !reason.isEmpty {
-                                    Text(reason)
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(Theme.mutedForeground)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-                            }
-                            accessPicker(
-                                "Computer use",
-                                key: "computer",
-                                value: settings.computerAccess,
-                                options: [("ask", "Ask"), ("allow", "Allow"), ("off", "Off")]
-                            ) { value in
-                                RemoteWorkspaceSettingsPatch(computerAccess: value)
-                            }
-                        }
+                        EmptyView()
                     }
                 } else {
                     Section {
@@ -1718,19 +1682,8 @@ private struct RemoteExperimentalSettingsPanel: View {
         runtime.snapshot?.workspaceSettings?.experimentalSettings
     }
 
-    /// Computer use follows the selected Host, not this build (D2): the row
-    /// shows when the Host advertises an adapter, and stays visible while
-    /// the value is on so a Host that stops advertising can still be turned
-    /// off (the one-way ratchet in `featureRow`).
     private var features: [ExperimentalFeature] {
-        ExperimentalFeature.all.filter { feature in
-            guard feature == .computerUse else { return UnpeelFeatureFlags.isAvailable(feature) }
-            return UnpeelFeatureFlags.isAvailable(.computerUse)
-                || UnpeelFeatureFlags.computerUseControllable(
-                    hostAdvertisesAvailability: settings?.computerUseAvailable
-                )
-                || settings?.computerUse == true
-        }
+        UnpeelFeatureFlags.availableExperimentalFeatures
     }
 
     var body: some View {
@@ -1785,26 +1738,6 @@ private struct RemoteExperimentalSettingsPanel: View {
         _ feature: ExperimentalFeature,
         settings: RemoteExperimentalSettings
     ) -> some View {
-        let adapterAvailable = settings.computerUseAvailable == true
-        let supported = feature != .computerUse || adapterAvailable
-        let currentValue = overrides[feature.key] ?? value(feature, in: settings)
-        // An unavailable Host must still let the user turn an already-on
-        // value off; once off, it cannot be re-enabled until the Host
-        // advertises a usable adapter.
-        let canToggle = supported || (feature == .computerUse && currentValue)
-        let detail: String = if feature == .computerUse, !supported {
-            settings.computerUseUnavailableReason
-                ?? "This Host does not advertise a Computer Use adapter. Update it and run "
-                    + "`unpeel serve` from a graphical session."
-        } else if feature == .computerUse,
-                  settings.computerUse,
-                  settings.computerUseReady != true {
-            settings.computerUseUnavailableReason
-                ?? "Cua Driver is starting on this Host. New sessions get Computer use once "
-                    + "the adapter reports Ready."
-        } else {
-            feature.summary
-        }
         return LabeledContent {
             Toggle(
                 "",
@@ -1818,13 +1751,12 @@ private struct RemoteExperimentalSettingsPanel: View {
             )
             .labelsHidden()
             .toggleStyle(.switch)
-            .disabled(!canToggle)
         } label: {
             VStack(alignment: .leading, spacing: 2) {
                 Text(feature.title)
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.foreground)
-                Text(detail)
+                Text(feature.summary)
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.mutedForeground)
                 .lineSpacing(2)
@@ -2284,7 +2216,7 @@ struct SettingsContentHost: View {
         case .browser:
             BrowserSettingsPanel(store: store)
         case .computer:
-            ComputerSettingsPanel(store: store)
+            EmptyView() // Old saved selection falls back through visibleCases.
         case .experimental:
             ExperimentalSettingsPanel(store: store)
         case .mobile:

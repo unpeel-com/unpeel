@@ -30,25 +30,20 @@ pub fn run_stdio(kind: &str) -> Result<(), String> {
         || crate::integrations::legacy_mcp_gate_granted(SESSIONS_KIND);
     let browser_granted = env_grant(BROWSER_ENABLED_ENV)
         || crate::integrations::legacy_mcp_gate_granted(BROWSER_KIND);
-    let computer_granted = env_grant(COMPUTER_ENABLED_ENV)
-        || crate::integrations::legacy_mcp_gate_granted(COMPUTER_KIND);
     let unified_domains = crate::mcp_host::McpDomainMask {
         sessions: sessions_granted,
         agents: sessions_granted,
         workspace: sessions_granted,
         artifacts: sessions_granted,
         browser: browser_granted,
-        computer: computer_granted,
+        computer: false,
         // Apps discovery rides any granted domain: it is read-only manifest
         // discovery, present by default wherever the unified server is live.
-        apps: sessions_granted || browser_granted || computer_granted,
-        skills: sessions_granted || browser_granted || computer_granted,
+        apps: sessions_granted || browser_granted,
+        skills: sessions_granted || browser_granted,
     };
     let (granted, server_name) = match kind {
-        UNIFIED_KIND => (
-            sessions_granted || browser_granted || computer_granted,
-            "unpeel",
-        ),
+        UNIFIED_KIND => (sessions_granted || browser_granted, "unpeel"),
         SESSIONS_KIND => (sessions_granted, "unpeel-sessions"),
         BROWSER_KIND => (browser_granted, "unpeel-browser"),
         _ => return Err(format!("Unknown gated MCP kind: {kind}")),

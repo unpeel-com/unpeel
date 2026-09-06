@@ -983,7 +983,7 @@ fn wire_experimental_settings(stored: Option<&Value>) -> Value {
         "worktrees": read("worktrees", true),
         "sessionsMcp": read("sessions_mcp", true),
         "browserMcp": read("browser_mcp", true),
-        "computerUse": read("computer_use", false),
+        "computerUse": false,
         "workspaces": read("workspaces", true),
     })
 }

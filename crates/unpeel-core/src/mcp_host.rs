@@ -1,7 +1,7 @@
 //! Unified Unpeel MCP: `unpeel-host __mcp__` speaks MCP (JSON-RPC 2.0 over
 //! stdio) and exposes small capability domains for terminal Sessions,
 //! recognized agent occupants, Apps/skills, workspace setup, artifacts,
-//! browser automation, and development-only computer control.
+//! and browser automation.
 //!
 //! The process is spawned by provider CLIs (Claude via `--mcp-config`, Codex via
 //! the wrapper's `-c mcp_servers...` overrides) and inherits the session env, so
@@ -55,7 +55,7 @@ impl McpDomainMask {
         workspace: true,
         artifacts: true,
         browser: true,
-        computer: true,
+        computer: false,
         apps: true,
         skills: true,
     };
@@ -67,7 +67,7 @@ impl McpDomainMask {
             WORKSPACE_TOOL => self.workspace,
             ARTIFACTS_TOOL => self.artifacts,
             BROWSER_TOOL => self.browser,
-            COMPUTER_TOOL => self.computer,
+            COMPUTER_TOOL => false,
             APPS_TOOL => self.apps,
             SKILLS_TOOL => self.skills,
             name if name.strip_prefix("browser_").is_some_and(is_browser_action) => self.browser,
@@ -113,7 +113,7 @@ impl McpDomainMask {
 const PROTOCOL_VERSION_FALLBACK: &str = "2025-06-18";
 pub(crate) const MODERN_PROTOCOL_VERSION: &str = "2026-07-28";
 // The unified Unpeel MCP server: one tool per capability domain (`sessions`,
-// `browser`, later `computer`/`device`), each taking an `action` parameter,
+// `browser`, `apps`, `skills`), each taking an `action` parameter,
 // instead of one server per domain with a dozen tools each. Keeps the
 // per-request context cost flat as domains are added; full per-action docs
 // load lazily through `action: "help"`.
@@ -524,15 +524,6 @@ fn initialize_result(params: &Value) -> Value {
     misbehaves; call {\"action\":\"context\"} if browser tools seem unavailable. Do not paste \
     cookies, tokens, passwords, or downloaded private files into the conversation unless the \
     user explicitly asks. \
-    'computer' (when present) controls this Mac's real apps — the user's desktop, not a \
-    sandbox. The first action may block on a one-time user approval; if declined, do not \
-    retry. Loop: 'launch' an app for its pid + windows, 'see' a window for its element tree \
-    [N] + screenshot, act by element_index ('click'/'type'/'set_value'), then re-'see' to \
-    verify (indices go stale on every see; an unchanged tree means the action likely \
-    no-oped). Control is background: it never moves the user's cursor or steals focus; \
-    desktop-wide capture/input needs an explicit 'escalate'. Screenshots save as session \
-    artifacts and return file paths. The screen can show sensitive user content — never \
-    quote secrets you see into the conversation. \
     'apps' (when present) discovers the Unpeel Apps installed on this Host: 'list' them, \
     'describe' an app's declared tools plus its optional skill references, and use 'context' \
     to distinguish Apps attached to this agent from other App instances in its project and \
@@ -617,8 +608,7 @@ fn run_tool(name: &str, arguments: &Value) -> Result<String, String> {
             run_browser_action(&action, arguments)
         }
         COMPUTER_TOOL => {
-            let action = required_action(arguments, computer_action_names())?;
-            run_computer_action(&action, arguments)
+            Err("Unpeel computer use has been retired. Configure desktop tools in your agent or environment.".into())
         }
         APPS_TOOL => {
             let action = required_action(arguments, apps_action_names())?;
@@ -644,7 +634,7 @@ fn run_tool(name: &str, arguments: &Value) -> Result<String, String> {
         }
         _ => Err(format!(
             "Unknown tool: {name}. This server exposes one tool per domain ('agents', \
-'sessions', 'workspace', 'artifacts', 'browser', 'computer', 'apps', 'skills') taking an 'action' parameter; call \
+'sessions', 'workspace', 'artifacts', 'browser', 'apps', 'skills') taking an 'action' parameter; call \
 {{\"action\":\"help\"}} on a tool for docs."
         )),
     }
@@ -757,12 +747,6 @@ fn artifacts_action_names() -> Vec<&'static str> {
 
 fn browser_action_names() -> Vec<&'static str> {
     let mut names: Vec<&'static str> = BROWSER_ACTIONS.to_vec();
-    names.push("help");
-    names
-}
-
-fn computer_action_names() -> Vec<&'static str> {
-    let mut names: Vec<&'static str> = crate::computer_mcp::COMPUTER_ACTIONS.to_vec();
     names.push("help");
     names
 }
@@ -953,36 +937,6 @@ for per-action docs.",
     }
 }
 
-fn run_computer_action(action: &str, arguments: &Value) -> Result<String, String> {
-    match action {
-        "help" => Ok(computer_help(optional_trimmed_str(arguments, "help_for"))),
-        // Context stays reachable regardless of access state so an agent can
-        // discover *why* the computer tools are refusing (and never triggers
-        // the approval prompt itself).
-        "context" => crate::computer_mcp::tool_computer_context(),
-        action if crate::computer_mcp::is_computer_action(action) => {
-            if let Some(manifest) = caller_manifest() {
-                if !manifest.computer_mcp_enabled() {
-                    return Err(
-                        "Computer tools were not enabled when this terminal was configured. They \
-apply after Computer access is turned on and the terminal is reloaded or resumed."
-                            .into(),
-                    );
-                }
-            }
-            if let Some(reason) = crate::computer_mcp::caller_refusal_reason() {
-                return Err(reason);
-            }
-            crate::computer_mcp::run_action(action, arguments)
-        }
-        _ => Err(format!(
-            "Unknown computer action: {action}. Valid actions: {}. Call {{\"action\":\"help\"}} \
-for per-action docs.",
-            computer_action_names().join(", ")
-        )),
-    }
-}
-
 /// Discovery is read-only; semantic context/open derive caller and project
 /// identity from the hosted Session. Agents never supply a command, cwd, or
 /// pane geometry.
@@ -1165,17 +1119,6 @@ fn skills_help(help_for: Option<&str>) -> String {
         })
         .collect();
     render_action_help(SKILLS_TOOL, &docs, help_for)
-}
-
-fn computer_help(help_for: Option<&str>) -> String {
-    let docs: Vec<(String, Value)> = crate::computer_mcp::action_docs()
-        .into_iter()
-        .filter_map(|definition| {
-            let action = definition.get("name").and_then(Value::as_str)?;
-            Some((action.to_string(), definition))
-        })
-        .collect();
-    render_action_help(COMPUTER_TOOL, &docs, help_for)
 }
 
 /// The per-call sessions-domain gate: the shared caller checks plus the
@@ -1637,8 +1580,6 @@ fn tool_definitions_for_manifest(
         domains.artifacts && manifest.is_none_or(HostedSessionManifest::sessions_mcp_enabled);
     let advertise_browser =
         domains.browser && manifest.is_none_or(HostedSessionManifest::browser_mcp_enabled);
-    let advertise_computer =
-        domains.computer && manifest.is_none_or(HostedSessionManifest::computer_mcp_enabled);
     // Apps discovery and the root skills registry are present by default
     // wherever the unified server has any live domain. Both are read-only,
     // but a registration that granted no domain at all still advertises
@@ -1647,8 +1588,7 @@ fn tool_definitions_for_manifest(
         || advertise_agents
         || advertise_workspace
         || advertise_artifacts
-        || advertise_browser
-        || advertise_computer;
+        || advertise_browser;
     let advertise_apps = domains.apps && any_live_domain;
     let advertise_skills = domains.skills && (any_live_domain || advertise_apps);
     let mut tools = Vec::new();
@@ -1666,9 +1606,6 @@ fn tool_definitions_for_manifest(
     }
     if advertise_browser {
         tools.push(browser_tool_definition());
-    }
-    if advertise_computer {
-        tools.push(computer_tool_definition());
     }
     if advertise_apps {
         tools.push(apps_tool_definition());
@@ -1722,63 +1659,6 @@ fn skills_tool_definition() -> Value {
                 },
                 "id": { "type": "string", "description": "get: exact namespaced skill id from list/search or another domain" },
                 "query": { "type": "string", "description": "search: case-insensitive substring" },
-                "help_for": { "type": "string", "description": "help: docs for one action only" },
-            },
-            "required": ["action"],
-            "additionalProperties": false,
-        },
-    })
-}
-
-fn computer_tool_definition() -> Value {
-    json!({
-        "name": COMPUTER_TOOL,
-        "description": "Control this Mac's real apps in the background — no focus steal, \
-    the user's cursor never moves (the user sees an overlay cursor; actions may need their \
-    one-time approval). Core loop: 'launch' an app → pid + windows; 'see' a window → \
-    element tree with [N] indices PLUS a screenshot artifact; act by element_index \
-    ('click'/'type'/'set_value'); re-'see' to verify — indices go stale on every see, and \
-    an unchanged tree means the action likely no-oped. When the tree lies or is empty \
-    (Electron/canvas), act by x/y read off the same screenshot. Desktop-wide scope needs \
-    'escalate'. {\"action\":\"help\"} returns full per-action docs; \
-    {\"action\":\"context\"} explains access and permission state.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "action": {
-                    "type": "string",
-                    "enum": computer_action_names(),
-                    "description": "What to do; see the tool description and help"
-                },
-                "pid": { "type": "integer", "description": "Target process id (from launch/apps)" },
-                "window_id": { "type": "integer", "description": "Target window (from launch/windows; required with element_index)" },
-                "element_index": { "type": "integer", "description": "click/type/set_value/press/scroll: [N] from the latest see" },
-                "x": { "type": "number", "description": "Pixel X off the latest see screenshot (window-local, top-left)" },
-                "y": { "type": "number", "description": "Pixel Y (see x)" },
-                "text": { "type": "string", "description": "type: text to insert" },
-                "value": { "type": "string", "description": "set_value: non-text control value" },
-                "key": { "type": "string", "description": "press: key name (return, tab, escape, arrows…)" },
-                "keys": { "type": "string", "description": "hotkey: [\"cmd\",\"shift\",\"t\"] or \"cmd,shift,t\"" },
-                "modifiers": { "type": "array", "items": {"type": "string"}, "description": "click/press/drag: held modifiers (cmd, shift, option, ctrl)" },
-                "app": { "type": "string", "description": "launch: application name" },
-                "bundle_id": { "type": "string", "description": "launch: bundle id (wins over app)" },
-                "urls": { "type": "array", "items": {"type": "string"}, "description": "launch: documents/URLs to open" },
-                "new_instance": { "type": "boolean", "description": "launch: force a separate app instance" },
-                "query": { "type": "string", "description": "see: filter the element tree" },
-                "screenshot": { "type": "boolean", "description": "see: capture pixels too (default true)" },
-                "double": { "type": "boolean", "description": "click: double-click / open" },
-                "right": { "type": "boolean", "description": "click: right-click / context menu" },
-                "button": { "type": "string", "description": "click/drag: left | right | middle" },
-                "count": { "type": "integer", "description": "click: click count (pixel path)" },
-                "direction": { "type": "string", "enum": ["up", "down", "left", "right"], "description": "scroll: direction" },
-                "amount": { "type": "integer", "description": "scroll: how far" },
-                "from_x": { "type": "number", "description": "drag: start X" },
-                "from_y": { "type": "number", "description": "drag: start Y" },
-                "to_x": { "type": "number", "description": "drag: end X" },
-                "to_y": { "type": "number", "description": "drag: end Y" },
-                "scope": { "type": "string", "description": "click/type/press/hotkey/scroll: \"desktop\" for screen-absolute input (needs escalate)" },
-                "delivery_mode": { "type": "string", "description": "Input rung: background (default) | foreground — escalate only when the driver recommends it" },
-                "reason": { "type": "string", "description": "escalate: advertised reason (e.g. \"foreground_ineffective\")" },
                 "help_for": { "type": "string", "description": "help: docs for one action only" },
             },
             "required": ["action"],
@@ -4628,7 +4508,6 @@ mod tests {
                     || name == WORKSPACE_TOOL
                     || name == ARTIFACTS_TOOL
                     || name == BROWSER_TOOL
-                    || name == COMPUTER_TOOL
                     || name == APPS_TOOL
                     || name == SKILLS_TOOL,
                 "unexpected advertised tool {name}"
@@ -4642,7 +4521,6 @@ mod tests {
             workspace_tool_definition(),
             artifacts_tool_definition(),
             browser_tool_definition(),
-            computer_tool_definition(),
             apps_tool_definition(),
             skills_tool_definition(),
         ];
@@ -4724,31 +4602,7 @@ mod tests {
             );
         }
 
-        let computer = &tools[5];
-        let actions = computer["inputSchema"]["properties"]["action"]["enum"]
-            .as_array()
-            .unwrap();
-        for expected in [
-            "launch",
-            "see",
-            "click",
-            "type",
-            "screenshot",
-            "escalate",
-            "context",
-        ] {
-            assert!(
-                actions.iter().any(|action| action == expected),
-                "missing computer action {expected}"
-            );
-        }
-        // Sessions and scope are server-managed: agents never declare or end
-        // the engine session themselves.
-        assert!(!actions
-            .iter()
-            .any(|action| action == "start_session" || action == "end_session"));
-
-        let apps = &tools[6];
+        let apps = &tools[5];
         let actions = apps["inputSchema"]["properties"]["action"]["enum"]
             .as_array()
             .unwrap();
@@ -4767,7 +4621,7 @@ mod tests {
             .iter()
             .any(|action| action == "call" || action == "install"));
 
-        let skills = &tools[7];
+        let skills = &tools[6];
         let actions = skills["inputSchema"]["properties"]["action"]["enum"]
             .as_array()
             .unwrap();
@@ -4795,7 +4649,6 @@ mod tests {
             workspace_tool_definition(),
             artifacts_tool_definition(),
             browser_tool_definition(),
-            computer_tool_definition(),
             apps_tool_definition(),
             skills_tool_definition(),
         ];

@@ -85,14 +85,14 @@ own** — Unpeel authors the server and owns the tool schema).
   `~/.unpeel/browser/projects/<project-key>/downloads/`. Tools return their
   paths. Phone screenshot requests explicitly set `gallery: true`.
 - Grants (`state.rs`, reworked 2026-07-18): `BrowserAccess` is now
-  `off`/`ask`/`on` — the same three-mode picker as computer use, with **On
+  `off`/`ask`/`on` — a three-mode picker with **On
   ("Allow") as the default** (the engine uses an Unpeel-managed project
   profile with no access to the user's own browser, so it does not expose
   personal logins; Settings ▸ Browser ▸ Off is the master disable).
   Under `ask`, a session's first browser action blocks on an approval alert
   (`/mcp/approve-browser`, `MCPBrowserApproval.swift`); Allow is remembered
-  in `browser_approvals` with the same prune/carry lifecycle as
-  `computer_approvals`, revocable in Settings ▸ Browser. `On` serializes as
+  in `browser_approvals`, pruned when the session is removed and carried
+  on restart. Grants are revocable in Settings ▸ Browser. `On` serializes as
   `"on"` for wire compat; `from_state_str` accepts `"allow"` as a synonym.
   Browser MCP is also **experimental** in the native app
   (`ExperimentalFeature.browserMcp`, env `UNPEEL_DEV_BROWSER_MCP=1`), gating

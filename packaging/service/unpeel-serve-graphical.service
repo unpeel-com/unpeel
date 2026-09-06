@@ -1,9 +1,9 @@
 # Unpeel Host service — Linux systemd user unit bound to the desktop session.
 #
-# The Computer Use engine (cua-driver) must run inside the desktop session:
+# Graphical tools launched by agents run inside the desktop session:
 # it needs the session's DISPLAY or WAYLAND_DISPLAY and the accessibility
 # (AT-SPI) bus on the session D-Bus. The plain unpeel-serve.service starts at
-# login with neither, so a Host that should offer computer use installs this
+# login with neither, so a Host that should inherit the graphical session installs this
 # variant instead (`unpeel serve install --graphical`), which starts when the
 # desktop session activates and stops when it ends:
 #
@@ -27,8 +27,8 @@
 # the user manager's environment, which is exactly what lacks the display.)
 #
 # `unpeel serve status` reports whether graphical-session.target is active
-# and whether a desktop session with a session bus is visible; the Host
-# publishes the same truth to Controllers as computerUseAvailable/Ready.
+# and whether a desktop session with a session bus is visible to the
+# calling shell.
 # Everything else about this unit (per-user only, `loginctl enable-linger`,
 # diagnostics) matches unpeel-serve.service.
 

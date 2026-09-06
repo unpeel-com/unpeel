@@ -277,7 +277,7 @@ small session-level restart recommendation API:
   protocol/capability change. `mcp_client_registered` records whether the
   Sessions MCP client was actually injected into a managed launch; a blank
   shell is `false` even if `mcp_enabled` lets a manually configured provider
-  use the local server. Browser and Computer use the same grant/evidence split.
+  use the local server. Browser uses the same grant/evidence split.
 - `UnpeelStore.restartRecommendations` is the native derived API:
   `[session id: SessionRestartRecommendation]` (a `{ token, message, action }`
   value). It

@@ -45,7 +45,7 @@ Package boundaries are intentional:
 - `crates/unpeel-serve` is the standalone UI-free Host runtime package. It
   contains workspace serving plus the machine/workspace supervision layer.
 - `crates/unpeel-core` contains reusable state, protocol, Session, transcript,
-  Browser/Computer, and MCP domain implementations. Keeping those libraries
+  Browser and MCP domain implementations. Keeping those libraries
   below `unpeel-serve` lets Session hosts, gateways, tests, and future clients
   share one implementation without turning the supervisor into a monolith.
 - `crates/unpeel-host` is the shipped multipurpose helper binary. In
@@ -264,62 +264,12 @@ by hand or by `unpeel browser install`. The install is flock-serialised on
 `~/.unpeel/browser/bin/.lock`, so sibling workspace workers and a manual
 `unpeel browser install` wait and re-verify rather than racing.
 
-### Computer Use engine install (`serve.json.computerEngine`)
+### Desktop-session service
 
-The Computer Use adapter (`crates/unpeel-serve/src/computer.rs`) owns the
-engine install and does it **on demand**, not at start: most Hosts never
-turn the `computer` domain on and the cua-driver archive is 30–40 MiB. Each
-reconcile tick keeps a resolved engine path cached (`computer_engine::resolve`
-— override, verified managed copy, bundled sibling, PATH; re-checked for
-existence, re-resolved every 5 s while missing). When no engine resolves
-and `experimental_features.computer_use` is on in `app-state.json`, the
-adapter spawns one `computer-engine-install` thread running
-`unpeel_core::computer_engine::ensure_installed(home)` (pin:
-`protocol/computer-engine-v1.json`; flock-serialised with `unpeel computer
-install`) and reports `computerUseUnavailableReason` = "Installing Cua
-Driver …" until it lands. `serve.json.computerEngine` is additive:
-`{state: "missing"}` until requested, then `installing` → `ready` (`version`,
-`path`) or `failed` (`error`); a failure stays visible until the next policy
-edit or restart and is also a `computer-engine` trace line.
-`UNPEEL_COMPUTER_ENGINE_INSTALL=0` (also `false`/`off`/`no`) never spawns the
-thread and publishes `{state: "disabled"}` — `scripts/bench-memory.sh` and
-the worker-spawning process tests set it beside the browser opt-out. Every
-engine process the worker starts (daemon, `status`, `stop`) carries
-`CUA_DRIVER_RS_TELEMETRY_ENABLED=0`: nothing about a Host's activity leaves
-the user's machines.
-
-### Computer Use readiness and the desktop-session unit (Lane B)
-
-On Linux the adapter's "available" gate is `computer_engine::desktop_session()`,
-not `DISPLAY` alone: a display (`DISPLAY`, or `WAYLAND_DISPLAY` with a
-resolvable socket) **and** a session D-Bus, discovered the way cua-driver
-does — `DBUS_SESSION_BUS_ADDRESS` → `$XDG_RUNTIME_DIR/bus` →
-`/run/user/<uid>/bus` (a socket). The AT-SPI accessibility bus the engine
-reads window trees from lives on that bus, so a serve started from a unit
-with a display but no bus would otherwise advertise ready and fail at the
-first `see`. The reason names the missing piece and points at
-`cua-driver doctor --json`. The resolved session is re-evaluated every
-reconcile and handed to the daemon child (`DBUS_SESSION_BUS_ADDRESS`, plus
-`CUA_DRIVER_RS_ENABLE_WAYLAND=1` when the chosen session is Wayland).
-`serve.json.computerUse` mirrors the bootstrap's
-`{computerUseAvailable, computerUseReady, computerUseUnavailableReason?}`
-so a headless Host is diagnosable from the file alone.
-
-**The Linux engine is an X11 client** (it links libXi, libXtst, libX11 and
-friends dynamically), so a bare image can verify every hash and still fail
-to start the binary (`libXi.so.6: cannot open shared object file`). Both
-the adapter (on every resolve and after an on-demand install) and `unpeel
-computer install [--check]` therefore run the engine once (`--version`,
-bounded, telemetry off; `computer_engine::probe`) and, on an exec failure,
-report `failed` naming the missing libraries from the loader error or
-`ldd` plus the Debian/Ubuntu line
-`sudo apt-get install -y libxi6 libxtst6 libx11-6 libxext6 libxrandr2
-libxinerama1 libxcursor1 libxfixes3 libxkbcommon0 libxcb1`
-(`computer_engine::LINUX_RUNTIME_PACKAGES`). The adapter re-probes on its
-next resolve, so installing the packages heals readiness without a
-restart. Install those packages before `unpeel computer install` on any
-minimal Debian/Ubuntu Host (the Box recipe in
-the private "computer-use-release" design record does).
+Desktop tools supplied by an agent or VM environment can use the Host's
+graphical session. Unpeel does not install or run a desktop automation engine.
+Legacy `computerUse`, `computerUseAvailable`, and `computerUseReady` fields
+remain false for older Controllers; saved grants cannot reactivate the domain.
 
 `unpeel serve install --graphical` (systemd only; launchd refuses) writes
 `packaging/service/unpeel-serve-graphical.service` under the same unit name:
@@ -558,13 +508,7 @@ boundary:
 - `approval.present` mirrors the Host's bounded approval queue into native
   presentation. Answers return through the generation-bound Host approval
   verb; Swift is not another approval authority.
-- `computer.status` returns only bounded availability/readiness/reason fields
-  from the app-owned macOS Cua Driver. The worker polls it asynchronously,
-  binds every result to the exact adapter generation, and publishes the same
-  state into its Direct/Link snapshot and independently generated local
-  `host.sock` bootstrap. Dropping the app connection immediately withdraws the
-  ready state. Cua Driver execution, TCC prompts, and the responsibility chain
-  remain in the app; no Computer action crosses this callback.
+
 - `overlay.snapshot` projects an exact allowlist of workspace-scoped native
   UserDefaults as one bounded plist. The worker refreshes it asynchronously,
   binds the result to the adapter generation, and caches it for sidebar,

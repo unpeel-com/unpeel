@@ -88,21 +88,11 @@ extension ExperimentalFeature {
         defaultOn: true
     )
 
-    /// Computer Use MCP: agent sessions can read app windows and drive them
-    /// in the background through the embedded cua-driver engine. Gates the
-    /// Settings ▸ Computer tab, the engine daemon, and whether new sessions
-    /// launch with the `computer` domain advertised.
+    /// Legacy preference identity retained for decoding saved settings.
     static let computerUse = ExperimentalFeature(
         key: "computerUse",
         title: "Computer use",
-        summary: "Development only. Let agent sessions control this Host's desktop apps in the "
-            + "background: read a window's UI elements, take screenshots, click, and type — "
-            + "without moving your cursor or stealing focus. By default each "
-            + "session asks you once before its first action. That prompt coordinates "
-            + "agents; it is not isolation from same-user shell code. Adds the Computer "
-            + "settings tab in development builds only.",
-        envOverride: "UNPEEL_DEV_COMPUTER_USE",
-        defaultOn: false
+        summary: "Unpeel computer use has been retired."
     )
 
     /// Browser MCP: agent sessions get an isolated real browser. Gates the
@@ -137,47 +127,25 @@ extension ExperimentalFeature {
 
     /// Everything shown in Settings ▸ Experimental, in display order.
     static let all: [ExperimentalFeature] = [
-        .remoteWorkspaces, .worktrees, .sessionsMcp, .browserMcp, .computerUse,
+        .remoteWorkspaces, .worktrees, .sessionsMcp, .browserMcp,
         .workspaces,
     ]
 }
 
 enum UnpeelFeatureFlags {
-    /// Computer Use currently relies on an unrestricted same-UID daemon that
-    /// inherits the app's TCC grants. Until hosted sessions have a kernel-
-    /// enforced broker boundary, it is a development-build facility only.
-    static var computerUseAvailable: Bool {
-        computerUseAvailable(infoDictionary: Bundle.main.infoDictionary)
-    }
+    // Kept for old saved settings; this feature is retired in every build.
+    static var computerUseAvailable: Bool { false }
 
-    /// Pure form used by containment tests. The marker is baked into dev
-    /// bundles by build-app.sh; missing, false, or a wrong type fails closed.
-    static func computerUseAvailable(infoDictionary: [String: Any]?) -> Bool {
-        infoDictionary?["UnpeelDevelopmentBuild"] as? Bool == true
-    }
+    static func computerUseAvailable(infoDictionary: [String: Any]?) -> Bool { false }
+
+    static func computerUseControllable(hostAdvertisesAvailability: Bool?) -> Bool { false }
 
     static func isAvailable(_ feature: ExperimentalFeature) -> Bool {
-        isAvailable(feature, developmentBuild: computerUseAvailable)
+        feature != .computerUse
     }
 
-    /// Whether THIS Controller may operate the selected Host's computer use
-    /// (release rule: the Mac's own desktop stays development-only): it follows what
-    /// the Host advertises in its bootstrap (`computerUseAvailable`), never
-    /// this app's build flavor. A Linux Host running `unpeel serve` in a
-    /// desktop session launders no privilege, so a release Mac app may drive
-    /// it; the Mac's own desktop daemon stays behind `computerUseAvailable`
-    /// (development builds only) regardless of this value. Absent or false
-    /// fails closed.
-    static func computerUseControllable(hostAdvertisesAvailability: Bool?) -> Bool {
-        hostAdvertisesAvailability == true
-    }
-
-    /// Availability independent of Bundle.main, so tests cover the production
-    /// boundary without relying on the Swift test runner's Info.plist.
-    static func isAvailable(
-        _ feature: ExperimentalFeature, developmentBuild: Bool
-    ) -> Bool {
-        feature != .computerUse || developmentBuild
+    static func isAvailable(_ feature: ExperimentalFeature, developmentBuild: Bool) -> Bool {
+        isAvailable(feature)
     }
 
     static var availableExperimentalFeatures: [ExperimentalFeature] {

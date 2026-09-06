@@ -324,45 +324,6 @@ fi
 # the app carries no engine copy and no engine notice. A copy next to
 # unpeel-host is still honoured as a compatibility resolution candidate.
 
-# Computer Use is development-build-only until hosted sessions have a kernel-
-# enforced broker boundary. The embedded unrestricted daemon inherits the
-# app's TCC grants, so shipping it in a release would let same-UID hosted code
-# bypass Unpeel's cooperative approval UI by calling its raw socket directly.
-if [ "$UNPEEL_DEV_BUILD" = "1" ]; then
-  CUA_DRIVER_SRC="${UNPEEL_CUA_DRIVER_BIN:-}"
-  if [ -z "$CUA_DRIVER_SRC" ]; then
-    for candidate in \
-      "$HOME/.unpeel/computer/bin/cua-driver" \
-      "$(command -v cua-driver 2>/dev/null || true)" \
-      "$HOME/.local/bin/cua-driver"; do
-      [ -n "$candidate" ] && [ -e "$candidate" ] || continue
-      resolved="$(readlink -f "$candidate" 2>/dev/null || echo "$candidate")"
-      if [ -f "$resolved" ]; then CUA_DRIVER_SRC="$resolved"; break; fi
-    done
-  fi
-  if [ -n "$CUA_DRIVER_SRC" ] && [ -f "$CUA_DRIVER_SRC" ]; then
-    step "bundling development-only cua-driver engine ($CUA_DRIVER_SRC)"
-    cp -L "$CUA_DRIVER_SRC" "$APP/Contents/MacOS/cua-driver"
-    # MIT notice ships alongside when the source layout carries one.
-    CUA_DRIVER_LICENSE="$(dirname "$CUA_DRIVER_SRC")/../LICENSE"
-    if [ -f "$CUA_DRIVER_LICENSE" ]; then
-      cp "$CUA_DRIVER_LICENSE" "$APP/Contents/Resources/cua-driver-LICENSE.txt"
-    fi
-  else
-    echo "note: cua-driver engine not found — development Computer Use is unavailable"
-  fi
-else
-  step "excluding cua-driver from release build (Computer Use is security-blocked)"
-fi
-
-# Source guard for the production containment above. Keep this independent of
-# the branch that chooses the engine so a future refactor cannot accidentally
-# place the TCC-bearing helper back into a customer bundle.
-if [ "$UNPEEL_DEV_BUILD" != "1" ] && [ -e "$APP/Contents/MacOS/cua-driver" ]; then
-  echo "FAIL: release bundle contains security-blocked cua-driver" >&2
-  exit 1
-fi
-
 # License payloads are part of the signed app. Rust notices follow the exact
 # locked dependency graphs for every embedded Rust component. Native-only
 # Swift/framework notices stay separate so CLI archives do not inherit them.
@@ -508,9 +469,6 @@ codesign_release "$APP/Contents/MacOS/unpeel-attach"
 if [ -f "$APP/Contents/MacOS/agent-browser" ]; then
   # Re-sign the third-party engines with our identity so notarization covers them.
   codesign_release "$APP/Contents/MacOS/agent-browser"
-fi
-if [ -f "$APP/Contents/MacOS/cua-driver" ]; then
-  codesign_release "$APP/Contents/MacOS/cua-driver"
 fi
 SPARKLE_FW="$APP/Contents/Frameworks/Sparkle.framework"
 codesign_sparkle "$SPARKLE_FW/Versions/B/XPCServices/Downloader.xpc"

@@ -39,7 +39,6 @@ It deliberately exposes an allowlist, not arbitrary JSON paths:
 | --- | --- | --- | --- |
 | `experimental_features.sessions_mcp` | nested boolean | `true`, `false` | `true` |
 | `experimental_features.browser_mcp` | nested boolean | `true`, `false` | `true` |
-| `experimental_features.computer_use` | nested boolean | `true`, `false` | `false` |
 | `browser_default_access` | string | `on`, `ask`, `off` | absent `on`; malformed `off` |
 | `mcp_nonchild_write_access` | string | `ask`, `allow`, `deny` | `ask` |
 | `theme` | string | `system`, `light`, `dark` | `system` |
@@ -57,9 +56,7 @@ the same grammar through `settings.workspace.set`; local disk semantics are
 the current implementation. Do not invent a CLI-only remote settings
 protocol.
 
-`experimental_features.sessions_mcp`, `.browser_mcp`, and `.computer_use` are
-launch gates (computer use additionally needs `computer_access` ≠ `off` and a
-ready adapter on the Host — `computer_mcp::enabled_for_launch_from_app_state`).
+`experimental_features.sessions_mcp` and `.browser_mcp` are launch gates.
 Changing them affects Sessions started or restarted afterward, not the
 capability set captured by a running Session. Keep that warning in `unpeel
 settings --help` and the website CLI page.
@@ -222,45 +219,12 @@ The Controller never copies or executes a remote App locally.
 
 Linux only. Writes the `graphical-session.target`-bound variant of the
 user unit (`packaging/service/unpeel-serve-graphical.service`) so the Host
-runs inside the desktop session Computer Use needs; launchd refuses the
+runs inside the desktop session used by graphical tools; launchd refuses the
 flag (the app owns the desktop daemon on macOS). `uninstall` and `status`
 take no flag; `status` additionally prints `unit variant:`,
 `graphical-session.target:` (`is-active`), and `desktop session:` — the
 display plus session bus visible to the calling shell, or the missing
 piece. Detail: `docs/agents/serve.md`.
-
-### Computer Use engine (`unpeel computer install`)
-
-`crates/unpeel-cli/src/computer_cli.rs` — the one Computer Use verb, the
-same shape as `unpeel browser install`; every decision lives in
-`unpeel_core::computer_engine` so the CLI, the worker's on-demand install,
-and the MCP server can never disagree:
-
-```text
-unpeel computer install [--check] [--json]
-```
-
-Installs (or confirms) the pinned `cua-driver` under
-`~/.unpeel/computer/bin` after two sha256 checks against
-`protocol/computer-engine-v1.json`: the release tarball, then the one
-extracted member (cua publishes tarballs, not bare binaries; the system
-`tar` extracts exactly `archiveMember` from the already-verified archive).
-`--check` only reports and never downloads. Both forms then run the engine
-once (`--version`, bounded) so a binary that verified but cannot start is
-never called ready. Exit codes: 0 engine ready · 1 download/hash/unsupported
-failure, **or installed but cannot start** — missing X11 client libraries
-are named with the apt line (`state: "failed"`) · 3 (`--check`) missing or
-stale · 4 engine ready and runnable but no desktop session is visible to
-this process (Linux:
-the daemon needs the desktop's `DISPLAY`/`WAYLAND_DISPLAY` **and** a session
-D-Bus for AT-SPI; the line names which is missing; on macOS the app owns the
-daemon and the line reads `macOS (app-owned daemon)`). `--check` on an
-override/bundled/PATH copy says so in the version field, since only the
-managed copy is hash-verified. `--json` prints `{state, version, path,
-error?, session: {display | null, error?}}`.
-`UNPEEL_CUA_DRIVER_BIN=<path>` overrides the engine;
-`UNPEEL_COMPUTER_ENGINE_INSTALL=0` keeps the Host service from installing
-on demand (the verb still works by hand).
 
 ### Gates
 

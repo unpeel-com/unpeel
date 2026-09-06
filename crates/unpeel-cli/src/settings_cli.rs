@@ -20,19 +20,16 @@ usage: unpeel settings list [--json]
 Script this workspace's allowlisted settings:
   experimental_features.sessions_mcp   true | false
   experimental_features.browser_mcp    true | false
-  experimental_features.computer_use   true | false   (alias: computer_use)
   browser_default_access               on | ask | off
   mcp_nonchild_write_access            ask | allow | deny
-  computer_access                      ask | allow | off
   mcp_worktree_access                  true | false
   mcp_auto_add_browser_screenshots     true | false
   auto_stop_archive_minutes            0 | 30 | 60 | 120 | 240 | 480 | 1440
   sidebar_stopped_limit                0 | 3 | 5 | 10 | 15 | 25
   theme                                system | light | dark
 
-The Sessions, Browser, and Computer MCP gates are captured when a Session launches.
-Start or restart a Session after changing any of them. Computer use also needs
-computer_access != off and a ready adapter on the Host.";
+The Sessions and Browser MCP gates are captured when a Session launches.
+Start or restart a Session after changing either of them.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SettingKey {
@@ -55,13 +52,11 @@ const AUTO_STOP_MINUTE_OPTIONS: [u64; 7] = [0, 30, 60, 120, 240, 480, 1440];
 const SIDEBAR_LIMIT_OPTIONS: [u64; 6] = [0, 3, 5, 10, 15, 25];
 
 impl SettingKey {
-    const ALL: [Self; 11] = [
+    const ALL: [Self; 9] = [
         Self::SessionsMcp,
         Self::BrowserMcp,
-        Self::ComputerUse,
         Self::BrowserDefaultAccess,
         Self::McpNonchildWriteAccess,
-        Self::ComputerAccess,
         Self::McpWorktreeAccess,
         Self::McpAutoAddBrowserScreenshots,
         Self::AutoStopArchiveMinutes,
@@ -73,8 +68,7 @@ impl SettingKey {
         match raw {
             "experimental_features.sessions_mcp" => Ok(Self::SessionsMcp),
             "experimental_features.browser_mcp" => Ok(Self::BrowserMcp),
-            // Short spelling used by the private "computer-use-release" design record and
-            // the Box recipe; the stored key is the nested experimental gate.
+            // Legacy aliases stay parseable, but no longer enable a domain.
             "experimental_features.computer_use" | "computer_use" => Ok(Self::ComputerUse),
             "browser_default_access" => Ok(Self::BrowserDefaultAccess),
             "mcp_nonchild_write_access" => Ok(Self::McpNonchildWriteAccess),
@@ -184,9 +178,8 @@ impl SettingKey {
         match self {
             Self::SessionsMcp => Value::Bool(read_experiment(state, "sessions_mcp", true)),
             Self::BrowserMcp => Value::Bool(read_experiment(state, "browser_mcp", true)),
-            // Same default as the Rust launch gate
-            // (`computer_mcp::requested_from_app_state`): off until set.
-            Self::ComputerUse => Value::Bool(read_experiment(state, "computer_use", false)),
+            // Saved values cannot re-enable the retired domain.
+            Self::ComputerUse => Value::Bool(false),
             Self::BrowserDefaultAccess => {
                 let access = match state.get("browser_default_access") {
                     None => BrowserAccess::default(),

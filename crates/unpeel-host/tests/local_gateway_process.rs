@@ -621,50 +621,15 @@ fn unified_worker_advertises_and_withdraws_connection_scoped_platform_adapter() 
     assert!(String::from_utf8_lossy(&status.body).contains("relay.credentials.recover"));
 
     let backend = RemoteSessionBackend::new(Arc::new(fixture.service_connection()));
-    let initial_operations = if cfg!(target_os = "macos") {
-        vec![
-            "computer.status",
-            "link.entitlement.refresh",
-            "mobile.e2e-key.reconcile",
-            "overlay.snapshot",
-        ]
-    } else {
-        vec![
-            "link.entitlement.refresh",
-            "mobile.e2e-key.reconcile",
-            "overlay.snapshot",
-        ]
-    };
+    let initial_operations = vec![
+        "link.entitlement.refresh",
+        "mobile.e2e-key.reconcile",
+        "overlay.snapshot",
+    ];
     let initial_callbacks = recv_platform_callbacks(&captured_rx, &initial_operations);
     assert!(initial_callbacks["link.entitlement.refresh"].contains("\"macID\":"));
     assert!(initial_callbacks["mobile.e2e-key.reconcile"].contains("\"action\":\"sync\""));
     assert!(initial_callbacks["overlay.snapshot"].contains("\"request\":{}"));
-    #[cfg(target_os = "macos")]
-    {
-        let request = &initial_callbacks["computer.status"];
-        assert!(request.contains("\"request\":{}"));
-        let mut observed_status = None;
-        let published = wait_until(Duration::from_secs(30), || {
-            observed_status = backend.bootstrap().ok().and_then(|bootstrap| {
-                bootstrap
-                    .snapshot
-                    .workspace_settings
-                    .and_then(|settings| settings.experimental_settings)
-                    .map(|settings| {
-                        (
-                            settings.computer_use_available,
-                            settings.computer_use_ready,
-                            settings.computer_use_unavailable_reason,
-                        )
-                    })
-            });
-            observed_status == Some((Some(true), Some(true), None))
-        });
-        assert!(
-            published,
-            "worker did not publish native Computer Use status: {observed_status:?}"
-        );
-    }
     let bootstrap = backend.bootstrap().unwrap();
     assert!(
         bootstrap
@@ -795,11 +760,11 @@ fn unified_worker_advertises_and_withdraws_connection_scoped_platform_adapter() 
             serde_json::from_slice(&direct_bootstrap[separator + 4..]).unwrap();
         assert_eq!(
             body["workspaceSettings"]["experimentalSettings"]["computerUseAvailable"],
-            true
+            false
         );
         assert_eq!(
             body["workspaceSettings"]["experimentalSettings"]["computerUseReady"],
-            true
+            false
         );
     }
     let direct_color = direct_tls_request(

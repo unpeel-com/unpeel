@@ -633,7 +633,6 @@ fn blank_terminal_never_claims_mcp_registration_or_agent_restart() {
             "workspace",
             "artifacts",
             "browser",
-            "computer",
             "apps",
             "skills"
         ]

@@ -248,16 +248,7 @@ struct ServeStatus<'a> {
     /// startup failure — the worker installs in a background thread.
     #[serde(skip_serializing_if = "Option::is_none")]
     browser_engine: Option<unpeel_core::browser_engine::Status>,
-    /// Host-owned Computer Use engine install (additive, 0.5.0):
-    /// `{state: ready|installing|failed|missing|disabled, version, path,
-    /// error}`. Installed on demand once Computer Use is turned on, never at
-    /// bare start; `UNPEEL_COMPUTER_ENGINE_INSTALL=0` reports `disabled`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    computer_engine: Option<unpeel_core::computer_engine::Status>,
-    /// The Computer Use adapter's Controller-facing truth (additive, 0.5.0):
-    /// the same `{computerUseAvailable, computerUseReady,
-    /// computerUseUnavailableReason?}` the worker publishes in bootstrap, so
-    /// a headless Host can be diagnosed from `serve.json` alone.
+    /// Legacy capability status, always unavailable after retirement.
     #[serde(skip_serializing_if = "Option::is_none")]
     computer_use: Option<serde_json::Value>,
     native_app_owns_controllers: bool,
@@ -688,7 +679,7 @@ impl HostRuntime {
             Arc::clone(&platform_adapters),
         )?;
         unpeel_core::session_ops::set_own_listener_port(port);
-        let mut computer = ComputerAdapter::new(&home, Arc::clone(&platform_adapters));
+        let computer = ComputerAdapter::default();
         let (local_control_tx, local_controls) = mpsc::channel();
         let native_probe = NativeProbe::start(port);
         let native_authority = native_probe.current();
@@ -706,7 +697,6 @@ impl HostRuntime {
         let persisted_unread =
             crate::activity_snapshot::load_unread(&unpeel_core::app_paths::activity_state_path());
         let unread_ids = derive_unread(&model, &activity_log, &persisted_unread);
-        computer.reconcile();
         let mut initial_snapshot = crate::sessions::mobile_snapshot(
             &model,
             overlay_snapshot.as_ref(),
@@ -822,11 +812,6 @@ impl HostRuntime {
         }
         dirty |= self.reconcile_overlay_refresh();
         self.sync_platform_approvals(platform_generation);
-        // Adapter or engine-install changes republish both the snapshot and
-        // serve.json (the latter carries `computerEngine`).
-        let computer_changed = self.computer.reconcile();
-        dirty |= computer_changed;
-        self.status_dirty |= computer_changed;
         while let Ok(message) = self.hook_events.try_recv() {
             if message.is_state_change() {
                 self.request_overlay_refresh(self.platform_adapter_generation);
@@ -1892,7 +1877,6 @@ impl HostRuntime {
                 .and_then(MobileServer::streamer_status),
             pty_core: self.pty_core.status(),
             browser_engine: Some(self.browser_engine_status.clone()),
-            computer_engine: Some(self.computer.engine_status().clone()),
             computer_use: Some(self.computer.status().wire()),
             native_app_owns_controllers: self.native_app_owns_controllers(),
             platform_capabilities: self.platform_adapters.capabilities(),
@@ -2189,7 +2173,6 @@ mod tests {
                 last_exit: Some("signal 9".into()),
             }),
             browser_engine: None,
-            computer_engine: None,
             computer_use: None,
             pty_core: Some(crate::pty_core_supervisor::CoreStatus {
                 state: "adopted",

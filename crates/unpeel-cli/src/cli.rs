@@ -57,8 +57,6 @@ unpeel — run and steer CLI agent sessions
   unpeel link deactivate          stop Link on this Host machine
   unpeel browser install [--check] [--json]
                                   install the Host-owned browser engine
-  unpeel computer install [--check] [--json]
-                                  install the Host-owned computer-use engine
   unpeel workspaces [list | add <name> | remove <name>]
   unpeel add [PATH] [--name N] [--here] [--json]
                                   add a folder (default: here) as a project

@@ -6,8 +6,7 @@
 //  dropdown in the terminal title bar. Uses the system `screencapture` CLI
 //  rather than ScreenCaptureKit: the CLI provides the native crosshair /
 //  window-picker UI for free, and as a direct child process its TCC
-//  screen-recording grant attributes to Unpeel.app (same discipline as
-//  cua-driver). Shots land in the session's `artifacts/uploads/` — the same
+//  screen-recording grant attributes to Unpeel.app. Shots land in the session's `artifacts/uploads/` — the same
 //  kind phone uploads use — so they show in both galleries, and are then
 //  attached to the session's prompt like a Finder drop.
 //
@@ -73,8 +72,16 @@ enum SessionScreenshotCapture {
         sessionID: String,
         completion: @escaping @MainActor (URL?) -> Void
     ) {
-        guard ComputerPermissions.screenRecordingGranted() else {
-            ComputerPermissions.request("Screen Recording")
+        guard CGPreflightScreenCaptureAccess() else {
+            // The system prompt blocks its thread until the user answers.
+            DispatchQueue.global(qos: .userInitiated).async {
+                _ = CGRequestScreenCaptureAccess()
+                DispatchQueue.main.async {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+            }
             completion(nil)
             return
         }

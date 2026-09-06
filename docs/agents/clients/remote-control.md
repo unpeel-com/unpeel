@@ -146,7 +146,7 @@ failure `500`, and `{ "ok": true }` on success. Per-session cross-process
 locks serialize lifecycle changes. Legacy
 terminal/session restart re-points title/custom-title, Session pin metadata
 and its `pinned_at` timestamp, manual order, Sessions MCP grant and directional
-write approvals, and Browser/Computer approvals; archive state is intentionally not
+write approvals, and Browser approvals; archive state is intentionally not
 carried. The additive `resume_agent` action instead keeps all of that state and
 the existing Session/PTY. It verifies that the original owned interactive login
 shell has the foreground and that no retained expected runtime,

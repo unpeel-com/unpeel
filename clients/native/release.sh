@@ -143,10 +143,6 @@ if [ "$DRY_RUN" -eq 0 ] && ! grep -qE "^## $VERSION( |$)" "$CHANGELOG_MD" 2>/dev
       $CHANGELOG_MD (newest first), then deploy the website after release."
 fi
 
-# Computer Use is deliberately absent from release bundles until its
-# TCC-bearing daemon is isolated from same-UID hosted code. build-app.sh
-# includes cua-driver only when UNPEEL_DEV_BUILD=1.
-
 # An un-notarized build must never be published: Gatekeeper rejects it on every
 # user's machine and latest.json/appcast would point at a broken release.
 if [ "$SKIP_NOTARIZE" -eq 1 ] && [ "$DRY_RUN" -eq 0 ] && [ "$FORCE_PUBLISH_UNNOTARIZED" -eq 0 ]; then

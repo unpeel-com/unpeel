@@ -5,9 +5,7 @@
 //! Swift app (`clients/native`) spawns. No GUI/Tauri dependency may be added to
 //! this crate — keeping it that way is what lets the host run headless.
 
-// The unified MCP tool definitions are single large `json!` literals (one
-// schema per domain); the computer tool's parameter set exceeds the default
-// macro recursion limit.
+// The unified MCP tool definitions are large `json!` literals, one per domain.
 #![recursion_limit = "256"]
 
 #[cfg(feature = "native-host")]
@@ -33,15 +31,13 @@ pub mod browser_engine;
 #[cfg(feature = "native-host")]
 pub mod browser_mcp;
 #[cfg(feature = "native-host")]
-pub mod computer_engine;
-#[cfg(feature = "native-host")]
-pub mod computer_mcp;
-#[cfg(feature = "native-host")]
 pub mod controller_api;
 #[cfg(feature = "native-host")]
 pub mod controller_host;
 #[cfg(feature = "controller-core")]
 pub mod controller_protocol;
+#[cfg(feature = "native-host")]
+pub mod desktop_session;
 #[cfg(feature = "native-host")]
 pub mod direct_connection;
 #[cfg(feature = "controller-core")]

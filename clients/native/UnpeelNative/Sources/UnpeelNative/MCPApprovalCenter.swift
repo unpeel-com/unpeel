@@ -197,16 +197,11 @@ extension UnpeelStore {
             // its runtime (capability-gated `approval.answer`), and let the
             // next bootstrap confirm the row is gone.
             guard hostMcpApprovalAnswersInFlight.insert(id).inserted else { return true }
-            let isLocalMachine = selectedHostScope.isLocalMachine
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 do {
                     try await self.remoteHostRuntime.answerApproval(id, approved: approved)
-                    let answered = self.pendingMcpApprovals.first { $0.id == id }
                     self.pendingMcpApprovals.removeAll { $0.id == id }
-                    if approved, isLocalMachine, answered?.kind == .computer {
-                        self.checkComputerPermissionsAfterApproval()
-                    }
                     self.scopedHostMcpApprovalIDs.remove(id)
                     self.hostMcpApprovalMessages.removeValue(forKey: id)
                     self.remoteHostRuntime.requestImmediateRefresh()
@@ -234,15 +229,7 @@ extension UnpeelStore {
                     backend = local
                     _ = try await local.bootstrap()
                     _ = try await local.answerApproval(id: id, approved: approved)
-                    let answered = self.pendingMcpApprovals.first { $0.id == id }
                     self.pendingMcpApprovals.removeAll { $0.id == id }
-                    if approved, answered?.kind == .computer {
-                        // The user is engaged right now — if required TCC
-                        // grants are missing, the approval they just gave
-                        // leads straight into a failing first action, so
-                        // chain into the grant prompt on this Mac.
-                        self.checkComputerPermissionsAfterApproval()
-                    }
                     self.hostOwnedMcpApprovalIDs.remove(id)
                     self.hostMcpApprovalMessages.removeValue(forKey: id)
                 } catch {

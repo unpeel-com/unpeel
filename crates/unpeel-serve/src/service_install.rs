@@ -399,7 +399,7 @@ pub fn status(
         ServiceManager::Launchd => None,
     };
     let desktop_session =
-        unpeel_core::computer_engine::desktop_session().map(|session| session.display);
+        unpeel_core::desktop_session::desktop_session().map(|session| session.display);
     Ok(ServiceStatusReport {
         unit_installed: path.exists(),
         unit_path: path,

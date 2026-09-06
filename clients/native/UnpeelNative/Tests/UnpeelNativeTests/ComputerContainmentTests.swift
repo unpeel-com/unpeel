@@ -6,7 +6,7 @@ final class ComputerContainmentTests: XCTestCase {
         XCTAssertFalse(ExperimentalFeature.computerUse.defaultOn)
     }
 
-    func testComputerUseRequiresBooleanDevelopmentBuildMarker() {
+    func testComputerUseIsRetiredInDevelopmentBuildsToo() {
         XCTAssertFalse(UnpeelFeatureFlags.computerUseAvailable(infoDictionary: nil))
         XCTAssertFalse(UnpeelFeatureFlags.computerUseAvailable(infoDictionary: [:]))
         XCTAssertFalse(UnpeelFeatureFlags.computerUseAvailable(
@@ -15,7 +15,7 @@ final class ComputerContainmentTests: XCTestCase {
         XCTAssertFalse(UnpeelFeatureFlags.computerUseAvailable(
             infoDictionary: ["UnpeelDevelopmentBuild": "true"]
         ))
-        XCTAssertTrue(UnpeelFeatureFlags.computerUseAvailable(
+        XCTAssertFalse(UnpeelFeatureFlags.computerUseAvailable(
             infoDictionary: ["UnpeelDevelopmentBuild": true]
         ))
     }
@@ -24,7 +24,7 @@ final class ComputerContainmentTests: XCTestCase {
         XCTAssertFalse(UnpeelFeatureFlags.isAvailable(
             .computerUse, developmentBuild: false
         ))
-        XCTAssertTrue(UnpeelFeatureFlags.isAvailable(
+        XCTAssertFalse(UnpeelFeatureFlags.isAvailable(
             .computerUse, developmentBuild: true
         ))
 
@@ -36,17 +36,14 @@ final class ComputerContainmentTests: XCTestCase {
         }
     }
 
-    /// Decision D2: operating a Host's computer use follows what that Host
-    /// advertises, never this app's build flavor.
-    func testControllableFollowsTheHostAdvertisementNotTheBuild() {
-        XCTAssertTrue(UnpeelFeatureFlags.computerUseControllable(hostAdvertisesAvailability: true))
+    func testRetirementAlsoAppliesToOlderHostsAdvertisingComputerUse() {
+        XCTAssertFalse(UnpeelFeatureFlags.computerUseControllable(hostAdvertisesAvailability: true))
         XCTAssertFalse(UnpeelFeatureFlags.computerUseControllable(hostAdvertisesAvailability: false))
         XCTAssertFalse(UnpeelFeatureFlags.computerUseControllable(hostAdvertisesAvailability: nil))
     }
 
-    func testReleaseBuildShowsTheComputerTabOnlyForAnAdvertisingHost() {
-        // Release build + advertising (Linux) Host → the tab is reachable.
-        XCTAssertTrue(SettingsTab.visibleCases(computerUseControllable: true).contains(.computer))
+    func testComputerTabIsHiddenForEveryHost() {
+        XCTAssertFalse(SettingsTab.visibleCases(computerUseControllable: true).contains(.computer))
         // Release build + this Mac's local scope → hidden, exactly as today.
         // (`visibleCases` without the Host flag is the local-scope path; the
         // test runner is not a development bundle.)
@@ -73,12 +70,12 @@ final class ComputerContainmentTests: XCTestCase {
         ]
         try JSONSerialization.data(withJSONObject: seed).write(to: file)
 
-        XCTAssertTrue(UnpeelStore.writeComputerUseExperiment(true, appStateFile: file))
+        XCTAssertFalse(UnpeelStore.writeComputerUseExperiment(true, appStateFile: file))
         let after = try XCTUnwrap(
             JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any]
         )
         let features = try XCTUnwrap(after["experimental_features"] as? [String: Any])
-        XCTAssertEqual(features["computer_use"] as? Bool, true)
+        XCTAssertNil(features["computer_use"])
         XCTAssertEqual(features["sessions_mcp"] as? Bool, true)
         XCTAssertEqual(features["future_gate"] as? String, "keep")
         XCTAssertNotNil(after["a_key_from_a_future_version"])

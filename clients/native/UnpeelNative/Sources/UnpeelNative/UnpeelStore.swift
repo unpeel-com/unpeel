@@ -848,7 +848,6 @@ final class UnpeelStore: ObservableObject {
     let computerNudgePanel = FloatingPromptPanelController()
     /// Missing-permission sets (sorted, "|"-joined) already alerted about this
     /// app run — the grant-prompt nudge fires once per distinct set.
-    var shownComputerPermissionNudges: Set<String> = []
 
     /// App-wide Browser Access (the `browser_default_access` field). Defaults
     /// to on — the browser is an isolated per-session profile (no access to the
@@ -2828,11 +2827,7 @@ final class UnpeelStore: ObservableObject {
                     let available = experimental?.computerUseAvailable == true
                     var response: [String: Any] = [
                         "available": available,
-                        "ready": available
-                            && experimental?.computerUseReady == true
-                            && FileManager.default.fileExists(
-                                atPath: ComputerEngineManager.socketPath
-                            ),
+                        "ready": false,
                     ]
                     if let reason = experimental?.computerUseUnavailableReason {
                         response["reason"] = reason
@@ -3349,23 +3344,10 @@ final class UnpeelStore: ObservableObject {
         }
         let transcripts = transcriptSettings
         let transparency = TransparencyModel.savedValues(in: AppDefaults.shared)
-        let computerAdapterAvailable = UnpeelFeatureFlags.computerUseAvailable
-            && ComputerPermissions.resolveEngine() != nil
-        let computerFeatureEnabled = isExperimentalEnabled(.computerUse)
-        let computerAdapterReady = computerFeatureEnabled
-            && computerDefaultAccess != .off
-            && ComputerEngineManager.shared.isRunning
-        let computerAdapterReason: String? = if !UnpeelFeatureFlags.computerUseAvailable {
-            "Computer use is not included in this Host build."
-        } else if ComputerPermissions.resolveEngine() == nil {
-            "Cua Driver is not installed on this Host."
-        } else if computerFeatureEnabled && computerDefaultAccess == .off {
-            "Computer access is Off in Settings ▸ Computer use."
-        } else if computerFeatureEnabled && !computerAdapterReady {
-            "Cua Driver is starting or could not start on this Host."
-        } else {
-            nil
-        }
+        let computerAdapterAvailable = false
+        let computerFeatureEnabled = false
+        let computerAdapterReady = false
+        let computerAdapterReason: String? = "Unpeel computer use has been retired."
         return RemoteWorkspaceSettings(
             transcriptSettings: RemoteTranscriptSettings(
                 includeUser: transcripts.includeUser,
@@ -4765,7 +4747,6 @@ final class UnpeelStore: ObservableObject {
         mutateAppStateJSON { root in
             root["computer_default_access"] = value
         }
-        ComputerEngineManager.shared.sync()
         rescan()
     }
 
@@ -11143,7 +11124,8 @@ final class UnpeelStore: ObservableObject {
     /// unknown key. Returns whether the file was written.
     @discardableResult
     nonisolated static func writeComputerUseExperiment(_ enabled: Bool, appStateFile: URL) -> Bool {
-        PresetStateFile.edit(at: appStateFile) { object in
+        guard !enabled else { return false }
+        return PresetStateFile.edit(at: appStateFile) { object in
             var features = object["experimental_features"] as? [String: Any] ?? [:]
             features["computer_use"] = enabled
             object["experimental_features"] = features

@@ -40,8 +40,8 @@
 //! `session_host::write_launch_file`; the host deletes it after reading.
 
 use unpeel_core::{
-    browser_mcp, computer_mcp, direct_path_punch, mcp_gate, mcp_host, relay_probe, remote_attach,
-    remote_server, remote_stdio, session_host, terminal_viewport, transcripts,
+    browser_mcp, direct_path_punch, mcp_gate, mcp_host, relay_probe, remote_attach, remote_server,
+    remote_stdio, session_host, terminal_viewport, transcripts,
 };
 
 /// Allocator spike (`--features mimalloc`): the shared PTY core keeps every
@@ -149,12 +149,8 @@ fn main() {
         return;
     }
 
-    if args.first().map(String::as_str) == Some(computer_mcp::COMPUTER_CLEANUP_ARG) {
-        args.remove(0);
-        if let Err(error) = computer_mcp::run_cleanup(&args) {
-            eprintln!("{error}");
-            std::process::exit(1);
-        }
+    // Older Controllers may still request cleanup for the retired domain.
+    if args.first().map(String::as_str) == Some("__computer_cleanup__") {
         return;
     }
 

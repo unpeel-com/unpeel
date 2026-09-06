@@ -91,7 +91,7 @@ fn settings_and_preset_verbs_use_locked_unknown_preserving_state() {
     assert_eq!(listed["experimental_features.sessions_mcp"], true);
     assert_eq!(listed["experimental_features.browser_mcp"], true);
     // Off until set — the same default as the Rust launch gate.
-    assert_eq!(listed["experimental_features.computer_use"], false);
+    assert!(listed.get("experimental_features.computer_use").is_none());
     assert_eq!(listed["browser_default_access"], "ask");
     assert_eq!(listed["mcp_nonchild_write_access"], "deny");
     assert_eq!(listed["theme"], "dark");
@@ -189,7 +189,7 @@ fn settings_and_preset_verbs_use_locked_unknown_preserving_state() {
     }
     let listed = run(home.path(), &["settings", "list", "--json"]);
     let listed: serde_json::Value = serde_json::from_slice(&listed.stdout).unwrap();
-    assert_eq!(listed["computer_access"], "off");
+    assert!(listed.get("computer_access").is_none());
     assert_eq!(listed["auto_stop_archive_minutes"], 60);
 
     let read_theme = run(home.path(), &["settings", "get", "theme", "--json"]);

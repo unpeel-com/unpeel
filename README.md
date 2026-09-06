@@ -2,7 +2,7 @@
 
 Unpeel is an **agent-first terminal multiplexer**, written in Rust. Sessions
 keep running on your own machines, know when the agent inside them needs you,
-and give that agent a browser, a computer, and its sibling sessions to work
+and give that agent a browser and its sibling sessions to work
 with. This repository is the whole product apart from the website and the
 operated Link service: the server, the Mac app, and the iPhone/iPad app,
 built from one tree at one version.
@@ -19,9 +19,9 @@ built from one tree at one version.
   you are holding. Resume re-runs the agent with its own conversation id
   after a crash or a Host upgrade.
 - 🧰 **Built-in MCP tools.** Every session has the single `unpeel` MCP server:
-  an isolated real browser with screenshots as reviewable artifacts, a real
-  desktop through Computer Use on Linux Hosts, presets and worktrees, and the
-  session gallery. The engines are Host-installed and pinned; nothing to set
+  an isolated real browser with screenshots as reviewable artifacts,
+  presets and worktrees, and the session gallery. The browser engine is
+  Host-installed and pinned; nothing to set
   up per agent.
 - 💬 **Agents can talk to each other.** From inside a session an agent can
   list its siblings, read their screens and transcripts, wait for one to go
@@ -173,7 +173,7 @@ default; session creation stays user-only. Detail:
 
 - **Mac app** — [`clients/native`](clients/native). The desktop client: a Controller
   of the bundled Host service plus the platform adapter (notifications,
-  Keychain, approvals, Computer Use on the Mac's own desktop). Signed,
+  Keychain, approvals). Signed,
   notarized builds: [unpeel.com/download](https://unpeel.com/download).
 - **iPhone / iPad app** — [`clients/ios`](clients/ios). A remote Controller: steer
   every session from your phone over your network or through Unpeel Link.

@@ -28,7 +28,7 @@ makes sense for coding, it does not belong here.
 | Path | What it is |
 | --- | --- |
 | `crates/unpeel-core` | Session backend: hosted PTYs, manifests, control sockets, app state, hook ingestion, MCP domains, transcripts, engines |
-| `crates/unpeel-serve` | The Host service (`unpeel serve`): workspace workers, `/mobile`, pairing, approvals, Link, remote streamer, computer-use adapter |
+| `crates/unpeel-serve` | The Host service (`unpeel serve`): workspace workers, `/mobile`, pairing, approvals, Link, remote streamer |
 | `crates/unpeel-host` | The `unpeel-host` binary: session host, PTY core, unified MCP server, remote server, one-shot helpers |
 | `crates/unpeel-cli` | The `unpeel` CLI and its PTY test matrix (`crates/unpeel-cli/tests`) |
 | `crates/unpeel-attach` | Terminal attach client (standalone crate, ships next to `unpeel-host`) |
@@ -69,14 +69,14 @@ makes sense for coding, it does not belong here.
   notification channel.
 - **Cooperative MCP policy, not a sandbox.** The unified `unpeel` MCP server
   (`unpeel-host __mcp__`) has open reads and approval-controlled writes to
-  other Sessions; browser and computer use are Off/Ask/Allow. Hosted
+  other Sessions; browser use is Off/Ask/On. Hosted
   commands run as the user's account, so Ask/Deny is a cooperative control
   for agents using Unpeel's tools, never a hard boundary. Agent Session
   creation and closing are user-only.
 - **Engines are Host-owned and pinned.** The browser engine
-  (`protocol/browser-engine-v1.json`) and the computer-use engine
-  (`protocol/computer-engine-v1.json`) are installed and hash-verified by
-  the Host. Unpeel never ships or requires a Node runtime.
+  (`protocol/browser-engine-v1.json`) is installed and hash-verified by
+  the Host. Desktop automation belongs to the agent or VM environment.
+  Unpeel never ships or requires a Node runtime.
 - **Hooks are the busy/idle authority.** Provider hook assets under
   `runtimes/<slug>/assets/hooks/` report lifecycle to the Host's hook port;
   terminal output never flips busy/idle. Hook scripts broadcast to every
@@ -107,7 +107,6 @@ scripts/ci/check-portable-core.sh          # unpeel-core without the Host (contr
 crates/unpeel-cli/tests/run.sh            # the PTY matrix (real binaries, ~10 min); ./run.sh <filter> for a subset
 scripts/verify-attach.sh                   # attach end to end
 scripts/verify-browser.sh                  # browser engine + MCP (needs Chrome)
-scripts/verify-computer.sh                 # computer use with the real engine (Linux, Xvfb + Openbox)
 bun run test:release                       # release/publish scripts
 bun run check:runtimes                     # both generated catalog copies match runtimes/
 scripts/check-notices.sh && scripts/check-links.sh
@@ -123,7 +122,7 @@ adjusting. The client suites are listed in the next section.
 
 The Mac app is a **Controller** of the bundled `unpeel serve` Host service
 plus a platform-capability adapter (notifications, Keychain, APNs, approval
-dialogs, Computer Use on the Mac's own desktop); the iOS app is a remote
+dialogs); the iOS app is a remote
 Controller only. Neither hosts sessions: "the server" is exactly `crates/`.
 Detail lives in `docs/agents/clients/` (`dev-builds.md`, `terminal.md`,
 `panes.md`, `workspaces.md`, `presets.md`, `session-activity.md`,

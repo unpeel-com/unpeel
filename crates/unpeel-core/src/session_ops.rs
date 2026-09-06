@@ -1944,13 +1944,7 @@ pub fn remove_session(session_id: &str) -> Result<(), String> {
 fn remove_session_unlocked(session_id: &str) -> Result<(), String> {
     let manifest = load_manifest(session_id);
     let managed_storage = manifest.as_ref().and_then(managed_storage_for_manifest);
-    let computer_session = manifest
-        .as_ref()
-        .is_some_and(HostedSessionManifest::computer_mcp_enabled);
     teardown_session_files(session_id)?;
-    if computer_session {
-        end_computer_engine_session(session_id);
-    }
     let storage_result: Result<(), String> =
         managed_storage.map_or(Ok(()), |path| match std::fs::remove_dir_all(&path) {
             Ok(()) => Ok(()),
@@ -1968,23 +1962,6 @@ fn remove_session_unlocked(session_id: &str) -> Result<(), String> {
         (Ok(()), Err(storage)) => Err(format!("session removed, but {storage}")),
         (Err(prune), Err(storage)) => Err(format!("{prune}; additionally, {storage}")),
     }
-}
-
-/// Ask the Computer Use engine to forget a removed Session's driver session
-/// (`unpeel-host __computer_cleanup__ <id>`), the same call the Mac app makes
-/// on Remove. Best effort and detached: a down or absent engine is a fine
-/// outcome for cleanup, and Remove never waits on the engine.
-fn end_computer_engine_session(session_id: &str) {
-    let Ok(binary) = resolve_host_binary() else {
-        return;
-    };
-    let _ = std::process::Command::new(binary)
-        .arg(crate::computer_mcp::COMPUTER_CLEANUP_ARG)
-        .arg(session_id)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
 }
 
 fn now_ms() -> u64 {
@@ -2025,11 +2002,7 @@ fn mcp_features_enabled_for_launch() -> (bool, bool, bool) {
                 .and_then(|features| features.get("sessions_mcp"))
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(true);
-            (
-                sessions,
-                browser_mcp_enabled_from_app_state(&state),
-                crate::computer_mcp::enabled_for_launch_from_app_state(&state),
-            )
+            (sessions, browser_mcp_enabled_from_app_state(&state), false)
         }
         Err(error) => {
             // A damaged settings file must not take down Session creation,
