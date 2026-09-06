@@ -17,10 +17,14 @@ enum ToolIcons {
 
     @MainActor
     static func image(for icon: UnpeelToolIcon) -> NSImage? {
-        if let cached = cache[icon.id] { return cached }
+        // Key on the artwork, not the icon id: an App's id is stable while
+        // its mark can change from the generic fallback (startup cache,
+        // older Host) to the catalog's authored SVG once bootstrap lands.
+        let key = "\(icon.isTemplate)#\(icon.svgSource)"
+        if let cached = cache[key] { return cached }
         guard let image = NSImage(data: Data(icon.svgSource.utf8)) else { return nil }
         image.isTemplate = icon.isTemplate
-        cache[icon.id] = image
+        cache[key] = image
         return image
     }
 }

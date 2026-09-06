@@ -11506,6 +11506,8 @@ final class UnpeelStore: ObservableObject {
     struct PaneSidebarItem: Identifiable, Equatable {
         let paneID: String
         let sessionID: String
+        /// Host-stamped App identity, so a merged App pane keeps its mark.
+        var appID: String? = nil
         let command: String
         let agentName: String
         let status: SessionStatus
@@ -11531,6 +11533,7 @@ final class UnpeelStore: ObservableObject {
         return PaneSidebarItem(
             paneID: paneID,
             sessionID: session.id,
+            appID: session.activeApp?.id,
             command: command,
             agentName: title.isEmpty ? runtimeName : title,
             status: session.status,

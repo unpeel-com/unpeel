@@ -3672,6 +3672,7 @@ private struct SessionCommandIconStack: View {
                     onFocus(item.sessionID)
                 } label: {
                     SessionCommandIconStackTile(
+                        appID: item.appID,
                         command: item.command,
                         index: index,
                         stackCount: visibleItems.count
@@ -3706,6 +3707,7 @@ private struct SessionCommandIconStack: View {
 /// do not replay their entrance. Alternating sub-degree rotations keep the
 /// settled stack visibly layered without turning it into a fan.
 private struct SessionCommandIconStackTile: View {
+    var appID: String? = nil
     let command: String
     let index: Int
     let stackCount: Int
@@ -3717,7 +3719,7 @@ private struct SessionCommandIconStackTile: View {
     }
 
     var body: some View {
-        ToolIconView(command: command, size: 12)
+        ToolIconView(appID: appID, command: command, size: 12)
             .frame(width: 18, height: 18)
             .background(
                 // The sidebar's own surface recipe (material + tint wash),
