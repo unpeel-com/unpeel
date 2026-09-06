@@ -12542,6 +12542,16 @@ final class UnpeelStore: ObservableObject {
         return node.sessions.filter(\.isLive)
     }
 
+    /// Publish the sidebar's arrangement (members + the selected main-area
+    /// Session) into the durable pane layout for the Host's pane context.
+    /// Cheap and idempotent: the controller persists only on change.
+    func syncProjectSidebarProjection() {
+        paneLayoutController.setProjectSidebar(
+            sessionIDs: projectSidebarSessions.map(\.id),
+            besideSessionID: selectedSessionID
+        )
+    }
+
     /// True when this project id is a root project's "Sidebar" group.
     /// Resolves through the scoped map first, then local truth: the swipe
     /// carousel's ghost of the Local workspace renders `nodes` while another

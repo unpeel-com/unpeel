@@ -111,7 +111,14 @@ struct ProjectSidebarView: View {
             // The pending session landed: hand the launcher slot's frame over
             // to its pane (a pure bookkeeping swap — same index, same height).
             store.clearProjectSidebarLauncherIfLanded()
+            store.syncProjectSidebarProjection()
         }
+        // The Host learns which Session the panel sits beside from the
+        // durable layout; keep it current with selection, not just membership.
+        .onChange(of: store.selectedSessionID) { _ in
+            store.syncProjectSidebarProjection()
+        }
+        .onAppear { store.syncProjectSidebarProjection() }
     }
 
     /// The transient "add a pane" launcher, styled as a TEMPORARY PANE — the

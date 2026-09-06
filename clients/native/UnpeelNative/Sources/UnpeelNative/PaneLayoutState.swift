@@ -1095,16 +1095,27 @@ struct PaneLayoutState: Equatable, Sendable {
 /// contain at least two sessions are omitted; while a launcher is live and a
 /// pre-launcher snapshot exists, the snapshot is what gets encoded. Writes are
 /// always version 2; version 1 (the flat pane list) migrates on read.
+/// Additive projection of the project sidebar (the right panel): which
+/// Sessions it shows and the main-area Session it is displayed beside. The
+/// Host reads it so a pinned App's "the chat next to me" resolves to what
+/// the user is looking at. Arrangement only — never focus, never geometry.
+struct DurableSidebarProjection: Codable, Equatable, Sendable {
+    var sessionIDs: [String]
+    var besideSessionID: String?
+}
+
 struct DurablePaneLayout: Codable, Equatable, Sendable {
     static let currentVersion = 2
     static let supportedVersions = 1...2
 
     let version: Int
     let groups: [DurablePaneGroup]
+    var sidebar: DurableSidebarProjection?
 
-    init(state: PaneLayoutState) {
+    init(state: PaneLayoutState, sidebar: DurableSidebarProjection? = nil) {
         version = Self.currentVersion
         groups = state.groups.compactMap(DurablePaneGroup.init(group:))
+        self.sidebar = sidebar
     }
 
     func restoredState() -> PaneLayoutState {

@@ -95,19 +95,65 @@ fn neighborhood_at(
         return Ok(None);
     };
     let groups = layout.groups()?;
+    let sidebar = layout.sidebar.as_ref();
+    // The project sidebar is the Controller's right panel: its members sit
+    // beside whatever the main area shows. That arrangement (not focus) is
+    // what the Controller publishes as `sidebar`, so a pinned App's "the
+    // chat next to me" resolves to the Session the user is actually looking
+    // at instead of an arbitrary agent in the project.
+    let sidebar_member = sidebar.is_some_and(|sidebar| {
+        sidebar
+            .session_ids
+            .iter()
+            .any(|session_id| session_id == caller_session_id)
+    });
+    if sidebar_member {
+        return Ok(Some(PaneNeighborhood {
+            window_id: window_id.to_string(),
+            scope_id: scope_id.to_string(),
+            left: sidebar
+                .and_then(|sidebar| sidebar.beside_session_id.clone())
+                .filter(|beside| beside != caller_session_id && !beside.is_empty()),
+            right: None,
+            up: None,
+            down: None,
+        }));
+    }
+    // The main-area Session the sidebar sits beside sees the panel on its
+    // right — only when the panel shows exactly one member, so the answer is
+    // never a guess among several pinned Apps.
+    let sidebar_on_right = sidebar
+        .filter(|sidebar| {
+            sidebar.beside_session_id.as_deref() == Some(caller_session_id)
+                && sidebar.session_ids.len() == 1
+        })
+        .and_then(|sidebar| sidebar.session_ids.first().cloned())
+        .filter(|member| member != caller_session_id);
     for group in &groups {
         let Some(caller_pane_id) = group.root.pane_id_for_session(caller_session_id) else {
             continue;
         };
+        let right = group
+            .root
+            .spatial_neighbor(caller_pane_id, Direction::Right)
+            .or(sidebar_on_right);
         return Ok(Some(PaneNeighborhood {
             window_id: window_id.to_string(),
             scope_id: scope_id.to_string(),
             left: group.root.spatial_neighbor(caller_pane_id, Direction::Left),
-            right: group
-                .root
-                .spatial_neighbor(caller_pane_id, Direction::Right),
+            right,
             up: group.root.spatial_neighbor(caller_pane_id, Direction::Up),
             down: group.root.spatial_neighbor(caller_pane_id, Direction::Down),
+        }));
+    }
+    if sidebar_on_right.is_some() {
+        return Ok(Some(PaneNeighborhood {
+            window_id: window_id.to_string(),
+            scope_id: scope_id.to_string(),
+            left: None,
+            right: sidebar_on_right,
+            up: None,
+            down: None,
         }));
     }
     Ok(None)
@@ -125,6 +171,19 @@ struct DurablePaneLayout {
     version: i64,
     #[serde(default)]
     groups: Value,
+    /// Additive (2026-09-06): the project sidebar's members and the
+    /// main-area Session the panel is displayed beside. Absent from older
+    /// Controllers and when the panel is hidden.
+    #[serde(default)]
+    sidebar: Option<DurableSidebarProjection>,
+}
+
+#[derive(Deserialize, Default)]
+struct DurableSidebarProjection {
+    #[serde(rename = "sessionIDs", default)]
+    session_ids: Vec<String>,
+    #[serde(rename = "besideSessionID", default)]
+    beside_session_id: Option<String>,
 }
 
 impl DurablePaneLayout {
@@ -416,6 +475,10 @@ mod tests {
         .unwrap();
     }
 
+    fn write_file(path: &Path, file: serde_json::Value) {
+        std::fs::write(path, serde_json::to_vec(&file).unwrap()).unwrap();
+    }
+
     fn pane(id: &str, session_id: &str) -> serde_json::Value {
         json!({ "pane": { "id": id, "sessionID": session_id } })
     }
@@ -462,6 +525,89 @@ mod tests {
         assert_eq!(context.down.as_deref(), Some("lower-session"));
         assert_eq!(context.right, None);
         assert_eq!(context.up, None);
+    }
+
+    #[test]
+    fn sidebar_members_see_the_session_the_panel_sits_beside() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pane-layouts.json");
+        write_file(
+            &path,
+            serde_json::json!({
+                "version": 1,
+                "windows": { "main": { "local": {
+                    "version": 2,
+                    "groups": [{
+                        "id": "group",
+                        "representativePaneID": "p1",
+                        "root": split("horizontal", 0.5, pane("p1", "chat"), pane("p2", "other"))
+                    }],
+                    "sidebar": { "sessionIDs": ["note"], "besideSessionID": "chat" }
+                } } }
+            }),
+        );
+        // The pinned App: the main content is on its left, nothing else.
+        let note = neighborhood_at(&path, "main", "local", "note")
+            .unwrap()
+            .expect("sidebar member has a neighborhood");
+        assert_eq!(note.left.as_deref(), Some("chat"));
+        assert_eq!((note.right, note.up, note.down), (None, None, None));
+        // The main Session keeps its split neighbors; the lone panel member
+        // fills its free right edge.
+        let chat = neighborhood_at(&path, "main", "local", "chat")
+            .unwrap()
+            .unwrap();
+        assert_eq!(chat.right.as_deref(), Some("other"));
+        // `other` is the group's right leaf but not the beside Session, so
+        // the panel is not its neighbor.
+        let other = neighborhood_at(&path, "main", "local", "other")
+            .unwrap()
+            .unwrap();
+        assert_eq!(other.right, None);
+    }
+
+    #[test]
+    fn a_single_pane_session_beside_one_pinned_app_sees_it_on_the_right() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pane-layouts.json");
+        write_file(
+            &path,
+            serde_json::json!({
+                "version": 1,
+                "windows": { "main": { "local": {
+                    "version": 2,
+                    "groups": [],
+                    "sidebar": { "sessionIDs": ["note"], "besideSessionID": "chat" }
+                } } }
+            }),
+        );
+        let chat = neighborhood_at(&path, "main", "local", "chat")
+            .unwrap()
+            .expect("beside Session has a neighborhood");
+        assert_eq!(chat.right.as_deref(), Some("note"));
+        assert_eq!(chat.left, None);
+
+        // Two pinned members: the sidebar is still each member's context,
+        // but the main Session is not told which one is "on the right".
+        write_file(
+            &path,
+            serde_json::json!({
+                "version": 1,
+                "windows": { "main": { "local": {
+                    "version": 2,
+                    "groups": [],
+                    "sidebar": { "sessionIDs": ["note", "usage"], "besideSessionID": "chat" }
+                } } }
+            }),
+        );
+        assert_eq!(
+            neighborhood_at(&path, "main", "local", "chat").unwrap(),
+            None
+        );
+        let usage = neighborhood_at(&path, "main", "local", "usage")
+            .unwrap()
+            .unwrap();
+        assert_eq!(usage.left.as_deref(), Some("chat"));
     }
 
     #[test]

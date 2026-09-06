@@ -46,6 +46,9 @@ final class PaneLayoutController: ObservableObject {
     @Published private(set) var activePane: ActivePane?
     @Published private(set) var zoomedPane: ZoomedPane?
     @Published private(set) var scopeID: String
+    /// What the project sidebar shows and which Session it sits beside —
+    /// published into the durable file for the Host's pane context.
+    @Published private(set) var sidebarProjection: DurableSidebarProjection?
 
     let windowID: String
     let fileURL: URL
@@ -81,7 +84,22 @@ final class PaneLayoutController: ObservableObject {
         )
         state = restored
         inMemoryStates[scopeID] = restored
+        sidebarProjection = Self.loadStorage(from: fileURL)?
+            .windows[windowID]?[scopeID]?
+            .sidebar
         lastFileRevision = Self.fileRevision(fileURL)
+    }
+
+    /// Record the project sidebar's arrangement. An empty panel clears it.
+    /// Persists only on change, through the same locked atomic write as a
+    /// layout mutation, so the Host never reads a half-updated file.
+    func setProjectSidebar(sessionIDs: [String], besideSessionID: String?) {
+        let next = sessionIDs.isEmpty
+            ? nil
+            : DurableSidebarProjection(sessionIDs: sessionIDs, besideSessionID: besideSessionID)
+        guard next != sidebarProjection else { return }
+        sidebarProjection = next
+        persist(state)
     }
 
     /// Runs one all-or-nothing in-memory state transaction. A throwing body
@@ -298,7 +316,7 @@ final class PaneLayoutController: ObservableObject {
             return
         }
         var scopes = storage.windows[windowID] ?? [:]
-        scopes[scopeID] = DurablePaneLayout(state: state)
+        scopes[scopeID] = DurablePaneLayout(state: state, sidebar: sidebarProjection)
         storage.windows[windowID] = scopes
         Self.write(storage, to: fileURL)
     }
