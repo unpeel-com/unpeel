@@ -1045,51 +1045,13 @@ fn tool_apps_context(args: &Value) -> Result<String, String> {
     .map_err(|error| format!("Failed to render App context: {error}"))
 }
 
-fn app_open_pair_approved(caller_session_id: &str, app_id: &str) -> bool {
-    crate::app_state::load()
-        .ok()
-        .and_then(|state| state.get("mcp_app_open_approvals").cloned())
-        .and_then(|raw| serde_json::from_value::<HashMap<String, Vec<String>>>(raw).ok())
-        .and_then(|approvals| approvals.get(caller_session_id).cloned())
-        .is_some_and(|apps| apps.iter().any(|approved| approved == app_id))
-}
-
-fn require_app_open_approval(
-    caller_session_id: &str,
-    app_id: &str,
-    app_name: &str,
-) -> Result<(), String> {
-    if app_open_pair_approved(caller_session_id, app_id) {
-        return Ok(());
-    }
-    let response = app_request_with_timeout(
-        "/mcp/approve-app-open",
-        &json!({
-            "caller_session_id": caller_session_id,
-            "app_id": app_id,
-            "app_name": app_name,
-        }),
-        Duration::from_secs(130),
-    )
-    .map_err(|error| {
-        format!(
-            "Opening App '{app_name}' requires the user's approval, but the approval prompt did not complete: {error}. If the prompt is still open, the user can answer it and you can retry once."
-        )
-    })?;
-    if response.get("approved").and_then(Value::as_bool) == Some(true) {
-        return Ok(());
-    }
-    Err(format!(
-        "The user declined opening App '{app_name}'. Do not retry on your own; ask the user before trying again."
-    ))
-}
-
 /// Open a resource in an App beside the caller: create or reuse the
 /// project/resource App instance, start its companion Session when needed,
 /// and ask Controllers to reveal the caller's panel. This is the one bounded
-/// exception to user-only Session creation, gated by the remembered
-/// per-caller/App approval; installing a missing App stays user-only.
-/// `target: panel` is the whole placement contract: a Mac Controller projects
+/// exception to user-only Session creation and it needs no approval:
+/// installing the App was the user's consent, and the App runs with the
+/// same authority the calling agent already has. Installing a missing App
+/// stays user-only. `target: panel` is the whole placement contract: a Mac Controller projects
 /// it on the trailing/right edge, while other Controllers choose their native
 /// equivalent.
 fn tool_apps_open(args: &Value) -> Result<String, String> {
@@ -1140,16 +1102,8 @@ fn tool_apps_open(args: &Value) -> Result<String, String> {
         request_id: optional_trimmed_str(args, "request_id").map(str::to_string),
     };
 
-    // A request that could never run (App not installed, unsupported media
-    // type, relative path) must fail before consuming the user's attention
-    // or recording an approval that cannot be used.
-    crate::app_open::validate_open_app(&request)?;
-    // Launching an installed App is an effect distinct from terminal writes.
-    // Remember approval per caller/App pair before committing new Host
-    // state, so a decline cannot leave a phantom instance or companion.
-    require_app_open_approval(&caller.session.id, &app.id, &app.name)?;
-    // An approval answered after the client cancelled this call must not
-    // still commit Host state or launch the companion.
+    // A call the client already cancelled must not commit Host state or
+    // launch a companion nobody is waiting for.
     crate::mcp_cancel::bail_if_cancelled()?;
     let result = crate::app_open::open_app(&request, companion_hook_port())?;
     let receipt = result.presentation.agent_receipt();

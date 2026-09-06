@@ -162,9 +162,10 @@ worker's.
 
 - Bridge: `crates/unpeel-serve` hook port, authenticated `POST /mcp/*`
   calls. Public effects use `list-presets`,
-  `create-worktree`, `list-worktrees`, `approve-write`, and
-  `approve-app-open`; `start-session` remains reserved for user/controller
-  launches. Approval routes reply asynchronously (150s bridge ceiling, ~130s
+  `create-worktree`, `list-worktrees`, and `approve-write`
+  (`approve-app-open` is still served for MCP binaries older than
+  2026-09-06, but current App opens need no approval and never call it);
+  `start-session` remains reserved for user/controller launches. Approval routes reply asynchronously (150s bridge ceiling, ~130s
   MCP client timeout). The MCP host tries launch-time `UNPEEL_APP_PORT`, then
   `~/.unpeel/app-ports` newest-first. App-less `unpeel serve` Hosts serve the
   same routes and the same shared approval queue.
@@ -197,9 +198,10 @@ other session** (reworked 2026-08-31):
   Session's attention badge — never a floating window and never
   `NSAlert.runModal()`, which stalls queued main-actor work including mobile
   bootstrap. Pending prompts ride phone bootstrap and are answerable through
-  `POST /mobile/approvals/answer`; first answer wins. App launch approvals are
-  remembered under `mcp_app_open_approvals` as caller Session → App ids,
-  pruned/carried with caller replacement just like other Session-keyed grants.
+  `POST /mobile/approvals/answer`; first answer wins. `mcp_app_open_approvals`
+  (caller Session → App ids) is a pre-2026-09-06 grant map: still decoded,
+  pruned/carried with caller replacement like other Session-keyed grants, but
+  no current open consults it.
 - **Approval lifecycle:** pairs live in `~/.unpeel/app-state.json`; an in-place Resume Agent after the managed runtime returns to its shell keeps the same Session id and therefore needs no migration. Replacement Resume/handoff paths snapshot the map before `pruneNativeState` and re-add every pair under the new Session id (both directions), using the same read-before-prune discipline as the carried access grant.
 - **Launch injection is unchanged:** `SessionHostLaunch.mcp_enabled` still decides both the saved Sessions-domain grant and whether a managed provider gets automatic configuration (Claude `--mcp-config`, Codex `-c mcp_servers.*`, Cursor `~/.cursor/mcp.json` + `--approve-mcps`, current Kimi's environment gate in persistent `~/.kimi-code/mcp.json`, legacy Kimi repeatable `--mcp-config-file`, Cline per-session `CLINE_MCP_SETTINGS_PATH`; other CLIs ignore it). The manifest records those as distinct `mcp_enabled` and `mcp_client_registered` facts.
 - **Native UI:** Settings ▸ Sessions use explains open reads and per-target
@@ -262,8 +264,9 @@ remains — and always framed as app-authored data, never instructions; each
 App's public documentation defines its own `context` schema (Unpeel Design:
 selected file + line span; a markdown App: current file/heading). `open`
 resolves only an installed catalog entry, derives caller/project/cwd Host-side,
-requires remembered user approval per caller/App pair (the first open of each
-App prompts once), then creates or reuses the project/resource App instance,
+then — with no approval prompt: installing the App was the user's consent,
+and the App runs with the authority the agent already has (decided
+2026-09-06) — creates or reuses the project/resource App instance,
 starts its companion Session when it is missing or exited, and binds the
 caller's semantic panel. This is the one bounded exception to user-only
 Session creation (decided 2026-09-06: agents may open files in panes). MCP
@@ -276,9 +279,9 @@ resolved PATH, so a mid-session install is visible without a restart.
 
 `apps.open` and the Controller's user-initiated `apps.open` Host effect share
 the typed resolver, presentation model, and companion lifecycle in
-`app_open::open_app`; the agent path differs only in the approval gate in
-front of it and in `validate_open_app`, which fails a request that could never
-run before the prompt is shown. An explicit `resource` plus `media_type`
+`app_open::open_app`; the agent path is the same effect with the same
+validation (App not installed, unsupported media type, relative path all fail
+before any state is written). An explicit `resource` plus `media_type`
 defaults to `resource_kind:file`; otherwise callers use a declared typed kind
 such as `folder` or `git.working-tree`. Future kinds such as
 `github.pull-request` use the same wire. The Host passes any resource as one

@@ -988,7 +988,7 @@ pub fn action_docs() -> Vec<Value> {
         caller: creates or reuses the project/resource App instance and starts its companion \
         when needed. Files use media_type; non-file resources use declared kinds such as folder \
         or git.working-tree. The Host derives caller/project/cwd; Controllers choose placement \
-        and geometry. The first open per App asks the user once and is remembered. MCP never \
+        and geometry. Opening needs no approval (the user installed the App). MCP never \
         installs Apps; ask the user to install a missing one first.",
             "inputSchema": {
                 "type": "object",

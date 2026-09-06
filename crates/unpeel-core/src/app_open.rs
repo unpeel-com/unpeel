@@ -1,11 +1,10 @@
 //! Host-owned App resolution and presentation shared by Controllers and MCP.
 //!
-//! Callers decide how the App was selected and whether user approval is
-//! required. This module resolves the installed App and derives the caller's
-//! effective project/cwd for both paths. Both paths create or reuse the
-//! project/resource companion Session; an agent (MCP) caller must first clear
-//! the user's remembered per-caller/App approval, and `validate_open_app`
-//! lets it fail a bad request before that prompt is ever shown.
+//! Callers decide how the App was selected (a user verb, `unpeel open`, or
+//! an agent's `apps.open`). This module resolves the installed App and
+//! derives the caller's effective project/cwd for every path. Both paths create or reuse the
+//! project/resource companion Session: installing the App was the user's
+//! consent, so an agent's open is the same effect as a user's.
 
 use crate::app_presentations::{
     AppPresentationTarget, AppResourceRef, EnsureAppPresentation, EnsureAppPresentationResult,
@@ -211,8 +210,8 @@ fn ensure_companion_running(
 
 /// Resolve everything an open needs without touching Host state: the
 /// running caller, the installed App and its launch command, and the
-/// presentation request. Shared by the effect and by the side-effect-free
-/// validation an agent runs before the approval prompt.
+/// presentation request. A request that cannot run (App not installed,
+/// unsupported media type, relative path) fails here, before any state.
 fn prepare_open(
     request: &OpenAppRequest,
 ) -> Result<
@@ -248,14 +247,6 @@ fn prepare_open(
         request_id: request.request_id.clone(),
     };
     Ok((caller, app, command, ensure))
-}
-
-/// Validate an open request without any side effect, so an agent's missing
-/// App, unsupported media type, or relative path fails before the user is
-/// asked to approve anything (and before an approval is remembered for a
-/// request that could never run).
-pub fn validate_open_app(request: &OpenAppRequest) -> Result<(), String> {
-    prepare_open(request).map(|_| ())
 }
 
 /// Create or reuse the project/resource App instance, bind the caller's

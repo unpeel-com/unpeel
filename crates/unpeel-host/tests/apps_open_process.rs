@@ -2,8 +2,7 @@
 
 use serde_json::{json, Value};
 use std::fs;
-use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpListener;
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -106,89 +105,6 @@ fn stop_and_reap(home: &Path, session_id: &str, child: &mut Child) {
     }
 }
 
-fn read_http_request(mut stream: &std::net::TcpStream) -> Vec<u8> {
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
-    let mut request = Vec::new();
-    let mut chunk = [0_u8; 4096];
-    let (header_end, content_length) = loop {
-        let read = stream.read(&mut chunk).unwrap();
-        assert!(read > 0, "approval bridge closed before request headers");
-        request.extend_from_slice(&chunk[..read]);
-        let Some(end) = request.windows(4).position(|window| window == b"\r\n\r\n") else {
-            continue;
-        };
-        let header_end = end + 4;
-        let headers = String::from_utf8_lossy(&request[..header_end]);
-        let content_length = headers
-            .lines()
-            .find_map(|line| {
-                let (name, value) = line.split_once(':')?;
-                name.eq_ignore_ascii_case("content-length")
-                    .then(|| value.trim().parse::<usize>().ok())
-                    .flatten()
-            })
-            .unwrap_or(0);
-        break (header_end, content_length);
-    };
-    while request.len() < header_end + content_length {
-        let read = stream.read(&mut chunk).unwrap();
-        assert!(read > 0, "approval bridge closed before request body");
-        request.extend_from_slice(&chunk[..read]);
-    }
-    request
-}
-
-/// A stand-in for the workspace worker's `/mcp/approve-app-open` route: it
-/// answers exactly ONE prompt (a second connection would hang the caller's
-/// approval and fail the test), persisting the grant the way the real
-/// handler does before replying.
-fn start_approval_bridge(home: PathBuf) -> (u16, thread::JoinHandle<Value>) {
-    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let handle = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let request = read_http_request(&stream);
-        let header_end = request
-            .windows(4)
-            .position(|window| window == b"\r\n\r\n")
-            .unwrap()
-            + 4;
-        let headers = String::from_utf8_lossy(&request[..header_end]);
-        assert!(headers.starts_with("POST /mcp/approve-app-open HTTP/1.1\r\n"));
-        assert!(headers
-            .to_ascii_lowercase()
-            .contains("x-unpeel-auth: fixture-token"));
-        let body: Value = serde_json::from_slice(&request[header_end..]).unwrap();
-        assert_eq!(body["caller_session_id"], "caller");
-        assert_eq!(body["app_id"], "unpeel.app.design");
-        assert_eq!(body["app_name"], "Unpeel Design");
-
-        fs::write(
-            home.join("app-state.json"),
-            serde_json::to_vec_pretty(&json!({
-                "mcp_app_open_approvals": {
-                    "caller": ["unpeel.app.design"]
-                }
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-        let response = br#"{"approved":true}"#;
-        write!(
-            stream,
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            response.len()
-        )
-        .unwrap();
-        stream.write_all(response).unwrap();
-        stream.flush().unwrap();
-        body
-    });
-    (port, handle)
-}
-
 fn install_fixture_app(home: &Path) -> &'static str {
     let bin = home.join("bin");
     fs::create_dir_all(&bin).unwrap();
@@ -207,18 +123,15 @@ fn manifest_state(home: &Path, session_id: &str) -> Option<String> {
 }
 
 /// An agent's `apps.open` is the one bounded exception to user-only Session
-/// creation: the first open per caller/App pair prompts the user once, then
-/// the Host creates the project/resource instance, starts the companion App
-/// Session, and binds the caller's panel. A replay with the same
-/// `request_id` is an exact deduplication (no second prompt, no second
-/// companion), and the receipt never leaks the companion Session id.
+/// creation, and it asks nobody: with no app port and no bridge reachable at
+/// all, the Host creates the project/resource instance, starts the companion
+/// App Session, and binds the caller's panel. A replay with the same
+/// `request_id` is an exact deduplication (no second companion), and the
+/// receipt never leaks the companion Session id.
 #[test]
-fn apps_open_approves_once_and_creates_the_companion_session() {
+fn apps_open_creates_the_companion_session_without_approval() {
     let home = temp_home();
-    fs::create_dir_all(home.join("mcp")).unwrap();
-    fs::write(home.join("mcp/auth-token"), "fixture-token\n").unwrap();
     install_fixture_app(&home);
-    let (port, approval) = start_approval_bridge(home.clone());
 
     let caller_id = "caller";
     let launch = write_caller_launch(&home, caller_id);
@@ -232,7 +145,6 @@ fn apps_open_approves_once_and_creates_the_companion_session() {
         .env("HOME", &home)
         .env("SHELL", "/bin/bash")
         .env("UNPEEL_SESSION_ID", caller_id)
-        .env("UNPEEL_APP_PORT", port.to_string())
         // Keep the companion a plain per-process host: this home has no
         // workspace worker to adopt a PTY core.
         .env("UNPEEL_PTY_CORE", "0")
@@ -306,14 +218,11 @@ fn apps_open_approves_once_and_creates_the_companion_session() {
         );
     }
 
-    let approval_body = approval.join().unwrap();
-    assert_eq!(approval_body["app_id"], "unpeel.app.design");
-
     let state: Value =
         serde_json::from_slice(&fs::read(home.join("app-state.json")).unwrap()).unwrap();
-    assert_eq!(
-        state["mcp_app_open_approvals"]["caller"],
-        json!(["unpeel.app.design"])
+    assert!(
+        state.get("mcp_app_open_approvals").is_none(),
+        "an App open records no grant"
     );
     let instances = state["app_presentations"]["instances"].as_array().unwrap();
     assert_eq!(instances.len(), 1, "one instance per project/resource");
