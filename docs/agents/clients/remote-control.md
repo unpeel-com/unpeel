@@ -561,7 +561,7 @@ depend on the native app being present.
   socket (the attach client splits replay/live the same way).
 - **Unpeel Link Relay (originally shipped as Unpeel Remote, 2026-07-02,
   dark)** — off-LAN phone access through
-  a Cloudflare Worker + Durable Object (`unpeel-relay:apps/relay`, plain `.mjs`, no deps).
+  a Cloudflare Worker + Durable Object (`unpeel-cloud:apps/relay`, plain `.mjs`, no deps).
   Both sides dial outbound; interactive session frames are end-to-end encrypted.
   APNs notification metadata is a separately disclosed, bounded relay path.
   The LAN pairing request/response is AES-GCM sealed with the scanned QR secret
@@ -578,7 +578,7 @@ depend on the native app being present.
   AES-256-GCM with direction-tagged counter nonces (`RelayProtocol.swift` in
   UnpeelShared). Verified by a cross-language known-answer test (Swift
   CryptoKit vs JS WebCrypto, byte-identical) and a live workerd integration
-  test driving every auth gate adversarially — `npm test` in `unpeel-relay:apps/relay`. Mac uplink: the workspace worker
+  test driving every auth gate adversarially — `npm test` in `unpeel-cloud:apps/relay`. Mac uplink: the workspace worker
   (`crates/unpeel-serve`, relay URL override `unpeel.native.relayURL` read
   through the overlay). `RelayUplinkManager.swift` keeps only the client
   half: the shared Link authority record, the `link.entitlement.refresh`
@@ -598,13 +598,13 @@ depend on the native app being present.
   the whole **shipped** gate — the old `REMOTE_ACCESS_MODE` knob is retired).
   The target Link identity/seat/login model and the Relay deploy runbook
   are not part of this repository. Relay tests:
-  `npm test` in `unpeel-relay:apps/relay`.
+  `npm test` in `unpeel-cloud:apps/relay`.
   - **Public website doc (live since 2026-07-23):** a user-facing doc lives
-    at `unpeel-website:apps/website/app/docs/unpeel-remote.md`, registered in
-    `unpeel-website:apps/website/app/docs/manifest.ts` as the "Remote access" group and
+    at `unpeel-cloud:apps/website/app/docs/unpeel-remote.md`, registered in
+    `unpeel-cloud:apps/website/app/docs/manifest.ts` as the "Remote access" group and
     published at `unpeel.com/docs/unpeel-remote`. The build-time gate
     `VITE_UNPEEL_REMOTE` is now set permanently via the committed
-    `unpeel-website:apps/website/.env` (Vite inlines it) — don't remove that file or the group
+    `unpeel-cloud:apps/website/.env` (Vite inlines it) — don't remove that file or the group
     drops from `DOC_GROUPS` again (absent from the sidebar and unroutable;
     `isDocSlug` derives from `DOC_GROUPS`). The security section is
     intentionally accurate-not-overclaimed: it states

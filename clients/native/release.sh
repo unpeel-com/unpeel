@@ -131,7 +131,7 @@ fi
 # Every published release must have a website changelog entry (a `## <version>`
 # heading in the website's changelog.md) — the site's /changelog page renders
 # it. The changelog lives with the website: scripts/release-changelog.mjs
-# resolves UNPEEL_CHANGELOG, then the ../unpeel-website sibling checkout
+# resolves UNPEEL_CHANGELOG, then the ../unpeel-cloud sibling checkout
 # (apps/website/app/changelog.md), then apps/website/app/changelog.md (monorepo), and fails
 # naming the sibling checkout when none exists. Dry runs are exempt from the
 # entry check (local iteration) but still need the file to exist. After

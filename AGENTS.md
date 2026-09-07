@@ -242,8 +242,8 @@ binaries and the bridge from this tree at the same commit, Developer ID
 signs, notarizes, staples, packages the DMG and Sparkle ZIP, writes the
 appcast, publishes; `--dry-run` rehearses without secrets) → **website**
 (the `## <version>` changelog entry that `release.sh` requires goes live from
-the separate `unpeel-website` repo; `release-changelog.mjs` resolves
-`UNPEEL_CHANGELOG`, then the `../unpeel-website` sibling). `CFBundleVersion`
+the separate `unpeel-cloud` repo; `release-changelog.mjs` resolves
+`UNPEEL_CHANGELOG`, then the `../unpeel-cloud` sibling). `CFBundleVersion`
 is one monotonic space across channels. Agents cannot cut a real release (it
 needs the operator's Developer ID, notary, Sparkle, and R2 credentials);
 validate pipeline changes with `--dry-run`. Detail:

@@ -7,7 +7,7 @@ A release is cut from a Mac with **one command** — `clients/native/release.sh`
 there is no website/admin path, because signing, notarization, and Sparkle
 signing need local secrets a Cloudflare Worker cannot hold. The release order
 is CLI (`bun run release:cli`) → Mac app (`bun run release:mac`) → website
-(the changelog entry goes live from the separate `unpeel-website` repo).
+(the changelog entry goes live from the separate `unpeel-cloud` repo).
 
 ```sh
 CODESIGN_IDENTITY="Developer ID Application: <team> (<TEAMID>)" \
@@ -61,7 +61,7 @@ CFBundleVersion is one monotonic space across channels (`--force` overrides
 the published-state guards; versioned artifacts are CDN-cached as immutable,
 so overwriting a published version strands clients on a ZIP whose EdDSA
 signature no longer matches the appcast) — or the version has no
-`## <version>` entry in `unpeel-website:apps/website/app/changelog.md` (the website's
+`## <version>` entry in `unpeel-cloud:apps/website/app/changelog.md` (the website's
 `/changelog` page; add the entry, and deploy the site after the release so it
 goes live — dry runs are exempt). The lower-level publisher preserves validated
 same-version fields for a partial/appcast repair; a new version must include
@@ -104,7 +104,7 @@ The CLI installs with:
 curl -fsSL https://unpeel.com/install.sh | sh
 ```
 
-- `/install.sh` is served by the releases worker (`unpeel-website:apps/releases/src/worker.mjs`),
+- `/install.sh` is served by the releases worker (`unpeel-cloud:apps/releases/src/worker.mjs`),
   which fetches `<channel>/cli/install.sh` from R2 per request (bounded
   60 s in-isolate cache, `served-assets.mjs`) and substitutes
   `__DEFAULT_CHANNEL__` / `__BASE_URL__` per request. The script's source is
@@ -130,8 +130,8 @@ curl -fsSL https://unpeel.com/install.sh | sh
   `/usr/local/bin` if writable, else `~/.local/bin` (`UNPEEL_INSTALL_DIR`
   overrides; `UNPEEL_CHANNEL` picks alpha/beta/stable).
 - Publishing coordinates: `scripts/r2.jsonc` (account id + bucket) and the
-  root `wrangler` devDependency; neither publisher reads `unpeel-website:apps/website` or
-  `unpeel-website:apps/releases` any more (`--bucket` / `UNPEEL_RELEASE_BUCKET` still
+  root `wrangler` devDependency; neither publisher reads `unpeel-cloud:apps/website` or
+  `unpeel-cloud:apps/releases` any more (`--bucket` / `UNPEEL_RELEASE_BUCKET` still
   override).
 - Publishing: `bun run release:cli -- --channel beta` on a Mac builds both
   darwin triples (needs `rustup target add aarch64-apple-darwin
@@ -283,13 +283,13 @@ updates.
   three targets), then the app (`release:mac`), then deploy the website.
 - **The changelog lives with the website.** `release.sh` resolves it via
   `scripts/release-changelog.mjs`: `UNPEEL_CHANGELOG`, then
-  `../unpeel-website/app/changelog.md` (the sibling checkout after the
-  split), then `unpeel-website:apps/website/app/changelog.md` (monorepo), and fails naming
+  `../unpeel-cloud/apps/website/app/changelog.md` (the sibling checkout after the
+  split), then `unpeel-cloud:apps/website/app/changelog.md` (monorepo), and fails naming
   the sibling checkout when none exists. Author the `## <version>` entry in
   the website before the app cut; deploy the website after.
 - **The release Worker's deploy-time fallbacks are vendored**, not imported
-  from the tree: `unpeel-website:apps/releases/scripts/vendor-fallbacks.mjs` copies
+  from the tree: `unpeel-cloud:apps/releases/scripts/vendor-fallbacks.mjs` copies
   `scripts/install.sh`, `scripts/install-app.sh`, and
   `protocol/app-registry.json` from `--from <server checkout>` (default: this
-  repo root) into `unpeel-website:apps/releases/vendored/` (gitignored); `release:updates:*`
-  and `unpeel-website:apps/releases` `npm run deploy[:dry-run]` run it first.
+  repo root) into `unpeel-cloud:apps/releases/vendored/` (gitignored); `release:updates:*`
+  and `unpeel-cloud:apps/releases` `npm run deploy[:dry-run]` run it first.

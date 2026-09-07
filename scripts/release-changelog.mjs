@@ -2,10 +2,10 @@
 // release-changelog.mjs — where the app release reads the website changelog.
 //
 // The changelog is the website's `/changelog` page and stays with the website
-// (unpeel-website, a separate repository). The app cut reads it, in order of
+// (unpeel-cloud, a separate repository; unpeel-website before 2026-09-07). The app cut reads it, in order of
 // precedence:
 //   1. UNPEEL_CHANGELOG=<path>            explicit override
-//   2. ../unpeel-website/app/changelog.md the website sibling checkout
+//   2. ../unpeel-cloud/apps/website/app/changelog.md the sibling checkout
 //   3. apps/website/app/changelog.md      a website checkout inside this tree
 // and fails with a message naming the sibling checkout when none exists.
 //
@@ -18,8 +18,8 @@ import { fileURLToPath } from 'node:url'
 
 export const CHANGELOG_CANDIDATES = Object.freeze([
   // The website repo keeps the monorepo layout (apps/website/app/…).
-  ['website sibling', ['..', 'unpeel-website', 'apps', 'website', 'app', 'changelog.md']],
-  ['website sibling', ['..', 'unpeel-website', 'app', 'changelog.md']],
+  ['website sibling', ['..', 'unpeel-cloud', 'apps', 'website', 'app', 'changelog.md']],
+  ['website sibling (pre-2026-09-07 name)', ['..', 'unpeel-website', 'apps', 'website', 'app', 'changelog.md']],
   ['monorepo', ['apps', 'website', 'app', 'changelog.md']]
 ])
 
@@ -43,7 +43,7 @@ export function resolveChangelogPath({ repoRoot, env = process.env, exists = exi
   throw new Error(
     'no website changelog found. The app release reads the website\'s changelog.md ' +
       `(${CHANGELOG_CANDIDATES.map(([, segments]) => segments.join('/')).join(' or ')} ` +
-      `relative to ${repoRoot}). Clone unpeel-website next to this repo, or set UNPEEL_CHANGELOG.`
+      `relative to ${repoRoot}). Clone unpeel-cloud next to this repo, or set UNPEEL_CHANGELOG.`
   )
 }
 

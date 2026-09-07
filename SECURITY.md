@@ -15,7 +15,7 @@ Please do **not** open a public issue for vulnerabilities.
 
 In scope, in rough order of how much we care:
 
-- The E2E relay protocol and its implementations (the `unpeel-relay` repository,
+- The E2E relay protocol and its implementations (the `unpeel-cloud` repository (`apps/relay`),
   `RelayProtocol.swift`, the Rust uplink) — anything that lets the relay or a
   network observer read or forge session content breaks the core promise.
 - Host exposure: the remote-control server (TLS/pairing/auth), the hook HTTP

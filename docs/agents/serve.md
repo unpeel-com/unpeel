@@ -300,7 +300,7 @@ only rotates token hashes (`token_rotation_only`) is re-announced **in
 place**: the Host resends the ordinary hello frame over the same socket
 (rate-limited to one per second), and the deployed Relay replaces its
 registered token set on that repeated hello without closing any client
-(`unpeel-relay:apps/relay` integration test "a repeated hello rotates a device token in
+(`unpeel-cloud:apps/relay` integration test "a repeated hello rotates a device token in
 place without evicting clients"). No new Relay message exists; an older
 hello-only Relay sees the same frame it always accepted. Pairing, unpairing,
 or re-scoping a device (`relayAllowed`) still replaces the uplink, because

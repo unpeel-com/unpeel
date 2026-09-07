@@ -275,7 +275,7 @@ test('CLI publisher rejects misspelled and equals-form dry-run flags', () => {
 
 test('the app release reads the changelog from the website sibling, then the monorepo, then fails', () => {
   const root = '/work/unpeel'
-  const sibling = resolve(root, '..', 'unpeel-website', 'app', 'changelog.md')
+  const sibling = resolve(root, '..', 'unpeel-cloud', 'apps', 'website', 'app', 'changelog.md')
   const monorepo = resolve(root, 'apps', 'website', 'app', 'changelog.md')
   const present = (paths) => (path) => paths.includes(path)
 
@@ -289,7 +289,7 @@ test('the app release reads the changelog from the website sibling, then the mon
   )
   assert.throws(
     () => resolveChangelogPath({ repoRoot: root, env: {}, exists: present([]) }),
-    /Clone unpeel-website next to this repo, or set UNPEEL_CHANGELOG/
+    /Clone unpeel-cloud next to this repo, or set UNPEEL_CHANGELOG/
   )
   assert.deepEqual(
     resolveChangelogPath({
@@ -307,7 +307,7 @@ test('the app release reads the changelog from the website sibling, then the mon
 
 test('the changelog resolver CLI prints the resolved path and fails without a changelog', () => {
   // The website is a separate repository, so a checkout of this one may or
-  // may not have a `../unpeel-website` sibling: drive the CLI through the
+  // may not have a `../unpeel-cloud` sibling: drive the CLI through the
   // UNPEEL_CHANGELOG override so the test is independent of the machine.
   const dir = mkdtempSync(resolve(tmpdir(), 'unpeel-changelog-'))
   const changelog = resolve(dir, 'changelog.md')
