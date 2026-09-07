@@ -220,6 +220,7 @@ final class SurfaceCache: ObservableObject {
             }
         }
         if let existing = panes[session.id] {
+            existing.pane.acceptsPlainTextDrops = session.activeApp == nil
             // Working directory / command can change across restart; keep
             // the record current so theme reloads resolve against the right
             // paths.
@@ -263,6 +264,7 @@ final class SurfaceCache: ObservableObject {
             ),
             style: frameStyle.paneStyle
         )
+        pane.acceptsPlainTextDrops = session.activeApp == nil
         panes[session.id] = PaneRecord(
             pane: pane,
             frameStyle: frameStyle,

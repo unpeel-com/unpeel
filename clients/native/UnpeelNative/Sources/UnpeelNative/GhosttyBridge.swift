@@ -163,6 +163,12 @@ private final class PathDraggableTerminalView: TerminalView, NSDraggingSource {
 /// AppKit layout + the wrapper's `fitToSize()`.
 @MainActor
 final class GhosttyTerminalPane: NSView {
+    /// Whether a file/folder drop with no registered App drop target may be
+    /// typed into the terminal as a path. True for shells and agents (the
+    /// path lands on the prompt); false for App panes, where the keystrokes
+    /// would go into the App's UI — an App accepts drops only through the
+    /// semantic drop-target map it registers itself.
+    var acceptsPlainTextDrops = true
     weak var paneDelegate: GhosttyTerminalPaneDelegate?
     var commandClickHandler: ((ClickablePath.Match, String) -> Bool)?
 
@@ -1053,7 +1059,7 @@ final class GhosttyTerminalPane: NSView {
             return []
         }
         updateAppDropHover(sender)
-        return .copy
+        return dropOperation(sender)
     }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
@@ -1062,6 +1068,15 @@ final class GhosttyTerminalPane: NSView {
             return []
         }
         updateAppDropHover(sender)
+        return dropOperation(sender)
+    }
+
+    /// `.copy` on a registered App drop target or on a plain terminal;
+    /// nothing (the "not allowed" cursor) over an App pane elsewhere.
+    private func dropOperation(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if !acceptsPlainTextDrops && appDropTargetCell(sender) == nil {
+            return []
+        }
         return .copy
     }
 
@@ -1093,6 +1108,7 @@ final class GhosttyTerminalPane: NSView {
             return true
         }
         resetAppDropHover()
+        guard acceptsPlainTextDrops else { return false }
         return insertDroppedText(text)
     }
 
