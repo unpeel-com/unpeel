@@ -96,6 +96,7 @@ struct RootView: View {
         projectSidebarShown ? CGFloat(projectSidebarWidth) : 0
     }
 
+
     /// The surface inset persists through a sidebar collapse — the content
     /// pane keeps floating in the frame (a leading gap appears in its place
     /// so the surface is framed on all four sides).
@@ -234,16 +235,11 @@ struct RootView: View {
                     cache: cache
                 )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    // Leave the corner-radius-wide leading strip to the shared
-                    // sidebar backdrop. The content itself covers the strip
-                    // except where its rounded corners cut away. Clipped to
-                    // the same pane shape as the content, so the backdrop
-                    // never pokes square corners into the surface inset gap.
-                    .background(
-                        ContentBackground()
-                            .padding(.leading, Theme.windowCornerRadius)
-                            .clipShape(Theme.contentPaneShape(inset: surfaceInset))
-                    )
+                    // No content backdrop: every page is a card carrying
+                    // its own canvas below the title strip, and the strip,
+                    // the gaps, and the corner bleed all show the ONE
+                    // window-spanning frame backdrop — exactly like the
+                    // sidebar beside them.
                     // Float the Surface: a sliver of the Background backdrop
                     // frames the content pane's top/right/bottom edges (the
                     // sidebar frames the left while open; collapsed, a
@@ -269,24 +265,17 @@ struct RootView: View {
                 ZStack(alignment: .leading) {
                     ProjectSidebarView(store: store, cache: cache)
                         .frame(width: CGFloat(projectSidebarWidth))
-                        // Thin muted divider in the gap between the main
-                        // pane and the panel's session stack. Its top tracks
-                        // the PANES' top edge: in collapsed mode the panes
-                        // slide down under the title strip and the divider
-                        // follows, staying flush with the cards.
+                        // A short muted tick in the gap between the main
+                        // pane and the panel's session stack — just where
+                        // the resize handle appears (vertically centered,
+                        // like its capsule), not a full-height border. The
+                        // resizer keeps the whole height as its hover/drag
+                        // target; only the resting mark is small.
                         .overlay(alignment: .leading) {
-                            // Inset a touch past the pane edges so the line
-                            // reads as a quiet separator, not a full-bleed
-                            // border.
                             Rectangle()
                                 .fill(Theme.contentHairline)
-                                .frame(width: 1)
-                                .padding(
-                                    .top,
-                                    Theme.surfaceInset + 3
-                                        + (store.sidebarCollapsed ? Theme.titleStripHeight : 0)
-                                )
-                                .padding(.bottom, Theme.surfaceInset + 3)
+                                .frame(width: 1, height: 30)
+                                .frame(maxHeight: .infinity, alignment: .center)
                                 .allowsHitTesting(false)
                         }
                 }
@@ -302,17 +291,15 @@ struct RootView: View {
             .timingCurve(0.25, 0.1, 0.25, 1, duration: 0.15),
             value: projectSidebarShown
         )
-        // Collapsed-sidebar breadcrumb strip — WINDOW chrome, not content
-        // chrome, so the centered title and the trailing Open-in/site chips
-        // span the main column and the project panel alike. TerminalArea
+        // The window title strip — WINDOW chrome, not content chrome: the
+        // current page's title centers on the whole window like a macOS
+        // window title, sidebar open or collapsed, and the workspace's
+        // trailing Open-in/site chips sit at the window's edge. Every page
         // keeps a matching-height spacer. Under the resizers so the 8pt
         // edge handles still win at the strip's ends.
         .overlay(alignment: .top) {
-            if store.sidebarCollapsed, !store.settingsVisible,
-               !store.recentActivityVisible, store.archivedProjectID == nil {
-                WorkspaceTitleStrip(store: store)
-                    .padding(.top, surfaceInset)
-            }
+            WindowTitleStrip(store: store)
+                .padding(.top, surfaceInset)
         }
         .overlay(alignment: .topLeading) {
             if !store.sidebarCollapsed {
@@ -487,9 +474,30 @@ struct RootView: View {
     }
 }
 
-/// The collapsed-sidebar window-chrome strip: centered project breadcrumb
-/// + branch, Open-in/local-site chips at the trailing edge. Mounted by
-/// RootView so it spans the main column AND the right project panel. A
+/// The window title strip: the current page's title. Settings and the
+/// main-pane libraries (All recent, Archived) show their breadcrumb; the
+/// workspace shows the project breadcrumb + branch with its chips.
+private struct WindowTitleStrip: View {
+    @ObservedObject var store: UnpeelStore
+
+    var body: some View {
+        if store.settingsVisible {
+            SettingsTitleStrip(store: store)
+        } else if let segments = store.libraryTitlebarSegments {
+            TitleBarView(
+                segments: segments,
+                height: Theme.titleStripHeight,
+                titleYOffset: -4
+            )
+        } else {
+            WorkspaceTitleStrip(store: store)
+        }
+    }
+}
+
+/// The workspace window-chrome strip: centered project breadcrumb + branch,
+/// Open-in/local-site chips at the trailing edge. Mounted by RootView so it
+/// spans the main column AND the right project panel, sidebar open or not. A
 /// leaf view on purpose — it observes the hot selection state so RootView
 /// itself never re-renders per session switch.
 private struct WorkspaceTitleStrip: View {
