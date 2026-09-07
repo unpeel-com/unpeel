@@ -1350,8 +1350,8 @@ struct ProjectNodeView: View {
             showsBusyShimmer: showsBusyShimmer,
             quickGroups: store.displayQuickPresetGroups,
             menuPresets: store.displayAvailablePresets,
-            addableApps: isLocalScope ? store.addableApps : [],
-            onAddApp: isLocalScope ? { store.addAppPreset($0) } : nil,
+            addableApps: store.addableApps,
+            onAddApp: { store.addAppPreset($0) },
             folderColor: isLocalMachine ? store.projectFolderColor(for: node.id) : nil,
             // Worktree menu toggle gate (ProjectItem.svelte:843-848):
             // real project (not a plain folder), not a worktree child,
@@ -1586,8 +1586,8 @@ struct ProjectNodeView: View {
                     showsManagePresets: store.selectedHostScope == .local,
                     archivedCount: archivedSessionCount,
                     onOpenArchived: { store.openArchivedSessions(projectID: node.id) },
-                    addableApps: store.selectedHostScope == .local ? store.addableApps : [],
-                    onAddApp: store.selectedHostScope == .local ? { store.addAppPreset($0) } : nil
+                    addableApps: store.addableApps,
+                    onAddApp: { store.addAppPreset($0) }
                 )
             }
 

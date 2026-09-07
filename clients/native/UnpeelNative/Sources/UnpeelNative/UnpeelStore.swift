@@ -13337,9 +13337,27 @@ final class UnpeelStore: ObservableObject {
 
     /// Installed apps not already present in the launch list (matched on the
     /// exact launch command), so the menu only offers apps you haven't added.
-    /// Local scope only — remote presets flow through the Host protocol.
+    /// Local reads this Mac's scan; every other scope reads the selected
+    /// Host's catalog (installed there) minus that Host's launch list, so a
+    /// sibling workspace and a remote Host get the same menu.
     var addableApps: [InstalledAppInfo] {
-        guard selectedHostScope == .local else { return [] }
+        guard selectedHostScope == .local else {
+            guard let snapshot = remoteHostRuntime.snapshot else { return [] }
+            let existing = Set(
+                snapshot.presets.map { $0.command.trimmingCharacters(in: .whitespaces) }
+            )
+            return (snapshot.availableApps ?? [])
+                .filter { $0.installed && !existing.contains($0.command) }
+                .map {
+                    InstalledAppInfo(
+                        id: $0.id,
+                        name: $0.name,
+                        command: $0.command,
+                        description: $0.description,
+                        tint: $0.tint
+                    )
+                }
+        }
         let existing = Set(
             availablePresets.map { $0.command.trimmingCharacters(in: .whitespaces) }
         )
@@ -13349,8 +13367,17 @@ final class UnpeelStore: ObservableObject {
     }
 
     /// Add an installed App to the launch list as a preset (label = app name),
-    /// then refresh so it drops out of "Apps you can add".
+    /// then refresh so it drops out of "Apps you can add". Outside Local the
+    /// preset is created on the selected Host through `settings.presets.set`.
     func addAppPreset(_ app: InstalledAppInfo) {
+        guard selectedHostScope == .local else {
+            Task { @MainActor in
+                try? await remoteHostRuntime.setPreset(
+                    RemotePresetPatch(command: app.command, label: app.name)
+                )
+            }
+            return
+        }
         addPreset(command: app.command, label: app.name)
         installedAppsRefreshedAt = nil
         refreshInstalledApps()

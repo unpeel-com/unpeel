@@ -801,7 +801,10 @@ struct HostPresetsSettingsPanel: View {
                             .strokeBorder(Theme.resizerLine.opacity(0.55), lineWidth: 1)
                     )
 
-                    if editable { remoteAgentsSection }
+                    if editable {
+                        remoteAppsSection
+                        remoteAgentsSection
+                    }
                     }
                     .padding(EdgeInsets(top: 0, leading: 20, bottom: 20, trailing: 20))
                 }
@@ -908,6 +911,109 @@ struct HostPresetsSettingsPanel: View {
                 errorMessage = error.localizedDescription
             }
             busy = false
+        }
+    }
+
+    // MARK: - Apps on this Host (install / add to list)
+
+    @State private var installingApps: Set<String> = []
+
+    /// Host-catalog Apps not already in the Host's launch list (matched on
+    /// the launch command). The catalog rides bootstrap for every scope, so a
+    /// sibling workspace on this Mac and a remote Host offer the same rows:
+    /// Install runs the Host's own installer (`apps.install`); Add creates
+    /// the preset on the Host.
+    private var remoteCatalogApps: [RemoteAppSummary] {
+        let existing = Set(
+            (runtime.snapshot?.presets ?? []).map { $0.command.trimmingCharacters(in: .whitespaces) }
+        )
+        return (runtime.snapshot?.availableApps ?? []).filter {
+            !existing.contains($0.command.trimmingCharacters(in: .whitespaces))
+        }
+    }
+
+    private func installRemoteApp(_ app: RemoteAppSummary) {
+        installingApps.insert(app.id)
+        errorMessage = nil
+        Task { @MainActor in
+            defer { installingApps.remove(app.id) }
+            do {
+                try await runtime.installApp(app.id)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var remoteAppsSection: some View {
+        if !remoteCatalogApps.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Apps you can add")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.mutedForeground)
+                Text("Install puts the App on \(hostName); Add puts it in "
+                    + "\(hostName)'s launch list.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(remoteCatalogApps) { app in
+                        HStack(spacing: 10) {
+                            ToolIconView(appID: app.id, command: app.command, size: 16)
+                                .frame(width: 16, height: 16)
+
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(app.name)
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(Theme.foreground)
+                                if !app.description.isEmpty {
+                                    Text(app.description)
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(Theme.mutedForeground)
+                                        .lineLimit(1)
+                                        .truncationMode(.tail)
+                                }
+                            }
+
+                            Spacer(minLength: 8)
+
+                            if app.installed {
+                                Button("Add") {
+                                    apply(RemotePresetPatch(command: app.command, label: app.name))
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
+                            } else {
+                                Button {
+                                    installRemoteApp(app)
+                                } label: {
+                                    if installingApps.contains(app.id) {
+                                        ProgressView().controlSize(.small)
+                                    } else {
+                                        Text("Install")
+                                    }
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .disabled(installingApps.contains(app.id))
+                            }
+                        }
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 12)
+                    }
+                }
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Theme.foreground.opacity(0.06))
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(Theme.resizerLine.opacity(0.55), lineWidth: 1)
+                )
+            }
         }
     }
 
