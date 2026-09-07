@@ -1704,6 +1704,9 @@ struct ProjectNodeView: View {
                 store.setNotifyWhenDone(session.id, enabled: $0)
             },
             onResume: { store.resumeAgentOrSession(session.id) },
+            onRestartApp: store.sessionCanRestartApp(session.id)
+                ? { store.restartApp(session.id) }
+                : nil,
             onClearAttention: { store.clearAttention(session.id) },
             onSetPinned: { pinned in
                 if pinned {
@@ -2985,6 +2988,9 @@ struct SessionRowView: View {
     /// Opt this session in/out of the "notify when done" push.
     var onSetNotifyWhenDone: (Bool) -> Void = { _ in }
     var onResume: () -> Void = {}
+    /// Relaunch a live App Session in place (nil when the row is not an App
+    /// or the Host cannot restart it).
+    var onRestartApp: (() -> Void)? = nil
     /// Force-clear a stuck/false attention badge (offered only while the
     /// row shows one).
     var onClearAttention: () -> Void = {}
@@ -3270,6 +3276,11 @@ struct SessionRowView: View {
             } else if resumePresentation == .resumeSession {
                 Button("Resume") {
                     onResume()
+                }
+            }
+            if let onRestartApp {
+                Button("Restart App") {
+                    onRestartApp()
                 }
             }
         }

@@ -9834,6 +9834,30 @@ final class UnpeelStore: ObservableObject {
         return ProviderCapabilities.canArchive(session: session)
     }
 
+    /// A live App Session can be restarted in place: the same command runs
+    /// again in a fresh host while the Session id, its sidebar pin, and its
+    /// panel binding stay — the dev loop after rebuilding an App, and the
+    /// way out of a wedged one. Apps keep no scrollback worth preserving, so
+    /// the terminal-replacement verb is the right primitive.
+    func sessionCanRestartApp(_ sessionID: String) -> Bool {
+        guard let entry = displaySessionsByID[sessionID],
+              entry.isLive,
+              entry.activeApp != nil,
+              !restartingSessionIDs.contains(sessionID)
+        else { return false }
+        if routesSessionVerbThroughHost(sessionID) {
+            return remoteHostRuntime.supportsHostOperation(
+                RemoteHostRuntime.HostOperation.restart
+            )
+        }
+        return true
+    }
+
+    func restartApp(_ sessionID: String) {
+        guard sessionCanRestartApp(sessionID) else { return }
+        restartSession(sessionID, stoppedOnly: false)
+    }
+
     /// Archive remains available for any resumable launch regardless of live
     /// state. It is separate from stopped-only Resume and live Resume Agent.
     func sessionCanArchive(_ sessionID: String) -> Bool {

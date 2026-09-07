@@ -1880,6 +1880,11 @@ struct TerminalPaneContainer: View {
                 store.resumeAgentOrSession(entry.id)
             })
         }
+        if store.sessionCanRestartApp(entry.id) {
+            menu.addItem(controller.item("Restart App") {
+                store.restartApp(entry.id)
+            })
+        }
 
         if store.sessionCanNotifyWhenDone(entry.id) {
             let enabled = store.notifyWhenDoneSessionIDs.contains(entry.id)
