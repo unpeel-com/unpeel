@@ -1509,43 +1509,21 @@ enum Theme {
     /// update — by adding one line here.
     static func toolColorHex(forCommand command: String) -> Int? {
         UnpeelRuntimeCatalog.runtime(command: command)?.tintColorHex
-            ?? installedAppTint(forCommand: command)?.tint
     }
 
     /// Provider-specific spinner treatments can differ from their brand marks.
     static func toolSpinnerColorHex(forCommand command: String) -> Int? {
-        if let runtime = UnpeelRuntimeCatalog.runtime(command: command) {
-            return runtime.spinnerTintColorHex ?? runtime.tintColorHex
-        }
-        return installedAppTint(forCommand: command)?.spinner
+        let runtime = UnpeelRuntimeCatalog.runtime(command: command)
+        return runtime?.spinnerTintColorHex ?? runtime?.tintColorHex
     }
 
-    // MARK: Installed Unpeel App tints (Host-resolved catalog data)
-
-    /// Command-keyed tints for installed Unpeel Apps, sourced ONLY from
-    /// Host-stamped session manifests (`active_app`): the Host matched the
-    /// central App catalog against its PATH, so native never guesses identity.
-    /// Keyed by the launch command's executable basename; built-in catalog
-    /// entries always win above. Guarded because the phone-wire DTO adapters
-    /// read the color table off the main actor.
-    private static let installedAppTintLock = NSLock()
-    nonisolated(unsafe) private static var installedAppTints:
-        [String: (tint: Int?, spinner: Int?)] = [:]
-
-    static func updateInstalledAppTints(_ tints: [String: (tint: Int?, spinner: Int?)]) {
-        installedAppTintLock.lock()
-        installedAppTints = tints
-        installedAppTintLock.unlock()
-    }
-
-    private static func installedAppTint(
-        forCommand command: String
-    ) -> (tint: Int?, spinner: Int?)? {
-        let key = Self.commandBasename(command)
-        guard !key.isEmpty else { return nil }
-        installedAppTintLock.lock()
-        defer { installedAppTintLock.unlock() }
-        return installedAppTints[key]
+    /// Color for a tool's MARK: the agent runtime's brand color when it has
+    /// one, else the ordinary foreground. Unpeel Apps and plain terminals
+    /// are deliberately not tinted (decided 2026-09-07): their marks are
+    /// templates rendered in the current color like the rest of the chrome.
+    static func toolIconColor(forCommand command: String) -> Color {
+        if let hex = toolColorHex(forCommand: command) { return Color(hex: UInt32(hex)) }
+        return foreground
     }
 
     /// First whitespace token's path basename, lowercased — the same

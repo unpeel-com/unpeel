@@ -6537,7 +6537,6 @@ final class UnpeelStore: ObservableObject {
             entries.append(pending)
         }
 
-        Self.publishInstalledAppTints(from: entries)
 
         observedForegroundIdentities = observedForegroundIdentities.filter { seen.contains($0.key) }
         runtimeLaunchGenerations = runtimeLaunchGenerations.filter { seen.contains($0.key) }
@@ -15840,7 +15839,6 @@ extension UnpeelStore {
         }
         // Remote App rows color through the same command-keyed table as
         // local ones; their tints came resolved over the wire.
-        Self.publishInstalledAppTints(from: entries)
         let affectedProjects = SidebarProjectionChanges.affectedProjects(
             previous: remoteNodes, next: newNodes,
             previousSummaries: previousSummaries, nextSummaries: summaries,
@@ -16026,22 +16024,6 @@ extension UnpeelStore {
     /// Shared remote-summary → display-entry mapping. Also used by the
     /// workspace peek panel to render pooled bootstrap snapshots with the
     /// real sidebar row components.
-    /// Feed the command-keyed color table (`Theme.toolColorHex` and friends)
-    /// with Host-stamped installed-App tints, so every command-driven surface
-    /// — sidebar rows, palette, menu bar, terminal chrome, and the phone wire
-    /// — renders Host-resolved App branding without native guessing identity.
-    /// Built-in catalog entries still win inside Theme.
-    static func publishInstalledAppTints(from entries: [SessionEntry]) {
-        var tints: [String: (tint: Int?, spinner: Int?)] = [:]
-        for entry in entries {
-            guard let app = entry.activeApp else { continue }
-            let key = Theme.commandBasename(entry.command)
-            guard !key.isEmpty else { continue }
-            tints[key] = (app.tintColorHex, app.spinnerTintColorHex)
-        }
-        Theme.updateInstalledAppTints(tints)
-    }
-
     static func sessionEntry(fromRemote summary: RemoteSessionSummary) -> SessionEntry {
         let status: SessionStatus
         switch summary.status {

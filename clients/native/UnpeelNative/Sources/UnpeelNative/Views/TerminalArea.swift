@@ -1454,7 +1454,7 @@ struct StartingSessionView: View {
     var body: some View {
         VStack(spacing: 10) {
             ToolIconView(command: session.presentationCommand, size: 32)
-                .foregroundStyle(Theme.toolColor(forCommand: session.presentationCommand))
+                .foregroundStyle(Theme.toolIconColor(forCommand: session.presentationCommand))
             Text(session.label)
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(Theme.foreground)
@@ -1484,7 +1484,7 @@ struct DeadSessionView: View {
             // icon at 32px (App.svelte:1521/1545, ToolIcon → commandIcon
             // in icons.ts, terminalIcon fallback for plain shells).
             ToolIconView(tool: QuickPresetTool.detect(in: session.command), size: 32)
-                .foregroundStyle(Theme.toolColor(forCommand: session.command))
+                .foregroundStyle(Theme.toolIconColor(forCommand: session.command))
             Text(session.label)
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(Theme.foreground)

@@ -56,7 +56,7 @@ struct RecentActivityView: View {
                         event: store.activityStatusLabel(for: session),
                         command: session.presentationCommand,
                         working: true,
-                        unread: false
+                        done: false
                     ) {
                         store.closeRecentActivity()
                         store.revealSessionInSidebar(session.id)
@@ -73,18 +73,36 @@ struct RecentActivityView: View {
         return store.activityLogEntries.reversed().filter { !active.contains($0.sessionID) }
     }
 
+    /// The ids of the entries that carry the Done treatment: the newest entry
+    /// of every session that is unread and not working right now — the same
+    /// rows the activity dropdown's Done group shows. Older entries of that
+    /// session are history and render plain.
+    private var doneEntryIDs: Set<String> {
+        var seenSessions = Set<String>()
+        var ids = Set<String>()
+        for entry in feedEntries where seenSessions.insert(entry.sessionID).inserted {
+            // A blocked session is attention, never Done, even while unread.
+            if store.unreadSessionIDs.contains(entry.sessionID),
+               store.sessionsByID[entry.sessionID]?.status != .attention {
+                ids.insert(entry.id)
+            }
+        }
+        return ids
+    }
+
     private var feedSections: some View {
-        Group {
+        let doneIDs = doneEntryIDs
+        return Group {
             ForEach(Self.groupByDay(feedEntries), id: \.label) { group in
                 sectionLabel(group.label)
                 ForEach(group.entries) { entry in
-                    feedRow(entry)
+                    feedRow(entry, done: doneIDs.contains(entry.id))
                 }
             }
         }
     }
 
-    private func feedRow(_ entry: ActivityLogEntry) -> some View {
+    private func feedRow(_ entry: ActivityLogEntry, done: Bool) -> some View {
         // Prefer the live title (auto-title/rename overlay applied) while the
         // session still exists; the logged snapshot is the fallback that keeps
         // removed sessions renderable.
@@ -97,11 +115,12 @@ struct RecentActivityView: View {
             event: Self.kindLabel(
                 entry.kind,
                 message: entry.message,
-                age: Self.ageString(entry.date)
+                age: Self.ageString(entry.date),
+                done: done
             ),
             command: entry.command,
             working: false,
-            unread: store.unreadSessionIDs.contains(entry.sessionID)
+            done: done
         ) {
             guard sessionAlive else { return }
             store.closeRecentActivity()
@@ -172,16 +191,20 @@ struct RecentActivityView: View {
         }
     }
 
+    /// `done` marks the entry that currently keeps its session unread: a
+    /// finish reads "Done", the dropdown's status word, instead of the past
+    /// tense "Finished".
     static func kindLabel(
         _ kind: ActivityLogEntry.Kind,
         message: String? = nil,
-        age: String
+        age: String,
+        done: Bool = false
     ) -> String {
         let when = age == "now" ? "just now" : "\(age) ago"
         switch kind {
         case .started: return "Started \(when)"
         case .needsInput: return "Needed input \(when)"
-        case .finished: return "Finished \(when)"
+        case .finished: return done ? "Done \(when)" : "Finished \(when)"
         case .exited: return "Exited \(when)"
         case .alert:
             return message.map { "\($0) · \(when)" } ?? "Alerted \(when)"
@@ -205,14 +228,15 @@ struct RecentActivityView: View {
 /// Compact single-line table row (matches ArchivedSessionCard's row form):
 /// bare CLI logo, title, then muted trailing columns — project and event —
 /// with a subtle hover highlight. Working rows swap the logo for the
-/// CLI-colored spinner; unread rows carry the blue dot.
+/// CLI-colored spinner; done rows (unread and settled) swap it for the blue
+/// done dot, exactly like the activity dropdown.
 private struct RecentActivityRow: View {
     let title: String
     let project: String
     let event: String
     let command: String
     let working: Bool
-    let unread: Bool
+    let done: Bool
     let onSelect: () -> Void
 
     @State private var hovering = false
@@ -223,9 +247,13 @@ private struct RecentActivityRow: View {
                 Group {
                     if working {
                         BrailleSpinner(color: Theme.toolSpinnerColor(forCommand: command))
+                    } else if done {
+                        Circle()
+                            .fill(Theme.unread)
+                            .frame(width: 7, height: 7)
                     } else {
                         ToolIconView(command: command, size: 15)
-                            .foregroundStyle(Theme.toolColor(forCommand: command))
+                            .foregroundStyle(Theme.toolIconColor(forCommand: command))
                     }
                 }
                 .frame(width: 16, height: 16)
@@ -249,12 +277,6 @@ private struct RecentActivityRow: View {
                     .foregroundStyle(Theme.mutedForeground)
                     .lineLimit(1)
                     .frame(minWidth: 120, alignment: .trailing)
-
-                if unread {
-                    Circle()
-                        .fill(Theme.unread)
-                        .frame(width: 7, height: 7)
-                }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)

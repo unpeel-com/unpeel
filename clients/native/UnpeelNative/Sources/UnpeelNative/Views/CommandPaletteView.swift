@@ -105,11 +105,13 @@ struct PaletteItem: Identifiable {
         case command = "Command"
     }
 
-    /// Leading-slot indicator, mirroring the sidebar rows exactly: spinner
-    /// while working, attention dot while blocked, nothing otherwise.
+    /// Leading-slot indicator, mirroring the activity dropdown rows: spinner
+    /// while working, attention dot while blocked, the blue done dot for an
+    /// unread finished session, nothing otherwise.
     enum Indicator {
         case spinner(Color)
         case attention
+        case done
     }
 
     let id: String
@@ -130,6 +132,11 @@ struct PaletteItem: Identifiable {
     /// Session rows use their lifecycle age, matching date-sorted sidebar rows.
     var trailingLabel: String?
     let action: @MainActor () -> Void
+
+    var isDone: Bool {
+        if case .done = indicator { return true }
+        return false
+    }
 }
 
 // MARK: - ⌘K palette overlay
@@ -249,6 +256,7 @@ struct CommandPaletteOverlay: View {
     private struct SessionMeta {
         let item: PaletteItem
         let working: Bool
+        let blocked: Bool
         let unread: Bool
         /// The top-level sidebar project this session lives under (its own
         /// project for root sessions, the parent for worktree/group rows) —
@@ -260,8 +268,9 @@ struct CommandPaletteOverlay: View {
     /// the shared ⌘K contract with the TUI (unpeel-core
     /// session_ops::recents_recency_ms): working sessions first, then
     /// everything by recency (newest lifecycle event, creation as floor) — with
-    /// the sidebar's exact indicator language (spinner while working,
-    /// attention dot, trailing unread dot — nothing otherwise).
+    /// the activity dropdown's indicator language (spinner while working,
+    /// attention dot while blocked, blue done dot while unread — nothing
+    /// otherwise).
     private var sessionMeta: [SessionMeta] {
         var byID: [String: SessionMeta] = [:]
         var order: [(id: String, working: Bool, recency: Int64)] = []
@@ -270,16 +279,19 @@ struct CommandPaletteOverlay: View {
             where !store.archivedSessionIDs.contains(session.id) {
                 let recency = recencyByID[session.id]
                     ?? max(session.createdAt, session.lifecycleAtMs ?? 0)
-                let indicator: PaletteItem.Indicator? = switch session.status {
-                case .starting, .busy:
-                    .spinner(Theme.toolSpinnerColor(forCommand: session.presentationCommand))
-                case .attention:
-                    .attention
-                case .idle, .exited:
-                    nil
-                }
+                let unread = store.unreadSessionIDs.contains(session.id)
                 let working = session.status == .starting || session.status == .busy
                     || store.restartingSessionIDs.contains(session.id)
+                let blocked = session.status == .attention
+                let indicator: PaletteItem.Indicator? = if working {
+                    .spinner(Theme.toolSpinnerColor(forCommand: session.presentationCommand))
+                } else if blocked {
+                    .attention
+                } else if unread {
+                    .done
+                } else {
+                    nil
+                }
                 byID[session.id] = SessionMeta(
                     item: PaletteItem(
                         id: "session:\(session.id)",
@@ -288,14 +300,15 @@ struct CommandPaletteOverlay: View {
                         subtitle: node.project.name,
                         keywords: session.command,
                         indicator: indicator,
-                        unread: store.unreadSessionIDs.contains(session.id),
+                        unread: unread,
                         trailingLabel: session.ageString(since: recency),
                         action: { [id = session.id] in
                             store.revealSessionInSidebar(id)
                         }
                     ),
                     working: working,
-                    unread: store.unreadSessionIDs.contains(session.id),
+                    blocked: blocked,
+                    unread: unread,
                     topLevelProjectID: topLevelProjectID
                 )
                 order.append((
@@ -454,13 +467,14 @@ struct CommandPaletteOverlay: View {
         return items
     }
 
-    /// The unfiltered palette, tiered (mirrored with the TUI's
-    /// `palette_sections`): every working session (any project — a job you
-    /// kicked off elsewhere still matters), every unread-finished session
-    /// (the popover's blue-dot group), then the current project's remaining
-    /// recents so keyboard nav stays close to home. Idle sessions in other
-    /// projects only surface by typing; the Projects tier switches project
-    /// instead. Captions ride on the first row of each tier.
+    /// The unfiltered palette, tiered like the activity dropdown: every
+    /// blocked session (attention is actionable, so it leads), every working
+    /// session (any project — a job you kicked off elsewhere still matters),
+    /// every unread-finished session (the dropdown's Done group), then the
+    /// current project's remaining recents so keyboard nav stays close to
+    /// home. Idle sessions in other projects only surface by typing; the
+    /// Projects tier switches project instead. Captions ride on the first
+    /// row of each tier.
     private var tieredRecents: [PaletteItem] {
         let metas = sessionMeta
         let current = currentTopLevelProjectID
@@ -471,10 +485,11 @@ struct CommandPaletteOverlay: View {
             items.append(first)
             items += rows.dropFirst()
         }
+        tier("Blocked", metas.filter { !$0.working && $0.blocked }.map(\.item))
         tier("Active", metas.filter(\.working).map(\.item))
-        tier("Recent", metas.filter { !$0.working && $0.unread }.map(\.item))
+        tier("Done", metas.filter { !$0.working && !$0.blocked && $0.unread }.map(\.item))
         let home = metas.filter {
-            !$0.working && !$0.unread
+            !$0.working && !$0.blocked && !$0.unread
                 && (current == nil || $0.topLevelProjectID == current)
         }
         tier(
@@ -627,13 +642,17 @@ private struct PaletteRowView: View {
             ZStack {
                 if let command = item.iconCommand {
                     ToolIconView(command: command, size: 14)
-                        .foregroundStyle(Theme.toolColor(forCommand: command))
+                        .foregroundStyle(Theme.toolIconColor(forCommand: command))
                 } else {
                     switch item.indicator {
                     case .spinner(let color):
                         BrailleSpinner(color: color)
                     case .attention:
                         AttentionDot(color: Theme.attention)
+                    case .done:
+                        Circle()
+                            .fill(Theme.unread)
+                            .frame(width: 7, height: 7)
                     case nil:
                         EmptyView()
                     }
@@ -647,8 +666,9 @@ private struct PaletteRowView: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
 
-            // Sidebar-parity unread marker (7px #60a5fa after the title).
-            if item.unread {
+            // Sidebar-parity unread marker (7px #60a5fa after the title) —
+            // unless the leading slot already carries the done dot.
+            if item.unread, !item.isDone {
                 Circle()
                     .fill(Theme.unread)
                     .frame(width: 7, height: 7)

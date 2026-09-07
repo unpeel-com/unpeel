@@ -225,7 +225,7 @@ private struct ArchivedSessionCard: View {
                 BrailleSpinner(color: Theme.toolSpinnerColor(forCommand: session.command))
             } else {
                 ToolIconView(command: session.command, size: 15)
-                    .foregroundStyle(Theme.toolColor(forCommand: session.command))
+                    .foregroundStyle(Theme.toolIconColor(forCommand: session.command))
             }
         }
         .frame(width: 16, height: 16)
