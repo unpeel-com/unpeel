@@ -2382,7 +2382,22 @@ private struct OpenResourcesSettingsRows: View {
                         }
                         .controlSize(.small)
                         .disabled(installing.contains(app.id))
+                    } else if let app = selectedOutdatedApp(for: selector) {
+                    // Same Host installer, same verified tarball; running
+                    // panes keep the old binary until Restart App.
+                    Button {
+                        install(app)
+                    } label: {
+                        if installing.contains(app.id) {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Text(app.version.map { "Update to \($0)" } ?? "Update")
+                        }
                     }
+                    .controlSize(.small)
+                    .disabled(installing.contains(app.id))
+                    .help(app.installedVersion.map { "Installed: \($0)" } ?? "Installed version unknown")
+                }
                 }
             }
         }
@@ -2434,6 +2449,15 @@ private struct OpenResourcesSettingsRows: View {
             return nil
         }
         return apps.first { $0.id == appID }
+    }
+
+    /// The selected App when it is installed on this Host but the Host's
+    /// registry publishes a different version.
+    private func selectedOutdatedApp(for selector: String) -> RemoteAppSummary? {
+        let opener = selection(for: selector).wrappedValue
+        guard opener.hasPrefix("app:") else { return nil }
+        let appID = String(opener.dropFirst(4))
+        return apps.first { $0.id == appID && $0.installed && $0.updateAvailable }
     }
 
     private func install(_ app: RemoteAppSummary) {
