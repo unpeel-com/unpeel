@@ -13,6 +13,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Position, Rect};
 use ratatui::{Frame, Terminal};
 use unpeel_app_kit::{
+    OpenOutcome, open_resource,
     AgentBridge, AppContext, AppMetadata, AppReporter, DoubleClickTracker, DragSurface,
     EditorBridge, Explorer, ExplorerEvent, ExplorerInput, ExplorerTheme, FooterAction,
     KeyboardEnhancementGuard, KitTheme, MenuTheme, PopupMenu, SemanticMenu, SemanticMenuAnchor,
@@ -23,6 +24,7 @@ use unpeel_app_kit::{
 
 const UI_VIEW_ID: &str = "main";
 const UI_TREE_ID: &str = "file-tree";
+const OPEN_ACTION: &str = "open";
 const OPEN_IN_EDITOR_ACTION: &str = "open-in-editor";
 const SEND_TO_AGENT_ACTION: &str = "send-to-agent";
 const COPY_PATH_ACTION: &str = "copy-path";
@@ -363,11 +365,13 @@ fn semantic_node(explorer: &mut Explorer, can_send: bool, status: Option<&Status
 }
 
 fn semantic_context_menu(can_send: bool) -> SemanticMenu {
-    let mut items = vec![SemanticMenuItem::new(
-        "open-in-editor",
-        "Open in editor",
-        OPEN_IN_EDITOR_ACTION,
-    )];
+    let mut items = vec![
+        // "Open" follows the workspace's opener policy (an App beside this
+        // pane, the editor, or the system); "Open in editor" is the explicit
+        // override.
+        SemanticMenuItem::new("open", "Open", OPEN_ACTION),
+        SemanticMenuItem::new("open-in-editor", "Open in editor", OPEN_IN_EDITOR_ACTION),
+    ];
     if can_send {
         items.push(SemanticMenuItem::new(
             "send-to-agent",
@@ -524,6 +528,7 @@ fn semantic_context_action(
     };
     let build: fn(PathBuf) -> ContextAction =
         match (action.node_id.as_str(), action.action.as_str()) {
+            ("open", OPEN_ACTION) => ContextAction::Open,
             ("open-in-editor", OPEN_IN_EDITOR_ACTION) => ContextAction::OpenInEditor,
             ("send-to-agent", SEND_TO_AGENT_ACTION) if can_send => ContextAction::SendToAgent,
             ("copy-path", COPY_PATH_ACTION) => ContextAction::CopyPath,
@@ -570,6 +575,7 @@ fn explorer_theme(theme: KitTheme) -> ExplorerTheme {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ContextAction {
+    Open(PathBuf),
     OpenInEditor(PathBuf),
     SendToAgent(PathBuf),
     CopyPath(PathBuf),
@@ -617,6 +623,7 @@ fn activate_menu(menu: ContextMenu, agent: &AgentBridge) -> Status {
         return Status::error("No menu action selected");
     };
     let action = match item_id {
+        "open" => ContextAction::Open(path),
         "open-in-editor" => ContextAction::OpenInEditor(path),
         "send-to-agent" => ContextAction::SendToAgent(path),
         "copy-path" => ContextAction::CopyPath(path),
@@ -627,6 +634,7 @@ fn activate_menu(menu: ContextMenu, agent: &AgentBridge) -> Status {
 
 fn activate_context_action(action: ContextAction, agent: &AgentBridge) -> Status {
     match action {
+        ContextAction::Open(path) => open_status(&path),
         ContextAction::OpenInEditor(path) => match EditorBridge::open(&path) {
             Ok(()) => Status::message("Opened in editor"),
             Err(error) => Status::error(format!("Open failed: {error}")),
@@ -674,8 +682,20 @@ impl Status {
     }
 }
 
+/// Open a file the way the workspace policy says and describe the outcome.
+fn open_status(path: &std::path::Path) -> Status {
+    match open_resource(path) {
+        Ok(OpenOutcome::App(name)) => Status::message(format!("Opened in {name}")),
+        Ok(OpenOutcome::Editor) => Status::message("Opened in editor"),
+        Ok(OpenOutcome::System) => Status::message("Opened with the system"),
+        Err(error) => Status::error(format!("Open failed: {error}")),
+    }
+}
+
 fn status_for_event(event: ExplorerEvent, explorer: &Explorer) -> Option<Status> {
     match event {
+        // Activation opens the file (see `handle_explorer`); the event
+        // itself carries no footer message.
         ExplorerEvent::FileActivated(_) => None,
         ExplorerEvent::Refreshed => Some(Status::message(if explorer.show_hidden() {
             "Hidden files shown"
@@ -700,6 +720,10 @@ fn status_for_event(event: ExplorerEvent, explorer: &Explorer) -> Option<Status>
 
 fn handle_explorer(explorer: &mut Explorer, input: ExplorerInput) -> Option<Status> {
     match explorer.handle(input) {
+        // Enter / double-click on a file: the workspace's opener policy
+        // decides where it goes (an App pane beside this one, the editor,
+        // or the system), exactly like the "Open" menu action.
+        Ok(ExplorerEvent::FileActivated(path)) => Some(open_status(&path)),
         Ok(event) => status_for_event(event, explorer),
         Err(error) => Some(Status::error(error.to_string())),
     }
@@ -1039,7 +1063,7 @@ mod tests {
         assert_eq!(tree.label, "Files");
         assert!(tree.filter.is_some());
         assert_eq!(tree.items.len(), 2);
-        assert_eq!(tree.context_menu.as_ref().unwrap().items.len(), 2);
+        assert_eq!(tree.context_menu.as_ref().unwrap().items.len(), 3);
         assert_eq!(
             tree.footer
                 .actions
@@ -1132,7 +1156,7 @@ mod tests {
             .unwrap();
 
         assert!(drags.regions().is_empty());
-        assert_eq!(menu.items().len(), 3);
+        assert_eq!(menu.items().len(), 4);
         let items_area = menu.items_area();
         assert_eq!(
             terminal.backend().buffer()[(items_area.right() - 1, items_area.y)].bg,
