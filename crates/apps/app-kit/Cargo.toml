@@ -1,0 +1,50 @@
+[package]
+name = "unpeel-app-kit"
+version = "0.1.0"
+edition = "2024"
+description = "Opinionated Ratatui components for standalone and Unpeel-hosted terminal Apps"
+license = "MIT"
+
+[features]
+default = ["ui-bridge"]
+markdown-text-area = ["dep:tui-textarea", "dep:unicode-segmentation"]
+media = ["dep:image", "dep:ratatui-image", "dep:sha2"]
+surface-embed = ["dep:unpeel-surface"]
+ui-bridge = ["dep:hmac", "dep:libc", "dep:sha2"]
+
+[dependencies]
+base64 = "0.22"
+crossterm = { version = "0.29", default-features = false, features = ["events", "bracketed-paste"] }
+hmac = { version = "0.12", optional = true }
+image = { version = "0.25.6", default-features = false, features = ["gif", "jpeg", "png", "webp"], optional = true }
+libc = { version = "0.2", optional = true }
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
+ratatui-image = { version = "11.0.6", default-features = false, optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = { version = "0.10", optional = true }
+tui-textarea = { package = "tui-textarea-2", version = "0.12", default-features = false, features = ["ratatui"], optional = true }
+unicode-segmentation = { version = "1", optional = true }
+unicode-width = "0.2"
+unpeel-surface = { version = "=0.1.0-alpha.6", default-features = false, features = ["ratatui"], optional = true }
+
+[dev-dependencies]
+crossterm = "0.29"
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
+tempfile = "3"
+
+[[example]]
+name = "markdown"
+required-features = ["markdown-text-area", "ui-bridge"]
+
+[[example]]
+name = "media"
+required-features = ["media", "ui-bridge"]
+
+[[example]]
+name = "surface_planets"
+required-features = ["surface-embed"]
+
+[[example]]
+name = "surface_canvas"
+required-features = ["surface-embed"]

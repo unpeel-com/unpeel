@@ -1,0 +1,7 @@
+# Test fixtures use an obviously fake 32-hex key; real keys never live here.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "dummy fixture keys in tests"
+regexes = ['''0123456789abcdef0123456789abcdef''']

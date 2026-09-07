@@ -1,0 +1,1917 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://unpeel.com/protocol/unpeel-ui-v1.schema.json",
+  "title": "Unpeel App Kit UI protocol v1",
+  "description": "Durable component projections between terminal Apps and Host-brokered native, web, or agent participants. Attachments use Host-minted route-bound participant tokens. Implementations ignore unknown fields inside recognized message and value kinds. An unsupported component kind causes pane-level terminal fallback without rejecting the attachment.",
+  "oneOf": [
+    { "$ref": "#/$defs/attach" },
+    { "$ref": "#/$defs/attached" },
+    { "$ref": "#/$defs/snapshot" },
+    { "$ref": "#/$defs/delta" },
+    { "$ref": "#/$defs/event" },
+    { "$ref": "#/$defs/ack" },
+    { "$ref": "#/$defs/lifecycle" },
+    { "$ref": "#/$defs/requestSnapshot" },
+    { "$ref": "#/$defs/presence" },
+    { "$ref": "#/$defs/error" }
+  ],
+  "$defs": {
+    "protocolName": { "const": "unpeel.ui" },
+    "protocolVersion": { "const": 1 },
+    "offeredProtocolVersion": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9._:/-]+$"
+    },
+    "grant": {
+      "anyOf": [
+        { "const": "*" },
+        { "$ref": "#/$defs/identifier" }
+      ]
+    },
+    "appMetadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "name", "version"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" }
+      }
+    },
+    "participant": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "kind": {
+          "enum": ["human", "agent", "service"],
+          "default": "human"
+        },
+        "sourceSessionId": { "$ref": "#/$defs/identifier" },
+        "displayName": { "type": "string", "minLength": 1 },
+        "color": { "type": "string" },
+        "grants": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/grant" }
+        }
+      }
+    },
+    "renderer": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "kind"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "kind": { "$ref": "#/$defs/identifier" },
+        "capabilities": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/identifier" }
+        }
+      }
+    },
+    "rendererState": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["rendererVisible", "terminalVisible"],
+      "properties": {
+        "rendererVisible": { "type": "boolean" },
+        "terminalVisible": { "type": "boolean" }
+      }
+    },
+    "attach": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type",
+        "protocol",
+        "minProtocolVersion",
+        "maxProtocolVersion",
+        "participantToken",
+        "clientId",
+        "renderer",
+        "viewId"
+      ],
+      "properties": {
+        "type": { "const": "attach" },
+        "protocol": { "$ref": "#/$defs/protocolName" },
+        "minProtocolVersion": { "$ref": "#/$defs/offeredProtocolVersion" },
+        "maxProtocolVersion": { "$ref": "#/$defs/offeredProtocolVersion" },
+        "participantToken": { "type": "string", "minLength": 1, "maxLength": 16384 },
+        "clientId": { "$ref": "#/$defs/identifier" },
+        "renderer": { "$ref": "#/$defs/renderer" },
+        "viewId": { "$ref": "#/$defs/identifier" },
+        "expectedAppInstanceId": { "$ref": "#/$defs/identifier" },
+        "lastSeenRevision": { "$ref": "#/$defs/revision" },
+        "state": { "$ref": "#/$defs/rendererState" }
+      }
+    },
+    "attached": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type",
+        "protocol",
+        "protocolVersion",
+        "minProtocolVersion",
+        "maxProtocolVersion",
+        "app",
+        "appInstanceId",
+        "participantId",
+        "clientId",
+        "rendererId",
+        "viewId",
+        "resumed"
+      ],
+      "properties": {
+        "type": { "const": "attached" },
+        "protocol": { "$ref": "#/$defs/protocolName" },
+        "protocolVersion": { "$ref": "#/$defs/protocolVersion" },
+        "minProtocolVersion": { "$ref": "#/$defs/offeredProtocolVersion" },
+        "maxProtocolVersion": { "$ref": "#/$defs/offeredProtocolVersion" },
+        "app": { "$ref": "#/$defs/appMetadata" },
+        "appInstanceId": { "$ref": "#/$defs/identifier" },
+        "participantId": { "$ref": "#/$defs/identifier" },
+        "clientId": { "$ref": "#/$defs/identifier" },
+        "rendererId": { "$ref": "#/$defs/identifier" },
+        "viewId": { "$ref": "#/$defs/identifier" },
+        "resumed": { "type": "boolean" },
+        "currentRevision": { "$ref": "#/$defs/revision" }
+      }
+    },
+    "textPosition": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["line", "utf16Column"],
+      "properties": {
+        "line": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "utf16Column": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
+      }
+    },
+    "textRange": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "$ref": "#/$defs/textPosition" },
+        "end": { "$ref": "#/$defs/textPosition" }
+      }
+    },
+    "textSelection": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["anchor", "head"],
+      "properties": {
+        "anchor": { "$ref": "#/$defs/textPosition" },
+        "head": { "$ref": "#/$defs/textPosition" }
+      }
+    },
+    "textEdit": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["range", "text"],
+      "properties": {
+        "range": { "$ref": "#/$defs/textRange" },
+        "text": { "type": "string" }
+      }
+    },
+    "markdownActions": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "replaceRange": { "$ref": "#/$defs/identifier" },
+        "setSelection": { "$ref": "#/$defs/identifier" },
+        "save": { "$ref": "#/$defs/identifier" },
+        "undo": { "$ref": "#/$defs/identifier" },
+        "redo": { "$ref": "#/$defs/identifier" },
+        "setPresentation": { "$ref": "#/$defs/identifier" },
+        "openMenu": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "footerAction": {
+      "description": "One App-owned screen action with an optional single physical-key accelerator.",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "label", "action"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "label": { "type": "string", "maxLength": 4096, "pattern": "^[^\\r\\n]*$" },
+        "action": { "$ref": "#/$defs/identifier" },
+        "accelerator": {
+          "type": "string",
+          "pattern": "^(?:[!-~]|ctrl\\+[A-Za-z0-9]|escape|enter|space)$"
+        },
+        "role": { "enum": ["default", "danger"], "default": "default" },
+        "disabled": { "type": "boolean", "default": false },
+        "busy": { "type": "boolean", "default": false }
+      }
+    },
+    "footerActions": {
+      "description": "Ordered screen-level action slot shared by Page, Tree, and MarkdownEditor roots.",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["actions"],
+      "properties": {
+        "actions": {
+          "type": "array",
+          "maxItems": 100000,
+          "items": { "$ref": "#/$defs/footerAction" }
+        }
+      }
+    },
+    "menuItem": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "label", "action"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "label": { "type": "string", "maxLength": 16384, "pattern": "^[^\\r\\n]*$" },
+        "action": { "$ref": "#/$defs/identifier" },
+        "hint": { "type": "string", "maxLength": 16384, "pattern": "^[^\\r\\n]*$" },
+        "disabled": { "type": "boolean", "default": false },
+        "role": { "enum": ["default", "danger"], "default": "default" }
+      }
+    },
+    "semanticMenu": {
+      "description": "Bounded action menu; anchor is resolved in each renderer's local coordinate space.",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["label", "items"],
+      "properties": {
+        "label": { "type": "string", "maxLength": 16384, "pattern": "^[^\\r\\n]*$" },
+        "presentation": { "enum": ["popup", "context"], "default": "popup" },
+        "anchor": { "enum": ["control", "caret", "pointer"], "default": "control" },
+        "items": {
+          "type": "array",
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/menuItem" }
+        },
+        "selectedId": { "$ref": "#/$defs/identifier" },
+        "dismiss": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "menu": {
+      "allOf": [
+        { "$ref": "#/$defs/semanticMenu" },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["id", "type"],
+          "properties": {
+            "id": { "$ref": "#/$defs/identifier" },
+            "type": { "const": "menu" }
+          }
+        }
+      ]
+    },
+    "markdownEditor": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "type", "text", "selection"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "type": { "const": "markdownEditor" },
+        "text": { "type": "string" },
+        "selection": { "$ref": "#/$defs/textSelection" },
+        "presentation": {
+          "enum": ["source", "preview", "split"],
+          "default": "source"
+        },
+        "readOnly": { "type": "boolean", "default": false },
+        "dirty": { "type": "boolean", "default": false },
+        "placeholder": { "type": "string", "default": "" },
+        "commandHint": { "$ref": "#/$defs/markdownCommandHint" },
+        "title": { "type": "string" },
+        "back": { "$ref": "#/$defs/identifier" },
+        "actions": { "$ref": "#/$defs/markdownActions" },
+        "insertMenu": { "$ref": "#/$defs/semanticMenu" },
+        "contextMenu": { "$ref": "#/$defs/semanticMenu" },
+        "footer": { "$ref": "#/$defs/footerActions" }
+      }
+    },
+    "textBox": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "type"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "type": { "const": "textBox" },
+        "text": { "type": "string", "default": "" },
+        "placeholder": { "type": "string", "default": "" },
+        "prompt": { "type": "string", "default": "" },
+        "titles": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["text", "position"],
+            "properties": {
+              "text": { "type": "string" },
+              "position": { "enum": ["topLeft", "topRight", "bottomLeft", "bottomRight"] }
+            }
+          }
+        },
+        "hints": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["key", "label"],
+            "properties": {
+              "key": { "type": "string" },
+              "label": { "type": "string" }
+            }
+          }
+        },
+        "busy": {
+          "type": "object",
+          "required": ["label"],
+          "properties": {
+            "label": { "type": "string" },
+            "elapsedMs": { "type": "integer", "minimum": 0, "default": 0 },
+            "rightMeta": { "type": "string", "default": "" }
+          }
+        },
+        "submitMode": { "enum": ["enter", "never"], "default": "enter" },
+        "minRows": { "type": "integer", "minimum": 1, "default": 3 },
+        "maxRows": { "type": "integer", "minimum": 1, "default": 10 },
+        "actions": {
+          "type": "object",
+          "properties": {
+            "setText": { "$ref": "#/$defs/identifier" },
+            "submit": { "$ref": "#/$defs/identifier" }
+          }
+        }
+      }
+    },
+    "markdownCommandHint": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["text", "visibility"],
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "^[^\\u0000\\r\\n]+$"
+        },
+        "visibility": {
+          "const": "cursorOnEmptyLineOutsideCodeFence"
+        }
+      }
+    },
+    "mediaSource": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["kind", "path"],
+          "properties": {
+            "kind": { "const": "path" },
+            "path": { "type": "string", "minLength": 1, "maxLength": 4096 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["kind", "mediaType", "base64"],
+          "properties": {
+            "kind": { "const": "inline" },
+            "mediaType": {
+              "type": "string",
+              "minLength": 7,
+              "maxLength": 127,
+              "pattern": "^image/[A-Za-z0-9!#$&^_.+/-]+$"
+            },
+            "base64": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 349528,
+              "contentEncoding": "base64"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["kind", "sha256", "mediaType", "byteLength"],
+          "properties": {
+            "kind": { "const": "blob" },
+            "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "mediaType": {
+              "type": "string",
+              "minLength": 7,
+              "maxLength": 127,
+              "pattern": "^image/[A-Za-z0-9!#$&^_.+/-]+$"
+            },
+            "byteLength": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          }
+        }
+      ]
+    },
+    "mediaPixelSize": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["w", "h"],
+      "properties": {
+        "w": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
+        "h": { "type": "integer", "minimum": 1, "maximum": 4294967295 }
+      }
+    },
+    "mediaCellSize": {
+      "type": "object",
+      "additionalProperties": true,
+      "anyOf": [
+        { "required": ["w"] },
+        { "required": ["h"] }
+      ],
+      "properties": {
+        "w": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "h": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    },
+    "mediaPointSize": {
+      "type": "object",
+      "additionalProperties": true,
+      "anyOf": [
+        { "required": ["w"] },
+        { "required": ["h"] }
+      ],
+      "properties": {
+        "w": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
+        "h": { "type": "integer", "minimum": 1, "maximum": 4294967295 }
+      }
+    },
+    "media": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "type", "source", "intrinsic", "alt"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "type": { "const": "media" },
+        "source": { "$ref": "#/$defs/mediaSource" },
+        "intrinsic": { "$ref": "#/$defs/mediaPixelSize" },
+        "cells": { "$ref": "#/$defs/mediaCellSize" },
+        "points": { "$ref": "#/$defs/mediaPointSize" },
+        "fit": { "enum": ["contain", "cover", "fill"], "default": "contain" },
+        "alt": { "type": "string", "maxLength": 16384 },
+        "activate": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "surfaceReference": {
+      "description": "Opaque route resolved and authorized by the existing Host; never a socket, URL, credential, or USRF header.",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["sessionId", "streamId"],
+      "properties": {
+        "sessionId": { "$ref": "#/$defs/identifier" },
+        "streamId": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "surfaceCellSize": {
+      "type": "object",
+      "additionalProperties": true,
+      "anyOf": [
+        { "required": ["w"] },
+        { "required": ["h"] }
+      ],
+      "properties": {
+        "w": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "h": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    },
+    "surfacePointSize": {
+      "type": "object",
+      "additionalProperties": true,
+      "anyOf": [
+        { "required": ["w"] },
+        { "required": ["h"] }
+      ],
+      "properties": {
+        "w": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
+        "h": { "type": "integer", "minimum": 1, "maximum": 4294967295 }
+      }
+    },
+    "surfaceBackground": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "transparent" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["kind", "color"],
+          "properties": {
+            "kind": { "const": "solid" },
+            "color": {
+              "type": "string",
+              "pattern": "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$"
+            }
+          }
+        }
+      ]
+    },
+    "surface": {
+      "description": "Reference-only canvas embed. Retained scenes/resources use the separate USRF stream and every presenter renders locally.",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "type", "reference"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "type": { "const": "surface" },
+        "reference": { "$ref": "#/$defs/surfaceReference" },
+        "cells": { "$ref": "#/$defs/surfaceCellSize" },
+        "points": { "$ref": "#/$defs/surfacePointSize" },
+        "background": { "$ref": "#/$defs/surfaceBackground" },
+        "inputPolicy": {
+          "enum": ["none", "pointer", "pointerAndKeyboard"],
+          "default": "none"
+        }
+      }
+    },
+    "button": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "id", "label", "action"],
+      "properties": {
+        "type": { "const": "button" },
+        "id": { "$ref": "#/$defs/identifier" },
+        "label": { "type": "string", "maxLength": 4096 },
+        "action": { "$ref": "#/$defs/identifier" },
+        "role": { "enum": ["default", "primary", "destructive"], "default": "default" }
+      }
+    },
+    "canvasSurface": {
+      "description": "Named, closed Surface slot; scene/resource bytes remain on USRF.",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "reference"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "reference": { "$ref": "#/$defs/surfaceReference" },
+        "cells": { "$ref": "#/$defs/surfaceCellSize" },
+        "points": { "$ref": "#/$defs/surfacePointSize" },
+        "background": { "$ref": "#/$defs/surfaceBackground" },
+        "inputPolicy": {
+          "enum": ["none", "pointer", "pointerAndKeyboard"],
+          "default": "none"
+        }
+      }
+    },
+    "unsupportedCanvasControl": {
+      "description": "Opaque future Canvas control retained only to trigger whole-pane terminal fallback.",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type"],
+      "properties": { "type": { "$ref": "#/$defs/identifier" } },
+      "not": {
+        "required": ["type"],
+        "properties": { "type": { "const": "button" } }
+      }
+    },
+    "canvasControl": {
+      "oneOf": [
+        { "$ref": "#/$defs/button" },
+        { "$ref": "#/$defs/unsupportedCanvasControl" }
+      ]
+    },
+    "canvasPage": {
+      "description": "One Surface slot plus a bounded fixed top overlay of semantic controls.",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "type", "title", "surface", "controls"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "type": { "const": "canvasPage" },
+        "title": { "type": "string", "maxLength": 4096 },
+        "surface": { "$ref": "#/$defs/canvasSurface" },
+        "controls": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/canvasControl" }
+        }
+      }
+    },
+    "toggle": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "id", "label", "value", "setValue"],
+      "properties": {
+        "type": { "const": "toggle" },
+        "id": { "$ref": "#/$defs/identifier" },
+        "label": { "type": "string", "maxLength": 4096 },
+        "value": { "type": "boolean" },
+        "setValue": { "$ref": "#/$defs/identifier" },
+        "role": { "enum": ["completion", "setting"], "default": "completion" }
+      }
+    },
+    "checkmark": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "id", "label", "value", "setValue"],
+      "properties": {
+        "type": { "const": "checkmark" },
+        "id": { "$ref": "#/$defs/identifier" },
+        "label": { "type": "string", "maxLength": 4096 },
+        "value": { "type": "boolean" },
+        "setValue": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "disclosure": {
+      "description": "Navigation affordance only; the ListItem activate action remains the App-owned router.",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type"],
+      "properties": { "type": { "const": "disclosure" } }
+    },
+    "listItemTone": {
+      "enum": ["default", "muted", "accent", "info", "success", "warning", "danger"]
+    },
+    "listItemEmphasis": {
+      "enum": ["regular", "strong"]
+    },
+    "listItemTextRun": {
+      "description": "One closed semantic text span. Omitted tone/emphasis inherit the containing ListItem field.",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["text"],
+      "properties": {
+        "text": { "type": "string", "minLength": 1, "maxLength": 16384, "pattern": "^[^\\u0000\\r\\n]+$" },
+        "tone": { "$ref": "#/$defs/listItemTone" },
+        "emphasis": { "$ref": "#/$defs/listItemEmphasis" }
+      }
+    },
+    "statusSymbol": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "symbol", "label"],
+      "properties": {
+        "type": { "const": "status" },
+        "symbol": { "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^[^\\r\\n]+$" },
+        "label": { "type": "string", "maxLength": 4096 },
+        "tone": { "$ref": "#/$defs/listItemTone", "default": "default" },
+        "emphasis": { "$ref": "#/$defs/listItemEmphasis", "default": "regular" },
+        "preserveToneWhenSelected": { "type": "boolean", "default": false }
+      }
+    },
+    "badge": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "text"],
+      "properties": {
+        "type": { "const": "badge" },
+        "text": { "type": "string", "maxLength": 4096, "pattern": "^[^\\r\\n]*$" },
+        "tone": { "$ref": "#/$defs/listItemTone", "default": "default" }
+      }
+    },
+    "sparkline": {
+      "description": "Read-only numeric history. Inferred bounds include zero; all-zero domains resolve to 0...1 in every renderer.",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "id", "series", "accessibilityText"],
+      "properties": {
+        "type": { "const": "sparkline" },
+        "id": { "$ref": "#/$defs/identifier" },
+        "series": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100000,
+          "items": { "type": "number" }
+        },
+        "min": { "type": "number" },
+        "max": { "type": "number" },
+        "caption": { "type": "string", "maxLength": 4096, "pattern": "^[^\\u0000\\r\\n]*$" },
+        "unit": { "type": "string", "maxLength": 4096, "pattern": "^[^\\u0000\\r\\n]*$" },
+        "accessibilityText": { "type": "string", "minLength": 1, "maxLength": 16384, "pattern": "^[^\\u0000\\r]*$" },
+        "activate": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "barChartEmphasis": {
+      "enum": ["default", "accent", "danger"]
+    },
+    "barChartBar": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["label", "value"],
+      "properties": {
+        "label": { "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^[^\\u0000\\r\\n]+$" },
+        "value": { "type": "number", "minimum": 0 },
+        "valueCaption": { "type": "string", "maxLength": 4096, "pattern": "^[^\\u0000\\r\\n]*$" },
+        "emphasis": { "$ref": "#/$defs/barChartEmphasis", "default": "default" }
+      }
+    },
+    "barChart": {
+      "description": "Minimal categorical chart with labeled non-negative numeric bars.",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "id", "bars", "accessibilityText"],
+      "properties": {
+        "type": { "const": "barChart" },
+        "id": { "$ref": "#/$defs/identifier" },
+        "bars": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1000,
+          "items": { "$ref": "#/$defs/barChartBar" }
+        },
+        "accessibilityText": { "type": "string", "minLength": 1, "maxLength": 16384, "pattern": "^[^\\u0000\\r]*$" },
+        "activate": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "lineChartPoint": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["x", "y"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" }
+      }
+    },
+    "lineChartSeries": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["name", "points"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^[^\\u0000\\r\\n]+$" },
+        "points": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100000,
+          "items": { "$ref": "#/$defs/lineChartPoint" }
+        }
+      }
+    },
+    "lineChartBounds": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["min", "max"],
+      "properties": {
+        "min": { "type": "number" },
+        "max": { "type": "number" }
+      }
+    },
+    "lineChartAxis": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "bounds": { "$ref": "#/$defs/lineChartBounds" },
+        "label": { "type": "string", "maxLength": 4096, "pattern": "^[^\\u0000\\r\\n]*$" }
+      }
+    },
+    "lineChart": {
+      "description": "Minimal multi-series x/y line chart with optional axis bounds and labels.",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "id", "series", "accessibilityText"],
+      "properties": {
+        "type": { "const": "lineChart" },
+        "id": { "$ref": "#/$defs/identifier" },
+        "series": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/lineChartSeries" }
+        },
+        "xAxis": { "$ref": "#/$defs/lineChartAxis" },
+        "yAxis": { "$ref": "#/$defs/lineChartAxis" },
+        "accessibilityText": { "type": "string", "minLength": 1, "maxLength": 16384, "pattern": "^[^\\u0000\\r]*$" },
+        "activate": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "gauge": {
+      "description": "Minimal labeled ratio from zero through one with optional App-authored value caption; valid as a Page body or one trailing ListItem slot. A ListItem value, when present, is the visible rich caption while Gauge contributes the compact meter.",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "id", "ratio", "label", "accessibilityText"],
+      "properties": {
+        "type": { "const": "gauge" },
+        "id": { "$ref": "#/$defs/identifier" },
+        "ratio": { "type": "number", "minimum": 0, "maximum": 1 },
+        "label": { "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^[^\\u0000\\r\\n]+$" },
+        "caption": { "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^[^\\u0000\\r\\n]+$" },
+        "accessibilityText": { "type": "string", "minLength": 1, "maxLength": 16384, "pattern": "^[^\\u0000\\r]*$" },
+        "activate": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "unsupportedRowSlot": {
+      "description": "Opaque future row control retained so a renderer can fall back to the terminal pane.",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type"],
+      "properties": { "type": { "$ref": "#/$defs/identifier" } },
+      "not": {
+        "required": ["type"],
+        "properties": { "type": { "enum": ["toggle", "status", "badge", "sparkline", "gauge", "disclosure", "checkmark"] } }
+      }
+    },
+    "listItemSlot": {
+      "oneOf": [
+        { "$ref": "#/$defs/toggle" },
+        { "$ref": "#/$defs/statusSymbol" },
+        { "$ref": "#/$defs/badge" },
+        { "$ref": "#/$defs/sparkline" },
+        { "$ref": "#/$defs/gauge" },
+        { "$ref": "#/$defs/disclosure" },
+        { "$ref": "#/$defs/checkmark" },
+        { "$ref": "#/$defs/unsupportedRowSlot" }
+      ]
+    },
+    "listRowLayout": {
+      "oneOf": [
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "inline" } } },
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "stacked" } } },
+        {
+          "type": "object",
+          "required": ["type", "stackBelowWidth"],
+          "properties": {
+            "type": { "const": "auto" },
+            "stackBelowWidth": { "type": "integer", "minimum": 0, "maximum": 65535 }
+          }
+        }
+      ]
+    },
+    "listItemBand": {
+      "oneOf": [
+        { "$ref": "#/$defs/gauge" },
+        { "$ref": "#/$defs/sparkline" },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["type", "text"],
+          "properties": {
+            "type": { "const": "text" },
+            "text": { "type": "string", "maxLength": 16384, "pattern": "^[^\\r\\n]*$" },
+            "tone": { "$ref": "#/$defs/listItemTone", "default": "default" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["type"],
+          "properties": { "type": { "const": "divider" } }
+        }
+      ]
+    },
+    "listItemMedia": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["width"],
+      "properties": {
+        "side": { "enum": ["leading", "trailing"], "default": "leading" },
+        "width": { "type": "integer", "minimum": 1, "maximum": 12 },
+        "glyph": { "type": "string", "maxLength": 4096, "pattern": "^[^\\r\\n]*$" },
+        "tone": { "$ref": "#/$defs/listItemTone", "default": "default" },
+        "spec": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["source", "intrinsic", "alt"],
+          "properties": {
+            "source": { "$ref": "#/$defs/mediaSource" },
+            "intrinsic": { "$ref": "#/$defs/mediaPixelSize" },
+            "cells": { "$ref": "#/$defs/mediaCellSize" },
+            "points": { "$ref": "#/$defs/mediaPointSize" },
+            "fit": { "enum": ["contain", "cover", "fill"], "default": "contain" },
+            "alt": { "type": "string", "maxLength": 16384 },
+            "activate": { "$ref": "#/$defs/identifier" }
+          }
+        }
+      }
+    },
+    "listItem": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "label"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "label": { "type": "string", "maxLength": 16384, "pattern": "^[^\\r\\n]*$" },
+        "labelRuns": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/listItemTextRun" } },
+        "labelTone": { "$ref": "#/$defs/listItemTone", "default": "default" },
+        "emphasis": { "$ref": "#/$defs/listItemEmphasis", "default": "regular" },
+        "detail": { "type": "string", "maxLength": 16384, "pattern": "^[^\\r\\n]*$" },
+        "detailRuns": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/listItemTextRun" } },
+        "value": { "type": "string", "maxLength": 4096, "pattern": "^[^\\r\\n]*$" },
+        "valueRuns": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/listItemTextRun" } },
+        "valueTone": { "$ref": "#/$defs/listItemTone", "default": "muted" },
+        "valueMinWidth": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "done": { "type": "boolean", "default": false },
+        "busy": { "type": "boolean", "default": false },
+        "leading": { "$ref": "#/$defs/listItemSlot" },
+        "trailing": { "$ref": "#/$defs/listItemSlot" },
+        "accessory": { "$ref": "#/$defs/listItemSlot" },
+        "top": { "$ref": "#/$defs/listItemBand" },
+        "bottom": { "$ref": "#/$defs/listItemBand" },
+        "media": { "$ref": "#/$defs/listItemMedia" },
+        "divider": { "type": "boolean", "default": false },
+        "delete": { "$ref": "#/$defs/identifier" },
+        "activate": { "$ref": "#/$defs/identifier" },
+        "actionRole": { "enum": ["default", "destructive"], "default": "default" }
+      }
+    },
+    "list": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "id", "items"],
+      "properties": {
+        "type": { "const": "list" },
+        "id": { "$ref": "#/$defs/identifier" },
+        "items": {
+          "type": "array",
+          "maxItems": 100000,
+          "items": { "$ref": "#/$defs/listItem" }
+        },
+        "emptyMessage": { "type": "string", "maxLength": 4096 },
+        "selectedId": { "$ref": "#/$defs/identifier" },
+        "select": { "$ref": "#/$defs/identifier" },
+        "scrollPadding": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "pageOverlap": { "type": "integer", "minimum": 0, "maximum": 65535, "default": 1 },
+        "pageBehavior": { "enum": ["selection", "scroll"], "default": "selection" },
+        "spacePagesDown": { "type": "boolean", "default": false },
+        "rowLayout": { "$ref": "#/$defs/listRowLayout" },
+        "contextMenu": { "$ref": "#/$defs/semanticMenu" }
+      }
+    },
+    "contentTone": {
+      "enum": ["default", "muted", "accent", "info", "success", "warning", "danger"]
+    },
+    "contentEmphasis": { "enum": ["regular", "strong", "italic"] },
+    "contentRun": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["text"],
+      "properties": {
+        "text": { "type": "string", "maxLength": 262144, "pattern": "^[^\\r\\n]*$" },
+        "tone": { "$ref": "#/$defs/contentTone", "default": "default" },
+        "emphasis": { "$ref": "#/$defs/contentEmphasis", "default": "regular" }
+      }
+    },
+    "contentLine": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "runs"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "runs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/contentRun" }
+        },
+        "tone": { "enum": ["default", "muted", "header", "added", "removed"], "default": "default" }
+      }
+    },
+    "contentSelection": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["anchorId", "headId"],
+      "properties": {
+        "anchorId": { "$ref": "#/$defs/identifier" },
+        "headId": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "content": {
+      "description": "Read-only scrollable styled document content; not an editor.",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "id", "label", "lines"],
+      "properties": {
+        "type": { "const": "content" },
+        "id": { "$ref": "#/$defs/identifier" },
+        "label": { "type": "string", "maxLength": 16384 },
+        "lines": {
+          "type": "array",
+          "maxItems": 100000,
+          "items": { "$ref": "#/$defs/contentLine" }
+        },
+        "wrap": { "type": "boolean", "default": true },
+        "font": { "enum": ["body", "monospace"], "default": "body" },
+        "emptyMessage": { "type": "string", "maxLength": 16384 },
+        "selection": { "$ref": "#/$defs/contentSelection" },
+        "select": { "$ref": "#/$defs/identifier" },
+        "contextMenu": { "$ref": "#/$defs/semanticMenu" }
+      }
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "id", "label"],
+      "properties": {
+        "type": { "const": "input" },
+        "id": { "$ref": "#/$defs/identifier" },
+        "label": { "type": "string", "maxLength": 4096 },
+        "value": { "type": "string", "maxLength": 1048576 },
+        "placeholder": { "type": "string", "maxLength": 4096 },
+        "setValue": { "$ref": "#/$defs/identifier" },
+        "submit": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "unsupportedHeaderSlot": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type"],
+      "properties": { "type": { "$ref": "#/$defs/identifier" } },
+      "not": {
+        "required": ["type"],
+        "properties": { "type": { "const": "input" } }
+      }
+    },
+    "unsupportedBodySlot": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type"],
+      "properties": { "type": { "$ref": "#/$defs/identifier" } },
+      "not": {
+        "required": ["type"],
+        "properties": { "type": { "enum": ["list", "content", "sparkline", "barChart", "lineChart", "gauge"] } }
+      }
+    },
+    "page": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "type", "title", "body"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "type": { "const": "page" },
+        "title": { "type": "string", "maxLength": 4096 },
+        "back": { "$ref": "#/$defs/identifier" },
+        "header": {
+          "oneOf": [
+            { "$ref": "#/$defs/input" },
+            { "$ref": "#/$defs/unsupportedHeaderSlot" }
+          ]
+        },
+        "body": {
+          "oneOf": [
+            { "$ref": "#/$defs/list" },
+            { "$ref": "#/$defs/content" },
+            { "$ref": "#/$defs/sparkline" },
+            { "$ref": "#/$defs/barChart" },
+            { "$ref": "#/$defs/lineChart" },
+            { "$ref": "#/$defs/gauge" },
+            { "$ref": "#/$defs/unsupportedBodySlot" }
+          ]
+        },
+        "footer": { "$ref": "#/$defs/footerActions" }
+      }
+    },
+    "treeFilter": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "label", "value", "setValue"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "label": { "type": "string", "maxLength": 16384 },
+        "value": { "type": "string", "maxLength": 1048576 },
+        "placeholder": { "type": "string", "maxLength": 16384 },
+        "setValue": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "treeActions": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["select", "open", "parent"],
+      "properties": {
+        "select": { "$ref": "#/$defs/identifier" },
+        "open": { "$ref": "#/$defs/identifier" },
+        "parent": { "$ref": "#/$defs/identifier" },
+        "setExpanded": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "treePrimaryAction": {
+      "description": "The one constrained toolbar action accepted by Tree; no arbitrary children.",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "label", "action"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "label": { "type": "string", "maxLength": 4096 },
+        "action": { "$ref": "#/$defs/identifier" },
+        "role": { "enum": ["default", "primary", "destructive"], "default": "default" }
+      }
+    },
+    "treeItem": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "label", "kind"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "label": { "type": "string", "maxLength": 16384, "pattern": "^[^\\r\\n]*$" },
+        "kind": { "enum": ["parent", "directory", "file"] },
+        "detail": { "type": "string", "maxLength": 16384, "pattern": "^[^\\r\\n]*$" },
+        "hidden": { "type": "boolean", "default": false },
+        "symlink": { "type": "boolean", "default": false },
+        "childState": { "enum": ["loaded", "unloaded", "loading"], "default": "loaded" },
+        "expanded": { "type": "boolean", "default": false },
+        "children": {
+          "type": "array",
+          "maxItems": 100000,
+          "items": { "$ref": "#/$defs/treeItem" }
+        }
+      }
+    },
+    "tree": {
+      "description": "Closed file/document hierarchy. Item ids are opaque App keys, never Host filesystem paths.",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "type", "label", "location", "items", "actions"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "type": { "const": "tree" },
+        "label": { "type": "string", "maxLength": 16384 },
+        "location": { "type": "string", "maxLength": 16384 },
+        "presentation": { "enum": ["drillDown", "outline"], "default": "drillDown" },
+        "filter": { "$ref": "#/$defs/treeFilter" },
+        "items": {
+          "type": "array",
+          "maxItems": 100000,
+          "items": { "$ref": "#/$defs/treeItem" }
+        },
+        "selectedId": { "$ref": "#/$defs/identifier" },
+        "emptyMessage": { "type": "string", "maxLength": 16384 },
+        "primaryAction": { "$ref": "#/$defs/treePrimaryAction" },
+        "contextMenu": { "$ref": "#/$defs/semanticMenu" },
+        "actions": { "$ref": "#/$defs/treeActions" },
+        "footer": { "$ref": "#/$defs/footerActions" }
+      }
+    },
+    "unsupportedComponent": {
+      "description": "Opaque future root retained only so a renderer can keep its attachment and expose the terminal pane.",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "type"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "type": { "$ref": "#/$defs/identifier" }
+      },
+      "not": {
+        "required": ["type"],
+        "properties": {
+          "type": { "enum": ["canvasPage", "markdownEditor", "media", "menu", "page", "surface", "textBox", "tree"] }
+        }
+      }
+    },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type",
+        "protocol",
+        "protocolVersion",
+        "appInstanceId",
+        "clientId",
+        "viewId",
+        "revision",
+        "root"
+      ],
+      "properties": {
+        "type": { "const": "snapshot" },
+        "protocol": { "$ref": "#/$defs/protocolName" },
+        "protocolVersion": { "$ref": "#/$defs/protocolVersion" },
+        "appInstanceId": { "$ref": "#/$defs/identifier" },
+        "clientId": { "$ref": "#/$defs/identifier" },
+        "viewId": { "$ref": "#/$defs/identifier" },
+        "revision": { "$ref": "#/$defs/revision" },
+        "root": {
+          "oneOf": [
+            { "$ref": "#/$defs/canvasPage" },
+            { "$ref": "#/$defs/markdownEditor" },
+            { "$ref": "#/$defs/media" },
+            { "$ref": "#/$defs/menu" },
+            { "$ref": "#/$defs/page" },
+            { "$ref": "#/$defs/surface" },
+            { "$ref": "#/$defs/textBox" },
+            { "$ref": "#/$defs/tree" },
+            { "$ref": "#/$defs/unsupportedComponent" }
+          ]
+        }
+      }
+    },
+    "deltaOperation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["op", "root"],
+          "properties": {
+            "op": { "const": "replaceRoot" },
+            "root": {
+              "oneOf": [
+                { "$ref": "#/$defs/canvasPage" },
+                { "$ref": "#/$defs/markdownEditor" },
+                { "$ref": "#/$defs/media" },
+                { "$ref": "#/$defs/menu" },
+                { "$ref": "#/$defs/page" },
+                { "$ref": "#/$defs/surface" },
+                { "$ref": "#/$defs/textBox" },
+                { "$ref": "#/$defs/tree" },
+                { "$ref": "#/$defs/unsupportedComponent" }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["op", "nodeId", "edit"],
+          "properties": {
+            "op": { "const": "markdownReplaceRange" },
+            "nodeId": { "$ref": "#/$defs/identifier" },
+            "edit": { "$ref": "#/$defs/textEdit" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["op", "nodeId", "selection"],
+          "properties": {
+            "op": { "const": "markdownSetSelection" },
+            "nodeId": { "$ref": "#/$defs/identifier" },
+            "selection": { "$ref": "#/$defs/textSelection" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["op", "nodeId", "presentation"],
+          "properties": {
+            "op": { "const": "markdownSetPresentation" },
+            "nodeId": { "$ref": "#/$defs/identifier" },
+            "presentation": { "enum": ["source", "preview", "split"] }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["op", "nodeId", "dirty"],
+          "properties": {
+            "op": { "const": "markdownSetDirty" },
+            "nodeId": { "$ref": "#/$defs/identifier" },
+            "dirty": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["op", "nodeId", "readOnly"],
+          "properties": {
+            "op": { "const": "markdownSetReadOnly" },
+            "nodeId": { "$ref": "#/$defs/identifier" },
+            "readOnly": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["op", "nodeId", "title"],
+          "properties": {
+            "op": { "const": "markdownSetTitle" },
+            "nodeId": { "$ref": "#/$defs/identifier" },
+            "title": { "type": ["string", "null"] }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["op", "nodeId", "placeholder"],
+          "properties": {
+            "op": { "const": "markdownSetPlaceholder" },
+            "nodeId": { "$ref": "#/$defs/identifier" },
+            "placeholder": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["op", "nodeId", "commandHint"],
+          "properties": {
+            "op": { "const": "markdownSetCommandHint" },
+            "nodeId": { "$ref": "#/$defs/identifier" },
+            "commandHint": {
+              "oneOf": [
+                { "$ref": "#/$defs/markdownCommandHint" },
+                { "type": "null" }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["op", "nodeId", "actions"],
+          "properties": {
+            "op": { "const": "markdownSetActions" },
+            "nodeId": { "$ref": "#/$defs/identifier" },
+            "actions": { "$ref": "#/$defs/markdownActions" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["op", "nodeId"],
+          "properties": {
+            "op": { "const": "markdownSetMenus" },
+            "nodeId": { "$ref": "#/$defs/identifier" },
+            "insertMenu": {
+              "oneOf": [
+                { "$ref": "#/$defs/semanticMenu" },
+                { "type": "null" }
+              ]
+            },
+            "contextMenu": {
+              "oneOf": [
+                { "$ref": "#/$defs/semanticMenu" },
+                { "type": "null" }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["op", "nodeId", "selectedId"],
+          "properties": {
+            "op": { "const": "menuSetSelection" },
+            "nodeId": { "$ref": "#/$defs/identifier" },
+            "selectedId": {
+              "oneOf": [
+                { "$ref": "#/$defs/identifier" },
+                { "type": "null" }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["op", "nodeId", "source", "intrinsic"],
+          "properties": {
+            "op": { "const": "mediaSetSource" },
+            "nodeId": { "$ref": "#/$defs/identifier" },
+            "source": { "$ref": "#/$defs/mediaSource" },
+            "intrinsic": { "$ref": "#/$defs/mediaPixelSize" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["op", "nodeId", "reference"],
+          "properties": {
+            "op": { "const": "surfaceSetReference" },
+            "nodeId": { "$ref": "#/$defs/identifier" },
+            "reference": { "$ref": "#/$defs/surfaceReference" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["op", "nodeId", "value"],
+          "properties": {
+            "op": { "const": "toggleSetValue" },
+            "nodeId": { "$ref": "#/$defs/identifier" },
+            "value": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["op", "nodeId", "value"],
+          "properties": {
+            "op": { "const": "checkmarkSetValue" },
+            "nodeId": { "$ref": "#/$defs/identifier" },
+            "value": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["op", "nodeId", "series", "min", "max", "caption", "unit", "accessibilityText"],
+          "properties": {
+            "op": { "const": "sparklineSetData" },
+            "nodeId": { "$ref": "#/$defs/identifier" },
+            "series": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 100000,
+              "items": { "type": "number" }
+            },
+            "min": { "type": ["number", "null"] },
+            "max": { "type": ["number", "null"] },
+            "caption": { "type": ["string", "null"], "maxLength": 4096, "pattern": "^[^\\u0000\\r\\n]*$" },
+            "unit": { "type": ["string", "null"], "maxLength": 4096, "pattern": "^[^\\u0000\\r\\n]*$" },
+            "accessibilityText": { "type": "string", "minLength": 1, "maxLength": 16384, "pattern": "^[^\\u0000\\r]*$" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["op", "nodeId", "bars", "accessibilityText"],
+          "properties": {
+            "op": { "const": "barChartSetData" },
+            "nodeId": { "$ref": "#/$defs/identifier" },
+            "bars": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1000,
+              "items": { "$ref": "#/$defs/barChartBar" }
+            },
+            "accessibilityText": { "type": "string", "minLength": 1, "maxLength": 16384, "pattern": "^[^\\u0000\\r]*$" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["op", "nodeId", "series", "xAxis", "yAxis", "accessibilityText"],
+          "properties": {
+            "op": { "const": "lineChartSetData" },
+            "nodeId": { "$ref": "#/$defs/identifier" },
+            "series": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 16,
+              "items": { "$ref": "#/$defs/lineChartSeries" }
+            },
+            "xAxis": { "$ref": "#/$defs/lineChartAxis" },
+            "yAxis": { "$ref": "#/$defs/lineChartAxis" },
+            "accessibilityText": { "type": "string", "minLength": 1, "maxLength": 16384, "pattern": "^[^\\u0000\\r]*$" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["op", "nodeId", "ratio", "label", "accessibilityText"],
+          "properties": {
+            "op": { "const": "gaugeSetData" },
+            "nodeId": { "$ref": "#/$defs/identifier" },
+            "ratio": { "type": "number", "minimum": 0, "maximum": 1 },
+            "label": { "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^[^\\u0000\\r\\n]+$" },
+            "caption": {
+              "oneOf": [
+                { "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^[^\\u0000\\r\\n]+$" },
+                { "type": "null" }
+              ]
+            },
+            "accessibilityText": { "type": "string", "minLength": 1, "maxLength": 16384, "pattern": "^[^\\u0000\\r]*$" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["op", "nodeId", "actions"],
+          "properties": {
+            "op": { "const": "footerSetActions" },
+            "nodeId": { "$ref": "#/$defs/identifier" },
+            "actions": {
+              "type": "array",
+              "maxItems": 100000,
+              "items": { "$ref": "#/$defs/footerAction" }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["op", "nodeId", "value"],
+          "properties": {
+            "op": { "const": "inputSetValue" },
+            "nodeId": { "$ref": "#/$defs/identifier" },
+            "value": { "type": "string", "maxLength": 1048576 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["op", "listId", "index", "item"],
+          "properties": {
+            "op": { "const": "listInsertItem" },
+            "listId": { "$ref": "#/$defs/identifier" },
+            "index": { "$ref": "#/$defs/revision" },
+            "item": { "$ref": "#/$defs/listItem" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["op", "listId", "selectedId"],
+          "properties": {
+            "op": { "const": "listSetSelection" },
+            "listId": { "$ref": "#/$defs/identifier" },
+            "selectedId": {
+              "oneOf": [
+                { "$ref": "#/$defs/identifier" },
+                { "type": "null" }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["op", "listId", "itemId"],
+          "properties": {
+            "op": { "const": "listRemoveItem" },
+            "listId": { "$ref": "#/$defs/identifier" },
+            "itemId": { "$ref": "#/$defs/identifier" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["op", "contentId", "selection"],
+          "properties": {
+            "op": { "const": "contentSetSelection" },
+            "contentId": { "$ref": "#/$defs/identifier" },
+            "selection": {
+              "oneOf": [
+                { "$ref": "#/$defs/contentSelection" },
+                { "type": "null" }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["op", "contentId", "index", "deleteCount", "lines"],
+          "properties": {
+            "op": { "const": "contentSpliceLines" },
+            "contentId": { "$ref": "#/$defs/identifier" },
+            "index": { "$ref": "#/$defs/revision" },
+            "deleteCount": { "$ref": "#/$defs/revision" },
+            "lines": {
+              "type": "array",
+              "maxItems": 100000,
+              "items": { "$ref": "#/$defs/contentLine" }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["op", "nodeId", "selectedId"],
+          "properties": {
+            "op": { "const": "treeSetSelection" },
+            "nodeId": { "$ref": "#/$defs/identifier" },
+            "selectedId": {
+              "oneOf": [
+                { "$ref": "#/$defs/identifier" },
+                { "type": "null" }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["op", "filterId", "value"],
+          "properties": {
+            "op": { "const": "treeSetFilter" },
+            "filterId": { "$ref": "#/$defs/identifier" },
+            "value": { "type": "string", "maxLength": 1048576 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["op", "nodeId", "location"],
+          "properties": {
+            "op": { "const": "treeSetLocation" },
+            "nodeId": { "$ref": "#/$defs/identifier" },
+            "location": { "type": "string", "maxLength": 16384 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["op", "nodeId", "index", "deleteCount", "items"],
+          "properties": {
+            "op": { "const": "treeSpliceChildren" },
+            "nodeId": { "$ref": "#/$defs/identifier" },
+            "parentId": { "$ref": "#/$defs/identifier" },
+            "index": { "$ref": "#/$defs/revision" },
+            "deleteCount": { "$ref": "#/$defs/revision" },
+            "items": {
+              "type": "array",
+              "maxItems": 100000,
+              "items": { "$ref": "#/$defs/treeItem" }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["op", "nodeId", "itemId", "childState"],
+          "properties": {
+            "op": { "const": "treeSetChildState" },
+            "nodeId": { "$ref": "#/$defs/identifier" },
+            "itemId": { "$ref": "#/$defs/identifier" },
+            "childState": { "enum": ["loaded", "unloaded", "loading"] }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["op", "nodeId", "itemId", "expanded"],
+          "properties": {
+            "op": { "const": "treeSetExpanded" },
+            "nodeId": { "$ref": "#/$defs/identifier" },
+            "itemId": { "$ref": "#/$defs/identifier" },
+            "expanded": { "type": "boolean" }
+          }
+        }
+      ]
+    },
+    "delta": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type",
+        "protocol",
+        "protocolVersion",
+        "appInstanceId",
+        "clientId",
+        "viewId",
+        "baseRevision",
+        "revision",
+        "operations"
+      ],
+      "properties": {
+        "type": { "const": "delta" },
+        "protocol": { "$ref": "#/$defs/protocolName" },
+        "protocolVersion": { "$ref": "#/$defs/protocolVersion" },
+        "appInstanceId": { "$ref": "#/$defs/identifier" },
+        "clientId": { "$ref": "#/$defs/identifier" },
+        "viewId": { "$ref": "#/$defs/identifier" },
+        "baseRevision": { "$ref": "#/$defs/revision" },
+        "revision": { "$ref": "#/$defs/revision" },
+        "operations": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "items": { "$ref": "#/$defs/deltaOperation" }
+        }
+      }
+    },
+    "eventValue": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["type"],
+          "properties": { "type": { "const": "none" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "bool" },
+            "value": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "index" },
+            "value": { "$ref": "#/$defs/revision" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "integer" },
+            "value": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "number" },
+            "value": { "type": "number" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "text" },
+            "value": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "textList" },
+            "value": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "textEdit" },
+            "value": { "$ref": "#/$defs/textEdit" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "textSelection" },
+            "value": { "$ref": "#/$defs/textSelection" }
+          }
+        }
+      ]
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type",
+        "protocol",
+        "protocolVersion",
+        "appInstanceId",
+        "participantId",
+        "clientId",
+        "rendererId",
+        "viewId",
+        "eventId",
+        "baseRevision",
+        "nodeId",
+        "action",
+        "kind",
+        "value"
+      ],
+      "properties": {
+        "type": { "const": "event" },
+        "protocol": { "$ref": "#/$defs/protocolName" },
+        "protocolVersion": { "$ref": "#/$defs/protocolVersion" },
+        "appInstanceId": { "$ref": "#/$defs/identifier" },
+        "participantId": { "$ref": "#/$defs/identifier" },
+        "clientId": { "$ref": "#/$defs/identifier" },
+        "rendererId": { "$ref": "#/$defs/identifier" },
+        "viewId": { "$ref": "#/$defs/identifier" },
+        "eventId": { "$ref": "#/$defs/identifier" },
+        "baseRevision": { "$ref": "#/$defs/revision" },
+        "nodeId": { "$ref": "#/$defs/identifier" },
+        "action": { "$ref": "#/$defs/identifier" },
+        "kind": {
+          "enum": ["activate", "select", "change", "submit", "cancel", "command"]
+        },
+        "value": { "$ref": "#/$defs/eventValue" }
+      }
+    },
+    "ack": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type",
+        "protocol",
+        "protocolVersion",
+        "appInstanceId",
+        "clientId",
+        "rendererId",
+        "viewId",
+        "eventId",
+        "status",
+        "revision"
+      ],
+      "properties": {
+        "type": { "const": "ack" },
+        "protocol": { "$ref": "#/$defs/protocolName" },
+        "protocolVersion": { "$ref": "#/$defs/protocolVersion" },
+        "appInstanceId": { "$ref": "#/$defs/identifier" },
+        "clientId": { "$ref": "#/$defs/identifier" },
+        "rendererId": { "$ref": "#/$defs/identifier" },
+        "viewId": { "$ref": "#/$defs/identifier" },
+        "eventId": { "$ref": "#/$defs/identifier" },
+        "status": { "enum": ["pending", "applied", "rejected", "stale"] },
+        "revision": { "$ref": "#/$defs/revision" },
+        "message": { "type": "string" }
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type",
+        "protocol",
+        "protocolVersion",
+        "appInstanceId",
+        "clientId",
+        "rendererId",
+        "viewId",
+        "state"
+      ],
+      "properties": {
+        "type": { "const": "lifecycle" },
+        "protocol": { "$ref": "#/$defs/protocolName" },
+        "protocolVersion": { "$ref": "#/$defs/protocolVersion" },
+        "appInstanceId": { "$ref": "#/$defs/identifier" },
+        "clientId": { "$ref": "#/$defs/identifier" },
+        "rendererId": { "$ref": "#/$defs/identifier" },
+        "viewId": { "$ref": "#/$defs/identifier" },
+        "state": { "$ref": "#/$defs/rendererState" }
+      }
+    },
+    "requestSnapshot": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type",
+        "protocol",
+        "protocolVersion",
+        "appInstanceId",
+        "clientId",
+        "rendererId",
+        "viewId"
+      ],
+      "properties": {
+        "type": { "const": "requestSnapshot" },
+        "protocol": { "$ref": "#/$defs/protocolName" },
+        "protocolVersion": { "$ref": "#/$defs/protocolVersion" },
+        "appInstanceId": { "$ref": "#/$defs/identifier" },
+        "clientId": { "$ref": "#/$defs/identifier" },
+        "rendererId": { "$ref": "#/$defs/identifier" },
+        "viewId": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "presenceMember": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["participant", "clientId", "renderer", "state"],
+      "properties": {
+        "participant": { "$ref": "#/$defs/participant" },
+        "clientId": { "$ref": "#/$defs/identifier" },
+        "renderer": { "$ref": "#/$defs/renderer" },
+        "state": { "$ref": "#/$defs/rendererState" }
+      }
+    },
+    "presence": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type",
+        "protocol",
+        "protocolVersion",
+        "appInstanceId",
+        "viewId",
+        "members"
+      ],
+      "properties": {
+        "type": { "const": "presence" },
+        "protocol": { "$ref": "#/$defs/protocolName" },
+        "protocolVersion": { "$ref": "#/$defs/protocolVersion" },
+        "appInstanceId": { "$ref": "#/$defs/identifier" },
+        "viewId": { "$ref": "#/$defs/identifier" },
+        "members": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/presenceMember" }
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "protocol", "protocolVersion", "code", "message"],
+      "properties": {
+        "type": { "const": "error" },
+        "protocol": { "$ref": "#/$defs/protocolName" },
+        "protocolVersion": { "$ref": "#/$defs/protocolVersion" },
+        "code": { "$ref": "#/$defs/identifier" },
+        "message": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

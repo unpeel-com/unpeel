@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://unpeel.com/protocol/unpeel-app-kit-state-v1.schema.json",
+  "title": "Unpeel App Kit hosted state envelope v1",
+  "description": "Crash-safe ui-state.json envelope stored beside ~/.unpeel/app-sessions/<id>/ui.sock. The App owns its state value and stateSchemaVersion migrations; the Host preserves the Session directory and relaunches always-on Apps after reboot.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "format",
+    "formatVersion",
+    "appId",
+    "appVersion",
+    "stateSchemaVersion",
+    "revision",
+    "savedAtUnixMs",
+    "state"
+  ],
+  "properties": {
+    "format": { "const": "unpeel.app-kit.state" },
+    "formatVersion": { "const": 1 },
+    "appId": { "type": "string", "minLength": 1 },
+    "appVersion": { "type": "string", "minLength": 1 },
+    "stateSchemaVersion": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "savedAtUnixMs": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "state": true
+  }
+}

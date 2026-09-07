@@ -1,0 +1,18 @@
+{
+  "name": "@unpeel/app-kit-ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build:kitchen-sink": "bun build src/kitchen-sink.ts --target browser --format=iife --minify --outfile ../swift/Examples/KitchenSink/Sources/KitchenSink/Resources/Web/app.js",
+    "check": "tsc -p tsconfig.json",
+    "test": "bun test test",
+    "test:browser": "bun run build:kitchen-sink && playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.59.0",
+    "@types/bun": "^1.4.0",
+    "typescript": "^7.0.2"
+  }
+}

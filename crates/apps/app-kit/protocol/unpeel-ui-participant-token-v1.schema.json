@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://unpeel.com/protocol/unpeel-ui-participant-token-v1.schema.json",
+  "title": "Unpeel App Kit scoped participant-token claims v1",
+  "description": "Decoded payload of upui1.<base64url-json>.<base64url-hmac-sha256>. The existing Unpeel Host mints a token from the per-App-session UNPEEL_UI_TOKEN signing key after authenticating a ControllerPrincipal or neighboring agent Session. The token is bound to one App Session, client, renderer, and view.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "version",
+    "appSessionId",
+    "participant",
+    "clientId",
+    "rendererId",
+    "viewId",
+    "issuedAtUnixMs",
+    "expiresAtUnixMs",
+    "tokenId"
+  ],
+  "properties": {
+    "version": { "const": 1 },
+    "appSessionId": { "$ref": "#/$defs/identifier" },
+    "participant": { "$ref": "#/$defs/participant" },
+    "clientId": { "$ref": "#/$defs/identifier" },
+    "rendererId": { "$ref": "#/$defs/identifier" },
+    "viewId": { "$ref": "#/$defs/identifier" },
+    "issuedAtUnixMs": { "$ref": "#/$defs/timestamp" },
+    "expiresAtUnixMs": { "$ref": "#/$defs/timestamp" },
+    "tokenId": { "$ref": "#/$defs/identifier" }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9._:/-]+$"
+    },
+    "timestamp": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "grant": {
+      "anyOf": [
+        { "const": "*" },
+        { "$ref": "#/$defs/identifier" }
+      ]
+    },
+    "participant": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "kind"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "kind": { "enum": ["human", "agent", "service"] },
+        "sourceSessionId": { "$ref": "#/$defs/identifier" },
+        "displayName": { "type": "string", "minLength": 1 },
+        "color": { "type": "string" },
+        "grants": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/grant" }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["kind"],
+            "properties": { "kind": { "const": "agent" } }
+          },
+          "then": { "required": ["sourceSessionId"] }
+        }
+      ]
+    }
+  }
+}

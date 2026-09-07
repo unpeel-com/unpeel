@@ -1,0 +1,286 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://unpeel.com/protocol/unpeel-workspace-ui-v1.schema.json",
+  "title": "Unpeel Controller-to-Host workspace UI protocol v1",
+  "description": "Untrusted renderer messages carried as an additive extension of the authenticated /mobile Host contract over Direct, SSH, or Link relay. Participant identity, grants, and local participant tokens are intentionally absent and must be derived by the existing Host from ControllerPrincipal. Implementations ignore unknown fields inside recognized message and value kinds for forward compatibility, but reject unknown discriminated kinds.",
+  "oneOf": [
+    { "$ref": "#/$defs/resume" },
+    { "$ref": "#/$defs/action" },
+    { "$ref": "#/$defs/lifecycle" },
+    { "$ref": "#/$defs/requestSnapshot" }
+  ],
+  "$defs": {
+    "protocolName": { "const": "unpeel.workspace.ui" },
+    "protocolVersion": { "const": 1 },
+    "revision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9._:/-]+$"
+    },
+    "renderer": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "kind"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "kind": { "$ref": "#/$defs/identifier" },
+        "capabilities": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/identifier" }
+        }
+      }
+    },
+    "rendererState": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["rendererVisible", "terminalVisible"],
+      "properties": {
+        "rendererVisible": { "type": "boolean" },
+        "terminalVisible": { "type": "boolean" }
+      }
+    },
+    "textPosition": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["line", "utf16Column"],
+      "properties": {
+        "line": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "utf16Column": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
+      }
+    },
+    "textRange": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "$ref": "#/$defs/textPosition" },
+        "end": { "$ref": "#/$defs/textPosition" }
+      }
+    },
+    "textSelection": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["anchor", "head"],
+      "properties": {
+        "anchor": { "$ref": "#/$defs/textPosition" },
+        "head": { "$ref": "#/$defs/textPosition" }
+      }
+    },
+    "textEdit": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["range", "text"],
+      "properties": {
+        "range": { "$ref": "#/$defs/textRange" },
+        "text": { "type": "string" }
+      }
+    },
+    "eventValue": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["type"],
+          "properties": { "type": { "const": "none" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "bool" },
+            "value": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "index" },
+            "value": { "$ref": "#/$defs/revision" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "integer" },
+            "value": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "number" },
+            "value": { "type": "number" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "text" },
+            "value": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "textList" },
+            "value": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "textEdit" },
+            "value": { "$ref": "#/$defs/textEdit" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "textSelection" },
+            "value": { "$ref": "#/$defs/textSelection" }
+          }
+        }
+      ]
+    },
+    "resume": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type",
+        "protocol",
+        "protocolVersion",
+        "appSessionId",
+        "clientId",
+        "renderer",
+        "viewId",
+        "state"
+      ],
+      "properties": {
+        "type": { "const": "resume" },
+        "protocol": { "$ref": "#/$defs/protocolName" },
+        "protocolVersion": { "$ref": "#/$defs/protocolVersion" },
+        "appSessionId": { "$ref": "#/$defs/identifier" },
+        "clientId": { "$ref": "#/$defs/identifier" },
+        "renderer": { "$ref": "#/$defs/renderer" },
+        "viewId": { "$ref": "#/$defs/identifier" },
+        "expectedAppInstanceId": { "$ref": "#/$defs/identifier" },
+        "lastSeenRevision": { "$ref": "#/$defs/revision" },
+        "state": { "$ref": "#/$defs/rendererState" }
+      }
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type",
+        "protocol",
+        "protocolVersion",
+        "appSessionId",
+        "appInstanceId",
+        "clientId",
+        "rendererId",
+        "viewId",
+        "eventId",
+        "baseRevision",
+        "nodeId",
+        "action",
+        "kind",
+        "value"
+      ],
+      "properties": {
+        "type": { "const": "action" },
+        "protocol": { "$ref": "#/$defs/protocolName" },
+        "protocolVersion": { "$ref": "#/$defs/protocolVersion" },
+        "appSessionId": { "$ref": "#/$defs/identifier" },
+        "appInstanceId": { "$ref": "#/$defs/identifier" },
+        "clientId": { "$ref": "#/$defs/identifier" },
+        "rendererId": { "$ref": "#/$defs/identifier" },
+        "viewId": { "$ref": "#/$defs/identifier" },
+        "eventId": { "$ref": "#/$defs/identifier" },
+        "baseRevision": { "$ref": "#/$defs/revision" },
+        "nodeId": { "$ref": "#/$defs/identifier" },
+        "action": { "$ref": "#/$defs/identifier" },
+        "kind": {
+          "enum": ["activate", "select", "change", "submit", "cancel", "command"]
+        },
+        "value": { "$ref": "#/$defs/eventValue" }
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type",
+        "protocol",
+        "protocolVersion",
+        "appSessionId",
+        "appInstanceId",
+        "clientId",
+        "rendererId",
+        "viewId",
+        "state"
+      ],
+      "properties": {
+        "type": { "const": "lifecycle" },
+        "protocol": { "$ref": "#/$defs/protocolName" },
+        "protocolVersion": { "$ref": "#/$defs/protocolVersion" },
+        "appSessionId": { "$ref": "#/$defs/identifier" },
+        "appInstanceId": { "$ref": "#/$defs/identifier" },
+        "clientId": { "$ref": "#/$defs/identifier" },
+        "rendererId": { "$ref": "#/$defs/identifier" },
+        "viewId": { "$ref": "#/$defs/identifier" },
+        "state": { "$ref": "#/$defs/rendererState" }
+      }
+    },
+    "requestSnapshot": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type",
+        "protocol",
+        "protocolVersion",
+        "appSessionId",
+        "appInstanceId",
+        "clientId",
+        "rendererId",
+        "viewId"
+      ],
+      "properties": {
+        "type": { "const": "requestSnapshot" },
+        "protocol": { "$ref": "#/$defs/protocolName" },
+        "protocolVersion": { "$ref": "#/$defs/protocolVersion" },
+        "appSessionId": { "$ref": "#/$defs/identifier" },
+        "appInstanceId": { "$ref": "#/$defs/identifier" },
+        "clientId": { "$ref": "#/$defs/identifier" },
+        "rendererId": { "$ref": "#/$defs/identifier" },
+        "viewId": { "$ref": "#/$defs/identifier" }
+      }
+    }
+  }
+}
