@@ -357,14 +357,16 @@ fn semantic_node(explorer: &mut Explorer, can_send: bool, status: Option<&Status
             )
             .accelerator("ctrl+h"),
         ]);
-    if let Some(status) = status {
-        tree.location = format!(
-            "{} · {}{}",
-            tree.location,
+    // The session title carries the browsed path; the line under the filter
+    // shows only a transient status (refresh, errors), or nothing.
+    tree.location = match status {
+        Some(status) => format!(
+            "{}{}",
             if status.error { "Error: " } else { "" },
             status.message
-        );
-    }
+        ),
+        None => String::new(),
+    };
     UiNode::tree(UI_TREE_ID, tree)
 }
 
@@ -854,47 +856,50 @@ fn render_component_frame(
     }
 }
 
-/// Sidebar title for a browsed folder. At the project root it is the
-/// project's own name; below it, the path from that root with a leading
-/// slash (`/docs/agents`), so a deep folder reads as "where in the project"
-/// rather than a bare basename. Outside any root (or with no root) it falls
-/// back to the folder's name, or the whole path for a filesystem root.
+/// Sidebar title for a browsed folder: the project folder and the path
+/// under it, each ending in `/` so the row reads as a folder — `unpeel/` at
+/// the root, `unpeel/docs/agents/` below it. Outside any root (or with no
+/// root) it is the folder's own name, or the whole path for a filesystem
+/// root.
 fn folder_title(cwd: &std::path::Path, root: Option<&std::path::Path>) -> String {
+    let name = |path: &std::path::Path| {
+        path.file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| path.display().to_string())
+    };
     if let Some(root) = root
         && let Ok(relative) = cwd.strip_prefix(root)
-        && !relative.as_os_str().is_empty()
     {
-        let inside = relative
-            .components()
-            .map(|component| component.as_os_str().to_string_lossy())
-            .collect::<Vec<_>>()
-            .join("/");
-        return format!("/{inside}");
+        let mut title = name(root);
+        for component in relative.components() {
+            title.push('/');
+            title.push_str(&component.as_os_str().to_string_lossy());
+        }
+        title.push('/');
+        return title;
     }
-    cwd.file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| cwd.display().to_string())
+    format!("{}/", name(cwd))
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
-    fn folder_title_is_the_project_name_at_root_and_a_rooted_path_below_it() {
+    fn folder_title_is_the_project_folder_and_a_slash_terminated_path_below_it() {
         use std::path::Path;
         let root = Path::new("/Users/me/Dev/unpeel");
-        assert_eq!(super::folder_title(root, Some(root)), "unpeel");
+        assert_eq!(super::folder_title(root, Some(root)), "unpeel/");
         assert_eq!(
             super::folder_title(Path::new("/Users/me/Dev/unpeel/docs/agents"), Some(root)),
-            "/docs/agents"
+            "unpeel/docs/agents/"
         );
         // Outside the root, or without one, the folder name stands alone.
         assert_eq!(
             super::folder_title(Path::new("/tmp/notes"), Some(root)),
-            "notes"
+            "notes/"
         );
-        assert_eq!(super::folder_title(Path::new("/tmp/notes"), None), "notes");
-        assert_eq!(super::folder_title(Path::new("/"), None), "/");
+        assert_eq!(super::folder_title(Path::new("/tmp/notes"), None), "notes/");
+        assert_eq!(super::folder_title(Path::new("/"), None), "//");
     }
 
     use std::path::PathBuf;
@@ -1033,10 +1038,11 @@ mod tests {
             .unwrap()
             .to_string_lossy()
             .into_owned();
+        let _ = root_name;
         assert_eq!(
             location.trim_end(),
-            format!("  {root_name}"),
-            "the root shows its folder name, not a lone dot"
+            "",
+            "the session title carries the path; the row under the filter stays empty"
         );
         assert!(
             !location.contains(directory.path().to_string_lossy().as_ref()),
@@ -1100,10 +1106,8 @@ mod tests {
             .unwrap()
             .to_string_lossy()
             .into_owned();
-        assert_eq!(
-            tree.location,
-            format!("{root_name} · Error: Could not open entry")
-        );
+        let _ = root_name;
+        assert_eq!(tree.location, "Error: Could not open entry");
     }
 
     #[test]

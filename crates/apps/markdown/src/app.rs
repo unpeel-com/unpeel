@@ -262,19 +262,10 @@ impl App<'_> {
             .as_ref()
             .filter(|(_, at)| at.elapsed() < Duration::from_secs(3))
             .map(|(text, _)| text.as_str());
+        // The session title carries the file name; this row is state only.
         match message {
-            Some(message) => format!(
-                "{} · {save_state} · {}:{} · {message}",
-                file_name(&self.path),
-                row + 1,
-                col + 1
-            ),
-            None => format!(
-                "{} · {save_state} · {}:{}",
-                file_name(&self.path),
-                row + 1,
-                col + 1
-            ),
+            Some(message) => format!("{save_state} · {}:{} · {message}", row + 1, col + 1),
+            None => format!("{save_state} · {}:{}", row + 1, col + 1),
         }
     }
 
@@ -1821,8 +1812,8 @@ mod tests {
         let footer = row_text(&buffer, 7);
 
         assert!(
-            status.starts_with("  demo.md · Saved · 1:1"),
-            "title sits on top: {status}"
+            status.starts_with("  Saved · 1:1"),
+            "state row sits on top, without the file name: {status}"
         );
         assert!(!status.contains("Auto-save"), "the footer owns auto-save");
         assert!(padding.trim().is_empty(), "one empty row under the title");
@@ -1840,7 +1831,11 @@ mod tests {
             panic!("Markdown App must publish MarkdownEditor");
         };
         let title = editor.title.unwrap();
-        assert!(title.contains("demo.md · Saved · 1:1"));
+        assert!(title.starts_with("Saved · 1:1"));
+        assert!(
+            !title.contains("demo.md"),
+            "the session title carries the file name"
+        );
         assert!(!title.contains("Auto-save"));
         assert!(title.contains("saved manually"));
         assert!(

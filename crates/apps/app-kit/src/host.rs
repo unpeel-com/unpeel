@@ -179,14 +179,21 @@ impl AppReporter {
         self.write_context(&entry);
     }
 
-    /// Reports the current App document/resource for Unpeel's automatic title.
+    /// Reports the current App document/resource as the terminal's title:
+    /// inside Unpeel through the `app-title.json` marker (the Host folds it
+    /// into the sidebar row until the user renames it); standalone through
+    /// the ordinary OSC 2 window-title sequence, so iTerm, Terminal.app,
+    /// tmux, and friends show the same title an Unpeel row would.
     pub fn set_title(&self, text: &str) {
-        let Some(host) = &self.host else { return };
-        if !host.session_dir.is_dir() {
-            return;
-        }
         let text = single_line(text);
         if text.is_empty() {
+            return;
+        }
+        let Some(host) = &self.host else {
+            emit_terminal_title(&text);
+            return;
+        };
+        if !host.session_dir.is_dir() {
             return;
         }
         let body = serde_json::json!({
@@ -386,4 +393,17 @@ mod tests {
         assert_eq!(status["text"], "loading items");
         assert_eq!(title["text"], "Current note");
     }
+}
+
+/// OSC 2 (window title) for a standalone App. Only to a real terminal, and
+/// with the text kept to one line: a control byte would split the sequence.
+fn emit_terminal_title(text: &str) {
+    use std::io::{IsTerminal, Write};
+    let mut stdout = std::io::stdout();
+    if !stdout.is_terminal() {
+        return;
+    }
+    let clean: String = text.chars().filter(|c| !c.is_control()).collect();
+    let _ = write!(stdout, "\x1b]2;{clean}\x07");
+    let _ = stdout.flush();
 }
