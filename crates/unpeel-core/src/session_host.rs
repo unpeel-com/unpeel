@@ -67,6 +67,9 @@ const SESSION_HEARTBEAT_STALE_MS: u64 = 180_000;
 /// select-menu prompt. Fast enough that the attention badge feels immediate,
 /// cheap enough to run per live session (a substring scan of the viewport).
 const SESSION_MENU_SCAN_INTERVAL_MS: u64 = 500;
+/// `app-title.json` stat cadence: a retitle should land in the sidebar
+/// within a frame or two, and a stat costs nothing.
+const APP_TITLE_SCAN_INTERVAL_MS: u64 = 100;
 /// Foreground jobs change on user commands, so live runtime identity needs a
 /// tighter cadence than the heartbeat while remaining cheap per hosted PTY.
 const SESSION_RUNTIME_SCAN_INTERVAL_MS: u64 = 300;
@@ -4273,12 +4276,20 @@ fn apply_agent_terminal_title(session_id: &str, title: &str) -> bool {
         return false;
     }
     let title = title.to_string();
+    let applied = std::cell::Cell::new(false);
     let _ = update_manifest_session(session_id, |manifest| {
         // Re-check under the manifest lock; a rename may have landed since.
-        if !manifest.session.custom_title {
+        if !manifest.session.custom_title && manifest.session.label != title {
             manifest.session.label = title.clone();
+            applied.set(true);
         }
     });
+    // A label change is shared state every frontend shows: ping the bus so
+    // the worker rescans now instead of on its next interval, and the app
+    // wakes its own refresh.
+    if applied.get() {
+        crate::state_bus::announce(crate::state_bus::Change::SessionMarkers, None);
+    }
     false
 }
 
@@ -5587,30 +5598,10 @@ pub(crate) fn build_session_timer_jobs(inputs: SessionJobInputs) -> Vec<HostTime
         let mut url_tracker = crate::local_urls::LocalUrlTracker::default();
         let mut screen_tracker = ScreenChangeTracker::default();
         let mut ticks_since_probe: u32 = 0;
-        // App-title marker watch: (mtime, len) of `app-title.json`, so
-        // steady state costs one stat per tick and zero reads/writes.
-        let app_title_path = session_dir(&menu_session_id).join(APP_TITLE_MARKER);
-        let mut app_title_seen: Option<(std::time::SystemTime, u64)> = None;
-        let mut app_title_settled = false;
         HostTimerJob::new(
             Duration::from_millis(SESSION_MENU_SCAN_INTERVAL_MS),
             Duration::from_millis(SESSION_MENU_SCAN_INTERVAL_MS),
             move || {
-                if !app_title_settled {
-                    let stamp = fs::metadata(&app_title_path)
-                        .ok()
-                        .and_then(|meta| Some((meta.modified().ok()?, meta.len())));
-                    if let Some(stamp) = stamp {
-                        if app_title_seen != Some(stamp) {
-                            app_title_seen = Some(stamp);
-                            if let Some(title) =
-                                read_app_title_marker(&session_dir(&menu_session_id))
-                            {
-                                app_title_settled = apply_app_title(&menu_session_id, &title);
-                            }
-                        }
-                    }
-                }
                 let (screen, modes) = {
                     let mut viewport = viewport_for_menu.lock().unwrap();
                     (
@@ -5655,7 +5646,36 @@ pub(crate) fn build_session_timer_jobs(inputs: SessionJobInputs) -> Vec<HostTime
             },
         )
     };
-    let mut jobs: Vec<HostTimerJob> = vec![heartbeat_job, menu_job];
+    // App-title marker watch: (mtime, len) of `app-title.json`, one stat per
+    // tick and zero reads in steady state. Its own fast job rather than a
+    // rider on the viewport scan: an App retitling itself (Markdown on a
+    // file, Diffs on a branch) should reach the sidebar in well under a
+    // second, and the stat is far cheaper than parsing the screen. The job
+    // retires once a user title has permanently won.
+    let app_title_job = {
+        let session_id = session_id.clone();
+        let app_title_path = session_dir(&session_id).join(APP_TITLE_MARKER);
+        let mut app_title_seen: Option<(std::time::SystemTime, u64)> = None;
+        HostTimerJob::new(
+            Duration::from_millis(APP_TITLE_SCAN_INTERVAL_MS),
+            Duration::from_millis(APP_TITLE_SCAN_INTERVAL_MS),
+            move || {
+                let stamp = fs::metadata(&app_title_path)
+                    .ok()
+                    .and_then(|meta| Some((meta.modified().ok()?, meta.len())));
+                let Some(stamp) = stamp else { return true };
+                if app_title_seen == Some(stamp) {
+                    return true;
+                }
+                app_title_seen = Some(stamp);
+                match read_app_title_marker(&session_dir(&session_id)) {
+                    Some(title) => !apply_app_title(&session_id, &title),
+                    None => true,
+                }
+            },
+        )
+    };
+    let mut jobs: Vec<HostTimerJob> = vec![heartbeat_job, menu_job, app_title_job];
     if escape_cancels_turn {
         jobs.push(cancellation_job);
     }

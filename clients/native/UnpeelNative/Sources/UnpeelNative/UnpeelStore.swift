@@ -2988,6 +2988,11 @@ final class UnpeelStore: ObservableObject {
                 Self.sharedProjectOrderCache = nil
                 _ = change
                 self.scheduleRescan(after: 0)
+                // The Host worker rescans on the same ping; wake this
+                // window's projection refresh too instead of waiting out
+                // its poll interval, so a retitle or lifecycle change
+                // reaches the sidebar as soon as the worker has it.
+                self.remoteHostRuntime.requestImmediateRefresh()
             }
         }
         // A peer workspace instance asked this one to come forward (its
