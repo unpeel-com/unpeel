@@ -64,6 +64,10 @@ pub fn run(
     bridge
         .publish(UI_VIEW_ID, ui_revision, published.clone())
         .map_err(ui_bridge_error)?;
+    // The session title follows the folder being browsed (the Host folds it
+    // into the sidebar row until the user renames it). Written only when it
+    // changes: the reporter persists a marker file per call.
+    let mut session_title = String::new();
 
     loop {
         drain_bridge(
@@ -84,6 +88,11 @@ pub fn run(
             &mut published,
         )?;
         if needs_draw {
+            let title = folder_title(explorer.cwd());
+            if title != session_title {
+                reporter.set_title(&title);
+                session_title = title;
+            }
             let selected = explorer.selected();
             reporter.set_context(&serde_json::json!({
                 "cwd": explorer.cwd(),
@@ -815,6 +824,16 @@ fn render_component_frame(
     if !menu_open && let Some(position) = explorer.filter_cursor_position() {
         frame.set_cursor_position(position);
     }
+}
+
+
+/// Sidebar title for a browsed folder: its name, or the whole path when it
+/// has none (a filesystem root).
+fn folder_title(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| path.display().to_string())
 }
 
 #[cfg(test)]
