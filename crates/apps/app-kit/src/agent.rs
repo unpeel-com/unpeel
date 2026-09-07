@@ -162,6 +162,10 @@ pub struct AgentBridge {
     /// (`pane-layouts.json`), which the Mac app rewrites on every selection
     /// and layout change — the cheap trigger for an immediate re-probe.
     layout_stamp: Arc<Mutex<Option<std::time::SystemTime>>>,
+    /// Last seen stamp of the followed neighbor's `manifest.json`: the
+    /// other thing that can change the answer (it exited, was replaced, or
+    /// re-rooted) without the layout changing.
+    neighbor_stamp: Arc<Mutex<Option<std::time::SystemTime>>>,
 }
 
 /// Project/worktree identity of the agent this App would hand off to.
@@ -214,6 +218,44 @@ impl AgentBridge {
         let first = last.is_none();
         *last = stamp;
         // The very first observation just records the baseline.
+        !first
+    }
+
+    /// True when anything that can change the followed context changed since
+    /// the last call: the Controller's pane layout, or the followed
+    /// neighbor's manifest. Two `stat`s, no Host call — Apps ask on every UI
+    /// tick and probe only when this says so (plus a slow safety cadence).
+    pub fn context_changed(&self) -> bool {
+        let layout = self.layout_changed();
+        let neighbor = self.neighbor_changed();
+        layout || neighbor
+    }
+
+    fn neighbor_changed(&self) -> bool {
+        let Some(context) = self.project_context() else {
+            return false;
+        };
+        let Some(session_dir) = std::env::var_os("UNPEEL_SESSION_DIR").map(PathBuf::from) else {
+            return false;
+        };
+        let Some(sessions_root) = session_dir.parent() else {
+            return false;
+        };
+        let manifest = sessions_root
+            .join(&context.session_id)
+            .join("manifest.json");
+        let stamp = std::fs::metadata(&manifest)
+            .and_then(|meta| meta.modified())
+            .ok();
+        let mut last = self
+            .neighbor_stamp
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if *last == stamp {
+            return false;
+        }
+        let first = last.is_none();
+        *last = stamp;
         !first
     }
 
@@ -284,22 +326,24 @@ impl AgentBridge {
 fn resolve_agent_project_context(
     client: &mut McpClient,
 ) -> Result<AgentProjectContext, AgentError> {
+    // Following is about WHERE the neighbor works, not whether it is an
+    // agent: a plain terminal opened inside a worktree beside this App is
+    // the folder to show. Sending text still targets agents only. The
+    // neighbor answer is one cheap `current` call; the group listing is
+    // fetched only when there is no neighbor to follow.
+    if let Some(current) = client
+        .call_tool("sessions", &json!({ "action": "current" }))
+        .ok()
+        && let Some(context) = adjacent_follow_context(&current, None)
+    {
+        return Ok(context);
+    }
     let group = client
         .call_tool(
             "sessions",
             &json!({ "action": "list_group", "include_exited": false }),
         )
         .ok();
-    // Following is about WHERE the neighbor works, not whether it is an
-    // agent: a plain terminal opened inside a worktree beside this App is
-    // the folder to show. Sending text still targets agents only.
-    if let Some(current) = client
-        .call_tool("sessions", &json!({ "action": "current" }))
-        .ok()
-        && let Some(context) = adjacent_follow_context(&current, group.as_ref())
-    {
-        return Ok(context);
-    }
     let (session_id, label) = resolve_agent(client)?;
     let agents = client
         .call_tool("agents", &json!({ "action": "list" }))
