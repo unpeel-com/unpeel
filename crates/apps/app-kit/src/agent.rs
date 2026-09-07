@@ -155,9 +155,13 @@ pub struct AgentBridge {
     project_context: Arc<Mutex<Option<AgentProjectContext>>>,
     probing: Arc<AtomicBool>,
     /// One live MCP server per bridge, reused across refreshes: a probe on a
-    /// warm client costs a few milliseconds, so Apps can follow their
-    /// neighbor several times a second. Dropped and respawned on any error.
+    /// warm client costs a few milliseconds. Dropped and respawned on any
+    /// error.
     client: Arc<Mutex<Option<McpClient>>>,
+    /// Last seen modification stamp of the Controller's durable pane layout
+    /// (`pane-layouts.json`), which the Mac app rewrites on every selection
+    /// and layout change — the cheap trigger for an immediate re-probe.
+    layout_stamp: Arc<Mutex<Option<std::time::SystemTime>>>,
 }
 
 /// Project/worktree identity of the agent this App would hand off to.
@@ -187,6 +191,30 @@ impl AgentBridge {
     #[must_use]
     pub fn project_context(&self) -> Option<AgentProjectContext> {
         self.project_context.lock().ok()?.clone()
+    }
+
+    /// True when the Controller's durable pane layout changed since the last
+    /// call — the moment a sidebar-pinned App's neighbor can change. One
+    /// `stat` per call, so Apps can ask on every UI tick and refresh right
+    /// then instead of on a fixed cadence.
+    pub fn layout_changed(&self) -> bool {
+        let Some(path) = layout_file_path() else {
+            return false;
+        };
+        let stamp = std::fs::metadata(&path)
+            .and_then(|meta| meta.modified())
+            .ok();
+        let mut last = self
+            .layout_stamp
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if *last == stamp {
+            return false;
+        }
+        let first = last.is_none();
+        *last = stamp;
+        // The very first observation just records the baseline.
+        !first
     }
 
     /// Refresh the cached label off the UI thread, if hosted by Unpeel.
@@ -525,6 +553,15 @@ fn label_or(value: &Value, key: &str, fallback: &str) -> String {
     } else {
         label
     }
+}
+
+/// The Controller's durable pane layout for the home this Session lives in
+/// (`<home>/pane-layouts.json`), derived from the Host's session directory.
+fn layout_file_path() -> Option<PathBuf> {
+    let session_dir = PathBuf::from(std::env::var_os("UNPEEL_SESSION_DIR")?);
+    // <home>/app-sessions/<id> → <home>
+    let home = session_dir.parent()?.parent()?;
+    Some(home.join("pane-layouts.json"))
 }
 
 /// The `unpeel-host` that hosts this App. The Host exports its own binary
