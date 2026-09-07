@@ -861,7 +861,7 @@
       "path": "/mobile/openers",
       "body": {
         "selector": "file:text/markdown",
-        "opener": "app:unpeel.app.design"
+        "opener": "app:unpeel.app.filetree"
       },
       "expected": {
         "native": 400,
@@ -897,7 +897,7 @@
       "path": "/mobile/apps/open",
       "body": {
         "callerSessionID": "caller",
-        "appID": "unpeel.app.design",
+        "appID": "unpeel.app.filetree",
         "mediaType": "text/markdown",
         "resource": {
           "kind": "file",

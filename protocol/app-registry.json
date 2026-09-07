@@ -1,26 +1,4 @@
 {
-  "design": {
-    "id": "unpeel.app.design",
-    "channel": "stable",
-    "binary": "unpeel-design",
-    "name": "Unpeel Design",
-    "description": "Terminal visual designer over a folder of HTML artboards; files are the truth and edits write straight back to disk",
-    "tint": "#8B5CF6",
-    "media_types": [
-      "text/html"
-    ],
-    "file_extensions": {
-      "html": "text/html",
-      "htm": "text/html"
-    },
-    "resource_kinds": [
-      "folder"
-    ],
-    "try": [
-      "unpeel-design path/to/html-files",
-      "(needs a Kitty-graphics terminal: Ghostty or Unpeel)"
-    ]
-  },
   "diffs": {
     "id": "unpeel.app.diffs",
     "channel": "stable",

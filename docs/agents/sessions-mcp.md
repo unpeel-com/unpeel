@@ -207,8 +207,8 @@ state (selection-frequency updates cost no manifest churn or state-bus
 pings), never exposed for a pane that is not currently App-branded — a
 marker left behind by an exited App must not speak for the shell that
 remains — and always framed as app-authored data, never instructions; each
-App's public documentation defines its own `context` schema (Unpeel Design:
-selected file + line span; a markdown App: current file/heading). `open`
+App's public documentation defines its own `context` schema (the Markdown
+App: current file, cursor line, selection lines). `open`
 resolves only an installed catalog entry, derives caller/project/cwd Host-side,
 then — with no approval prompt: installing the App was the user's consent,
 and the App runs with the authority the agent already has (decided
@@ -263,18 +263,15 @@ absent until RoomFS/the Host worker exist — `describe` says so and points
 agents at the app's standalone command and root skill reference.
 
 Reference convention: an app can hand agents a token like
-`[mcp:unpeel.app.design hero.html LOC:12:32]`; the tool description and
+`[mcp:unpeel.app.markdown README.md LOC:12:32]`; the tool description and
 server instructions teach agents to resolve it by fetching that app's
-skill through `skills.get`. First installed app: `unpeel-design` (self-installs its manifest at
-startup; see `~/Dev/unpeel-app-design/src/agent_hook.rs`, which also implements
-"Send to agent" — pasting the token into an agent session through
-`unpeel-host __mcp__` sessions `send_text` (and therefore the same approval
-policy as any other inter-session write) — plus the project-local
-`.presence/<participant>/` heartbeat/selection/claim bridge and advisory
-`.presence/current-owner.json` its skill documents). This disposable
-standalone bridge uses the Link profile display name when available and keeps
-a one-release read fallback for `.unpeel-design/claims.json`; it is not the
-future authoritative Host `room.presence` lease.
+skill through `skills.get`. "Send to agent" in the shipped Apps is
+`unpeel-app-kit`'s handoff: it types the reference into the neighboring
+agent through `unpeel-host __mcp__` sessions `send_keys` (and therefore the
+same policy as any other inter-session write), resolving the Host through
+`UNPEEL_HOST_BIN`. (The earlier Unpeel Design App and its `.presence/`
+bridge were removed from the catalog on 2026-09-07; nothing in core refers
+to them.)
 
 ## Dual-era MCP transport (Cloudflare/MCP v2 review, 2026-08-23)
 

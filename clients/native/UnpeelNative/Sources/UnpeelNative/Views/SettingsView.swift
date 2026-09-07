@@ -2416,7 +2416,6 @@ private struct OpenResourcesSettingsRows: View {
     private func selectorTitle(_ selector: String) -> String {
         switch selector {
         case "file:text/markdown": "Markdown"
-        case "file:text/html": "HTML"
         case "file:text/csv": "CSV"
         case "resource:folder": "Folders"
         case "resource:git.working-tree": "Git changes"

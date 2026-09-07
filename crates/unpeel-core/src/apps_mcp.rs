@@ -1144,7 +1144,7 @@ mod tests {
     fn shipped_release_registry_is_valid_cli_catalog_data() {
         let entries =
             serde_json::from_str::<BTreeMap<String, RawCatalogApp>>(APP_CLI_REGISTRY).unwrap();
-        assert!(entries.len() >= 6);
+        assert!(entries.len() >= 5);
         assert_eq!(entries["markdown"].binary, "unpeel-markdown");
         assert_eq!(entries["usage"].id, "unpeel.app.usage");
 

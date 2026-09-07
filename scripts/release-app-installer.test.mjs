@@ -25,7 +25,7 @@ const appRegistry = JSON.parse(
   readFileSync(resolve(repoRoot, 'protocol/app-registry.json'), 'utf8')
 )
 
-function renderInstaller(root, app = 'design') {
+function renderInstaller(root, app = 'filetree') {
   const binary = `unpeel-${app}`
   const rendered = installerTemplate
     .replaceAll('__DEFAULT_CHANNEL__', 'beta')
@@ -40,7 +40,7 @@ function renderInstaller(root, app = 'design') {
 }
 
 function fixture() {
-  const root = mkdtempSync(resolve(tmpdir(), 'unpeel-design-installer-test-'))
+  const root = mkdtempSync(resolve(tmpdir(), 'unpeel-app-installer-test-'))
   const payload = resolve(root, 'payload')
   const mockBin = resolve(root, 'bin')
   const installDir = resolve(root, 'install')
@@ -48,20 +48,20 @@ function fixture() {
   mkdirSync(payload)
   mkdirSync(mockBin)
   const installer = renderInstaller(root)
-  const binary = resolve(payload, 'unpeel-design')
+  const binary = resolve(payload, 'unpeel-filetree')
   writeFileSync(binary, [
     '#!/bin/sh',
-    'echo "unpeel-design 0.1.0"',
+    'echo "unpeel-filetree 0.1.0"',
     ''
   ].join('\n'))
   chmodSync(binary, 0o755)
 
-  const archive = resolve(root, 'unpeel-design.tar.gz')
-  const tar = spawnSync('tar', ['-czf', archive, '-C', payload, 'unpeel-design'])
+  const archive = resolve(root, 'unpeel-filetree.tar.gz')
+  const tar = spawnSync('tar', ['-czf', archive, '-C', payload, 'unpeel-filetree'])
   assert.equal(tar.status, 0, tar.stderr?.toString())
   const digest = createHash('sha256').update(readFileSync(archive)).digest('hex')
-  const sidecar = resolve(root, 'unpeel-design.tar.gz.sha256')
-  writeFileSync(sidecar, `${digest}  unpeel-design-latest-test.tar.gz\n`)
+  const sidecar = resolve(root, 'unpeel-filetree.tar.gz.sha256')
+  writeFileSync(sidecar, `${digest}  unpeel-filetree-latest-test.tar.gz\n`)
 
   const curl = resolve(mockBin, 'curl')
   writeFileSync(curl, `#!/bin/sh
@@ -108,7 +108,7 @@ test('App installer requires a checksum sidecar', () => {
     const result = runInstaller(state, resolve(state.root, 'missing.sha256'))
     assert.notEqual(result.status, 0)
     assert.match(result.stderr, /checksum sidecar is unavailable/)
-    assert.equal(existsSync(resolve(state.installDir, 'unpeel-design')), false)
+    assert.equal(existsSync(resolve(state.installDir, 'unpeel-filetree')), false)
   } finally {
     rmSync(state.root, { recursive: true, force: true })
   }
@@ -117,12 +117,12 @@ test('App installer requires a checksum sidecar', () => {
 test('App installer rejects a checksum mismatch', () => {
   const state = fixture()
   const wrong = resolve(state.root, 'wrong.sha256')
-  writeFileSync(wrong, `${'a'.repeat(64)}  unpeel-design.tar.gz\n`)
+  writeFileSync(wrong, `${'a'.repeat(64)}  unpeel-filetree.tar.gz\n`)
   try {
     const result = runInstaller(state, wrong)
     assert.notEqual(result.status, 0)
     assert.match(result.stderr, /checksum mismatch/)
-    assert.equal(existsSync(resolve(state.installDir, 'unpeel-design')), false)
+    assert.equal(existsSync(resolve(state.installDir, 'unpeel-filetree')), false)
   } finally {
     rmSync(state.root, { recursive: true, force: true })
   }
@@ -133,8 +133,8 @@ test('App installer verifies and installs without mutating an Unpeel registry', 
   try {
     const result = runInstaller(state)
     assert.equal(result.status, 0, result.stderr)
-    assert.equal(existsSync(resolve(state.installDir, 'unpeel-design')), true)
-    const appHome = resolve(state.unpeelHome, 'apps', 'unpeel.app.design')
+    assert.equal(existsSync(resolve(state.installDir, 'unpeel-filetree')), true)
+    const appHome = resolve(state.unpeelHome, 'apps', 'unpeel.app.filetree')
     assert.equal(existsSync(appHome), false)
     assert.match(result.stdout, /detects it automatically/)
   } finally {
@@ -144,7 +144,6 @@ test('App installer verifies and installs without mutating an Unpeel registry', 
 
 test('App registry covers every standalone App with a stable id', () => {
   assert.deepEqual(Object.keys(appRegistry), [
-    'design',
     'diffs',
     'filetree',
     'github-issues',
