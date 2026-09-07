@@ -9,6 +9,10 @@ members = [
     "unpeel-cli",
     "unpeel-native-bridge",
 ]
+# The first-party Apps and the App Kit are their own workspace
+# (`crates/apps/Cargo.toml`): separate cadence, separate versions, and a
+# TUI dependency tree the Host's gates should not pay for.
+exclude = ["apps"]
 
 [workspace.package]
 version = "0.5.3"

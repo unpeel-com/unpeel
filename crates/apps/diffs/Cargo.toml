@@ -11,11 +11,7 @@ ratatui = { version = "0.30.2", default-features = false, features = ["crossterm
 serde_json = "1"
 syntect = { version = "5.2", default-features = false, features = ["default-fancy"] }
 unicode-width = "0.2"
-unpeel-app-kit = { path = "../unpeel-app-kit" }
+unpeel-app-kit = { path = "../app-kit" }
 
 [dev-dependencies]
 tempfile = "3"
-
-[profile.release]
-lto = true
-strip = true

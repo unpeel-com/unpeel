@@ -2027,7 +2027,6 @@ fn visible_cells(line: &str, offset: usize, width: u16) -> String {
     result
 }
 
-
 /// Sidebar title for a working tree: `<folder> · <branch>` (short commit id
 /// when detached), or just the folder when Git has no answer.
 fn session_title_for(repository: &crate::git::Repository) -> String {

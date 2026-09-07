@@ -210,6 +210,8 @@ used by the release scripts.
 ```bash
 cargo build --manifest-path crates/Cargo.toml -p unpeel-cli -p unpeel-host
 cargo build --manifest-path crates/unpeel-attach/Cargo.toml   # standalone crate
+cargo build --release --manifest-path crates/apps/Cargo.toml   # first-party Apps + App Kit (own workspace)
+bun run apps:link                                              # dev mode: link those builds into ~/.unpeel/apps/bin
 UNPEEL_HOME=/tmp/unpeel-dev crates/target/debug/unpeel serve  # isolated state
 cargo test --manifest-path crates/Cargo.toml --workspace
 crates/unpeel-cli/tests/run.sh          # the real-PTY case matrix (~8 min)

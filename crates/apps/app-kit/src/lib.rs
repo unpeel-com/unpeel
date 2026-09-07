@@ -20,7 +20,6 @@ mod context;
 mod drag;
 mod drop_target;
 mod editor;
-mod opener;
 mod explorer;
 mod gauge;
 mod host;
@@ -37,6 +36,7 @@ mod markdown_text_area;
 mod media;
 mod menu;
 mod navigator;
+mod opener;
 mod path;
 mod pointer;
 #[cfg(feature = "ui-bridge")]
@@ -99,7 +99,6 @@ pub use drop_target::{
     DropTargetSurface,
 };
 pub use editor::{EditorBridge, EditorError, open_in_editor};
-pub use opener::{OpenOutcome, open_resource};
 pub use explorer::{
     Explorer, ExplorerEntry, ExplorerEntryDetail, ExplorerEvent, ExplorerInput, ExplorerTheme,
     ExplorerWidget,
@@ -145,6 +144,7 @@ pub use media::{
 pub use media::{Media, MediaError, MediaPicker, MediaProtocolType, MediaWidget};
 pub use menu::{MenuItem, MenuItemTone, MenuTheme, PopupMenu};
 pub use navigator::Navigator;
+pub use opener::{OpenOutcome, open_resource};
 pub use path::display_path_from_root;
 pub use pointer::{TerminalPointerPhase, TerminalPointerState};
 pub use runner::{App, AppAction, AppValue, Flow, Reduce, Session, run_app};

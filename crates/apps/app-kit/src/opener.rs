@@ -13,7 +13,7 @@ use std::process::{Command, Stdio};
 
 use serde_json::Value;
 
-use crate::agent::{is_hosted, AgentError};
+use crate::agent::{AgentError, is_hosted};
 use crate::editor::open_in_editor;
 
 /// How a resource ended up being opened.
@@ -69,7 +69,9 @@ pub fn open_resource(path: impl AsRef<Path>) -> Result<OpenOutcome, AgentError> 
                 .to_owned();
             Ok(OpenOutcome::App(name))
         }
-        other => Err(AgentError::new(format!("no opener for this file ({other:?})"))),
+        other => Err(AgentError::new(format!(
+            "no opener for this file ({other:?})"
+        ))),
     }
 }
 

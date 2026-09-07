@@ -45,7 +45,10 @@ fn component_kinds_match_their_wire_tags_and_capabilities() {
         // `kind()` must stay identical to the `type` tag Swift, web, and the
         // schema switch on when deserializing this exact value.
         let wire = serde_json::to_value(root).unwrap();
-        assert_eq!(wire.get("type").and_then(|tag| tag.as_str()), Some(root.kind()));
+        assert_eq!(
+            wire.get("type").and_then(|tag| tag.as_str()),
+            Some(root.kind())
+        );
 
         // Capabilities are the renderer feature flags; they are wire too.
         let (kind, capability) = match root {
@@ -90,10 +93,7 @@ fn event_values_have_frozen_tagged_wire_shapes() {
         (UiEventValue::Integer(-1), "integer"),
         (UiEventValue::Number(0.5), "number"),
         (UiEventValue::Text("go".to_owned()), "text"),
-        (
-            UiEventValue::TextList(vec!["a".to_owned()]),
-            "textList",
-        ),
+        (UiEventValue::TextList(vec!["a".to_owned()]), "textList"),
         (
             UiEventValue::TextEdit(TextEdit::new(TextRange::default(), "x")),
             "textEdit",
@@ -106,13 +106,7 @@ fn event_values_have_frozen_tagged_wire_shapes() {
     assert_eq!(cases.len(), 9);
     for (value, tag) in cases {
         let wire = serde_json::to_value(&value).unwrap();
-        assert_eq!(
-            wire.get("type").and_then(|entry| entry.as_str()),
-            Some(tag)
-        );
-        assert_eq!(
-            serde_json::from_value::<UiEventValue>(wire).unwrap(),
-            value
-        );
+        assert_eq!(wire.get("type").and_then(|entry| entry.as_str()), Some(tag));
+        assert_eq!(serde_json::from_value::<UiEventValue>(wire).unwrap(), value);
     }
 }

@@ -33,6 +33,7 @@ makes sense for coding, it does not belong here.
 | `crates/unpeel-cli` | The `unpeel` CLI and its PTY test matrix (`crates/unpeel-cli/tests`) |
 | `crates/unpeel-attach` | Terminal attach client (standalone crate, ships next to `unpeel-host`) |
 | `crates/unpeel-native-bridge` | Panic-contained C ABI over `unpeel-core` that the Mac app links (workspace member, path deps) |
+| `crates/apps/` | The first-party Unpeel Apps (`markdown`, `filetree`, `diffs`, `usage`) and `app-kit`, their Ratatui App Kit — a separate Cargo workspace, released per App by `release:app`, run in dev mode with `bun run apps:link` |
 | `clients/native` | The macOS app (Swift + SwiftUI + libghostty) and its build/release scripts |
 | `clients/ios` | The iPhone/iPad Controller (xcodegen project `UnpeelIOS/`) |
 | `clients/shared/UnpeelShared` | Swift package shared by both apps: pairing, Host protocol client, Relay E2E, icon art, the runtime catalog copy |
@@ -102,6 +103,7 @@ makes sense for coding, it does not belong here.
 ```sh
 cargo test --manifest-path crates/Cargo.toml --workspace          # includes unpeel-native-bridge
 cargo test --manifest-path crates/unpeel-attach/Cargo.toml
+cargo test --manifest-path crates/apps/Cargo.toml --workspace         # first-party Apps + App Kit (own workspace)
 cargo clippy --manifest-path crates/Cargo.toml --workspace --all-targets --all-features -- -D warnings
 scripts/ci/check-portable-core.sh          # unpeel-core without the Host (controller-core + wasm32 clippy)
 crates/unpeel-cli/tests/run.sh            # the PTY matrix (real binaries, ~10 min); ./run.sh <filter> for a subset

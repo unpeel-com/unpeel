@@ -165,9 +165,9 @@ curl -fsSL https://unpeel.com/install.sh | sh
   `/install/*` route (no per-app route patterns) and
   `scripts/release-app.mjs`. Publishing:
   `bun run release:app -- --app <app> --channel beta [--dry-run]` builds
-  the macos-universal binary from the **sibling checkout
-  `~/Dev/unpeel-app-<app>`** (design additionally path-depends on
-  `~/Dev/unpeel-surface`), lipos/ad-hoc signs/tars it, and uploads
+  the macos-universal binary from **`crates/apps/<app>`** (the first-party
+  Apps' own workspace; an App not yet moved in falls back to the sibling
+  checkout `~/Dev/unpeel-app-<app>`), lipos/ad-hoc signs/tars it, and uploads
   versioned + `-latest` tarballs and sha256 sidecars under
   `<channel>/<app>/`. Linux tarballs attach with `--linux-*` like the CLI.
   Hosts may install the same assets directly with

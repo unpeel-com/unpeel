@@ -640,7 +640,12 @@ mod tests {
             "left": { "kind": "terminal", "state": "exited", "cwd": "/tmp/old", "session_id": "gone" },
             "right": { "kind": "agent", "state": "running", "cwd": "/tmp/main", "session_id": "agent", "label": "Claude" },
             "up": null, "down": null } } });
-        assert_eq!(super::adjacent_follow_context(&current, None).unwrap().session_id, "agent");
+        assert_eq!(
+            super::adjacent_follow_context(&current, None)
+                .unwrap()
+                .session_id,
+            "agent"
+        );
         let none = json!({ "pane_context": { "neighbors": { "left": null, "right": null, "up": null, "down": null } } });
         assert!(super::adjacent_follow_context(&none, None).is_none());
     }

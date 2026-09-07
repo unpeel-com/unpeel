@@ -10,6 +10,8 @@
     "validate:runtimes": "bun run check:runtimes && bun run test:runtimes && cargo test --manifest-path crates/Cargo.toml -p unpeel-core runtime_catalog",
     "release:cli": "node scripts/release-cli.mjs",
     "release:app": "node scripts/release-app.mjs",
+    "apps:link": "scripts/apps-link.sh",
+    "test:apps": "cargo test --manifest-path crates/apps/Cargo.toml --workspace",
     "release:cli:linux": "scripts/build-cli-linux.sh",
     "release:mac": "clients/native/release.sh",
     "dev:native": "clients/native/dev-app.sh",

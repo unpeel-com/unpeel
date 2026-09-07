@@ -13,13 +13,12 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Position, Rect};
 use ratatui::{Frame, Terminal};
 use unpeel_app_kit::{
-    OpenOutcome, open_resource,
     AgentBridge, AppContext, AppMetadata, AppReporter, DoubleClickTracker, DragSurface,
     EditorBridge, Explorer, ExplorerEvent, ExplorerInput, ExplorerTheme, FooterAction,
-    KeyboardEnhancementGuard, KitTheme, MenuTheme, PopupMenu, SemanticMenu, SemanticMenuAnchor,
-    SemanticMenuItem, SemanticMenuPresentation, ThemeMonitor, TreeState, TreeTheme, UiAction,
-    UiBridge, UiBridgeEvent, UiComponent, UiEventKind, UiEventOutcome, UiEventValue, UiNode,
-    clipboard_sequence, tree_delta_operations,
+    KeyboardEnhancementGuard, KitTheme, MenuTheme, OpenOutcome, PopupMenu, SemanticMenu,
+    SemanticMenuAnchor, SemanticMenuItem, SemanticMenuPresentation, ThemeMonitor, TreeState,
+    TreeTheme, UiAction, UiBridge, UiBridgeEvent, UiComponent, UiEventKind, UiEventOutcome,
+    UiEventValue, UiNode, clipboard_sequence, open_resource, tree_delta_operations,
 };
 
 const UI_VIEW_ID: &str = "main";
@@ -850,7 +849,6 @@ fn render_component_frame(
     }
 }
 
-
 /// Sidebar title for a browsed folder. At the project root it is the
 /// project's own name; below it, the path from that root with a leading
 /// slash (`/docs/agents`), so a deep folder reads as "where in the project"
@@ -886,7 +884,10 @@ mod tests {
             "/docs/agents"
         );
         // Outside the root, or without one, the folder name stands alone.
-        assert_eq!(super::folder_title(Path::new("/tmp/notes"), Some(root)), "notes");
+        assert_eq!(
+            super::folder_title(Path::new("/tmp/notes"), Some(root)),
+            "notes"
+        );
         assert_eq!(super::folder_title(Path::new("/tmp/notes"), None), "notes");
         assert_eq!(super::folder_title(Path::new("/"), None), "/");
     }

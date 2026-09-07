@@ -1649,6 +1649,9 @@ impl UiSnapshot {
 /// efficient. `replaceRoot` remains a complete fallback for uncommon changes.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "camelCase", rename_all_fields = "camelCase")]
+// A wire delta: one variant per component-tree edit, sized by its payload.
+// Boxing ListItem would only move the allocation, not the wire shape.
+#[allow(clippy::large_enum_variant)]
 pub enum UiDeltaOperation {
     ReplaceRoot {
         root: UiNode,

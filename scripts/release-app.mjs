@@ -8,9 +8,11 @@
 //   <channel>/<app>/unpeel-<app>-latest-<target>.tar.gz      (5-min cache)
 //   <channel>/<app>/unpeel-<app>-latest-<target>.tar.gz.sha256
 //
-// Every app crate lives in the sibling repo ~/Dev/unpeel-app-<app> and names
-// its binary unpeel-<app>. `protocol/app-registry.json` is the one
-// serving/publishing allowlist; the Worker route itself is shared.
+// First-party App crates live in this repo under crates/apps/<app> (their own
+// Cargo workspace); an App not yet moved in is built from the sibling repo
+// ~/Dev/unpeel-app-<app>. Either way the binary is unpeel-<app>.
+// `protocol/app-registry.json` is the one serving/publishing allowlist; the
+// Worker route itself is shared.
 //
 // Usage (from a Mac — builds the macos-universal tarball itself):
 //   node scripts/release-app.mjs --app usage --channel beta [--dry-run]
@@ -20,7 +22,7 @@
 
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -58,7 +60,10 @@ if (!KNOWN_APPS.includes(app)) {
   throw new Error(`--app must be one of: ${KNOWN_APPS.join(', ')}`)
 }
 const bin = `unpeel-${app}`
-const designDir = resolve(repoRoot, `../unpeel-app-${app}`)
+const inRepoDir = resolve(repoRoot, 'crates/apps', app)
+const designDir = existsSync(resolve(inRepoDir, 'Cargo.toml'))
+  ? inRepoDir
+  : resolve(repoRoot, `../unpeel-app-${app}`)
 
 const channel = String(args.channel ?? '')
 if (!['alpha', 'beta', 'stable'].includes(channel)) {
@@ -78,7 +83,7 @@ const manifest = readFileSync(resolve(designDir, 'Cargo.toml'), 'utf8')
 const version = String(
   args.version ?? manifest.match(/^version\s*=\s*"([^"]+)"/m)?.[1] ?? ''
 )
-if (!version) throw new Error(`could not read version from unpeel-app-${app}/Cargo.toml`)
+if (!version) throw new Error(`could not read version from ${designDir}/Cargo.toml`)
 
 function run(command, commandArgs, options = {}) {
   console.log(`$ ${command} ${commandArgs.join(' ')}`)

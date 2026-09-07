@@ -56,3 +56,6 @@ __pycache__
 
 # Operator-local agent context
 CLAUDE.local.md
+
+# First-party Apps workspace (crates/apps/Cargo.toml)
+crates/apps/target

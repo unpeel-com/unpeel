@@ -1,0 +1,47 @@
+# First-party Unpeel Apps + App Kit (crates/apps, their own workspace).
+name: Apps
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'crates/apps/**'
+      - 'protocol/app-registry.json'
+      - '.github/workflows/apps.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'crates/apps/**'
+      - 'protocol/app-registry.json'
+      - '.github/workflows/apps.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  apps:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/apps
+      - name: Format
+        run: cargo fmt --manifest-path crates/apps/Cargo.toml --all -- --check
+      - name: Clippy
+        run: cargo clippy --manifest-path crates/apps/Cargo.toml --workspace --all-targets --locked -- -D warnings
+      - name: Tests
+        run: cargo test --manifest-path crates/apps/Cargo.toml --workspace --locked
+      - name: Release builds
+        run: cargo build --manifest-path crates/apps/Cargo.toml --workspace --release --locked
+      - name: Every registry App that lives here builds its binary
+        run: |
+          set -e
+          for slug in $(python3 -c "import json;print(' '.join(json.load(open('protocol/app-registry.json'))))"); do
+            if [ -f "crates/apps/$slug/Cargo.toml" ]; then
+              test -x "crates/apps/target/release/unpeel-$slug"
+            fi
+          done

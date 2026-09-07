@@ -1,0 +1,14 @@
+# The first-party Unpeel Apps and the App Kit they are built on — one Cargo
+# workspace, deliberately separate from the Host workspace in `crates/`
+# (which `exclude`s this directory): Apps release on their own cadence and
+# version, and their TUI dependency tree must not slow the Host's gates.
+#
+#   cargo build --release --manifest-path crates/apps/Cargo.toml
+#   bun run apps:link      # dev mode: link every App build into ~/.unpeel/apps/bin
+[workspace]
+resolver = "2"
+members = ["app-kit", "markdown", "filetree", "diffs", "usage"]
+
+[profile.release]
+lto = true
+strip = true
