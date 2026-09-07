@@ -154,6 +154,10 @@ pub struct AgentBridge {
     label: Arc<Mutex<Option<String>>>,
     project_context: Arc<Mutex<Option<AgentProjectContext>>>,
     probing: Arc<AtomicBool>,
+    /// One live MCP server per bridge, reused across refreshes: a probe on a
+    /// warm client costs a few milliseconds, so Apps can follow their
+    /// neighbor several times a second. Dropped and respawned on any error.
+    client: Arc<Mutex<Option<McpClient>>>,
 }
 
 /// Project/worktree identity of the agent this App would hand off to.
@@ -193,10 +197,27 @@ impl AgentBridge {
         let label = Arc::clone(&self.label);
         let project_context = Arc::clone(&self.project_context);
         let probing = Arc::clone(&self.probing);
+        let shared_client = Arc::clone(&self.client);
         std::thread::spawn(move || {
-            let found = McpClient::spawn()
-                .and_then(|mut client| resolve_agent_project_context(&mut client))
-                .ok();
+            let found = {
+                let mut slot = shared_client
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let result = match slot.as_mut() {
+                    Some(client) => resolve_agent_project_context(client),
+                    None => McpClient::spawn().and_then(|mut client| {
+                        let result = resolve_agent_project_context(&mut client);
+                        *slot = Some(client);
+                        result
+                    }),
+                };
+                if result.is_err() {
+                    // A failed or exited server is not retried in place: the
+                    // next refresh spawns a fresh one.
+                    *slot = None;
+                }
+                result.ok()
+            };
             if let Ok(mut slot) = label.lock() {
                 *slot = found.as_ref().map(|context| context.label.clone());
             }

@@ -66,6 +66,11 @@ const OPEN_IN_EDITOR_ACTION: &str = "open-in-editor";
 const SEND_TO_AGENT_ACTION: &str = "send-to-agent";
 const COPY_ACTION: &str = "copy";
 
+/// How often the App asks the Host who is beside it (a warm probe costs a
+/// few milliseconds); following a selected worktree session should feel
+/// immediate.
+const AGENT_CONTEXT_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
+
 pub fn run(
     mut app: App,
     follow_agent_context: bool,
@@ -156,7 +161,7 @@ pub fn run(
                 needs_draw = true;
             }
             if follow_agent_context
-                && last_agent_context_refresh.elapsed() >= Duration::from_secs(1)
+                && last_agent_context_refresh.elapsed() >= AGENT_CONTEXT_REFRESH_INTERVAL
             {
                 last_agent_context_refresh = Instant::now();
                 let app_context_changed = app_context.refresh();
