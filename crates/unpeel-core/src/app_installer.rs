@@ -212,6 +212,81 @@ pub fn install(home: &Path, app_id: &str) -> Result<PathBuf, String> {
     Ok(installed)
 }
 
+/// Development mode: point the Host's managed slot for an official App at a
+/// local build instead of a downloaded release. The Host resolves
+/// `~/.unpeel/apps/bin/<binary>` first, so a symlink there wins over PATH
+/// and over any installed copy — and follows every `cargo build`, since
+/// the toolchain replaces the target as a new inode. Nothing is verified:
+/// this is the developer's own binary on the developer's own machine.
+pub fn link(home: &Path, app_id: &str, executable: &Path) -> Result<PathBuf, String> {
+    let app = apps_mcp::catalog_app(app_id)
+        .ok_or_else(|| format!("unknown or unsupported App id {app_id:?}"))?;
+    if !executable.is_absolute() {
+        return Err("the executable must be an absolute path".into());
+    }
+    let metadata = std::fs::metadata(executable)
+        .map_err(|error| format!("cannot read {}: {error}", executable.display()))?;
+    #[cfg(unix)]
+    let runnable = {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+    };
+    #[cfg(not(unix))]
+    let runnable = metadata.is_file();
+    if !runnable {
+        return Err(format!(
+            "{} is not an executable file",
+            executable.display()
+        ));
+    }
+    let dir = install_dir(home);
+    std::fs::create_dir_all(&dir).map_err(|error| format!("create {}: {error}", dir.display()))?;
+    let target = binary_path(home, &app);
+    // Replace whatever is there (a downloaded copy or an older link) through
+    // a fresh symlink renamed into place, so a running instance keeps its
+    // old inode and a new launch sees the new one.
+    let staged = dir.join(format!(".{}.link.part", app.binary));
+    let _ = std::fs::remove_file(&staged);
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(executable, &staged)
+        .map_err(|error| format!("link {}: {error}", staged.display()))?;
+    #[cfg(not(unix))]
+    return Err("linking Apps is only supported on Unix".into());
+    std::fs::rename(&staged, &target)
+        .map_err(|error| format!("replace {}: {error}", target.display()))?;
+    crate::state_bus::announce(crate::state_bus::Change::AppState, None);
+    Ok(target)
+}
+
+/// Undo `link`: remove the managed slot only when it is a symlink, so a
+/// downloaded release is never deleted by the dev-mode verb.
+pub fn unlink(home: &Path, app_id: &str) -> Result<bool, String> {
+    let app = apps_mcp::catalog_app(app_id)
+        .ok_or_else(|| format!("unknown or unsupported App id {app_id:?}"))?;
+    let target = binary_path(home, &app);
+    match std::fs::symlink_metadata(&target) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            std::fs::remove_file(&target)
+                .map_err(|error| format!("remove {}: {error}", target.display()))?;
+            crate::state_bus::announce(crate::state_bus::Change::AppState, None);
+            Ok(true)
+        }
+        Ok(_) => Err(format!(
+            "{} is an installed release, not a link; leave it or reinstall over it",
+            target.display()
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("inspect {}: {error}", target.display())),
+    }
+}
+
+/// True when the managed slot is a dev-mode link rather than a release.
+pub fn is_linked(home: &Path, app: &CatalogApp) -> bool {
+    std::fs::symlink_metadata(binary_path(home, app))
+        .map(|metadata| metadata.file_type().is_symlink())
+        .unwrap_or(false)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AppStatus {
@@ -235,7 +310,14 @@ pub fn status(home: &Path, app: &CatalogApp) -> AppStatus {
     AppStatus {
         id: app.id.clone(),
         name: app.name.clone(),
-        state: if path.is_some() { "ready" } else { "missing" }.into(),
+        state: if path.is_none() {
+            "missing"
+        } else if is_linked(home, app) {
+            "linked"
+        } else {
+            "ready"
+        }
+        .into(),
         command: app.binary.clone(),
         media_types: app.media_types.clone(),
         file_extensions: app.file_extensions.clone(),
@@ -298,6 +380,52 @@ pub fn installed_wire() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn link_points_the_managed_slot_at_a_local_build_and_unlink_only_removes_links() {
+        let home = tempfile::tempdir().unwrap();
+        let build = tempfile::tempdir().unwrap();
+        let exe = build.path().join("unpeel-filetree");
+        std::fs::write(&exe, "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let linked = link(home.path(), "unpeel.app.filetree", &exe).unwrap();
+        assert_eq!(linked, home.path().join("apps/bin/unpeel-filetree"));
+        assert_eq!(std::fs::read_link(&linked).unwrap(), exe);
+        let app = apps_mcp::catalog_app("unpeel.app.filetree").unwrap();
+        assert!(is_linked(home.path(), &app));
+        assert_eq!(status(home.path(), &app).state, "linked");
+
+        // Relinking replaces in place; a relative or missing target is refused.
+        link(home.path(), "unpeel.app.filetree", &exe).unwrap();
+        assert!(link(
+            home.path(),
+            "unpeel.app.filetree",
+            Path::new("target/release/x")
+        )
+        .is_err());
+        assert!(link(
+            home.path(),
+            "unpeel.app.filetree",
+            &build.path().join("nope")
+        )
+        .is_err());
+        assert!(link(home.path(), "unpeel.app.nope", &exe).is_err());
+
+        assert!(unlink(home.path(), "unpeel.app.filetree").unwrap());
+        assert!(!linked.exists());
+        assert!(!unlink(home.path(), "unpeel.app.filetree").unwrap());
+
+        // A real (non-link) file in the slot is never removed by unlink.
+        std::fs::create_dir_all(linked.parent().unwrap()).unwrap();
+        std::fs::write(&linked, b"release").unwrap();
+        assert!(unlink(home.path(), "unpeel.app.filetree").is_err());
+        assert!(linked.exists());
+    }
 
     fn app() -> CatalogApp {
         CatalogApp {

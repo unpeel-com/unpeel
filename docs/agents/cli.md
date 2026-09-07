@@ -185,6 +185,8 @@ Linux/SSH Host:
 ```text
 unpeel apps list [--json]
 unpeel apps install <app-id> [--check] [--yes] [--json]
+unpeel apps link <app-id> <executable>       # dev mode: symlink a local build into the slot
+unpeel apps unlink <app-id>                  # remove only such a link
 unpeel open <path> [--with <app-id>] [--media-type <type>] [--json]
 unpeel open git:working-tree [--with diffs] [--json]
 unpeel open <resource-id> --kind <resource-kind> [--with <app-id>] [--json]

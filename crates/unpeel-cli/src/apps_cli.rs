@@ -9,10 +9,16 @@ unpeel apps — Host-side Unpeel Apps
 
   unpeel apps list [--json]
   unpeel apps install <app-id> [--check] [--yes] [--json]
+  unpeel apps link <app-id> <executable>
+  unpeel apps unlink <app-id>
 
 Apps install under ~/.unpeel/apps/bin after the release tarball is verified
 against its mandatory SHA-256 sidecar. --check never downloads anything.
-Interactive installs ask first; noninteractive installs require --yes.";
+Interactive installs ask first; noninteractive installs require --yes.
+
+link is development mode: it points the managed slot at a local build (a
+symlink, so every rebuild is picked up by the next launch) instead of a
+downloaded release. unlink removes only such a link.";
 
 pub fn run(args: &[String]) -> i32 {
     let json = args.iter().any(|arg| arg == "--json");
@@ -36,6 +42,8 @@ pub fn run(args: &[String]) -> i32 {
         }
         ["list"] => list(json),
         ["install", app_id] => install(app_id, check, yes, json),
+        ["link", app_id, executable] => link(app_id, executable),
+        ["unlink", app_id] => unlink(app_id),
         _ => {
             eprintln!("{HELP}");
             1
@@ -136,4 +144,49 @@ fn confirm_install(app_name: &str) -> Result<bool, String> {
         answer.trim().to_ascii_lowercase().as_str(),
         "y" | "yes"
     ))
+}
+
+fn link(app_id: &str, executable: &str) -> i32 {
+    let home = unpeel_core::app_paths::unpeel_home();
+    let path = std::path::Path::new(executable);
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    };
+    match app_installer::link(&home, app_id, &path) {
+        Ok(target) => {
+            unpeel_core::state_bus::flush();
+            println!("{} -> {}", target.display(), path.display());
+            0
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            1
+        }
+    }
+}
+
+fn unlink(app_id: &str) -> i32 {
+    let home = unpeel_core::app_paths::unpeel_home();
+    match app_installer::unlink(&home, app_id) {
+        Ok(removed) => {
+            unpeel_core::state_bus::flush();
+            println!(
+                "{}",
+                if removed {
+                    "unlinked"
+                } else {
+                    "nothing linked"
+                }
+            );
+            0
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            1
+        }
+    }
 }
