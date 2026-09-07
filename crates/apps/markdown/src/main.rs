@@ -95,15 +95,41 @@ fn main() -> color_eyre::Result<()> {
             }
             Ok(())
         } else {
-            status.set_title(&display_name(&path));
-            status.set_status(&editing_status(&path));
-            status.flush();
-            App::open_with_autosave(path, theme, start::read_autosave(install::APP_ID))?.run(
-                terminal,
-                &mut status,
-                &mut ui_bridge,
-                &mut ui_revision,
-            )
+            // A file opened directly (the opener, an agent, a CLI argument)
+            // still belongs to a project: browse that project's Markdown
+            // from here. The vault is the Session's project root (the
+            // active worktree) when the file lives inside it, else the
+            // file's own folder; leaving the editor lands in that list
+            // instead of ending the App.
+            let vault = app_context
+                .current_root()
+                .filter(|root| path.starts_with(root))
+                .map(Path::to_path_buf)
+                .or_else(|| path.parent().map(Path::to_path_buf))
+                .unwrap_or_else(|| path.clone());
+            let vault_title = display_name(&vault);
+            let mut picker = Picker::open(vault.clone(), theme)?;
+            let mut next = Some(path);
+            loop {
+                let file = match next.take() {
+                    Some(file) => file,
+                    None => match picker.pick(terminal, &mut ui_bridge, &mut ui_revision)? {
+                        Some(file) => file,
+                        None => break,
+                    },
+                };
+                status.set_title(&display_name(&file));
+                status.set_status(&editing_status(&file));
+                status.flush();
+                App::open_with_autosave(file, theme, start::read_autosave(install::APP_ID))?
+                    .with_back_to_list(true)
+                    .run(terminal, &mut status, &mut ui_bridge, &mut ui_revision)?;
+                status.set_title(&vault_title);
+                status.set_status("browsing notes");
+                status.set_context(&browsing_context(&vault));
+                status.flush();
+            }
+            Ok::<(), std::io::Error>(())
         }
     })?;
     Ok(())
