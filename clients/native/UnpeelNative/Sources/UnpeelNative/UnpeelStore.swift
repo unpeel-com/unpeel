@@ -2991,8 +2991,16 @@ final class UnpeelStore: ObservableObject {
                 // The Host worker rescans on the same ping; wake this
                 // window's projection refresh too instead of waiting out
                 // its poll interval, so a retitle or lifecycle change
-                // reaches the sidebar as soon as the worker has it.
+                // reaches the sidebar as soon as the worker has it. Both
+                // receive the ping at the same instant, so the first read
+                // can land before the worker's 100 ms loop has rescanned:
+                // read again shortly after (the wake coalesces, so a burst
+                // of pings costs one extra bootstrap read, not one each).
                 self.remoteHostRuntime.requestImmediateRefresh()
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(nanoseconds: 300_000_000)
+                    self?.remoteHostRuntime.requestImmediateRefresh()
+                }
             }
         }
         // A peer workspace instance asked this one to come forward (its
