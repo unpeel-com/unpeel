@@ -2198,6 +2198,10 @@ struct ProjectRowView: View {
                     addableApps: addableApps,
                     onAddApp: onAddApp
                 )
+                // The pill overflows the row's trailing inset a little so its
+                // "+" sits on the same edge as the session rows' hover
+                // actions instead of a step inside it.
+                .padding(.trailing, -4)
             } else if let shortcutHint {
                 // Held ⌃ shows the project-switch hint (same 9px/500 @ 0.7
                 // treatment as the session rows' ⌘N hint).
