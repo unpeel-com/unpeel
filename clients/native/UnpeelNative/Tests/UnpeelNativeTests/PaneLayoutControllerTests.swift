@@ -365,6 +365,45 @@ final class PaneLayoutControllerTests: XCTestCase {
         )
     }
 
+    func testProjectSidebarProjectionRoundTripsThroughTheFile() throws {
+        let home = temporaryControllerHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let controller = PaneLayoutController(controllerHome: home, windowID: "main", scopeID: "local")
+
+        controller.setProjectSidebar(sessionIDs: ["note"], besideSessionID: "chat")
+        let fileURL = home.appendingPathComponent(PaneLayoutController.storageFileName)
+        let json = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: fileURL)) as? [String: Any]
+        )
+        let slot = try XCTUnwrap(
+            ((json["windows"] as? [String: Any])?["main"] as? [String: Any])?["local"]
+                as? [String: Any]
+        )
+        // The Host reads exactly these keys (pane_context.rs).
+        let sidebar = try XCTUnwrap(slot["sidebar"] as? [String: Any])
+        XCTAssertEqual(sidebar["sessionIDs"] as? [String], ["note"])
+        XCTAssertEqual(sidebar["besideSessionID"] as? String, "chat")
+
+        // A relaunch restores it, so a pane edit before the store's first sync
+        // cannot drop it from the file.
+        let reloaded = PaneLayoutController(controllerHome: home, windowID: "main", scopeID: "local")
+        XCTAssertEqual(
+            reloaded.sidebarProjection,
+            DurableSidebarProjection(sessionIDs: ["note"], besideSessionID: "chat")
+        )
+
+        // An empty panel clears it.
+        reloaded.setProjectSidebar(sessionIDs: [], besideSessionID: "chat")
+        let cleared = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: fileURL)) as? [String: Any]
+        )
+        let clearedSlot = try XCTUnwrap(
+            ((cleared["windows"] as? [String: Any])?["main"] as? [String: Any])?["local"]
+                as? [String: Any]
+        )
+        XCTAssertNil(clearedSlot["sidebar"])
+    }
+
     private func temporaryControllerHome() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("pane-layout-controller-\(UUID().uuidString)", isDirectory: true)

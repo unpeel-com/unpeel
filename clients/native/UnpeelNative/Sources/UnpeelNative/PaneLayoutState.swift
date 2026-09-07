@@ -1131,12 +1131,15 @@ struct DurablePaneLayout: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case version
         case groups
+        case sidebar
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let decodedVersion = try container.decode(Int.self, forKey: .version)
         version = decodedVersion
+        // Additive: absent from files older Controllers wrote.
+        sidebar = try container.decodeIfPresent(DurableSidebarProjection.self, forKey: .sidebar)
         switch decodedVersion {
         case 2:
             groups = try container.decode([DurablePaneGroup].self, forKey: .groups)
@@ -1156,6 +1159,7 @@ struct DurablePaneLayout: Codable, Equatable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(Self.currentVersion, forKey: .version)
         try container.encode(groups, forKey: .groups)
+        try container.encodeIfPresent(sidebar, forKey: .sidebar)
     }
 }
 
