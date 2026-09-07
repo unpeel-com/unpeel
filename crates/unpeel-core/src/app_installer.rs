@@ -22,6 +22,29 @@ pub fn install_dir(home: &Path) -> PathBuf {
     home.join("apps").join("bin")
 }
 
+/// Where this home resolves installed Apps from, in order: its own slot,
+/// then the machine's default home (`~/.unpeel/apps/bin`) when this is an
+/// isolated workspace home. Apps are per-Mac installs: a sibling workspace
+/// on the same machine sees — and runs — what the default workspace
+/// installed or dev-linked, instead of reporting it missing.
+pub fn install_dirs(home: &Path) -> Vec<PathBuf> {
+    let mut dirs = vec![install_dir(home)];
+    let machine = install_dir(&crate::app_paths::real_unpeel_home());
+    if machine != dirs[0] {
+        dirs.push(machine);
+    }
+    dirs
+}
+
+/// The installed binary this home would run for `app`: its own slot first,
+/// else the machine's.
+pub fn resolved_binary_path(home: &Path, app: &CatalogApp) -> Option<PathBuf> {
+    install_dirs(home)
+        .into_iter()
+        .map(|dir| dir.join(&app.binary))
+        .find(|path| path.is_file())
+}
+
 pub fn binary_path(home: &Path, app: &CatalogApp) -> PathBuf {
     install_dir(home).join(&app.binary)
 }
@@ -354,9 +377,11 @@ pub fn unlink(home: &Path, app_id: &str) -> Result<bool, String> {
 
 /// True when the managed slot is a dev-mode link rather than a release.
 pub fn is_linked(home: &Path, app: &CatalogApp) -> bool {
-    std::fs::symlink_metadata(binary_path(home, app))
-        .map(|metadata| metadata.file_type().is_symlink())
-        .unwrap_or(false)
+    install_dirs(home).into_iter().any(|dir| {
+        std::fs::symlink_metadata(dir.join(&app.binary))
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(false)
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -382,14 +407,17 @@ pub struct AppStatus {
 }
 
 pub fn status(home: &Path, app: &CatalogApp) -> AppStatus {
-    let managed = binary_path(home, app);
-    let managed_present = managed.is_file();
-    let path = managed_present.then_some(managed).or_else(|| {
+    let managed = resolved_binary_path(home, app);
+    let managed_present = managed.is_some();
+    let path = managed.or_else(|| {
         crate::setup::find_command_path(&app.binary, &crate::setup::search_dirs())
             .map(PathBuf::from)
     });
     let linked = is_linked(home, app);
-    let record = installed_records(home).remove(&app.id);
+    let record = install_dirs(home).into_iter().find_map(|dir| {
+        let home = dir.parent()?.parent()?;
+        installed_records(home).remove(&app.id)
+    });
     let installed_version = record
         .as_ref()
         .filter(|record| record.source == "release")

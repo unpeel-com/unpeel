@@ -273,12 +273,11 @@ pub fn search_dirs() -> Vec<PathBuf> {
     let mut seen = std::collections::HashSet::new();
     let mut dirs = Vec::new();
 
-    for dir in std::iter::once(crate::app_installer::install_dir(
-        &crate::app_paths::unpeel_home(),
-    ))
-    .chain(current_env_path_dirs())
-    .chain(shell_path_dirs())
-    .chain(common_bin_dirs())
+    for dir in crate::app_installer::install_dirs(&crate::app_paths::unpeel_home())
+        .into_iter()
+        .chain(current_env_path_dirs())
+        .chain(shell_path_dirs())
+        .chain(common_bin_dirs())
     {
         if !dir.as_os_str().is_empty() && seen.insert(dir.clone()) {
             dirs.push(dir);
