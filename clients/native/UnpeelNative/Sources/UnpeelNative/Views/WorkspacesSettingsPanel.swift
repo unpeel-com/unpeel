@@ -487,6 +487,11 @@ struct WorkspacesSettingsPanel: View {
             else { continue }
             var request = URLRequest(url: url, timeoutInterval: 2)
             request.httpMethod = "POST"
+            // The listener requires a JSON body on every route (it mirrors
+            // hook_server.rs); a body-less POST was answered 400 and the
+            // running instance never repainted.
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = Data("{}".utf8)
             URLSession.shared.dataTask(with: request).resume()
         }
     }

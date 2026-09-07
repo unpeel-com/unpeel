@@ -266,10 +266,11 @@ final class GhosttyTerminalPane: NSView {
     private var searchSelected: Int?
     private var findObservers: [NSObjectProtocol] = []
 
-    /// Ghostty `background-opacity` currently rendered by this pane's
-    /// controller; applyPaneStyle pushes a live config overlay only when the
-    /// Appearance setting actually moved (a full config apply is expensive).
-    private var appliedBackgroundOpacity: Double = 1
+    /// The config overlay (canvas opacity + terminal font) this pane's
+    /// controller currently renders; applyPaneStyle pushes a live overlay only
+    /// when an Appearance value actually moved (a full config apply is
+    /// expensive, and a font change rebuilds the surface's font grid).
+    private var appliedOverlay: TerminalConfiguration
 
     /// Corner container for the overlay button: passes clicks through to
     /// the terminal whenever the button is not showing.
@@ -342,7 +343,7 @@ final class GhosttyTerminalPane: NSView {
             // only the canvas (and extended padding) picks up the alpha.
             builder.withBackgroundOpacity(style.backgroundOpacity)
         }
-        appliedBackgroundOpacity = style.backgroundOpacity
+        appliedOverlay = Self.surfaceOverlayConfiguration(for: style)
 
         // A config-build failure leaves the controller without a ghostty
         // app, and every later surface rebuild fails with no explanation —
@@ -450,22 +451,42 @@ final class GhosttyTerminalPane: NSView {
     @available(*, unavailable)
     required init?(coder _: NSCoder) { fatalError("not supported") }
 
-    /// Push a new frame style into the live Ghostty controller (colors only).
-    /// Used when OpenCode/Grok config changes while a pane is retained — no
-    /// surface rebuild. Window padding stays at whatever was set at create
-    /// (provider panes already zero it). Also updates this pane's opaque
-    /// layer so letterbox/padding matches the new canvas.
+    /// The per-pane config overlay pushed to a LIVE surface
+    /// (`ghostty_surface_update_config`) whenever one of its values moves:
+    /// canvas opacity plus the terminal font. `font-family` is a repeatable
+    /// Ghostty key and the base config already named a family at
+    /// construction, so the overlay clears the list first (an empty value
+    /// resets it) and then names the current family — or leaves it cleared
+    /// for Ghostty's bundled default. libghostty rebuilds the font grid on
+    /// config update as long as the surface's size was never adjusted by a
+    /// surface-level zoom bind, which this app does not install.
+    static func surfaceOverlayConfiguration(
+        for style: TerminalPaneStyle
+    ) -> TerminalConfiguration {
+        TerminalConfiguration { builder in
+            builder.withBackgroundOpacity(style.backgroundOpacity)
+            builder.withFontSize(style.fontSize)
+            builder.withFontFamily("")
+            if let family = style.fontFamily {
+                builder.withFontFamily(family)
+            }
+        }
+    }
+
+    /// Push a new frame style into the live Ghostty controller: colors, and
+    /// the opacity/font overlay when it moved. Used when OpenCode/Grok config
+    /// changes while a pane is retained and when Settings ▸ Appearance moves
+    /// — no surface rebuild. Window padding stays at whatever was set at
+    /// create (provider panes already zero it). Also updates this pane's
+    /// opaque layer so letterbox/padding matches the new canvas.
     func applyPaneStyle(_ style: TerminalPaneStyle) {
         _ = controller.setTheme(Self.terminalTheme(for: style))
-        if style.backgroundOpacity != appliedBackgroundOpacity {
-            appliedBackgroundOpacity = style.backgroundOpacity
+        let overlay = Self.surfaceOverlayConfiguration(for: style)
+        if overlay != appliedOverlay {
+            appliedOverlay = overlay
             // Per-session override on top of the base config; the wrapper
             // pushes it to the live surface (ghostty_surface_update_config).
-            _ = controller.setTerminalConfiguration(
-                TerminalConfiguration {
-                    $0.withBackgroundOpacity(style.backgroundOpacity)
-                }
-            )
+            _ = controller.setTerminalConfiguration(overlay)
         }
         applyFrameLayerBackground(style)
     }
@@ -519,10 +540,12 @@ final class GhosttyTerminalPane: NSView {
     /// — so defaults like super+w=close_surface silently eat app chords
     /// (⌘W Close Window, ⌘N, ⌘Q…). Clear them all; NSMenu is the single
     /// owner of app chords. The surface keeps only chords that must act on
-    /// the terminal itself, re-added explicitly below. Font zoom binds
-    /// translated characters only (⌘= / ⌘+ / ⌘−), so layouts with a
-    /// dedicated plus key work without physical-key binds stealing them.
-    /// Copy stays
+    /// the terminal itself, re-added explicitly below. Font zoom (⌘+ / ⌘=
+    /// / ⌘− / ⌘0) is deliberately NOT among them: the View menu owns those
+    /// chords and edits `TerminalFontModel`, so a zoom persists and moves
+    /// every pane; a surface-level `increase_font_size` would also flip
+    /// libghostty's `font_size_adjusted`, after which config reloads stop
+    /// moving that surface's size. Copy stays
     /// `performable` (consumed only when a selection exists), matching
     /// ghostty's own default, so a bare ⌘C over an empty terminal still
     /// reaches the Edit menu. Paste is `performable` too, again matching
@@ -546,14 +569,6 @@ final class GhosttyTerminalPane: NSView {
     static let surfaceKeybinds = [
         "performable:super+c=copy_to_clipboard",
         "performable:super+v=paste_from_clipboard",
-        // Font zoom binds by unicode codepoint only, mirroring Ghostty's own
-        // defaults ("equal"/"minus" would bind the PHYSICAL keys, which win
-        // over codepoint matches — on e.g. Norwegian layouts the dedicated
-        // "+" key sits on physical Minus, turning ⌘+ into zoom-out).
-        "super+plus=increase_font_size:1",
-        "super+==increase_font_size:1",
-        "super+-=decrease_font_size:1",
-        "super+zero=reset_font_size",
         // Scrollback navigation (same as Ghostty's macOS defaults).
         "super+home=scroll_to_top",
         "super+end=scroll_to_bottom",
@@ -2177,24 +2192,23 @@ final class RemoteGhosttyTerminalPane: NSView {
     }
 
     func applyPaneStyle(_ style: TerminalPaneStyle) {
-        let opacityChanged = paneStyle.backgroundOpacity != style.backgroundOpacity
-        guard !Self.hasSameTheme(paneStyle, style) || opacityChanged else { return }
+        let overlay = GhosttyTerminalPane.surfaceOverlayConfiguration(for: style)
+        let overlayChanged =
+            overlay != GhosttyTerminalPane.surfaceOverlayConfiguration(for: paneStyle)
+        guard !Self.hasSameTheme(paneStyle, style) || overlayChanged else { return }
         paneStyle = style
         _ = controller.setTheme(GhosttyTerminalPane.terminalTheme(for: style))
-        if opacityChanged {
-            _ = controller.setTerminalConfiguration(
-                TerminalConfiguration {
-                    $0.withBackgroundOpacity(style.backgroundOpacity)
-                }
-            )
+        if overlayChanged {
+            _ = controller.setTerminalConfiguration(overlay)
         }
         applyFrameLayerBackground(style)
     }
 
-    /// Live style updates intentionally cover colors only. Font and padding
-    /// are surface geometry established at construction; callers that change
-    /// those should evict/recreate the cache entry instead of reflowing a
-    /// retained remote screen during a session switch.
+    /// Live style updates cover colors plus the opacity/font overlay (a
+    /// Settings ▸ Appearance font change is meant to reflow every pane).
+    /// Padding is surface geometry established at construction; callers
+    /// that change it should evict/recreate the cache entry instead of
+    /// reflowing a retained remote screen during a session switch.
     private static func hasSameTheme(
         _ lhs: TerminalPaneStyle,
         _ rhs: TerminalPaneStyle

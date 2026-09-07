@@ -4264,6 +4264,7 @@ final class UnpeelStore: ObservableObject {
             applyAppAppearance()
         }
         TransparencyModel.shared.reloadFromDefaults()
+        TerminalFontModel.shared.reloadFromDefaults()
         // Peers also edit this workspace's Notifications/Experimental knobs
         // (and their reverts) through the same suite + ping — re-resolve
         // without materializing inherited values as own overrides.
@@ -4517,13 +4518,15 @@ final class UnpeelStore: ObservableObject {
         }
     }
 
-    /// Decision 4's revert on THIS workspace instance: drop its own mode +
-    /// transparency overrides so it inherits the default workspace's
-    /// baseline, and re-resolve everything live. Color stays.
+    /// Decision 4's revert on THIS workspace instance: drop its own mode,
+    /// font, and transparency overrides so it inherits the default
+    /// workspace's baseline, and re-resolve everything live. Color stays.
     func revertAppearanceToInheritedBaseline() {
         AppDefaults.shared.removeObject(forKey: Self.nativeThemeKey)
         TransparencyModel.clearSavedValues(in: AppDefaults.shared)
         TransparencyModel.shared.reloadFromDefaults()
+        TerminalFontModel.clearSavedValues(in: AppDefaults.shared)
+        TerminalFontModel.shared.reloadFromDefaults()
         // Own suite (just cleared) → own app-state → inherited baseline →
         // system: the same chain the scoped reader resolves.
         let theme = Self.workspaceThemePreference(home: LaunchConfig.unpeelDir.path)
@@ -6324,7 +6327,7 @@ final class UnpeelStore: ObservableObject {
                 let hookStateBefore = hooksOwnActivity
                     ? activity.hookOwnedState(info.id)
                     : nil
-                // Output/attention and provisional-Stop semantics live beside
+                // Output/attention semantics live beside
                 // each runtime's hook recipe — the stable launch binding
                 // first, else the observed foreground runtime. They only
                 // maintain state already established by an authoritative hook;
@@ -6332,11 +6335,8 @@ final class UnpeelStore: ObservableObject {
                 let outputPolicyRuntime = launchRuntime ?? observedTool?.metadata
                 let allowAttentionClearFromOutput =
                     outputPolicyRuntime?.attentionClearsOnOutput ?? true
-                let distrustStops =
-                    outputPolicyRuntime?.distrustStopsWhileOutputGrows ?? false
                 if hookStateBefore == .busy
-                    || hookStateBefore == .attention
-                    || (hookStateBefore == .idle && distrustStops) {
+                    || hookStateBefore == .attention {
                     // The activity signal is consumed as "value changed since
                     // last observation": prefer the host's parsed-screen
                     // change stamp — idle repaint loops that redraw identical
@@ -6351,7 +6351,6 @@ final class UnpeelStore: ObservableObject {
                         sessionID: info.id,
                         outputSize: signal,
                         allowAttentionClearFromOutput: allowAttentionClearFromOutput,
-                        distrustStops: distrustStops,
                         now: now
                     )
                 }

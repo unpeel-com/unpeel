@@ -374,6 +374,10 @@ enum UnpeelWorkspaceLauncher {
             else { continue }
             var request = URLRequest(url: url, timeoutInterval: 2)
             request.httpMethod = "POST"
+            // The listener requires a JSON body on every route; a body-less
+            // POST is answered 400 and the peer never comes forward.
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = Data("{}".utf8)
             URLSession.shared.dataTask(with: request).resume()
         }
     }

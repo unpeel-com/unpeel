@@ -30,6 +30,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, SPUU
         if ProcessInfo.processInfo.environment["UNPEEL_DEBUG"] == "1" {
             GhosttyTerminalPane.enableDebugLogging()
         }
+        // Load the saved terminal font into its Theme mirrors before the
+        // first Ghostty pane resolves its style, so a custom font never
+        // flashes the default for one config apply.
+        _ = TerminalFontModel.shared
 
         // One instance per UNPEEL_HOME: two processes on the same state dir
         // would fight over sessions, ports, and pairing. Identity-verified
@@ -508,6 +512,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, SPUU
         editItem.submenu = editMenu
         mainMenu.addItem(editItem)
 
+        // View menu: terminal font zoom. These chords reach NSMenu only
+        // because the surface's Ghostty binds are cleared (applySurfaceKeybinds
+        // deliberately re-adds no font binds); they edit the persisted
+        // Settings ▸ Appearance font, so every pane follows and the zoom
+        // survives a restart. ⌘+ is ⌘⇧= on US layouts, so a hidden ⌘= twin
+        // keeps the unshifted chord working (allowsKeyEquivalentWhenHidden).
+        let viewItem = NSMenuItem()
+        let viewMenu = NSMenu(title: "View")
+        let increaseFontItem = NSMenuItem(
+            title: "Increase Font Size",
+            action: #selector(increaseTerminalFontSizeFromMenu),
+            keyEquivalent: "+"
+        )
+        increaseFontItem.target = self
+        viewMenu.addItem(increaseFontItem)
+        let increaseFontEqualsItem = NSMenuItem(
+            title: "Increase Font Size",
+            action: #selector(increaseTerminalFontSizeFromMenu),
+            keyEquivalent: "="
+        )
+        increaseFontEqualsItem.target = self
+        increaseFontEqualsItem.isHidden = true
+        increaseFontEqualsItem.allowsKeyEquivalentWhenHidden = true
+        viewMenu.addItem(increaseFontEqualsItem)
+        let decreaseFontItem = NSMenuItem(
+            title: "Decrease Font Size",
+            action: #selector(decreaseTerminalFontSizeFromMenu),
+            keyEquivalent: "-"
+        )
+        decreaseFontItem.target = self
+        viewMenu.addItem(decreaseFontItem)
+        let resetFontItem = NSMenuItem(
+            title: "Reset Font Size",
+            action: #selector(resetTerminalFontSizeFromMenu),
+            keyEquivalent: "0"
+        )
+        resetFontItem.target = self
+        viewMenu.addItem(resetFontItem)
+        viewItem.submenu = viewMenu
+        mainMenu.addItem(viewItem)
+
         // Window menu: ⌘W follows Ghostty's active-surface convention while
         // a terminal is shown, then falls back to closing the window on
         // settings/library/empty screens. Validation keeps the label honest.
@@ -624,6 +669,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, SPUU
         store?.toggleTerminalPaneZoom()
     }
 
+    @objc private func increaseTerminalFontSizeFromMenu() {
+        TerminalFontModel.shared.increaseSize()
+    }
+
+    @objc private func decreaseTerminalFontSizeFromMenu() {
+        TerminalFontModel.shared.decreaseSize()
+    }
+
+    @objc private func resetTerminalFontSizeFromMenu() {
+        TerminalFontModel.shared.resetSize()
+    }
+
     @objc private func equalizeSplitsFromMenu() {
         store?.equalizeActiveTerminalPanes()
     }
@@ -712,6 +769,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, SPUU
             || menuItem.action == #selector(focusPaneDownFromMenu)
         {
             return store?.canZoomTerminalPane ?? false
+        }
+        // Font zoom stops at the Settings range; Reset is idle at 13 pt.
+        if menuItem.action == #selector(increaseTerminalFontSizeFromMenu) {
+            return TerminalFontModel.shared.canIncreaseSize
+        }
+        if menuItem.action == #selector(decreaseTerminalFontSizeFromMenu) {
+            return TerminalFontModel.shared.canDecreaseSize
+        }
+        if menuItem.action == #selector(resetTerminalFontSizeFromMenu) {
+            return !TerminalFontModel.shared.isDefaultSize
         }
         // Mirrors the old footer button's disabled state: nothing to
         // collapse when no folder is expanded.

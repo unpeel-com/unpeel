@@ -3,22 +3,21 @@ import XCTest
 
 @MainActor
 final class GhosttySurfaceKeybindTests: XCTestCase {
-    func testTerminalFontZoomBindingsSurviveDefaultKeybindClear() {
-        let keybinds = Set(GhosttyTerminalPane.surfaceKeybinds)
+    /// Font zoom is app-owned since the Settings ▸ Appearance terminal font
+    /// landed: the View menu's ⌘+ / ⌘= / ⌘− / ⌘0 edit `TerminalFontModel`
+    /// (persisted, every pane follows). A surface-level bind would swallow
+    /// the chord before NSMenu AND flip libghostty's `font_size_adjusted`,
+    /// after which config reloads stop moving that surface's size — the
+    /// Settings control would silently stop applying. Never re-add them.
+    func testSurfaceBindsNoFontZoomSoTheViewMenuOwnsIt() {
+        let keybinds = GhosttyTerminalPane.surfaceKeybinds
 
-        XCTAssertTrue(keybinds.contains("super+plus=increase_font_size:1"))
-        XCTAssertTrue(keybinds.contains("super+==increase_font_size:1"))
-        XCTAssertTrue(keybinds.contains("super+-=decrease_font_size:1"))
-        XCTAssertTrue(keybinds.contains("super+zero=reset_font_size"))
-
-        // "equal"/"minus" are PHYSICAL key names in Ghostty's bind parser and
-        // physical matches beat codepoint matches. On layouts where the
-        // dedicated "+" key sits on physical Minus (Norwegian, German, …) a
-        // super+minus bind turns ⌘+ into zoom-out. Never re-add them.
         for keybind in keybinds {
-            XCTAssertFalse(keybind.hasPrefix("super+equal="), keybind)
-            XCTAssertFalse(keybind.hasPrefix("super+minus="), keybind)
+            XCTAssertFalse(keybind.contains("font_size"), keybind)
         }
+        // Scrollback navigation still belongs to the surface.
+        XCTAssertTrue(keybinds.contains("super+home=scroll_to_top"))
+        XCTAssertTrue(keybinds.contains("super+end=scroll_to_bottom"))
     }
 
     /// ⌘V must stay `performable`: when the pasteboard has no text (e.g. a

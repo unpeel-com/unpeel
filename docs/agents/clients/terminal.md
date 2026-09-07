@@ -48,6 +48,24 @@ The native terminal is a **libghostty** surface (GhosttyKit), Metal-rendered, no
   its open file descriptor; the normal **Reload Terminal** recommendation
   upgrades it to bounded journaling.
 - The native app keeps a small LRU cache of live surfaces and pre-warms on hover (see the surface cache in `clients/native`); evicted-then-remounted surfaces rebuild from the replay tail plus new live output.
+- **Terminal font (2026-09-07).** Settings ▸ Appearance ▸ Terminal font
+  picks the family (this Mac's monospaced faces, plus anything named
+  mono/code so duospaced CJK fonts such as Sarasa Mono K appear) and the
+  size (8–32 pt, default 13). It is a Controller-local view preference like
+  transparency (`TerminalFontModel`, UserDefaults per workspace suite,
+  inheriting the default workspace's value; never `app-state.json`, never the
+  Host protocol — fonts are this Mac's display, so remote-scope panes use it
+  too). The View menu's ⌘+ / ⌘= / ⌘− / ⌘0 edit the same model, so a zoom
+  persists and moves every pane; the surface deliberately binds NO Ghostty
+  font-zoom actions (a surface-level adjust flips libghostty's
+  `font_size_adjusted`, after which config reloads stop moving that
+  surface's size). Live application is a config overlay
+  (`GhosttyTerminalPane.surfaceOverlayConfiguration`: opacity, `font-size`,
+  and `font-family` cleared then re-named because the key is repeatable)
+  pushed through `applyPaneStyle` — SurfaceCache on `unpeelTerminalFontChanged`
+  for local panes, the SwiftUI style re-resolve for remote panes. The user's
+  `~/.config/ghostty/config` is still not read: Unpeel generates its own
+  config so its theme, keybind clearing, and padding stay in control.
 - Agent TUIs that repaint the screen in place can still appear to "crop" or "overwrite" detail while streaming — normal terminal behavior; intermediate full-screen redraw states are not guaranteed to survive as scrollback.
 
 ### TUI kitty graphics passthrough (removed 2026-09-03)

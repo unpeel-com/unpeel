@@ -29,6 +29,10 @@ struct RemoteScopeTerminalMount: View {
     var onActivate: (() -> Void)? = nil
 
     @ObservedObject private var runtime: RemoteHostRuntime
+    /// Remote panes have no SurfaceCache observer: a terminal font change
+    /// reaches them by re-running this body, whose `terminalPaneStyle`
+    /// re-resolves and `pane(for:style:)` pushes the overlay.
+    @ObservedObject private var terminalFont = TerminalFontModel.shared
 
     init(
         store: UnpeelStore,

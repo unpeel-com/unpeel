@@ -322,6 +322,8 @@ private struct HostAppearanceSettingsPanel: View {
     @State private var surfaceOpacity = 1.0
     @State private var backgroundTone = TransparencyModel.designBackgroundTone
     @State private var surfaceTone = TransparencyModel.designSurfaceTone
+    @State private var fontFamily: String?
+    @State private var fontSize = TerminalFontModel.defaultSize
     @State private var loaded = false
     /// Slider drags fire per tick — coalesce the target-instance ping.
     @State private var pingWorkItem: DispatchWorkItem?
@@ -352,8 +354,8 @@ private struct HostAppearanceSettingsPanel: View {
                         title: "Inherits from \(defaultWorkspaceLabel)",
                         description: "\(name) uses \(defaultWorkspaceLabel)'s "
                             + "appearance until a setting below is changed. "
-                            + "Revert drops \(name)'s own mode and "
-                            + "transparency; its color stays."
+                            + "Revert drops \(name)'s own mode, transparency "
+                            + "and font; its color stays."
                     )
                 }
 
@@ -407,6 +409,14 @@ private struct HostAppearanceSettingsPanel: View {
                             + "running instance updates live."
                     )
                 }
+
+                TerminalFontSection(
+                    family: $fontFamily,
+                    size: $fontSize,
+                    description: "Family and size for \(name)'s terminals — a "
+                        + "running instance updates live. ⌘+ / ⌘− / ⌘0 in "
+                        + "\(name)'s own windows edit the same value."
+                )
             }
             .formStyle(.grouped)
             .scrollContentBackground(.hidden)
@@ -431,6 +441,8 @@ private struct HostAppearanceSettingsPanel: View {
         }
         .onChange(of: backgroundOpacity) { _ in transparencyChanged() }
         .onChange(of: surfaceOpacity) { _ in transparencyChanged() }
+        .onChange(of: fontFamily) { _ in fontChanged() }
+        .onChange(of: fontSize) { _ in fontChanged() }
     }
 
     private var defaultWorkspaceLabel: String {
@@ -442,6 +454,7 @@ private struct HostAppearanceSettingsPanel: View {
     private var hasOverrides: Bool {
         suite.string(forKey: UnpeelStore.nativeThemeKey) != nil
             || TransparencyModel.hasSavedValues(in: suite)
+            || TerminalFontModel.hasSavedValues(in: suite)
     }
 
     /// Decision 4's revert: drop the workspace's own mode + transparency so
@@ -450,6 +463,7 @@ private struct HostAppearanceSettingsPanel: View {
     private func revertToDefault() {
         suite.removeObject(forKey: UnpeelStore.nativeThemeKey)
         TransparencyModel.clearSavedValues(in: suite)
+        TerminalFontModel.clearSavedValues(in: suite)
         loaded = false
         load()
         notifyTarget()
@@ -464,9 +478,18 @@ private struct HostAppearanceSettingsPanel: View {
         surfaceOpacity = values.surface
         backgroundTone = values.backgroundTone
         surfaceTone = values.surfaceTone
+        let font = TerminalFontModel.savedValues(in: suite)
+        fontFamily = font.family
+        fontSize = font.size
         // Arm the writers only after the initial values settle, so loading
         // never writes the target suite.
         DispatchQueue.main.async { loaded = true }
+    }
+
+    private func fontChanged() {
+        guard loaded else { return }
+        TerminalFontModel.write(family: fontFamily, size: fontSize, to: suite)
+        notifyTarget()
     }
 
     private func transparencyChanged() {
@@ -1237,6 +1260,9 @@ private struct HostExperimentalSettingsPanel: View {
 private struct RemoteAppearanceSettingsPanel: View {
     @ObservedObject var store: UnpeelStore
     @ObservedObject var runtime: RemoteHostRuntime
+    /// The terminal font is never Host state — it is this Mac's display
+    /// preference and renders the remote panes too.
+    @ObservedObject private var terminalFont = TerminalFontModel.shared
 
     @State private var modeOverride: ThemePreference?
     @State private var tintOverride: AppTint?
@@ -1401,6 +1427,16 @@ private struct RemoteAppearanceSettingsPanel: View {
                                 + "terminal surface whenever \(scopeName) is selected."
                         )
                     }
+
+                    TerminalFontSection(
+                        family: $terminalFont.family,
+                        size: $terminalFont.size,
+                        description: "Fonts render on this Mac, so this is this "
+                            + "Controller's own setting: it applies to \(scopeName)'s "
+                            + "terminals and every other workspace alike. ⌘+ and ⌘− "
+                            + "zoom all panes; ⌘0 returns to "
+                            + "\(Int(TerminalFontModel.defaultSize)) pt."
+                    )
                 } else {
                     Section {
                         Text("Waiting for \(scopeName)'s appearance…")
@@ -2434,6 +2470,7 @@ private struct OpenResourcesSettingsRows: View {
 struct AppearanceSettingsPanel: View {
     @ObservedObject var store: UnpeelStore
     @ObservedObject private var transparency = TransparencyModel.shared
+    @ObservedObject private var terminalFont = TerminalFontModel.shared
 
     /// The same editor set the titlebar "open" dropdown offers, limited to
     /// installed apps — plus the current selection even if it isn't installed,
@@ -2478,7 +2515,7 @@ struct AppearanceSettingsPanel: View {
                             description: "This workspace uses the default "
                                 + "workspace's appearance until a setting "
                                 + "below is changed. Revert drops its own "
-                                + "mode and transparency; its color stays."
+                                + "mode, transparency and font; its color stays."
                         )
                     }
                 }
@@ -2576,6 +2613,12 @@ struct AppearanceSettingsPanel: View {
                     )
                 }
 
+                TerminalFontSection(
+                    family: $terminalFont.family,
+                    size: $terminalFont.size,
+                    description: TerminalFontSection.localDescription
+                )
+
                 Section {
                     Picker("Editor", selection: Binding(
                         get: { store.codeEditor },
@@ -2651,6 +2694,108 @@ struct AppearanceSettingsPanel: View {
             .scrollContentBackground(.hidden)
         }
     }
+}
+
+/// Settings ▸ Appearance ▸ Terminal font, shared by the local, scoped-local,
+/// and remote Appearance panels. Bindings rather than the model, so the
+/// scoped editor can point it at another workspace's suite. The family
+/// picker lists this Mac's monospaced faces (plus the saved family even when
+/// it is not installed, so a choice never silently disappears); the size
+/// stepper shares its range with the ⌘+ / ⌘− / ⌘0 View-menu chords.
+struct TerminalFontSection: View {
+    /// nil = the shipped stack.
+    @Binding var family: String?
+    @Binding var size: Double
+    let description: String
+
+    @State private var families: [String] = []
+
+    /// Picker tags: "" is the shipped default.
+    private var familyOptions: [String] {
+        var options = families
+        if let family, !options.contains(family) {
+            options.insert(family, at: 0)
+        }
+        return [""] + options
+    }
+
+    private var isDefault: Bool {
+        family == nil && abs(size - TerminalFontModel.defaultSize) < 0.001
+    }
+
+    var body: some View {
+        Section {
+            Picker(
+                "Font",
+                selection: Binding(
+                    get: { family ?? "" },
+                    set: { family = $0.isEmpty ? nil : $0 }
+                )
+            ) {
+                ForEach(familyOptions, id: \.self) { option in
+                    familyLabel(option).tag(option)
+                }
+            }
+            .pickerStyle(.menu)
+            .font(.system(size: 13))
+            .foregroundStyle(Theme.foreground)
+
+            LabeledContent {
+                HStack(spacing: 8) {
+                    Text("\(Int(size.rounded())) pt")
+                        .font(.system(size: 12).monospacedDigit())
+                        .foregroundStyle(Theme.mutedForeground)
+                    Stepper(
+                        "",
+                        value: $size,
+                        in: TerminalFontModel.sizeRange,
+                        step: TerminalFontModel.sizeStep
+                    )
+                    .labelsHidden()
+                    .controlSize(.small)
+                }
+            } label: {
+                Text("Size")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.foreground)
+            }
+
+            HStack {
+                Spacer()
+                Button("Revert to default") {
+                    family = nil
+                    size = TerminalFontModel.defaultSize
+                }
+                .controlSize(.small)
+                .disabled(isDefault)
+            }
+        } header: {
+            SettingsSectionHeader(title: "Terminal font", description: description)
+        }
+        .onAppear {
+            if families.isEmpty {
+                families = TerminalFontModel.installedMonospacedFamilies()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func familyLabel(_ option: String) -> some View {
+        if option.isEmpty {
+            Text("Default (\(TerminalFontModel.shippedFamilyDescription))")
+        } else if families.contains(option) {
+            Text(option).font(.custom(option, size: 13))
+        } else {
+            Text("\(option) (not installed)")
+        }
+    }
+
+    /// Shared copy for the local panels: the chords are the same everywhere.
+    static let localDescription =
+        "Family and size for every terminal on this Mac. ⌘+ and ⌘− zoom all "
+        + "panes together; ⌘0 returns to \(Int(TerminalFontModel.defaultSize)) pt. "
+        + "Ghostty falls back to other installed faces for glyphs the chosen "
+        + "font lacks."
 }
 
 /// One opacity/tone slider row: label, slider, and a fixed-width live

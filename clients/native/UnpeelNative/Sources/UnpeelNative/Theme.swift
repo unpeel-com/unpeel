@@ -303,6 +303,12 @@ extension Notification.Name {
     /// background-opacity configs and AppDelegate re-applies the window
     /// blur. SwiftUI chrome follows the published values directly instead.
     static let unpeelTransparencyChanged = Notification.Name("unpeelTransparencyChanged")
+
+    /// Posted (debounced) after Settings ▸ Appearance ▸ Terminal font (or a
+    /// View-menu zoom) settles: SurfaceCache pushes a font-size/font-family
+    /// config overlay to every retained local Ghostty pane. Remote panes
+    /// follow through their SwiftUI style re-resolve instead.
+    static let unpeelTerminalFontChanged = Notification.Name("unpeelTerminalFontChanged")
 }
 
 /// Settings ▸ Appearance window transparency: a window-wide frame backdrop
@@ -547,6 +553,224 @@ final class TransparencyModel: ObservableObject {
     }
 }
 
+/// Settings ▸ Appearance ▸ Terminal font: the family and point size every
+/// Ghostty surface renders with — local sessions, the panes of a scoped
+/// remote Host, everything. Fonts are a property of THIS Mac's display and
+/// installed faces (a Host cannot know which faces a Controller has), so the
+/// value is a native-only view preference like transparency: a UserDefaults
+/// overlay per workspace suite that inherits the default workspace's value
+/// (Decision 4), never `app-state.json` and never the Host protocol.
+///
+/// ⌘+ / ⌘− / ⌘0 (the View menu) edit this same model instead of Ghostty's
+/// per-surface `increase_font_size` binds, so a zoom persists across
+/// restarts and moves every pane together. The surface binds are gone for a
+/// second reason: a surface-level adjust flips libghostty's
+/// `font_size_adjusted`, after which config reloads stop moving that
+/// surface's size and this setting would silently stop applying to it.
+@MainActor
+final class TerminalFontModel: ObservableObject {
+    static let shared = TerminalFontModel()
+
+    nonisolated static let defaultSize: Double = 13
+    nonisolated static let sizeRange: ClosedRange<Double> = 8 ... 32
+    nonisolated static let sizeStep: Double = 1
+
+    private static let familyKey = "terminal_font_family"
+    private static let sizeKey = "terminal_font_size"
+
+    /// nil = the shipped stack (`shippedFamily()`): JetBrains Mono when
+    /// installed, else SF Mono, else Ghostty's own bundled JetBrains Mono.
+    @Published var family: String? {
+        didSet {
+            let normalized = Self.normalize(family)
+            if normalized != family {
+                family = normalized
+            }
+            Theme.terminalFontFamily = family
+            valueChanged()
+        }
+    }
+
+    @Published var size: Double {
+        didSet {
+            let clamped = Self.clamp(size)
+            if clamped != size {
+                size = clamped
+            }
+            Theme.terminalFontSize = size
+            valueChanged()
+        }
+    }
+
+    var isDefault: Bool { family == nil && isDefaultSize }
+    var isDefaultSize: Bool { abs(size - Self.defaultSize) < 0.001 }
+    var canIncreaseSize: Bool { size + Self.sizeStep <= Self.sizeRange.upperBound + 0.001 }
+    var canDecreaseSize: Bool { size - Self.sizeStep >= Self.sizeRange.lowerBound - 0.001 }
+
+    /// View ▸ Increase Font Size (⌘+ / ⌘=).
+    func increaseSize() {
+        guard canIncreaseSize else { return }
+        size += Self.sizeStep
+    }
+
+    /// View ▸ Decrease Font Size (⌘−).
+    func decreaseSize() {
+        guard canDecreaseSize else { return }
+        size -= Self.sizeStep
+    }
+
+    /// View ▸ Reset Font Size (⌘0): size only — the family is a deliberate
+    /// choice the zoom chords never touch.
+    func resetSize() {
+        guard !isDefaultSize else { return }
+        size = Self.defaultSize
+    }
+
+    /// Settings ▸ Appearance ▸ Terminal font "Revert to default".
+    func resetToDefaults() {
+        family = nil
+        size = Self.defaultSize
+    }
+
+    private var announceWorkItem: DispatchWorkItem?
+    private var suppressPersistence = false
+
+    private init() {
+        let values = Self.savedValues(in: AppDefaults.shared)
+        family = values.family
+        size = values.size
+        Theme.terminalFontFamily = values.family
+        Theme.terminalFontSize = values.size
+    }
+
+    /// The face `TerminalPaneStyle.resolved()` uses when no family is chosen:
+    /// DESIGN.md's stack, JetBrains Mono first, SF Mono next. nil means
+    /// neither is installed system-wide and Ghostty's bundled JetBrains Mono
+    /// takes over — so the default is JetBrains Mono either way.
+    nonisolated static func shippedFamily() -> String? {
+        for (psName, family) in [
+            ("JetBrainsMono-Regular", "JetBrains Mono"),
+            ("SFMono-Regular", "SF Mono"),
+        ] where NSFont(name: psName, size: 13) != nil {
+            return family
+        }
+        return nil
+    }
+
+    /// Picker label for the nil choice.
+    nonisolated static var shippedFamilyDescription: String {
+        shippedFamily() ?? "JetBrains Mono"
+    }
+
+    /// Families the Settings picker offers: every fixed-pitch face on this
+    /// Mac plus anything whose name says mono/code. The name rule is not
+    /// decoration — CJK terminal fonts such as Sarasa Mono K are duospaced
+    /// (half-width Latin, full-width Hangul/Kanji), carry no fixed-pitch
+    /// flag, and are exactly what a Korean or Japanese user is after
+    /// (orgs/unpeel-com discussions #9).
+    nonisolated static func installedMonospacedFamilies() -> [String] {
+        let manager = NSFontManager.shared
+        return manager.availableFontFamilies
+            .filter { family in
+                // Hidden system faces (".AppleSystemUIFontMonospaced" …).
+                guard !family.hasPrefix(".") else { return false }
+                let lower = family.lowercased()
+                if lower.contains("mono") || lower.contains("code") { return true }
+                guard let members = manager.availableMembers(ofFontFamily: family)
+                else { return false }
+                return members.contains { member in
+                    guard let name = member.first as? String,
+                          let font = NSFont(name: name, size: 13)
+                    else { return false }
+                    return font.isFixedPitch
+                }
+            }
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
+    nonisolated static func isInstalled(family: String) -> Bool {
+        NSFontManager.shared.availableFontFamilies.contains(family)
+    }
+
+    /// A workspace's saved font from ITS defaults suite, with the same
+    /// inheritance as transparency: no own value → the default workspace's
+    /// `.standard` value → the shipped default. The family is stored as ""
+    /// for an explicit "default" so a workspace can override an inherited
+    /// custom family back to the shipped stack.
+    static func savedValues(in defaults: UserDefaults) -> (family: String?, size: Double) {
+        func stored<T>(_ key: String, as _: T.Type) -> T? {
+            if let value = defaults.object(forKey: key) as? T { return value }
+            return UserDefaults.standard.object(forKey: key) as? T
+        }
+        let family = normalize(stored(familyKey, as: String.self))
+        let size = stored(sizeKey, as: Double.self).map(clamp) ?? defaultSize
+        return (family, size)
+    }
+
+    /// Whether the suite records ANY font value of its own (the revert
+    /// button's enablement).
+    static func hasSavedValues(in defaults: UserDefaults) -> Bool {
+        [familyKey, sizeKey].contains { defaults.object(forKey: $0) != nil }
+    }
+
+    /// Decision 4's revert: drop a workspace's own font so it inherits the
+    /// default workspace's again.
+    static func clearSavedValues(in defaults: UserDefaults) {
+        for key in [familyKey, sizeKey] {
+            defaults.removeObject(forKey: key)
+        }
+    }
+
+    /// Write a workspace's font into ITS suite; a running instance applies
+    /// it on its `/reload-appearance` ping.
+    static func write(family: String?, size: Double, to defaults: UserDefaults) {
+        defaults.set(normalize(family) ?? "", forKey: familyKey)
+        defaults.set(clamp(size), forKey: sizeKey)
+    }
+
+    /// Re-read OWN suite after a peer wrote it (the scoped Appearance editor
+    /// in another workspace's window, or the inherit revert) and re-apply
+    /// without writing it back.
+    func reloadFromDefaults() {
+        let values = Self.savedValues(in: AppDefaults.shared)
+        suppressPersistence = true
+        if values.family != family {
+            family = values.family
+        }
+        if abs(values.size - size) > 0.001 {
+            size = values.size
+        }
+        suppressPersistence = false
+        announceWorkItem?.cancel()
+        NotificationCenter.default.post(name: .unpeelTerminalFontChanged, object: nil)
+    }
+
+    private nonisolated static func normalize(_ family: String?) -> String? {
+        guard let family else { return nil }
+        let trimmed = family.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private nonisolated static func clamp(_ size: Double) -> Double {
+        let stepped = (size / sizeStep).rounded() * sizeStep
+        return min(max(stepped, sizeRange.lowerBound), sizeRange.upperBound)
+    }
+
+    /// Persist immediately; announce on a short trailing debounce so a held
+    /// ⌘+ or a stepper run rebuilds every pane's font grid once, not per tick.
+    private func valueChanged() {
+        guard !suppressPersistence else { return }
+        Self.write(family: family, size: size, to: AppDefaults.shared)
+
+        announceWorkItem?.cancel()
+        let work = DispatchWorkItem {
+            NotificationCenter.default.post(name: .unpeelTerminalFontChanged, object: nil)
+        }
+        announceWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+    }
+}
+
 /// Invalidation bridge for chrome views with no store dependency
 /// (SidebarBackground, ContentBackground, SettingsMainBackground): they are
 /// stateless, so SwiftUI never re-runs their bodies on its own and an App
@@ -784,6 +1008,13 @@ enum Theme {
     /// `toneNSColor(_:)` at that brightness in both appearances. Written
     /// only by TransparencyModel on the main thread.
     nonisolated(unsafe) static var surfaceToneOverride: Double?
+
+    /// Mirrors of `TerminalFontModel.shared` (same pattern as
+    /// `terminalBackgroundOpacity`) read by `TerminalPaneStyle.resolved()`.
+    /// nil family = the shipped stack. Written only by TerminalFontModel on
+    /// the main thread.
+    nonisolated(unsafe) static var terminalFontFamily: String?
+    nonisolated(unsafe) static var terminalFontSize: Double = TerminalFontModel.defaultSize
 
     /// The shared neutral used by the tone sliders: one hue/saturation for
     /// Background and Surface alike (saturation fades toward white), so
@@ -1406,7 +1637,9 @@ struct TerminalPaneStyle {
         ]
     )
 
-    var fontSize: Float = 13
+    /// Settings ▸ Appearance ▸ Terminal font (mirrored in
+    /// `Theme.terminalFontSize`); 13 is the shipped default.
+    var fontSize: Float = Float(TerminalFontModel.defaultSize)
     /// Runtime descriptors opt into horizontal padding. The neutral terminal
     /// style is edge-to-edge so full-bleed TUIs can own their whole canvas.
     var windowPaddingX: Int = 0
@@ -1423,7 +1656,9 @@ struct TerminalPaneStyle {
     /// 3 is ghostty tip's own discrete default. Trackpad (precision) scroll
     /// is pinned to 1 in GhosttyBridge to match the Ghostty app's feel.
     var mouseScrollMultiplier: Int = 3
-    /// nil = leave Ghostty's bundled default (JetBrains Mono).
+    /// The chosen family (Settings ▸ Appearance ▸ Terminal font) or the
+    /// shipped stack's first installed face; nil = leave Ghostty's bundled
+    /// default (JetBrains Mono).
     var fontFamily: String?
     /// Ghostty `background-opacity` (Settings ▸ Appearance ▸ Transparency).
     /// Below 1 the surface paints its canvas translucent AND every solid
@@ -1432,10 +1667,11 @@ struct TerminalPaneStyle {
     /// only canvas paint, so the effective alpha is exactly this value.
     var backgroundOpacity: Double = 1
 
-    /// DESIGN.md font stack: JetBrains Mono bundled-first, SF Mono fallback.
-    /// Ghostty itself bundles JetBrains Mono as its default face, so when
-    /// neither is installed system-wide we leave fontFamily nil and still
-    /// get JetBrains Mono.
+    /// Font: the user's Settings ▸ Appearance choice, else DESIGN.md's stack
+    /// (JetBrains Mono first, SF Mono fallback — `TerminalFontModel.
+    /// shippedFamily()`). Ghostty itself bundles JetBrains Mono as its
+    /// default face, so when neither is installed system-wide fontFamily
+    /// stays nil and we still get JetBrains Mono.
     static func resolved(
         runtimeID: String? = nil,
         command: String? = nil
@@ -1473,13 +1709,8 @@ struct TerminalPaneStyle {
         style.light.background = Theme.appTintedCanvasHexString(style.light.background)
         style.light.selectionBackground =
             Theme.appTintedHexString(style.light.selectionBackground)
-        for (psName, family) in [("JetBrainsMono-Regular", "JetBrains Mono"),
-                                 ("SFMono-Regular", "SF Mono")] {
-            if NSFont(name: psName, size: 13) != nil {
-                style.fontFamily = family
-                break
-            }
-        }
+        style.fontSize = Float(Theme.terminalFontSize)
+        style.fontFamily = Theme.terminalFontFamily ?? TerminalFontModel.shippedFamily()
         return style
     }
 }

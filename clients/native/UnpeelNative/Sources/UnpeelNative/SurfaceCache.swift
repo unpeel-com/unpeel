@@ -115,6 +115,7 @@ final class SurfaceCache: ObservableObject {
 
     /// nonisolated so deinit can remove it; only touched on the main queue.
     nonisolated(unsafe) private var transparencyObserver: NSObjectProtocol?
+    nonisolated(unsafe) private var terminalFontObserver: NSObjectProtocol?
 
     init() {
         rebuildThemeWatcher()
@@ -143,6 +144,17 @@ final class SurfaceCache: ObservableObject {
                 self?.reapplyAppTint()
             }
         }
+        // Terminal font (Settings ▸ Appearance or a View-menu zoom): the
+        // resolved style carries the new family/size, the signature moves,
+        // and every retained pane gets one live overlay push that rebuilds
+        // its font grid in place. Debounced at the model.
+        terminalFontObserver = NotificationCenter.default.addObserver(
+            forName: .unpeelTerminalFontChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.reapplyAppTint()
+            }
+        }
     }
 
     deinit {
@@ -159,6 +171,9 @@ final class SurfaceCache: ObservableObject {
             NotificationCenter.default.removeObserver(observer)
         }
         if let observer = transparencyObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        if let observer = terminalFontObserver {
             NotificationCenter.default.removeObserver(observer)
         }
     }
@@ -503,7 +518,10 @@ final class SurfaceCache: ObservableObject {
             ] + variant.palette
         }.joined(separator: ",")
         let opacity = String(format: "%.3f", paneStyle.backgroundOpacity)
-        return "\(config)|\(sample)|\(colors)|\(opacity)"
+        // The font rides the same overlay push as opacity, so a Settings
+        // change must move the signature too.
+        let font = "\(paneStyle.fontSize)/\(paneStyle.fontFamily ?? "-")"
+        return "\(config)|\(sample)|\(colors)|\(opacity)|\(font)"
     }
 
     private func scheduleThemeReload() {
