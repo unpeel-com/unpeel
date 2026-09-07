@@ -84,6 +84,15 @@ const version = String(
   args.version ?? manifest.match(/^version\s*=\s*"([^"]+)"/m)?.[1] ?? ''
 )
 if (!version) throw new Error(`could not read version from ${designDir}/Cargo.toml`)
+// The registry is what every Host compares its installed copy against: the
+// version it publishes for this App must be the one being built, or Hosts
+// will never see (or will wrongly see) an update.
+if (registry[app].version !== version) {
+  throw new Error(
+    `protocol/app-registry.json publishes ${app} version ${registry[app].version ?? '(none)'}, ` +
+      `but ${designDir}/Cargo.toml says ${version}. Bump the registry in the same commit.`
+  )
+}
 
 function run(command, commandArgs, options = {}) {
   console.log(`$ ${command} ${commandArgs.join(' ')}`)

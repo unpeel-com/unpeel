@@ -4,6 +4,7 @@
     "channel": "stable",
     "binary": "unpeel-diffs",
     "name": "Diffs",
+    "version": "0.1.0",
     "description": "Standalone borderless Git working-tree viewer with a changed-file list and diff detail",
     "icon_svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 256 256\" fill=\"#FFFFFF\"><path d=\"M118.18,213.08c-.11.14-.24.27-.36.4l-.16.18-.17.15a4.83,4.83,0,0,1-.42.37,3.92,3.92,0,0,1-.32.25l-.3.22-.38.23a2.91,2.91,0,0,1-.3.17l-.37.19-.34.15-.36.13a2.84,2.84,0,0,1-.38.13l-.36.1c-.14,0-.26.07-.4.09l-.42.07-.35.05a7,7,0,0,1-.79,0H64a8,8,0,0,1,0-16H92.69L55,162.34a23.85,23.85,0,0,1-7-17V95a32,32,0,1,1,16,0v50.38A8,8,0,0,0,66.34,151L104,188.69V160a8,8,0,0,1,16,0v48a7,7,0,0,1,0,.8c0,.11,0,.21,0,.32s0,.3-.07.46a2.83,2.83,0,0,1-.09.37c0,.13-.06.26-.1.39s-.08.23-.12.35l-.14.39-.15.31c-.06.13-.12.27-.19.4s-.11.18-.16.28l-.24.39-.21.28ZM208,161V110.63a23.85,23.85,0,0,0-7-17L163.31,56H192a8,8,0,0,0,0-16H143.82l-.6,0c-.14,0-.28,0-.41.06l-.37,0-.43.11-.33.08-.4.14-.34.13-.35.16-.36.18a3.14,3.14,0,0,0-.31.18c-.12.07-.25.14-.36.22a3.55,3.55,0,0,0-.31.23,3.81,3.81,0,0,0-.32.24c-.15.12-.28.24-.42.37l-.17.15-.16.18c-.12.13-.25.26-.36.4l-.26.35-.21.28-.24.39c-.05.1-.11.19-.16.28s-.13.27-.19.4l-.15.31-.14.39c0,.12-.09.23-.12.35s-.07.26-.1.39a2.83,2.83,0,0,0-.09.37c0,.16,0,.31-.07.46s0,.21-.05.32a7,7,0,0,0,0,.8V96a8,8,0,0,0,16,0V67.31L189.66,105a8,8,0,0,1,2.34,5.66V161a32,32,0,1,0,16,0Z\"/></svg>",
     "media_types": [],
@@ -22,6 +23,7 @@
     "channel": "stable",
     "binary": "unpeel-filetree",
     "name": "Files",
+    "version": "0.1.0",
     "description": "Borderless project-scoped file explorer with filtering and native path dragging",
     "icon_svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 256 256\" fill=\"#FFFFFF\"><path d=\"M160,136v-8H88v64a8,8,0,0,0,8,8h64v-8a16,16,0,0,1,16-16h32a16,16,0,0,1,16,16v32a16,16,0,0,1-16,16H176a16,16,0,0,1-16-16v-8H96a24,24,0,0,1-24-24V80H64A16,16,0,0,1,48,64V32A16,16,0,0,1,64,16H96a16,16,0,0,1,16,16V64A16,16,0,0,1,96,80H88v32h72v-8a16,16,0,0,1,16-16h32a16,16,0,0,1,16,16v32a16,16,0,0,1-16,16H176A16,16,0,0,1,160,136Z\"/></svg>",
     "media_types": [],
@@ -40,6 +42,7 @@
     "channel": "stable",
     "binary": "unpeel-github-issues",
     "name": "GitHub Issues",
+    "version": "0.1.0",
     "description": "Borderless GitHub issue list and detail browser for the current Git project",
     "media_types": [],
     "resource_kinds": [
@@ -54,6 +57,7 @@
     "channel": "stable",
     "binary": "unpeel-markdown",
     "name": "Markdown",
+    "version": "0.1.0",
     "description": "Terminal Markdown editor with live styling, slash commands, mouse editing, and note-vault browsing",
     "icon_svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 256 256\" fill=\"none\" stroke=\"#FFFFFF\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"16\"><path d=\"M200,224H56a8,8,0,0,1-8-8V40a8,8,0,0,1,8-8h96l56,56V216A8,8,0,0,1,200,224Z\"/><polyline points=\"152 32 152 88 208 88\"/><line x1=\"96\" y1=\"136\" x2=\"160\" y2=\"136\"/><line x1=\"96\" y1=\"168\" x2=\"160\" y2=\"168\"/></svg>",
     "media_types": [
@@ -80,6 +84,7 @@
     "channel": "stable",
     "binary": "unpeel-usage",
     "name": "Usage",
+    "version": "0.1.0",
     "description": "Codex, Claude, Grok, and Muse usage with monthly token totals and alerts",
     "media_types": [],
     "try": [

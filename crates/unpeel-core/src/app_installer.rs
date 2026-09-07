@@ -26,6 +26,55 @@ pub fn binary_path(home: &Path, app: &CatalogApp) -> PathBuf {
     install_dir(home).join(&app.binary)
 }
 
+/// What the Host knows about each installed App (`~/.unpeel/apps/installed.json`,
+/// keyed by App id). Written by the installer and by `link`; a copy that
+/// predates this record reads as version-unknown and is offered an update.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct InstalledRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    #[serde(default)]
+    pub installed_at_unix_ms: u64,
+    /// `release` (a verified download) or `link` (a developer's local build).
+    #[serde(default)]
+    pub source: String,
+}
+
+fn installed_records_path(home: &Path) -> PathBuf {
+    home.join("apps").join("installed.json")
+}
+
+pub fn installed_records(home: &Path) -> std::collections::BTreeMap<String, InstalledRecord> {
+    std::fs::read(installed_records_path(home))
+        .ok()
+        .and_then(|raw| serde_json::from_slice(&raw).ok())
+        .unwrap_or_default()
+}
+
+/// Replace (or with `None`, drop) one App's record; atomic rename so a reader
+/// never sees a torn file. Callers hold the install lock.
+fn write_installed_record(home: &Path, app_id: &str, record: Option<InstalledRecord>) {
+    let mut records = installed_records(home);
+    match record {
+        Some(record) => {
+            records.insert(app_id.to_string(), record);
+        }
+        None => {
+            records.remove(app_id);
+        }
+    }
+    let path = installed_records_path(home);
+    let staged = path.with_extension(format!("json.{}.part", std::process::id()));
+    if let Ok(raw) = serde_json::to_vec_pretty(&records) {
+        if std::fs::write(&staged, raw).is_ok() {
+            let _ = std::fs::rename(&staged, &path);
+        }
+        let _ = std::fs::remove_file(&staged);
+    }
+}
+
 pub(crate) fn release_target() -> Option<&'static str> {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("macos", _) => Some("macos-universal"),
@@ -192,6 +241,16 @@ pub fn install_with(
         format!("install {}: {error}", destination.display())
     })?;
     cleanup();
+    write_installed_record(
+        home,
+        &app.id,
+        Some(InstalledRecord {
+            version: app.version.clone(),
+            sha256: Some(expected),
+            installed_at_unix_ms: crate::state::current_timestamp_ms(),
+            source: "release".into(),
+        }),
+    );
     Ok(destination)
 }
 
@@ -254,6 +313,16 @@ pub fn link(home: &Path, app_id: &str, executable: &Path) -> Result<PathBuf, Str
     return Err("linking Apps is only supported on Unix".into());
     std::fs::rename(&staged, &target)
         .map_err(|error| format!("replace {}: {error}", target.display()))?;
+    write_installed_record(
+        home,
+        &app.id,
+        Some(InstalledRecord {
+            version: None,
+            sha256: None,
+            installed_at_unix_ms: crate::state::current_timestamp_ms(),
+            source: "link".into(),
+        }),
+    );
     crate::state_bus::announce(crate::state_bus::Change::AppState, None);
     Ok(target)
 }
@@ -268,6 +337,9 @@ pub fn unlink(home: &Path, app_id: &str) -> Result<bool, String> {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             std::fs::remove_file(&target)
                 .map_err(|error| format!("remove {}: {error}", target.display()))?;
+            if let Ok(_lock) = lock(home) {
+                write_installed_record(home, &app.id, None);
+            }
             crate::state_bus::announce(crate::state_bus::Change::AppState, None);
             Ok(true)
         }
@@ -293,6 +365,14 @@ pub struct AppStatus {
     pub id: String,
     pub name: String,
     pub state: String,
+    /// The registry's version for this App.
+    pub version: Option<String>,
+    /// What the Host recorded when it installed the copy in its slot; `None`
+    /// for a copy that predates the record, a linked build, or PATH-found one.
+    pub installed_version: Option<String>,
+    /// A release copy sits in the slot and the registry publishes a version
+    /// it does not match (or the copy is too old to have recorded one).
+    pub update_available: bool,
     pub command: String,
     pub media_types: Vec<String>,
     pub file_extensions: std::collections::BTreeMap<String, String>,
@@ -303,21 +383,33 @@ pub struct AppStatus {
 
 pub fn status(home: &Path, app: &CatalogApp) -> AppStatus {
     let managed = binary_path(home, app);
-    let path = managed.is_file().then_some(managed).or_else(|| {
+    let managed_present = managed.is_file();
+    let path = managed_present.then_some(managed).or_else(|| {
         crate::setup::find_command_path(&app.binary, &crate::setup::search_dirs())
             .map(PathBuf::from)
     });
+    let linked = is_linked(home, app);
+    let record = installed_records(home).remove(&app.id);
+    let installed_version = record
+        .as_ref()
+        .filter(|record| record.source == "release")
+        .and_then(|record| record.version.clone());
+    let update_available =
+        managed_present && !linked && app.version.is_some() && installed_version != app.version;
     AppStatus {
         id: app.id.clone(),
         name: app.name.clone(),
         state: if path.is_none() {
             "missing"
-        } else if is_linked(home, app) {
+        } else if linked {
             "linked"
         } else {
             "ready"
         }
         .into(),
+        version: app.version.clone(),
+        installed_version,
+        update_available,
         command: app.binary.clone(),
         media_types: app.media_types.clone(),
         file_extensions: app.file_extensions.clone(),
@@ -332,16 +424,21 @@ pub fn catalog_wire() -> Value {
         .into_iter()
         .map(|app| app.id)
         .collect::<std::collections::HashSet<_>>();
+    let home = crate::app_paths::unpeel_home();
     Value::Array(
         apps_mcp::catalog_apps()
             .into_iter()
             .map(|app| {
+                let status = status(&home, &app);
                 json!({
                     "id": app.id,
                     "name": app.name,
                     "description": app.description,
                     "tint": app.tint,
                     "iconSvg": app.icon_svg,
+                    "version": app.version,
+                    "installedVersion": status.installed_version,
+                    "updateAvailable": status.update_available,
                     "command": app.binary,
                     "mediaTypes": app.media_types,
                     "fileExtensions": app.file_extensions,
@@ -433,6 +530,7 @@ mod tests {
             id: "unpeel.app.markdown".into(),
             binary: "unpeel-markdown".into(),
             name: "Markdown".into(),
+            version: Some("0.1.0".into()),
             channel: "stable".into(),
             description: String::new(),
             tint: None,

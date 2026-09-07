@@ -124,6 +124,9 @@ final class RemoteControlProtocolTests: XCTestCase {
         XCTAssertEqual(app.fileExtensions, [:])
         XCTAssertEqual(app.resourceKinds, [])
         XCTAssertEqual(app.defaultFor, [])
+        XCTAssertNil(app.version)
+        XCTAssertNil(app.installedVersion)
+        XCTAssertFalse(app.updateAvailable)
     }
 
     func testBootstrapRoundTripsSidebarPaneGroups() throws {

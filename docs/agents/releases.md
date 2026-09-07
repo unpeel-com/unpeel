@@ -172,7 +172,16 @@ curl -fsSL https://unpeel.com/install.sh | sh
   `<channel>/<app>/`. Linux tarballs attach with `--linux-*` like the CLI.
   Hosts may install the same assets directly with
   `unpeel apps install <unpeel.app.id>`; those managed copies live in
-  `~/.unpeel/apps/bin`, which precedes ordinary PATH discovery.
+  `~/.unpeel/apps/bin`, which precedes ordinary PATH discovery. **Versions:**
+  each registry entry carries the App's `version`; the installer records
+  what it installed in `~/.unpeel/apps/installed.json`, the Host publishes
+  `version`/`installedVersion`/`updateAvailable` on `availableApps`, and
+  Settings (Open resources, Agents & Apps) offers **Update** while `unpeel
+  apps update [--check]` does it headless. A new App version therefore
+  needs the crate version AND the registry entry bumped in one commit
+  (`release:app` refuses a mismatch; a Rust test pins registry = crate for
+  Apps in `crates/apps`), and reaches Hosts with the next Unpeel release
+  that embeds that registry.
   Interactive installs ask for confirmation and unattended user-owned
   automation must pass `--yes`. A Host advertises `apps.install` only on a
   platform for which the publisher defines a release target.

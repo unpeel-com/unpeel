@@ -185,6 +185,7 @@ Linux/SSH Host:
 ```text
 unpeel apps list [--json]
 unpeel apps install <app-id> [--check] [--yes] [--json]
+unpeel apps update [<app-id>] [--check] [--yes] [--json]   # reinstall Apps behind the registry version (--check: exit 3 = available)
 unpeel apps link <app-id> <executable>       # dev mode: symlink a local build into the slot
 unpeel apps unlink <app-id>                  # remove only such a link
 unpeel open <path> [--with <app-id>] [--media-type <type>] [--json]

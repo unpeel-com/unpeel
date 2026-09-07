@@ -927,8 +927,18 @@ struct HostPresetsSettingsPanel: View {
         let existing = Set(
             (runtime.snapshot?.presets ?? []).map { $0.command.trimmingCharacters(in: .whitespaces) }
         )
+        // Not yet in the launch list — or installed there but behind the
+        // Host's registry, so the row can offer Update.
         return (runtime.snapshot?.availableApps ?? []).filter {
             !existing.contains($0.command.trimmingCharacters(in: .whitespaces))
+                || ($0.installed && $0.updateAvailable)
+        }
+    }
+
+    private func remoteAppIsInLaunchList(_ app: RemoteAppSummary) -> Bool {
+        (runtime.snapshot?.presets ?? []).contains {
+            $0.command.trimmingCharacters(in: .whitespaces)
+                == app.command.trimmingCharacters(in: .whitespaces)
         }
     }
 
@@ -979,13 +989,29 @@ struct HostPresetsSettingsPanel: View {
 
                             Spacer(minLength: 8)
 
-                            if app.installed {
+                            if app.installed && app.updateAvailable {
+                                Button {
+                                    installRemoteApp(app)
+                                } label: {
+                                    if installingApps.contains(app.id) {
+                                        ProgressView().controlSize(.small)
+                                    } else {
+                                        Text(app.version.map { "Update to \($0)" } ?? "Update")
+                                    }
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .disabled(installingApps.contains(app.id))
+                                .help(app.installedVersion.map { "Installed: \($0)" }
+                                    ?? "Installed version unknown")
+                            }
+                            if app.installed, !remoteAppIsInLaunchList(app) {
                                 Button("Add") {
                                     apply(RemotePresetPatch(command: app.command, label: app.name))
                                 }
                                 .buttonStyle(.borderedProminent)
                                 .controlSize(.small)
-                            } else {
+                            } else if !app.installed {
                                 Button {
                                     installRemoteApp(app)
                                 } label: {

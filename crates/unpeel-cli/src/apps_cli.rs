@@ -9,12 +9,17 @@ unpeel apps — Host-side Unpeel Apps
 
   unpeel apps list [--json]
   unpeel apps install <app-id> [--check] [--yes] [--json]
+  unpeel apps update [<app-id> | --all] [--check] [--yes] [--json]
   unpeel apps link <app-id> <executable>
   unpeel apps unlink <app-id>
 
 Apps install under ~/.unpeel/apps/bin after the release tarball is verified
 against its mandatory SHA-256 sidecar. --check never downloads anything.
 Interactive installs ask first; noninteractive installs require --yes.
+
+update reinstalls an App whose installed version differs from the one this
+Host's registry publishes (--check only reports; exit 3 = update available).
+Running instances keep their old binary until restarted.
 
 link is development mode: it points the managed slot at a local build (a
 symlink, so every rebuild is picked up by the next launch) instead of a
@@ -25,7 +30,7 @@ pub fn run(args: &[String]) -> i32 {
     let check = args.iter().any(|arg| arg == "--check");
     let yes = args.iter().any(|arg| arg == "--yes");
     if let Some(flag) = args.iter().find(|arg| {
-        arg.starts_with("--") && !matches!(arg.as_str(), "--json" | "--check" | "--yes")
+        arg.starts_with("--") && !matches!(arg.as_str(), "--json" | "--check" | "--yes" | "--all")
     }) {
         eprintln!("unknown apps option {flag:?}\n\n{HELP}");
         return 1;
@@ -42,6 +47,9 @@ pub fn run(args: &[String]) -> i32 {
         }
         ["list"] => list(json),
         ["install", app_id] => install(app_id, check, yes, json),
+        ["update", app_id] => update(Some(app_id), check, yes, json),
+        // No id (with or without --all) means every installed App.
+        ["update"] => update(None, check, yes, json),
         ["link", app_id, executable] => link(app_id, executable),
         ["unlink", app_id] => unlink(app_id),
         _ => {
@@ -64,7 +72,20 @@ fn list(json: bool) -> i32 {
         );
     } else {
         for status in statuses {
-            println!("{:<28} {:<8} {}", status.id, status.state, status.command);
+            let version = match (&status.installed_version, &status.version) {
+                (Some(installed), Some(latest)) if status.update_available => {
+                    format!("{installed} → {latest}")
+                }
+                (Some(installed), _) => installed.clone(),
+                (None, Some(latest)) if status.update_available => format!("? → {latest}"),
+                (None, Some(latest)) if status.state == "linked" => format!("dev ({latest})"),
+                (None, Some(latest)) => latest.clone(),
+                (None, None) => String::new(),
+            };
+            println!(
+                "{:<28} {:<8} {:<22} {}",
+                status.id, status.state, status.command, version
+            );
         }
     }
     0
@@ -188,5 +209,94 @@ fn unlink(app_id: &str) -> i32 {
             eprintln!("{error}");
             1
         }
+    }
+}
+
+/// Reinstall the Apps whose installed release differs from the registry's
+/// version. One App, or every installed one with `--all`. `--check` only
+/// reports: exit 3 when at least one update is available, 0 when none.
+fn update(app_id: Option<&str>, check: bool, yes: bool, json: bool) -> i32 {
+    let home = unpeel_core::app_paths::unpeel_home();
+    let candidates: Vec<_> = match app_id {
+        Some(app_id) => match apps_mcp::catalog_app(app_id) {
+            Some(app) => vec![app],
+            None => {
+                eprintln!("unknown or unsupported App id {app_id:?}");
+                return 1;
+            }
+        },
+        None => apps_mcp::catalog_apps(),
+    };
+    let outdated: Vec<_> = candidates
+        .into_iter()
+        .filter(|app| app_installer::status(&home, app).update_available)
+        .collect();
+    if outdated.is_empty() {
+        if json {
+            println!("{}", serde_json::json!({ "updated": [], "available": [] }));
+        } else {
+            println!("Every installed App is current.");
+        }
+        return 0;
+    }
+    if check {
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({ "available": outdated.iter().map(|app| &app.id).collect::<Vec<_>>() })
+            );
+        } else {
+            for app in &outdated {
+                let status = app_installer::status(&home, app);
+                println!(
+                    "{}: {} → {}",
+                    app.id,
+                    status.installed_version.as_deref().unwrap_or("?"),
+                    app.version.as_deref().unwrap_or("?")
+                );
+            }
+        }
+        return 3;
+    }
+    if !yes {
+        let names: Vec<_> = outdated.iter().map(|app| app.name.as_str()).collect();
+        match confirm_install(&names.join(", ")) {
+            Ok(true) => {}
+            Ok(false) => {
+                eprintln!("Update cancelled.");
+                return 1;
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                return 1;
+            }
+        }
+    }
+    let mut updated = Vec::new();
+    let mut failed = Vec::new();
+    for app in &outdated {
+        match app_installer::install(&home, &app.id) {
+            Ok(_) => updated.push(app.id.clone()),
+            Err(error) => {
+                eprintln!("{}: {error}", app.id);
+                failed.push(app.id.clone());
+            }
+        }
+    }
+    unpeel_core::state_bus::flush();
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({ "updated": updated, "failed": failed })
+        );
+    } else {
+        for id in &updated {
+            println!("updated {id} (running instances keep the old binary until restarted)");
+        }
+    }
+    if failed.is_empty() {
+        0
+    } else {
+        1
     }
 }

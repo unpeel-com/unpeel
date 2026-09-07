@@ -1068,6 +1068,12 @@ public struct RemoteAppSummary: Codable, Equatable, Identifiable, Sendable {
     /// runtime icon. Absent on Hosts older than 2026-09-06 and for Apps
     /// that ship none; clients fall back to the generic App mark.
     public let iconSvg: String?
+    /// The registry's version for this App, the Host's installed copy's
+    /// version, and whether they differ. Absent on Hosts older than
+    /// 2026-09-07 (decode to nil / false).
+    public let version: String?
+    public let installedVersion: String?
+    public let updateAvailable: Bool
     public let command: String
     public let mediaTypes: [String]
     public let fileExtensions: [String: String]
@@ -1081,6 +1087,9 @@ public struct RemoteAppSummary: Codable, Equatable, Identifiable, Sendable {
         description: String = "",
         tint: String? = nil,
         iconSvg: String? = nil,
+        version: String? = nil,
+        installedVersion: String? = nil,
+        updateAvailable: Bool = false,
         command: String,
         mediaTypes: [String] = [],
         fileExtensions: [String: String] = [:],
@@ -1093,6 +1102,9 @@ public struct RemoteAppSummary: Codable, Equatable, Identifiable, Sendable {
         self.description = description
         self.tint = tint
         self.iconSvg = iconSvg
+        self.version = version
+        self.installedVersion = installedVersion
+        self.updateAvailable = updateAvailable
         self.command = command
         self.mediaTypes = mediaTypes
         self.fileExtensions = fileExtensions
@@ -1102,8 +1114,8 @@ public struct RemoteAppSummary: Codable, Equatable, Identifiable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, description, tint, iconSvg, command, mediaTypes
-        case fileExtensions, resourceKinds, defaultFor, installed
+        case id, name, description, tint, iconSvg, version, installedVersion, updateAvailable
+        case command, mediaTypes, fileExtensions, resourceKinds, defaultFor, installed
     }
 
     public init(from decoder: Decoder) throws {
@@ -1113,6 +1125,9 @@ public struct RemoteAppSummary: Codable, Equatable, Identifiable, Sendable {
         description = try container.decodeIfPresent(String.self, forKey: .description) ?? ""
         tint = try container.decodeIfPresent(String.self, forKey: .tint)
         iconSvg = try container.decodeIfPresent(String.self, forKey: .iconSvg)
+        version = try container.decodeIfPresent(String.self, forKey: .version)
+        installedVersion = try container.decodeIfPresent(String.self, forKey: .installedVersion)
+        updateAvailable = try container.decodeIfPresent(Bool.self, forKey: .updateAvailable) ?? false
         command = try container.decode(String.self, forKey: .command)
         mediaTypes = try container.decodeIfPresent([String].self, forKey: .mediaTypes) ?? []
         fileExtensions = try container.decodeIfPresent(

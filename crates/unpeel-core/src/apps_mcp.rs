@@ -94,6 +94,10 @@ pub struct CatalogApp {
     pub id: String,
     pub binary: String,
     pub name: String,
+    /// The App version this registry publishes (the crate's version at
+    /// release time); what an installed copy is compared against.
+    #[serde(default)]
+    pub version: Option<String>,
     pub channel: String,
     #[serde(default)]
     pub description: String,
@@ -118,6 +122,8 @@ struct RawCatalogApp {
     id: String,
     binary: String,
     name: String,
+    #[serde(default)]
+    version: Option<String>,
     #[serde(default = "default_release_channel")]
     channel: String,
     #[serde(default)]
@@ -138,6 +144,16 @@ struct RawCatalogApp {
 
 fn default_release_channel() -> String {
     "stable".into()
+}
+
+/// A release version string: short, printable, no whitespace — what a Cargo
+/// package version looks like, without pretending to parse semver.
+pub fn valid_app_version(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 32
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+'))
 }
 
 /// Accept only a small, plain inline `<svg>` document: no scripts, no
@@ -296,6 +312,12 @@ fn catalog_apps_from(raw: &str) -> Vec<CatalogApp> {
                 .filter(|value| valid_hex_color(value))
                 .map(str::to_ascii_uppercase);
             let icon_svg = entry.icon_svg.as_deref().and_then(valid_icon_svg);
+            let version = entry
+                .version
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| valid_app_version(value))
+                .map(str::to_string);
             let media_types = entry
                 .media_types
                 .into_iter()
@@ -332,6 +354,7 @@ fn catalog_apps_from(raw: &str) -> Vec<CatalogApp> {
                 id: entry.id,
                 binary: entry.binary,
                 name: cap_chars(entry.name.trim(), NAME_CAP_CHARS),
+                version,
                 channel: entry.channel,
                 description: cap_chars(entry.description.trim(), DESCRIPTION_CAP_CHARS),
                 media_types,
@@ -1141,6 +1164,30 @@ mod tests {
     }
 
     #[test]
+    fn shipped_registry_versions_match_the_in_repo_app_crates() {
+        // The registry is what a Host compares an installed copy against, so
+        // it must say what the crate that release-app.mjs builds says.
+        let apps_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../apps");
+        for app in catalog_apps_from(APP_CLI_REGISTRY) {
+            let manifest = apps_root.join(&app.slug).join("Cargo.toml");
+            let Ok(text) = std::fs::read_to_string(&manifest) else {
+                continue; // an App still developed outside this repo
+            };
+            let crate_version = text
+                .lines()
+                .find_map(|line| line.strip_prefix("version = \"")?.strip_suffix('"'))
+                .expect("crate version");
+            assert_eq!(
+                app.version.as_deref(),
+                Some(crate_version),
+                "protocol/app-registry.json '{}' version must match {}",
+                app.slug,
+                manifest.display()
+            );
+        }
+    }
+
+    #[test]
     fn shipped_release_registry_is_valid_cli_catalog_data() {
         let entries =
             serde_json::from_str::<BTreeMap<String, RawCatalogApp>>(APP_CLI_REGISTRY).unwrap();
@@ -1189,6 +1236,7 @@ mod tests {
             id: "unpeel.app.markdown".into(),
             binary: "unpeel-markdown".into(),
             name: "Markdown".into(),
+            version: None,
             channel: "stable".into(),
             description: String::new(),
             tint: None,

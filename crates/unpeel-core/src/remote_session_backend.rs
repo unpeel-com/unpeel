@@ -381,6 +381,14 @@ pub struct RemoteAppSummary {
     /// Registry-authored monochrome SVG mark (additive 2026-09-06).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon_svg: Option<String>,
+    /// Registry version, the Host's installed copy's version, and whether
+    /// the two differ (additive 2026-09-07).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installed_version: Option<String>,
+    #[serde(default)]
+    pub update_available: bool,
     pub command: String,
     #[serde(default)]
     pub media_types: Vec<String>,
