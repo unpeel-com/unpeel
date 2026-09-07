@@ -15,9 +15,13 @@ unpeel open — open a resource with a workspace App
   unpeel open <path> [--with <app-id>] [--media-type <type>] [--json]
   unpeel open git:working-tree [--with diffs] [--json]
   unpeel open <resource-id> --kind <resource-kind> [--with <app-id>] [--json]
+  unpeel open <path> --resolve [--json]
 
 Inside an Unpeel Session, the App opens in a companion pane. Outside one, it
-opens as a new hosted Session. Missing Apps require user confirmation.";
+opens as a new hosted Session. Missing Apps require user confirmation.
+--resolve reports which opener this workspace's policy picks for the
+resource (an App, the editor, or the system) without opening anything —
+what an App uses before acting on a file the user activated inside it.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Args {
@@ -26,6 +30,7 @@ struct Args {
     kind: Option<String>,
     media_type: Option<String>,
     json: bool,
+    resolve: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,12 +66,26 @@ fn run_inner(arguments: &[String]) -> Result<i32, String> {
     }
     let args = parse(arguments)?;
     let resource = resolve_resource(&args)?;
+    // A file no App claims (unknown extension, no --media-type) has no
+    // catalog selector to look up: it belongs to the editor unless the
+    // caller named an App explicitly.
+    if resource.kind == "file" && resource.media_type.is_none() && args.app.is_none() {
+        if args.resolve {
+            return report_plain_file(&args, &resource);
+        }
+        let state = unpeel_core::app_state::load().unwrap_or_else(|_| json!({}));
+        return launch_editor(&state, &resource);
+    }
     let selector = resource.selector();
     let state = unpeel_core::app_state::load().unwrap_or_else(|_| json!({}));
     let configured = unpeel_core::controller_host::wire_openers(&state)
         .get(&selector)
         .and_then(serde_json::Value::as_str)
         .map(str::to_string);
+
+    if args.resolve {
+        return report_resolution(&args, &resource, configured.as_deref());
+    }
 
     if args.app.is_none() {
         match configured.as_deref() {
@@ -180,10 +199,12 @@ fn parse(arguments: &[String]) -> Result<Args, String> {
     let mut kind = None;
     let mut media_type = None;
     let mut json = false;
+    let mut resolve = false;
     let mut index = 0;
     while index < arguments.len() {
         match arguments[index].as_str() {
             "--json" => json = true,
+            "--resolve" => resolve = true,
             "--with" | "--kind" | "--media-type" => {
                 let flag = arguments[index].as_str();
                 let value = arguments
@@ -215,7 +236,64 @@ fn parse(arguments: &[String]) -> Result<Args, String> {
         kind,
         media_type,
         json,
+        resolve,
     })
+}
+
+/// `--resolve`: say which opener the workspace policy picks for the resource
+/// — `app:<id>` (with its install state), `editor`, or `system` — without
+/// opening anything. An explicit `--with` short-circuits to that App.
+fn report_resolution(
+    args: &Args,
+    resource: &ResolvedResource,
+    configured: Option<&str>,
+) -> Result<i32, String> {
+    let selector = resource.selector();
+    let mut opener = match (args.app.as_deref(), configured) {
+        (Some(wanted), _) => format!("app:{}", apps_mcp::resolve_catalog_app(wanted)?.id),
+        (None, Some(opener @ ("editor" | "system"))) => opener.to_string(),
+        (None, Some(opener)) if opener.starts_with("app:") => opener.to_string(),
+        (None, _) => match apps_mcp::default_catalog_app(&selector) {
+            Ok(app) => format!("app:{}", app.id),
+            // No App claims it: a file still has the editor; anything else
+            // has no opener at all.
+            Err(_) if resource.kind == "file" => "editor".to_string(),
+            Err(error) => return Err(error),
+        },
+    };
+    let mut app_json = serde_json::Value::Null;
+    if let Some(app_id) = opener.strip_prefix("app:") {
+        let app = apps_mcp::resolve_catalog_app(app_id)?;
+        if !apps_mcp::catalog_app_handles(&app, &resource.kind, resource.media_type.as_deref()) {
+            return Err(format!("{} does not handle {selector}.", app.name));
+        }
+        let status = app_installer::status(&unpeel_core::app_paths::unpeel_home(), &app);
+        opener = format!("app:{}", app.id);
+        app_json = json!({
+            "id": app.id,
+            "name": app.name,
+            "installed": status.state != "missing",
+        });
+    }
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "opener": opener,
+                "app": app_json,
+                "resource": {
+                    "kind": resource.kind,
+                    "id": resource.id,
+                    "mediaType": resource.media_type,
+                },
+                "selector": selector,
+            }))
+            .map_err(|error| format!("encode resolution: {error}"))?
+        );
+    } else {
+        println!("{opener}");
+    }
+    Ok(0)
 }
 
 fn resolve_resource(args: &Args) -> Result<ResolvedResource, String> {
@@ -240,7 +318,7 @@ fn resolve_resource(args: &Args) -> Result<ResolvedResource, String> {
             args.resource.clone()
         };
         let media_type = if kind == "file" {
-            Some(resolve_file_media_type(&id, args.media_type.as_deref())?)
+            resolve_file_media_type(&id, args.media_type.as_deref(), args.app.is_some())?
         } else {
             if args.media_type.is_some() {
                 return Err("--media-type is valid only with a file resource".into());
@@ -258,8 +336,9 @@ fn resolve_resource(args: &Args) -> Result<ResolvedResource, String> {
     let kind = if path.is_dir() { "folder" } else { "file" };
     let id = path.to_string_lossy().into_owned();
     let media_type = (kind == "file")
-        .then(|| resolve_file_media_type(&id, args.media_type.as_deref()))
-        .transpose()?;
+        .then(|| resolve_file_media_type(&id, args.media_type.as_deref(), args.app.is_some()))
+        .transpose()?
+        .flatten();
     Ok(ResolvedResource {
         kind: kind.into(),
         id,
@@ -267,19 +346,53 @@ fn resolve_resource(args: &Args) -> Result<ResolvedResource, String> {
     })
 }
 
-fn resolve_file_media_type(path: &str, explicit: Option<&str>) -> Result<String, String> {
+/// The media type for a path: explicit `--media-type`, else the registry's
+/// extension map. Unknown extensions are an error only when the caller named
+/// an App (`--with`), which needs a selector to validate against; otherwise
+/// `None` means "no App claims this file" and the editor handles it.
+fn resolve_file_media_type(
+    path: &str,
+    explicit: Option<&str>,
+    app_named: bool,
+) -> Result<Option<String>, String> {
     if let Some(explicit) = explicit.map(str::trim).filter(|value| !value.is_empty()) {
-        return Ok(explicit.to_string());
+        return Ok(Some(explicit.to_string()));
     }
     let extension = Path::new(path)
         .extension()
         .and_then(|value| value.to_str())
         .unwrap_or_default();
-    apps_mcp::media_type_for_extension(extension).ok_or_else(|| {
-        format!(
+    match apps_mcp::media_type_for_extension(extension) {
+        Some(media_type) => Ok(Some(media_type)),
+        None if app_named => Err(format!(
             "No App declares the .{extension} extension. Pass --media-type or add it to the App registry."
-        )
-    })
+        )),
+        None => Ok(None),
+    }
+}
+
+/// `--resolve` for a file no App claims: the editor, reported in the same
+/// shape as `report_resolution`.
+fn report_plain_file(args: &Args, resource: &ResolvedResource) -> Result<i32, String> {
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "opener": "editor",
+                "app": serde_json::Value::Null,
+                "resource": {
+                    "kind": resource.kind,
+                    "id": resource.id,
+                    "mediaType": serde_json::Value::Null,
+                },
+                "selector": "file",
+            }))
+            .map_err(|error| format!("encode resolution: {error}"))?
+        );
+    } else {
+        println!("editor");
+    }
+    Ok(0)
 }
 
 fn path_backed(kind: &str) -> bool {
@@ -369,6 +482,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn parser_accepts_resolve() {
+        let args = parse(&["README.md".into(), "--resolve".into(), "--json".into()]).unwrap();
+        assert!(args.resolve);
+        assert!(args.json);
+        assert_eq!(args.resource, "README.md");
+        assert!(!parse(&["README.md".into()]).unwrap().resolve);
+    }
+
+    #[test]
     fn parser_accepts_explicit_typed_resource() {
         let args = parse(&[
             "github:unpeel-com/unpeel#42".into(),
@@ -385,8 +507,18 @@ mod tests {
     #[test]
     fn markdown_extension_is_registry_driven() {
         assert_eq!(
-            resolve_file_media_type("/tmp/readme.markdown", None).unwrap(),
-            "text/markdown"
+            resolve_file_media_type("/tmp/readme.markdown", None, false).unwrap(),
+            Some("text/markdown".to_string())
+        );
+        // Unknown extensions are the editor's unless an App was named.
+        assert_eq!(
+            resolve_file_media_type("/tmp/notes.txt", None, false).unwrap(),
+            None
+        );
+        assert!(resolve_file_media_type("/tmp/notes.txt", None, true).is_err());
+        assert_eq!(
+            resolve_file_media_type("/tmp/notes.txt", Some("text/plain"), true).unwrap(),
+            Some("text/plain".to_string())
         );
     }
 
@@ -398,6 +530,7 @@ mod tests {
             kind: None,
             media_type: None,
             json: false,
+            resolve: false,
         };
         let resource = resolve_resource(&args).unwrap();
         assert_eq!(resource.kind, "git.working-tree");
