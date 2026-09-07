@@ -69,9 +69,10 @@ Important fields:
   only to rank an existing user's agents during first-run preset seeding.
 - `lifecycle`: source, authority, fallback, reliability claims, and the
   controller-side output semantics used to restore hook state
-  (`anchor_start_event_to_output`, `attention_clears_on_output`, and
-  `distrust_stops_while_output_grows`). The output flags default to
-  `true`, `true`, and `false`; declare only runtime-specific exceptions.
+  (`anchor_start_event_to_output` and `attention_clears_on_output`). These
+  flags default to `true`; declare only runtime-specific exceptions. The
+  legacy `distrust_stops_while_output_grows` field is accepted but ignored:
+  output never reopens a settled turn.
   `authority = "none"` must use `fallback = "none"`: raw output/screen
   changes remain telemetry and never start animated Busy.
 - `capabilities`: only behavior actually implemented by the adapter.

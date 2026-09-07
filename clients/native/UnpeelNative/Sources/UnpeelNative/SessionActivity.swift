@@ -28,14 +28,6 @@ final class SessionActivityEngine {
     /// (refresh_hook_busy_deadline, :225-249).
     static let hookIdleTimeout: TimeInterval = 5 * 60
 
-    /// Stop-distrust guard (codex): codex fires agent-turn-complete Stops for
-    /// internal sub-turns of one long run, so a Stop is not proof the work
-    /// ended. Growth observed after the grace (past the turn's trailing render
-    /// burst) but inside the window re-arms busy; the bounded window keeps
-    /// later user scroll repaints from faking busy on a finished session.
-    static let stopRearmGrace: TimeInterval = 5
-    static let stopRearmWindow: TimeInterval = 90
-
     struct Entry {
         var state: SessionStatus = .idle
         /// Latched on the first hook event (transition_state, :446-449).
@@ -67,9 +59,6 @@ final class SessionActivityEngine {
         /// to the new launch; a lone late Stop cannot.
         var legacyTurnStartedAt: Date?
         var legacyTurnStartEventName: String?
-        /// When the latest Stop/StopFailure landed; the stop-distrust guard
-        /// only re-arms busy inside [grace, window] after this instant.
-        var stoppedAt: Date?
     }
 
     private(set) var entries: [String: Entry] = [:]
@@ -151,22 +140,18 @@ final class SessionActivityEngine {
             }
             entry.state = .busy
             entry.deadlineAt = now.addingTimeInterval(Self.hookIdleTimeout)
-            entry.stoppedAt = nil
             return .busy
         case "Stop", "StopFailure":
             entry.state = .idle
             entry.deadlineAt = nil
-            entry.stoppedAt = now
             return .idle
         case "StopCancelled", "Idle":
             entry.state = .idle
             entry.deadlineAt = nil
-            entry.stoppedAt = nil
             return .idle
         case "PermissionRequest":
             entry.state = .attention
             entry.deadlineAt = nil
-            entry.stoppedAt = nil
             // Re-baseline output tracking: the prompt render that triggered
             // this request must not count as "agent resumed" on the next
             // sweep. Only output growth *after* the user answers should clear
@@ -189,7 +174,6 @@ final class SessionActivityEngine {
         sessionID: String,
         outputSize: UInt64,
         allowAttentionClearFromOutput: Bool = true,
-        distrustStops: Bool = false,
         now: Date = Date()
     ) -> Bool {
         guard var entry = entries[sessionID] else { return false }
@@ -226,16 +210,6 @@ final class SessionActivityEngine {
             return true
         }
 
-        // Stop-distrust guard: a hook-idle session whose output keeps growing
-        // shortly after its Stop is still working (codex mid-run Stops). The
-        // ordinary busy idle-timeout then settles it once output stops.
-        if entry.state == .idle, distrustStops, grew, let stoppedAt = entry.stoppedAt {
-            let sinceStop = now.timeIntervalSince(stoppedAt)
-            if sinceStop >= Self.stopRearmGrace, sinceStop <= Self.stopRearmWindow {
-                entry.state = .busy
-                entry.deadlineAt = now.addingTimeInterval(Self.hookIdleTimeout)
-            }
-        }
         return false
     }
 

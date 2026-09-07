@@ -173,8 +173,8 @@ pub struct RuntimeLifecycle {
     /// Whether terminal output growth means an attention prompt was answered.
     #[serde(default = "default_true")]
     pub attention_clears_on_output: bool,
-    /// Whether an idle/Stop hook is provisional while terminal output keeps
-    /// growing (some runtimes emit Stops for internal sub-turns).
+    /// Legacy descriptor field retained for package compatibility. Ignored:
+    /// terminal output cannot reopen a turn settled by an authoritative hook.
     #[serde(default)]
     pub distrust_stops_while_output_grows: bool,
 }

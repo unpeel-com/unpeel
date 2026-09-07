@@ -36,7 +36,6 @@ authority = "complete"
 fallback = "none"
 completion_reliable = true
 attention_reliable = true
-distrust_stops_while_output_grows = true
 
 [[usage.stores]]
 root = ".codex/sessions"

@@ -4,6 +4,30 @@ import Testing
 
 @MainActor
 struct HookRestartTests {
+    @Test(arguments: ["Stop", "StopFailure", "StopCancelled", "Idle"])
+    func settledTurnSeedIgnoresRedrawsUntilOpeningHook(eventName: String) throws {
+        let event = try #require(LastHookEvent.parse(Data(
+            "{\"hook_event_name\":\"\(eventName)\"}".utf8
+        )))
+        let engine = SessionActivityEngine()
+        let stopped = Date(timeIntervalSince1970: 1_000)
+        engine.applyHookEvent(sessionID: "s", hookEventName: event.hookEventName, now: stopped)
+        engine.noteOutputAndSweep(sessionID: "s", outputSize: 100, now: stopped)
+        for seconds in [2, 5, 12, 89, 91, 301] {
+            engine.noteOutputAndSweep(
+                sessionID: "s", outputSize: UInt64(100 + seconds),
+                now: stopped.addingTimeInterval(Double(seconds))
+            )
+            #expect(engine.hookOwnedState("s") == .idle)
+            #expect(engine.entries["s"]?.lastHookCompletedTurn == (eventName == "Stop"))
+        }
+        engine.applyHookEvent(
+            sessionID: "s", hookEventName: "UserPromptSubmit", now: stopped.addingTimeInterval(302)
+        )
+        #expect(engine.hookOwnedState("s") == .busy)
+        #expect(engine.entries["s"]?.lastHookCompletedTurn == false)
+    }
+
     @Test(arguments: ["stop_cancelled", "stop_failure", "idle"])
     func unsuccessfulTurnSeedsIdle(eventName: String) throws {
         let event = try #require(LastHookEvent.parse(Data(
@@ -137,59 +161,6 @@ final class SessionActivityTests: XCTestCase {
             )
         )
         XCTAssertEqual(engine.hookOwnedState("s1"), .idle)
-    }
-
-    func testDistrustedStopRearmsBusyOnSustainedGrowthOnly() {
-        let engine = SessionActivityEngine()
-        let start = Date(timeIntervalSince1970: 1_000)
-
-        engine.applyHookEvent(sessionID: "s1", hookEventName: "UserPromptSubmit", now: start)
-        engine.noteOutputAndSweep(
-            sessionID: "s1", outputSize: 100, distrustStops: true,
-            now: start.addingTimeInterval(1)
-        )
-        engine.applyHookEvent(
-            sessionID: "s1", hookEventName: "Stop", now: start.addingTimeInterval(10)
-        )
-        XCTAssertEqual(engine.hookOwnedState("s1"), .idle)
-
-        // The turn's trailing render burst lands inside the grace: stays idle.
-        engine.noteOutputAndSweep(
-            sessionID: "s1", outputSize: 200, distrustStops: true,
-            now: start.addingTimeInterval(12)
-        )
-        XCTAssertEqual(engine.hookOwnedState("s1"), .idle)
-
-        // Sustained growth past the grace re-arms busy (codex mid-run Stop).
-        engine.noteOutputAndSweep(
-            sessionID: "s1", outputSize: 300, distrustStops: true,
-            now: start.addingTimeInterval(17)
-        )
-        XCTAssertEqual(engine.hookOwnedState("s1"), .busy)
-
-        // Growth outside the window (a later scroll repaint) never re-arms.
-        engine.applyHookEvent(
-            sessionID: "s1", hookEventName: "Stop", now: start.addingTimeInterval(30)
-        )
-        engine.noteOutputAndSweep(
-            sessionID: "s1", outputSize: 300, distrustStops: true,
-            now: start.addingTimeInterval(31)
-        )
-        engine.noteOutputAndSweep(
-            sessionID: "s1", outputSize: 400, distrustStops: true,
-            now: start.addingTimeInterval(200)
-        )
-        XCTAssertEqual(engine.hookOwnedState("s1"), .idle)
-
-        // Providers without the guard keep the strict hook latch.
-        engine.applyHookEvent(sessionID: "s2", hookEventName: "Stop", now: start)
-        engine.noteOutputAndSweep(
-            sessionID: "s2", outputSize: 100, now: start.addingTimeInterval(1)
-        )
-        engine.noteOutputAndSweep(
-            sessionID: "s2", outputSize: 200, now: start.addingTimeInterval(10)
-        )
-        XCTAssertEqual(engine.hookOwnedState("s2"), .idle)
     }
 
     func testPermissionAttentionRequiresPostBaselineOutputGrowthToClear() {

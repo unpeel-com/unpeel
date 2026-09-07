@@ -35,7 +35,7 @@ final class PresetsTests: XCTestCase {
         let codex = try XCTUnwrap(SetupTool.codex.metadata)
         XCTAssertTrue(codex.anchorStartEventToOutput)
         XCTAssertTrue(codex.attentionClearsOnOutput)
-        XCTAssertTrue(codex.distrustStopsWhileOutputGrows)
+        XCTAssertFalse(codex.distrustStopsWhileOutputGrows)
 
         let claude = try XCTUnwrap(SetupTool.claude.metadata)
         XCTAssertTrue(claude.anchorStartEventToOutput)

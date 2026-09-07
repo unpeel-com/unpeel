@@ -48,9 +48,8 @@ accepted. The disk seed (`last-hook-event.json`) also carries no runtime
 identity and therefore stays launch-command-gated; observed-only sessions
 latch from live events only. The observation still selects live
 sidebar/icon/tint presentation, and `menu_prompt_active` still provides
-attention. Output-policy flags (grok's attention-clears-on-output opt-out,
-codex's stop-distrust) follow the launch binding first, else the observed
-runtime.
+attention. Output-policy flags (such as Grok's attention-clears-on-output opt-out)
+follow the launch binding first, else the observed runtime.
 
 Hook-driven sessions:
 
@@ -76,18 +75,13 @@ Hook-driven sessions:
   input never starts Busy. Activity follows hooks, the explicit runtime-owned
   Escape cancellation contract below, and the
   5-minute output-rearmed timeout.
-- **Codex exception — the stop-distrust guard (2026-08-11):** codex fires
-  agent-turn-complete `Stop` notifications for *internal sub-turns* of one
-  long run, so its long agentic turns used to show idle the whole time. For
-  codex only, a hook-idle session whose `output.bin` keeps growing between
-  5s and 90s after its latest Stop flips back to busy (then settles through
-  the ordinary output-rearmed timeout). The 5s grace skips the turn's
-  trailing render burst; the 90s window keeps later user scroll repaints
-  from faking busy on a finished session. Implemented identically in
-  `SessionActivityEngine` (`distrustStops`); the interactive terminal UI's own
-  `ActivityEngine` (`distrust_stops`) implemented the same logic before it was
-  removed 2026-09-03. The native scan additionally stats hook-idle codex
-  sessions, which are otherwise skipped.
+- **Settled turns stay idle, including Codex.** Terminal redraws after a
+  `Stop`, `StopFailure`, `StopCancelled`, or `Idle` never reopen the turn or
+  erase its completion outcome. The old Codex output-based Stop workaround
+  was removed after a real final Stop was followed by a redraw twelve seconds
+  later, resurrecting Busy. A new turn needs an opening hook; independently
+  tracked children keep their own lifecycle. This applies to the Host and
+  the Mac startup seed, including after a restart.
 - The latch survives app restarts via a durable seed: every provider hook
   script also writes its last lifecycle event to
   `~/.unpeel/app-sessions/<id>/last-hook-event.json` (atomic write; path from

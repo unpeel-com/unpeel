@@ -12,13 +12,6 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 pub const HOOK_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
-/// Stop-distrust guard (codex): codex fires agent-turn-complete Stops for
-/// internal sub-turns of one long run, so a Stop is not proof the work ended.
-/// Growth observed after the grace (past the turn's trailing render burst)
-/// but inside the window re-arms busy; the bounded window keeps later user
-/// scroll repaints from faking busy on a genuinely finished session.
-const STOP_REARM_GRACE: Duration = Duration::from_secs(5);
-const STOP_REARM_WINDOW: Duration = Duration::from_secs(90);
 /// Compatibility window for hooks installed by an older Unpeel build, before
 /// lifecycle payloads carried `unpeel_runtime_generation`. Immediately after
 /// an in-place generation edge, an untagged Stop is ambiguous: it may be a
@@ -60,9 +53,6 @@ struct Entry {
     /// Last observed activity signal (the host's screen-change stamp, or
     /// output.bin's size under old hosts); "grew" = the value changed.
     last_signal: Option<u64>,
-    /// When the latest Stop/StopFailure landed; the stop-distrust guard only
-    /// re-arms busy inside [grace, window] after this instant.
-    stopped_at: Option<SystemTime>,
     /// Newest accepted live/durable activity transition. Metadata-only hooks
     /// do not supersede a missed durable transition.
     last_transition_at: Option<SystemTime>,
@@ -211,32 +201,27 @@ impl ActivityEngine {
                 entry.last_turn_started_at = Some(unix_ms(now));
                 entry.state = Some(HookState::Busy);
                 entry.deadline_at = Some(now + HOOK_IDLE_TIMEOUT);
-                entry.stopped_at = None;
             }
             "Stop" | "StopFailure" => {
                 entry.completed = canonical == "Stop";
                 entry.state = Some(HookState::Idle);
                 entry.deadline_at = None;
-                entry.stopped_at = Some(now);
             }
             "StopCancelled" => {
                 entry.native_cancelled = true;
                 entry.completed = false;
                 entry.state = Some(HookState::Idle);
                 entry.deadline_at = None;
-                entry.stopped_at = None;
             }
             "Idle" => {
                 entry.completed = false;
                 entry.state = Some(HookState::Idle);
                 entry.deadline_at = None;
-                entry.stopped_at = None;
             }
             "PermissionRequest" => {
                 entry.completed = false;
                 entry.state = Some(HookState::Attention);
                 entry.deadline_at = None;
-                entry.stopped_at = None;
                 // Re-baseline output tracking so the answer's redraw counts
                 // as fresh growth.
                 entry.last_signal = None;
@@ -421,7 +406,6 @@ impl ActivityEngine {
                     entry.state = Some(HookState::Idle);
                 }
                 entry.deadline_at = None;
-                entry.stopped_at = None;
             }
         }
         entry.submitted_at = marker.submitted_at;
@@ -496,15 +480,13 @@ impl ActivityEngine {
     /// Per-tick output observation + timeout sweep for hook-owned sessions.
     /// `allow_attention_clear` is false for tools that repaint their ask-user
     /// UI to the terminal (grok), where growth doesn't mean "user answered".
-    /// `distrust_stops` is true for tools that fire Stop mid-run (codex): a
-    /// hook-idle session whose output keeps growing past the stop-rearm grace
-    /// flips back to busy.
+    /// A settled turn remains idle until another opening hook, regardless of
+    /// trailing output, scrolling, resizing, or a Controller reconnect.
     pub fn note_output_and_sweep(
         &mut self,
         session_id: &str,
         activity_signal: u64,
         allow_attention_clear: bool,
-        distrust_stops: bool,
         now: SystemTime,
     ) {
         let entry = self.entries.entry(session_id.to_string()).or_default();
@@ -555,16 +537,6 @@ impl ActivityEngine {
                     }
                 } else if grew {
                     entry.deadline_at = Some(now + HOOK_IDLE_TIMEOUT);
-                }
-            }
-            Some(HookState::Idle) if distrust_stops && grew => {
-                if let Some(stopped_at) = entry.stopped_at {
-                    let since_stop = now.duration_since(stopped_at).unwrap_or_default();
-                    if since_stop >= STOP_REARM_GRACE && since_stop <= STOP_REARM_WINDOW {
-                        entry.state = Some(HookState::Busy);
-                        entry.completed = false;
-                        entry.deadline_at = Some(now + HOOK_IDLE_TIMEOUT);
-                    }
                 }
             }
             _ => {}
@@ -761,8 +733,8 @@ mod tests {
         timed_seed(dir.path(), "UserPromptSubmit", 1, at(1000));
         let mut engine = ActivityEngine::default();
         engine.seed_from_disk("s", dir.path(), true, None, 1);
-        engine.note_output_and_sweep("s", 1, false, false, at(1000));
-        engine.note_output_and_sweep("s", 2, false, false, at(1000) + HOOK_IDLE_TIMEOUT);
+        engine.note_output_and_sweep("s", 1, false, at(1000));
+        engine.note_output_and_sweep("s", 2, false, at(1000) + HOOK_IDLE_TIMEOUT);
         assert_eq!(
             engine.hook_owned_state("s"),
             Some(HookState::Idle),
@@ -897,12 +869,11 @@ mod tests {
         engine.observe_runtime_launch("s", 1, None);
         engine.sync_background_from_disk("s", dir.path(), 1, None);
         engine.apply_hook_event("s", "Stop", None, now);
-        engine.note_output_and_sweep("s", 10, true, false, now);
+        engine.note_output_and_sweep("s", 10, true, now);
         engine.note_output_and_sweep(
             "s",
             10,
             true,
-            false,
             now + HOOK_IDLE_TIMEOUT + Duration::from_secs(1),
         );
         assert_eq!(engine.hook_owned_state("s"), Some(HookState::Idle));
@@ -912,7 +883,6 @@ mod tests {
             "s",
             11,
             true,
-            false,
             now + HOOK_IDLE_TIMEOUT + Duration::from_secs(2),
         );
         assert_eq!(engine.hook_owned_state("s"), Some(HookState::Idle));
@@ -941,8 +911,8 @@ mod tests {
                 None
             ));
         }
-        engine.note_output_and_sweep("s", 1, true, true, at(3000));
-        engine.note_output_and_sweep("s", 2, true, true, at(9000));
+        engine.note_output_and_sweep("s", 1, true, at(3000));
+        engine.note_output_and_sweep("s", 2, true, at(9000));
         assert_eq!(engine.hook_owned_state("s"), Some(HookState::Idle));
         assert!(engine.is_cancelled("s"));
 
@@ -1040,7 +1010,7 @@ mod tests {
         assert!(!engine.is_completed("s"));
         engine.apply_hook_event("s", "PermissionRequest", None, at(2100));
         engine.apply_hook_event("s", "Stop", None, at(2200));
-        engine.note_output_and_sweep("s", 1, true, true, at(2300));
+        engine.note_output_and_sweep("s", 1, true, at(2300));
         assert_eq!(engine.hook_owned_state("s"), Some(HookState::Idle));
         assert!(!engine.is_completed("s"));
         // Native lifecycle proof works for client stops and auto-wake turns
@@ -1063,7 +1033,7 @@ mod tests {
         assert_eq!(engine.hook_owned_state("s"), Some(HookState::Idle));
         assert!(!engine.is_completed("s"));
         engine.apply_hook_event("s", "UserPromptSubmit", None, at(4000));
-        engine.note_output_and_sweep("s", 0, true, false, at(4000) + HOOK_IDLE_TIMEOUT);
+        engine.note_output_and_sweep("s", 0, true, at(4000) + HOOK_IDLE_TIMEOUT);
         assert_eq!(engine.hook_owned_state("s"), Some(HookState::Idle));
         assert!(!engine.is_completed("s"));
     }
@@ -1200,9 +1170,9 @@ mod tests {
         engine.apply_hook_event("s", "Start", None, t0);
 
         // Growth inside the window re-arms the deadline.
-        engine.note_output_and_sweep("s", 0, true, false, t0);
-        engine.note_output_and_sweep("s", 100, true, false, t0 + Duration::from_secs(200));
-        engine.note_output_and_sweep("s", 200, true, false, t0 + Duration::from_secs(400));
+        engine.note_output_and_sweep("s", 0, true, t0);
+        engine.note_output_and_sweep("s", 100, true, t0 + Duration::from_secs(200));
+        engine.note_output_and_sweep("s", 200, true, t0 + Duration::from_secs(400));
         assert_eq!(engine.hook_owned_state("s"), Some(HookState::Busy));
 
         // No growth past the re-armed deadline expires to idle.
@@ -1210,7 +1180,6 @@ mod tests {
             "s",
             200,
             true,
-            false,
             t0 + Duration::from_secs(400) + HOOK_IDLE_TIMEOUT,
         );
         assert_eq!(engine.hook_owned_state("s"), Some(HookState::Idle));
@@ -1223,46 +1192,59 @@ mod tests {
 
         engine.apply_hook_event("s", "PermissionRequest", None, t0);
         // First observation is the re-baseline (last_signal was reset).
-        engine.note_output_and_sweep("s", 100, true, false, t0 + Duration::from_secs(1));
+        engine.note_output_and_sweep("s", 100, true, t0 + Duration::from_secs(1));
         assert_eq!(engine.hook_owned_state("s"), Some(HookState::Attention));
-        engine.note_output_and_sweep("s", 150, true, false, t0 + Duration::from_secs(2));
+        engine.note_output_and_sweep("s", 150, true, t0 + Duration::from_secs(2));
         assert_eq!(engine.hook_owned_state("s"), Some(HookState::Busy));
 
         // Grok-style: growth never clears attention.
         engine.apply_hook_event("g", "PermissionRequest", None, t0);
-        engine.note_output_and_sweep("g", 100, false, false, t0 + Duration::from_secs(1));
-        engine.note_output_and_sweep("g", 150, false, false, t0 + Duration::from_secs(2));
+        engine.note_output_and_sweep("g", 100, false, t0 + Duration::from_secs(1));
+        engine.note_output_and_sweep("g", 150, false, t0 + Duration::from_secs(2));
         assert_eq!(engine.hook_owned_state("g"), Some(HookState::Attention));
     }
 
     #[test]
-    fn distrusted_stop_rearms_busy_on_sustained_growth_only() {
-        let mut engine = ActivityEngine::default();
-        let t0 = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
-        engine.apply_hook_event("s", "UserPromptSubmit", None, t0);
-        engine.note_output_and_sweep("s", 100, true, true, t0 + Duration::from_secs(1));
-        engine.apply_hook_event("s", "Stop", None, t0 + Duration::from_secs(10));
-        assert_eq!(engine.hook_owned_state("s"), Some(HookState::Idle));
-
-        // The turn's trailing render burst lands inside the grace: stays idle.
-        engine.note_output_and_sweep("s", 200, true, true, t0 + Duration::from_secs(12));
-        assert_eq!(engine.hook_owned_state("s"), Some(HookState::Idle));
-
-        // Sustained growth past the grace re-arms busy (codex mid-run Stop).
-        engine.note_output_and_sweep("s", 300, true, true, t0 + Duration::from_secs(17));
-        assert_eq!(engine.hook_owned_state("s"), Some(HookState::Busy));
-
-        // Growth outside the window (a later scroll repaint) never re-arms.
-        engine.apply_hook_event("s", "Stop", None, t0 + Duration::from_secs(30));
-        engine.note_output_and_sweep("s", 300, true, true, t0 + Duration::from_secs(31));
-        engine.note_output_and_sweep("s", 400, true, true, t0 + Duration::from_secs(200));
-        assert_eq!(engine.hook_owned_state("s"), Some(HookState::Idle));
-
-        // Providers without the guard keep the strict hook latch.
-        engine.apply_hook_event("c", "Stop", None, t0);
-        engine.note_output_and_sweep("c", 100, true, false, t0 + Duration::from_secs(1));
-        engine.note_output_and_sweep("c", 200, true, false, t0 + Duration::from_secs(10));
-        assert_eq!(engine.hook_owned_state("c"), Some(HookState::Idle));
+    fn settled_turns_stay_idle_through_redraws_and_restart_until_an_opening_hook() {
+        for event in ["Stop", "StopFailure", "StopCancelled", "Idle"] {
+            let dir = tempfile::tempdir().unwrap();
+            let t0 = at(1_000_000);
+            timed_seed(dir.path(), event, 1, t0);
+            for restored in [false, true] {
+                let mut engine = ActivityEngine::default();
+                if restored {
+                    engine.seed_from_disk("s", dir.path(), true, None, 1);
+                } else {
+                    engine.apply_hook_event("s", "UserPromptSubmit", None, at(900_000));
+                    engine.apply_hook_event("s", event, None, t0);
+                }
+                engine.note_output_and_sweep("s", 100, true, t0);
+                // Reproduce delayed redraws inside the old 5–90 second window,
+                // including the reported 12-second repaint, and later output.
+                for seconds in [2, 5, 12, 89, 91, 301] {
+                    engine.note_output_and_sweep(
+                        "s",
+                        100 + seconds,
+                        true,
+                        t0 + Duration::from_secs(seconds),
+                    );
+                    assert_eq!(
+                        engine.hook_owned_state("s"),
+                        Some(HookState::Idle),
+                        "{event}, restored={restored}, redraw after {seconds}s"
+                    );
+                    assert_eq!(engine.is_completed("s"), event == "Stop");
+                }
+                engine.apply_hook_event(
+                    "s",
+                    "UserPromptSubmit",
+                    None,
+                    t0 + Duration::from_secs(302),
+                );
+                assert_eq!(engine.hook_owned_state("s"), Some(HookState::Busy));
+                assert!(!engine.is_completed("s"));
+            }
+        }
     }
 
     #[test]

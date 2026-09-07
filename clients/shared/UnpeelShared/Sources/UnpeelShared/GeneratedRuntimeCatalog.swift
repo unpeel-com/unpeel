@@ -172,7 +172,7 @@ public enum UnpeelRuntimeCatalog {
             attentionReliable: true,
             anchorStartEventToOutput: true,
             attentionClearsOnOutput: true,
-            distrustStopsWhileOutputGrows: true,
+            distrustStopsWhileOutputGrows: false,
             capabilities: [.lifecycleHooks, .resume, .restartAgent, .mcpSessions, .mcpBrowser, .mcpComputer, .transcript, .notifyWhenDone],
             usageStores: [
                 UnpeelRuntimeUsageStore(

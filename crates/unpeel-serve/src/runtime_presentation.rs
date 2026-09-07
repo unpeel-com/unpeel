@@ -128,7 +128,7 @@ mod tests {
         let codex = lifecycle("codex --full-auto").unwrap();
         assert!(codex.anchor_start_event_to_output);
         assert!(codex.attention_clears_on_output);
-        assert!(codex.distrust_stops_while_output_grows);
+        assert!(!codex.distrust_stops_while_output_grows);
 
         let claude = lifecycle("claude").unwrap();
         assert!(claude.anchor_start_event_to_output);

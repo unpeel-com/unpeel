@@ -270,7 +270,7 @@ fn derive_status(
         .unwrap_or(true);
     // Output may only maintain an authoritative hook-owned state. Use the
     // managed launch policy when it owns hooks, otherwise the observed hook
-    // runtime's policy (grok questions, codex's provisional Stops).
+    // runtime's policy (grok questions).
     let output_policy = if uses_lifecycle_hooks {
         lifecycle
     } else {
@@ -279,9 +279,6 @@ fn derive_status(
     let attention_clears_on_output = output_policy
         .map(|policy| policy.attention_clears_on_output)
         .unwrap_or(true);
-    let distrust_stops_while_output_grows = output_policy
-        .map(|policy| policy.distrust_stops_while_output_grows)
-        .unwrap_or(false);
     let id = manifest.session.id.as_str();
     engine.observe_runtime_launch(
         id,
@@ -345,13 +342,7 @@ fn derive_status(
             // then report the latch. Runtime-specific output semantics are
             // declared beside the runtime's hooks rather than guessed from
             // its command name here.
-            engine.note_output_and_sweep(
-                id,
-                activity_signal,
-                attention_clears_on_output,
-                distrust_stops_while_output_grows,
-                now,
-            );
+            engine.note_output_and_sweep(id, activity_signal, attention_clears_on_output, now);
             match engine.hook_owned_state(id) {
                 Some(HookState::Busy) => Status::Busy,
                 Some(HookState::Attention) => Status::Attention,
