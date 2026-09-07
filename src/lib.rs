@@ -20,6 +20,7 @@ mod context;
 mod drag;
 mod drop_target;
 mod editor;
+mod opener;
 mod explorer;
 mod gauge;
 mod host;
@@ -98,6 +99,7 @@ pub use drop_target::{
     DropTargetSurface,
 };
 pub use editor::{EditorBridge, EditorError, open_in_editor};
+pub use opener::{OpenOutcome, open_resource};
 pub use explorer::{
     Explorer, ExplorerEntry, ExplorerEntryDetail, ExplorerEvent, ExplorerInput, ExplorerTheme,
     ExplorerWidget,

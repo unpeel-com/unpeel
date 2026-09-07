@@ -24,7 +24,7 @@ const MAX_LITERAL_KEYS_PER_CALL: usize = 40;
 pub struct AgentError(String);
 
 impl AgentError {
-    fn new(message: impl Into<String>) -> Self {
+    pub(crate) fn new(message: impl Into<String>) -> Self {
         Self(message.into())
     }
 }
