@@ -94,6 +94,10 @@ pub fn run(
         .publish(UI_VIEW_ID, ui_revision, published.clone())
         .map_err(ui_bridge_error)?;
     let mut last_agent_context_refresh = Instant::now();
+    // The session title names the working tree and its branch (the Host
+    // folds it into the sidebar row until the user renames it). Recomputed
+    // when the tree changes or the periodic sync runs, written on change.
+    let mut session_title = String::new();
     let mut rendered = RenderResult::default();
     let mut menu: Option<ContextMenu> = None;
     let mut selecting = false;
@@ -118,6 +122,11 @@ pub fn run(
             &mut published,
         )?;
         if needs_draw {
+            let title = session_title_for(&app.repository);
+            if title != session_title {
+                reporter.set_title(&title);
+                session_title = title;
+            }
             reporter.set_context(&serde_json::json!({
                 "root": app.root(),
                 "view": if app.is_detail() { "diff" } else { "files" },
@@ -2016,6 +2025,22 @@ fn visible_cells(line: &str, offset: usize, width: u16) -> String {
         visible_width += character_width;
     }
     result
+}
+
+
+/// Sidebar title for a working tree: `<folder> · <branch>` (short commit id
+/// when detached), or just the folder when Git has no answer.
+fn session_title_for(repository: &crate::git::Repository) -> String {
+    let folder = repository
+        .root()
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| repository.root().display().to_string());
+    match repository.branch() {
+        Some(branch) => format!("{folder} · {branch}"),
+        None => folder,
+    }
 }
 
 #[cfg(test)]

@@ -180,6 +180,28 @@ impl Repository {
         &self.root
     }
 
+    /// The checked-out branch, or the short commit id when HEAD is detached.
+    /// `None` when Git cannot answer (a corrupt or unborn repository).
+    pub fn branch(&self) -> Option<String> {
+        let output = self.git(["rev-parse", "--abbrev-ref", "HEAD"]).ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let name = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        if name.is_empty() {
+            return None;
+        }
+        if name != "HEAD" {
+            return Some(name);
+        }
+        let output = self.git(["rev-parse", "--short", "HEAD"]).ok()?;
+        output
+            .status
+            .success()
+            .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+            .filter(|short| !short.is_empty())
+    }
+
     pub fn changed_files(&self) -> io::Result<Vec<ChangedFile>> {
         let output = self.git(["status", "--porcelain=v1", "-z", "--untracked-files=all"])?;
         if !output.status.success() {
