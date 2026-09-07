@@ -668,7 +668,27 @@ final class TerminalFontModel: ObservableObject {
     /// (half-width Latin, full-width Hangul/Kanji), carry no fixed-pitch
     /// flag, and are exactly what a Korean or Japanese user is after
     /// (orgs/unpeel-com discussions #9).
+    nonisolated private static let monospacedFamiliesLock = NSLock()
+    nonisolated(unsafe) private static var monospacedFamiliesCache: [String]?
+
     nonisolated static func installedMonospacedFamilies() -> [String] {
+        // Instantiating a face for every family on the Mac costs seconds;
+        // the installed set does not change within a launch, so compute
+        // once and hand the cached list back afterwards.
+        monospacedFamiliesLock.lock()
+        if let cached = monospacedFamiliesCache {
+            monospacedFamiliesLock.unlock()
+            return cached
+        }
+        monospacedFamiliesLock.unlock()
+        let families = scanInstalledMonospacedFamilies()
+        monospacedFamiliesLock.lock()
+        monospacedFamiliesCache = families
+        monospacedFamiliesLock.unlock()
+        return families
+    }
+
+    nonisolated private static func scanInstalledMonospacedFamilies() -> [String] {
         let manager = NSFontManager.shared
         return manager.availableFontFamilies
             .filter { family in

@@ -1999,22 +1999,12 @@ struct SettingsContentHost: View {
     @ObservedObject var store: UnpeelStore
     @ObservedObject private var transparency = TransparencyModel.shared
 
-    /// Cached for the titlebar: the registry read behind it is disk IO, and
-    /// this body re-runs on every store publish — never read files in a body
-    /// evaluation (same rule as SidebarWorkspaceSelector). Refreshed on
-    /// appearance and on scope changes; a rename from another instance lands
-    /// the next time Settings opens.
-    @State private var editedWorkspaceName: String?
-
-    /// Collapsed sidebar: settings gets the same slide-down the terminal
-    /// panes and full-content pages do — the breadcrumb becomes the compact
-    /// title strip and the panel renders as a rounded card below it, frame
-    /// material showing through around it.
-    private var collapsedSurfaceCard: Bool { store.sidebarCollapsed }
-
     var body: some View {
         VStack(spacing: 0) {
-            settingsTitlebar
+            // The Settings breadcrumb lives in the window title strip
+            // (RootView's SettingsTitleStrip); keep only the matching height.
+            Color.clear
+                .frame(height: Theme.titleStripHeight)
             // Each panel is a grouped Form (its own scroll view), System
             // Settings style — no outer ScrollView. The column is capped at
             // 740pt: macOS grouped Form caps its section cards at ~700pt,
@@ -2025,103 +2015,31 @@ struct SettingsContentHost: View {
                 .frame(maxWidth: 740)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .mask(panelTopFade)
-                // Collapsed-sidebar card chrome. Parameterized, never
-                // structural, so toggling the sidebar can't remount the
-                // panel (a Form would lose its scroll position).
-                .background {
-                    if collapsedSurfaceCard { SettingsMainBackground() }
-                }
+                // Card chrome, like the terminal panes and the other
+                // full-content pages: a rounded card below the title strip
+                // with the window frame showing through around it.
+                .background { SettingsMainBackground() }
                 .clipShape(
                     RoundedRectangle(
-                        cornerRadius: collapsedSurfaceCard ? Theme.contentCornerRadius : 0,
+                        cornerRadius: Theme.contentCornerRadius,
                         style: .continuous
                     )
                 )
                 .overlay {
-                    if collapsedSurfaceCard {
-                        RoundedRectangle(
-                            cornerRadius: Theme.contentCornerRadius,
-                            style: .continuous
-                        )
-                        .strokeBorder(Theme.contentHairline, lineWidth: 1)
-                        .allowsHitTesting(false)
-                    }
+                    RoundedRectangle(
+                        cornerRadius: Theme.contentCornerRadius,
+                        style: .continuous
+                    )
+                    .strokeBorder(Theme.contentHairline, lineWidth: 1)
+                    .allowsHitTesting(false)
                 }
         }
-        .background { hostBackdrop }
-        // Same curve the workspace pane uses for its collapse slide-down,
-        // so the strip compression, card chrome, and backdrop swap all move
-        // with the sidebar. After the backdrop so the swap cross-fades.
-        .animation(
-            .timingCurve(0.25, 0.1, 0.25, 1, duration: 0.15),
-            value: store.sidebarCollapsed
-        )
         .background(
             // Escape closes settings (SettingsView.svelte handleKeydown).
             Button("") { store.closeSettings() }
                 .keyboardShortcut(.cancelAction)
                 .opacity(0)
         )
-        .onAppear(perform: refreshEditedWorkspaceName)
-        .onChange(of: store.selectedHostScope) { _ in
-            refreshEditedWorkspaceName()
-        }
-        // Renames/removals from Settings ▸ Workspaces or the sidebar picker
-        // land in the title immediately — the rename happens right under
-        // this breadcrumb, so waiting for the next Settings open reads as
-        // a stale-title bug.
-        .onReceive(
-            NotificationCenter.default.publisher(for: .unpeelWorkspaceListChanged)
-        ) { _ in
-            refreshEditedWorkspaceName()
-        }
-    }
-
-    /// The window-frame backdrop behind the collapsed-sidebar card, the
-    /// shared Surface paint otherwise. Translucent Surfaces paint nothing
-    /// in card mode — the window-spanning frame backdrop already shows
-    /// through (same rule as ContentArea's columnBackdrop).
-    @ViewBuilder private var hostBackdrop: some View {
-        if collapsedSurfaceCard {
-            if transparency.surfaceOpacity < 1 {
-                Color.clear
-            } else {
-                FrameBackdrop()
-            }
-        } else {
-            SettingsMainBackground()
-        }
-    }
-
-    /// "Settings / <Tab>" centered, 13px/600 muted, gap 8, separator at
-    /// 0.54 opacity (SettingsView.svelte:300-324); the strip drags the
-    /// window like the workspace titlebar. Collapsed sidebar compresses it
-    /// to the terminal strip and centers the breadcrumb clear of the
-    /// traffic lights and window buttons, riding up like the pane strip.
-    private var settingsTitlebar: some View {
-        ZStack {
-            WindowDragArea()
-            HStack(spacing: 8) {
-                Text(titlebarScopeName.map { "Settings — \($0)" } ?? "Settings")
-                Text("/").opacity(0.54)
-                Text(selectedTab.title)
-            }
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(Theme.mutedForeground)
-            // Share the content column's geometry (740pt cap + 20pt inset,
-            // see panelContent) and left-align so the breadcrumb lines up
-            // with the pane header below instead of centering on the window.
-            .frame(
-                maxWidth: .infinity,
-                alignment: collapsedSurfaceCard ? .center : .leading
-            )
-            .padding(.horizontal, 20)
-            .frame(maxWidth: 740)
-            .frame(maxWidth: .infinity)
-            .offset(y: collapsedSurfaceCard ? -4 : 0)
-            .allowsHitTesting(false)
-        }
-        .frame(height: collapsedSurfaceCard ? Theme.titleStripHeight : Theme.titlebarHeight)
     }
 
     /// The breadcrumb is the only pinned chrome; the pane title, description
@@ -2271,16 +2189,65 @@ struct SettingsContentHost: View {
     }
 
     private var selectedTab: SettingsTab {
-        if SettingsTab.visibleCases(computerUseControllable: store.selectedHostAdvertisesComputerUse).contains(store.settingsTab) {
-            return store.settingsTab
+        resolvedSettingsTab(store)
+    }
+}
+
+/// The selected Settings tab, or the first visible one when the selected
+/// tab's gate (Mobile dev flag, Sessions MCP experiment) turned off.
+/// Workspaces leads the enum but is itself gated, so resolve through
+/// visibleCases.
+@MainActor
+func resolvedSettingsTab(_ store: UnpeelStore) -> SettingsTab {
+    let visible = SettingsTab.visibleCases(
+        computerUseControllable: store.selectedHostAdvertisesComputerUse
+    )
+    if visible.contains(store.settingsTab) {
+        return store.settingsTab
+    }
+    return visible.first ?? .presets
+}
+
+/// The Settings breadcrumb — "Settings — <workspace> › <Tab>" — rendered in
+/// the window title strip (RootView) above the settings card, centered like
+/// the workspace title; the strip drags the window.
+struct SettingsTitleStrip: View {
+    @ObservedObject var store: UnpeelStore
+    /// Cached for the title: the registry read behind it is disk IO, and
+    /// this body re-runs on every store publish — never read files in a body
+    /// evaluation (same rule as SidebarWorkspaceSelector). Refreshed on
+    /// appearance and on scope changes.
+    @State private var editedWorkspaceName: String?
+
+    var body: some View {
+        TitleBarView(
+            segments: [
+                titlebarScopeName.map { "Settings — \($0)" } ?? "Settings",
+                selectedTab.title,
+            ],
+            height: Theme.titleStripHeight,
+            titleYOffset: -4
+        )
+        .onAppear(perform: refreshEditedWorkspaceName)
+        .onChange(of: store.selectedHostScope) { _ in
+            refreshEditedWorkspaceName()
         }
-        // The selected tab's gate (Mobile dev flag, Sessions MCP experiment)
-        // turned off — fall back to the first tab. Workspaces leads the enum
-        // but is itself gated, so resolve through visibleCases.
-        return SettingsTab.visibleCases(computerUseControllable: store.selectedHostAdvertisesComputerUse).first ?? .presets
+        // Renames/removals from Settings ▸ Workspaces or the sidebar picker
+        // land in the title immediately — the rename happens right under
+        // this breadcrumb, so waiting for the next Settings open reads as
+        // a stale-title bug.
+        .onReceive(
+            NotificationCenter.default.publisher(for: .unpeelWorkspaceListChanged)
+        ) { _ in
+            refreshEditedWorkspaceName()
+        }
     }
 
-    /// The titlebar names the workspace the visible panel belongs to: the
+    private var selectedTab: SettingsTab {
+        resolvedSettingsTab(store)
+    }
+
+    /// The title names the workspace the visible panel belongs to: the
     /// active workspace for every tab except the machine-level Workspaces
     /// registry (which is this Mac's, whatever is scoped).
     private var titlebarScopeName: String? {
@@ -2798,7 +2765,14 @@ struct TerminalFontSection: View {
         }
         .onAppear {
             if families.isEmpty {
-                families = TerminalFontModel.installedMonospacedFamilies()
+                // Off the main thread: the first scan instantiates a face per
+                // family and used to freeze the tab for seconds. The picker
+                // shows the saved family immediately and fills in when the
+                // (cached-per-launch) list arrives.
+                Task.detached(priority: .userInitiated) {
+                    let scanned = TerminalFontModel.installedMonospacedFamilies()
+                    await MainActor.run { families = scanned }
+                }
             }
         }
     }
