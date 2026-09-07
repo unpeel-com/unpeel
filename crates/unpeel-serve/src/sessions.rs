@@ -80,6 +80,10 @@ fn manifest_resume_agent_available(
 #[derive(Clone, Debug)]
 pub struct SessionRow {
     pub id: String,
+    /// Kernel start time of the hosted child (`pid_started_at`): the
+    /// identity of THIS host, which changes on every replacement, including
+    /// a same-id `session.reload`. Controllers re-attach their pane on it.
+    pub host_started_at: Option<u64>,
     pub project_id: String,
     pub label: String,
     pub command: String,
@@ -643,6 +647,7 @@ pub fn scan_sidebar(
             );
             rows.push(SessionRow {
                 id: manifest.session.id.clone(),
+                host_started_at: manifest.pid_started_at,
                 project_id: manifest.session.project_id.clone(),
                 label,
                 command: manifest.session.command.clone(),
@@ -1210,6 +1215,7 @@ pub fn model_from_bridge(
                     command.trim().is_empty() || unpeel_core::session_ops::can_archive_session(&id)
                 });
             rows.push(SessionRow {
+                host_started_at: None,
                 id: id.clone(),
                 project_id: project_id.to_string(),
                 label: session.get("label")?.as_str()?.to_string(),
@@ -1760,6 +1766,7 @@ pub fn mobile_snapshot(
             "title": row.label,
             "command": row.command,
             "createdAtUnixMs": row.created_at,
+            "hostStartedAtUnixMs": row.host_started_at,
             // Host-computed shared lifecycle time. Controllers must not try
             // to reconstruct this from their own filesystem.
             "updatedAtUnixMs": row.activity_at
@@ -2232,6 +2239,7 @@ mod tests {
         pinned: bool,
     ) -> SessionRow {
         SessionRow {
+            host_started_at: None,
             id: format!("__recent_test_{id}"),
             project_id: "__recent_test_project".into(),
             label: id.into(),
@@ -2765,6 +2773,7 @@ mod tests {
         // and the overlays are already folded in by the model builders).
         let rows = vec![SessionRow {
             id: "s1".into(),
+            host_started_at: None,
             project_id: "p2".into(),
             label: "Session".into(),
             command: "claude".into(),
@@ -2819,6 +2828,7 @@ mod tests {
     fn blank_shell_uses_active_runtime_only_for_live_presentation_and_wire_metadata() {
         let row = SessionRow {
             id: "blank-shell".into(),
+            host_started_at: None,
             project_id: "project".into(),
             label: "Terminal".into(),
             command: String::new(),
@@ -2867,6 +2877,7 @@ mod tests {
     fn app_session_wire_metadata_carries_resolved_identity_and_tint() {
         let row = SessionRow {
             id: "design".into(),
+            host_started_at: None,
             project_id: "project".into(),
             label: "Design".into(),
             command: "/opt/bin/unpeel-design".into(),

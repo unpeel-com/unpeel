@@ -4014,6 +4014,7 @@ non-ephemeral ports — a product regression, not a port race. Attempts: {failur
                     { "id": "conformance-restart-agent-exited" },
                     { "id": "conformance-action-resume-agent" },
                     { "id": "conformance-resume-agent-exited" },
+                    { "id": "conformance-action-reload" },
                     { "id": "conformance-remove" },
                 ],
             }),
@@ -4039,6 +4040,7 @@ non-ephemeral ports — a product regression, not a port race. Attempts: {failur
                 | ("conformance-action-restart", ControllerSessionAction::Restart)
                 | ("conformance-action-restart-agent", ControllerSessionAction::RestartAgent)
                 | ("conformance-action-resume-agent", ControllerSessionAction::ResumeAgent)
+                | ("conformance-action-reload", ControllerSessionAction::Reload)
                 | ("conformance-remove", ControllerSessionAction::Remove) => Ok(()),
                 ("conformance-stop-exited", ControllerSessionAction::Stop)
                 | ("conformance-restart-agent-exited", ControllerSessionAction::RestartAgent)

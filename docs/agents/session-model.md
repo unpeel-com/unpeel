@@ -300,6 +300,16 @@ small session-level restart recommendation API:
   the session. Raising the required host protocol changes the token, so the bar
   can appear again for sessions that report an older known protocol.
 
+Since 2026-09-07 both Reload Terminal on a live Session and **Restart App**
+(an App pane's menu) use `session.reload` (`/mobile/session-action#reload`,
+protocol minor 16): the Host stops the live host (identity-verified) and
+relaunches the same command under the **same Session id**, so the row's
+filing, title, pin, approvals, and an App's panel binding all survive; the
+old host's scrollback and artifacts do not. The Mac pane re-attaches
+because `SurfaceCache` keys a live pane on the host's pid + start time and
+rebuilds it when that identity changes under the same id. Hosts without
+the capability get the older stopped-only replacement restart.
+
 Use this API for "session should restart, but does not have to restart right
 now" cases. If a future feature needs a restart to apply safely, add a stable
 recommendation token/reason/action through

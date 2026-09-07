@@ -3393,6 +3393,7 @@ extension RemoteHostRuntime {
         static let stop = "session.stop"
         static let remove = "session.remove"
         static let restart = "session.restart"
+        static let reload = RemoteControlProtocol.sessionReloadCapability
         static let resizeDesktop = "session.resize_desktop"
         static let resumeAgent = RemoteControlProtocol.sessionRuntimeResumeCapability
         static let create = "session.create"
@@ -3621,6 +3622,18 @@ extension RemoteHostRuntime {
                 replacementDefaultSelectionSuppressed = false
             }
             throw error
+        }
+    }
+
+    /// Replace the Session's host in place, keeping its id (`session.reload`).
+    /// No replacement selection: the row, pin, and panel binding stay; the
+    /// pane re-attaches when the surface cache sees the new host identity.
+    func reloadSession(_ sessionID: String) async throws {
+        try await performOrganizationVerb(
+            capability: HostOperation.reload,
+            operation: "reload"
+        ) { backend in
+            _ = try await backend.reloadSession(sessionID: sessionID)
         }
     }
 

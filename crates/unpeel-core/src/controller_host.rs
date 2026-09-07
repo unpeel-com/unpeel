@@ -1922,6 +1922,7 @@ fn session_summary_with_menu_attention(
             .unwrap_or_else(|| manifest.session.label.clone()),
         "command": manifest.session.command,
         "createdAtUnixMs": manifest.session.created_at,
+        "hostStartedAtUnixMs": manifest.pid_started_at,
         "ownerPrincipalID": manifest.session.owner_principal_id
             .as_deref()
             .unwrap_or(host_owner_principal_id),
@@ -3209,7 +3210,10 @@ mod tests {
             }
         }));
         assert_eq!(wire["file:text/markdown"], "app:unpeel.app.markdown");
-        assert_eq!(wire["file:text/html"], "system");
+        // Only media types some catalog App declares survive migration; since
+        // the Design App left the catalog (2026-09-07) text/html is as unknown
+        // as text/unknown.
+        assert!(wire.get("file:text/html").is_none());
         assert!(wire.get("file:text/unknown").is_none());
 
         let typed = wire_openers(&json!({

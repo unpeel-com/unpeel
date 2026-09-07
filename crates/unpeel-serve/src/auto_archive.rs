@@ -363,6 +363,7 @@ mod tests {
         // this worker has only just started observing it.
         let row = SessionRow {
             id: "old".into(),
+            host_started_at: None,
             project_id: "p".into(),
             label: "old".into(),
             command: "claude".into(),
@@ -438,6 +439,7 @@ mod tests {
     fn idle_row(id: &str, activity_at: u64) -> SessionRow {
         SessionRow {
             id: id.into(),
+            host_started_at: None,
             project_id: "p".into(),
             label: id.into(),
             command: "claude".into(),

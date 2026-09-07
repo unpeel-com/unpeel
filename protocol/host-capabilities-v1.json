@@ -2,13 +2,21 @@
   "schemaVersion": 1,
   "protocol": {
     "major": 1,
-    "minor": 15,
+    "minor": 16,
     "compatibility": {
       "major": "must-match",
       "minor": "additive",
       "unknownCapabilities": "ignore"
     },
     "history": [
+      {
+        "minor": 16,
+        "release": "0.6.0",
+        "summary": "session.reload — replace a Session's host in place while keeping its id (Reload Terminal for a live Session, Restart App for an App pane). Additive; a Controller checks the id, never the minor.",
+        "capabilities": [
+          "session.reload"
+        ]
+      },
       {
         "minor": 15,
         "release": "0.6.0",
@@ -286,6 +294,13 @@
       "id": "session.stop",
       "method": "POST",
       "path": "/mobile/session-action#stop",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "session.reload",
+      "method": "POST",
+      "path": "/mobile/session-action#reload",
       "native": true,
       "tui": true
     },

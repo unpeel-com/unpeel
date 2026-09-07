@@ -383,6 +383,7 @@ enum RemoteSessionVerb {
     Restart,
     RestartAgent,
     ResumeAgent,
+    Reload,
 }
 
 impl RemoteSessionVerb {
@@ -395,6 +396,7 @@ impl RemoteSessionVerb {
             Self::Restart => "session restart",
             Self::RestartAgent => "session agent restart",
             Self::ResumeAgent => "session agent resume",
+            Self::Reload => "session reload",
         }
     }
 }
@@ -594,6 +596,7 @@ impl RegisteredRemoteBackend for RegisteredCoreBackend {
             RemoteSessionVerb::Restart => self.backend.restart_session(session_id),
             RemoteSessionVerb::RestartAgent => self.backend.restart_agent(session_id),
             RemoteSessionVerb::ResumeAgent => self.backend.resume_agent(session_id),
+            RemoteSessionVerb::Reload => self.backend.reload_session(session_id),
         };
         receipt
             .map(|receipt| receipt.request_id())
@@ -4145,6 +4148,34 @@ pub unsafe extern "C" fn unpeel_native_bridge_remote_session_restart_agent(
         |session_id| {
             perform_remote_session_verb(handle, RemoteSessionVerb::RestartAgent, session_id)
         },
+    )
+}
+
+/// Replace a remote Session's host in place, keeping its id
+/// (`session.reload`): the Host stops a live host first, then relaunches the
+/// same command. Reload Terminal for a live Session; Restart App for an App
+/// pane.
+///
+/// # Safety
+///
+/// A non-empty Session id must point to readable UTF-8 bytes. Both output
+/// pointers must be non-null and writable.
+#[no_mangle]
+pub unsafe extern "C" fn unpeel_native_bridge_remote_session_reload(
+    handle: RemoteHandle,
+    session_id_pointer: *const u8,
+    session_id_length: usize,
+    out_pointer: *mut *mut u8,
+    out_length: *mut usize,
+) -> i32 {
+    remote_session_effect_ffi(
+        handle,
+        session_id_pointer,
+        session_id_length,
+        RemoteSessionVerb::Reload.operation(),
+        out_pointer,
+        out_length,
+        |session_id| perform_remote_session_verb(handle, RemoteSessionVerb::Reload, session_id),
     )
 }
 

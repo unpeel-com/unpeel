@@ -245,6 +245,9 @@ pub enum ControllerSessionAction {
     RestartAgent,
     ResumeAgent,
     Remove,
+    /// Replace the host in place, keeping the Session id (`session.reload`):
+    /// stops a live host first, then relaunches the same command.
+    Reload,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -869,6 +872,13 @@ pub fn execute_headless_session_action(
         ControllerSessionAction::RestartAgent => session_ops::restart_agent(&request.session_id),
         ControllerSessionAction::ResumeAgent => session_ops::resume_agent(&request.session_id),
         ControllerSessionAction::Remove => session_ops::remove_session(&request.session_id),
+        ControllerSessionAction::Reload => session_ops::reload_session(
+            &request.session_id,
+            hook_port,
+            SESSION_CREATE_INITIAL_COLUMNS,
+            SESSION_CREATE_INITIAL_ROWS,
+        )
+        .map(|_| ()),
     };
     result.map_err(|message| match request.action {
         ControllerSessionAction::RestartAgent | ControllerSessionAction::ResumeAgent => {
@@ -1120,6 +1130,7 @@ fn run_session_action(
             Some("restart_agent") => ControllerSessionAction::RestartAgent,
             Some("resume_agent") => ControllerSessionAction::ResumeAgent,
             Some("remove") => ControllerSessionAction::Remove,
+            Some("reload") => ControllerSessionAction::Reload,
             _ => return Err(ControllerApiError::new(400, "request failed")),
         },
     };
@@ -1157,6 +1168,7 @@ fn run_session_action(
                         ControllerSessionAction::RestartAgent => "restart agent",
                         ControllerSessionAction::ResumeAgent => "resume agent",
                         ControllerSessionAction::Remove => "remove",
+                        ControllerSessionAction::Reload => "reload",
                     }
                 );
                 let verb = match action {
@@ -1165,6 +1177,7 @@ fn run_session_action(
                     ControllerSessionAction::RestartAgent => "restart agent",
                     ControllerSessionAction::ResumeAgent => "resume agent",
                     ControllerSessionAction::Remove => "remove",
+                    ControllerSessionAction::Reload => "reload",
                 };
                 ControllerApiError::new(500, format!("Could not {verb} session: {session_id}"))
             }

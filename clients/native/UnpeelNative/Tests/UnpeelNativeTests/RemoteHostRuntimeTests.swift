@@ -3223,6 +3223,11 @@ private actor ControlledRemoteBackend: NativeRemoteBackendProtocol {
         return NativeRemoteEffectReceipt(requestID: 906)
     }
 
+    func reloadSession(sessionID: String) async throws -> NativeRemoteEffectReceipt {
+        organizationCalls.append("reload:\(sessionID)")
+        return NativeRemoteEffectReceipt(requestID: 913)
+    }
+
     func resumeAgent(sessionID: String) async throws -> NativeRemoteEffectReceipt {
         organizationCalls.append("resume-agent:\(sessionID)")
         return NativeRemoteEffectReceipt(requestID: 910)

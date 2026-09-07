@@ -179,6 +179,7 @@ mod tests {
     fn row(id: &str, status: Status) -> SessionRow {
         SessionRow {
             id: id.into(),
+            host_started_at: None,
             project_id: "project".into(),
             label: id.into(),
             command: "claude".into(),

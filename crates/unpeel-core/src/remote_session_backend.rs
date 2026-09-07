@@ -60,6 +60,7 @@ const RESTORE_CAPABILITY: &str = "session.restore";
 const STOP_CAPABILITY: &str = "session.stop";
 const REMOVE_CAPABILITY: &str = "session.remove";
 const RESTART_CAPABILITY: &str = "session.restart";
+const RELOAD_CAPABILITY: &str = "session.reload";
 const RESTART_AGENT_CAPABILITY: &str = "session.runtime.restart";
 const RESUME_AGENT_CAPABILITY: &str = "session.runtime.resume";
 const CREATE_CAPABILITY: &str = "session.create";
@@ -88,6 +89,7 @@ pub const REMOTE_CAPABILITY_STOP: &str = STOP_CAPABILITY;
 pub const REMOTE_CAPABILITY_REMOVE: &str = REMOVE_CAPABILITY;
 pub const REMOTE_CAPABILITY_RESTART: &str = RESTART_CAPABILITY;
 pub const REMOTE_CAPABILITY_RESTART_AGENT: &str = RESTART_AGENT_CAPABILITY;
+pub const REMOTE_CAPABILITY_RELOAD: &str = RELOAD_CAPABILITY;
 pub const REMOTE_CAPABILITY_RESUME_AGENT: &str = RESUME_AGENT_CAPABILITY;
 pub const REMOTE_CAPABILITY_CREATE: &str = CREATE_CAPABILITY;
 pub const REMOTE_CAPABILITY_ORDER_SET: &str = ORDER_SET_CAPABILITY;
@@ -1956,6 +1958,32 @@ impl RemoteSessionBackend {
             OPERATION,
             RESTART_CAPABILITY,
             RESTART_SESSION_PATH,
+            body,
+        )
+    }
+
+    /// Replace a Session's host in place, keeping its id (`session.reload`):
+    /// the Host stops a live host first, then relaunches the same command.
+    /// Reload Terminal for a live Session; Restart App for an App pane.
+    pub fn reload_session(
+        &self,
+        session_id: &str,
+    ) -> Result<RemoteEffectReceipt, RemoteEffectFailure> {
+        const OPERATION: &str = "session reload";
+        let effect_turn = self.inner.begin_effect();
+        effect_preflight(OPERATION, || validate_session_id(session_id))?;
+        let body = encode_effect_body(
+            OPERATION,
+            &SessionActionWire {
+                session_id,
+                action: "reload",
+            },
+        )?;
+        self.inner.perform_effect(
+            &effect_turn,
+            OPERATION,
+            RELOAD_CAPABILITY,
+            SESSION_ACTION_PATH,
             body,
         )
     }

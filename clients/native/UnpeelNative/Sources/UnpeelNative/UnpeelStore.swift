@@ -6505,6 +6505,7 @@ final class UnpeelStore: ObservableObject {
                 activeApp: live ? manifest.activeApp : nil,
                 runtimeLaunchPending: manifest.runtimeLaunchPending,
                 hostProtocolVersion: manifest.hostProtocolVersion,
+                hostStartedAtMs: manifest.pidStartedAt.map { Int64(clamping: $0) },
                 customTitle: titleOverride != nil || (info.customTitle ?? false),
                 worktreePath: info.worktreePath,
                 worktreeBranch: info.worktreeBranch,
@@ -9850,17 +9851,29 @@ final class UnpeelStore: ObservableObject {
               entry.activeApp != nil,
               !restartingSessionIDs.contains(sessionID)
         else { return false }
-        if routesSessionVerbThroughHost(sessionID) {
-            return remoteHostRuntime.supportsHostOperation(
-                RemoteHostRuntime.HostOperation.restart
-            )
-        }
-        return true
+        return remoteHostRuntime.supportsHostOperation(RemoteHostRuntime.HostOperation.reload)
     }
 
     func restartApp(_ sessionID: String) {
         guard sessionCanRestartApp(sessionID) else { return }
-        restartSession(sessionID, stoppedOnly: false)
+        reloadSession(sessionID, failure: "Couldn't restart the App")
+    }
+
+    /// Reload Terminal for a live Session: the Host replaces the host in
+    /// place under the same Session id (`session.reload`), so nothing keyed
+    /// by the id changes and the pane re-attaches to the new host. Hosts
+    /// without the capability fall back to the stopped-only replacement
+    /// restart (which refuses a running Session, as before).
+    func reloadSession(_ sessionID: String, failure: String = "Couldn't reload the terminal") {
+        guard !restartingSessionIDs.contains(sessionID) else { return }
+        guard remoteHostRuntime.supportsHostOperation(RemoteHostRuntime.HostOperation.reload)
+        else {
+            restartSession(sessionID, stoppedOnly: false)
+            return
+        }
+        performRemoteVerb(failure) { runtime in
+            try await runtime.reloadSession(sessionID)
+        }
     }
 
     /// Archive remains available for any resumable launch regardless of live
@@ -16096,6 +16109,7 @@ extension UnpeelStore {
                 summary.updatedAtUnixMs ?? 0
             )
         )
+        entry.hostStartedAtMs = summary.hostStartedAtUnixMs
         entry.worktreePath = summary.worktreePath
         entry.worktreeBranch = summary.worktreeBranch
         entry.cwd = summary.cwd

@@ -1129,6 +1129,9 @@ struct SessionEntry: Codable, Identifiable, Hashable, Sendable {
     /// Protocol implemented by this hosted PTY. A Session may survive an app
     /// update while still running an older Host without in-place restart.
     var hostProtocolVersion: Int? = nil
+    /// Identity of the current host (`pid_started_at`): a live pane built
+    /// against a different value must re-attach (same-id `session.reload`).
+    var hostStartedAtMs: Int64? = nil
     /// Restart provenance (SessionInfo parity): manifest custom_title plus
     /// the worktree the session runs in (nil = project root).
     var customTitle: Bool = false

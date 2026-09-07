@@ -2256,7 +2256,7 @@ pub fn restart_session(
     initial_rows: u16,
 ) -> Result<String, String> {
     let _lifecycle_lock = lock_session_lifecycle(session_id)?;
-    restart_session_unlocked(session_id, hook_port, initial_cols, initial_rows)
+    restart_session_unlocked(session_id, hook_port, initial_cols, initial_rows, false)
 }
 
 /// Resume a stopped Session by replacing its exited Host. Unlike
@@ -2285,7 +2285,29 @@ pub fn resume_session(
     // an explicitly requested replacement falls back to the resume planner's
     // fresh/continue-last recipes — a stale or version-skewed Controller
     // gets a relaunch, never a hard failure.
-    restart_session_unlocked(session_id, hook_port, initial_cols, initial_rows)
+    restart_session_unlocked(session_id, hook_port, initial_cols, initial_rows, false)
+}
+
+/// Replace a Session's host in place, keeping its id: stop the live host
+/// (identity-verified, like any stop), then relaunch the same command under
+/// the same Session id. Everything keyed by that id — its sidebar filing,
+/// title, pin, approvals, and an App's panel binding — survives; the old
+/// host's scrollback and artifacts do not, exactly as with a replacement
+/// restart. This is Reload Terminal for a live Session and Restart App for
+/// an App pane. Works for an exited Session too.
+pub fn reload_session(
+    session_id: &str,
+    hook_port: Option<u16>,
+    initial_cols: u16,
+    initial_rows: u16,
+) -> Result<String, String> {
+    let _lifecycle_lock = lock_session_lifecycle(session_id)?;
+    let current = crate::session_host::refresh_manifest_health(session_id)
+        .ok_or_else(|| format!("no manifest for {session_id}"))?;
+    if current.state == HostedSessionState::Running {
+        stop_session_unlocked(session_id)?;
+    }
+    restart_session_unlocked(session_id, hook_port, initial_cols, initial_rows, true)
 }
 
 /// Caller holds this Session's lifecycle lock. `restart_session` is the
@@ -2296,6 +2318,7 @@ fn restart_session_unlocked(
     hook_port: Option<u16>,
     initial_cols: u16,
     initial_rows: u16,
+    keep_id: bool,
 ) -> Result<String, String> {
     let old = manifest(session_id)?;
     let relaunch = relaunch_command(session_id, RelaunchMode::Restart { force_fresh: false })?;
@@ -2317,7 +2340,11 @@ fn restart_session_unlocked(
     teardown_session_files(session_id)?;
 
     let mut session = SessionInfo {
-        id: uuid::Uuid::new_v4().to_string().to_lowercase(),
+        id: if keep_id {
+            session_id.to_string()
+        } else {
+            uuid::Uuid::new_v4().to_string().to_lowercase()
+        },
         command: relaunch,
         // Keep the old created_at so the row keeps its sidebar position.
         created_at: if old.session.created_at > 0 {

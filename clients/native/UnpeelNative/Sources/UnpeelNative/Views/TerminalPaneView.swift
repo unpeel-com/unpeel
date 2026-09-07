@@ -1526,7 +1526,7 @@ struct TerminalPaneContainer: View {
                         case .resumeAgent:
                             store.resumeAgent(entry.id)
                         case .reloadTerminal:
-                            store.restartSession(entry.id, stoppedOnly: false)
+                            store.reloadSession(entry.id)
                         case nil:
                             break
                         }

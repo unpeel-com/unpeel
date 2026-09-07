@@ -83,6 +83,13 @@ final class SurfaceCache: ObservableObject {
         /// the same session id never appears under two homes, but a pane
         /// must never be reused across them either.
         let sessionsDir: URL
+        /// The hosted PTY this pane's `unpeel-attach` was started against
+        /// (child pid + kernel start time). A Session keeps its id across a
+        /// Host reload (`session.reload`, Restart App), but its socket and
+        /// journal are new: a pane built for the old host would sit on a dead
+        /// attach, so a live Session with a different identity gets a fresh
+        /// pane instead of the cached one.
+        var hostIdentity: HostIdentity?
         /// Last applied style signature (config + optional canvas sample).
         var styleSignature: String
         /// Live canvas color sampled from output.bin (0xRRGGBB).
@@ -179,6 +186,15 @@ final class SurfaceCache: ObservableObject {
     }
 
     /// Returns the retained pane for a session, creating it on first use.
+    struct HostIdentity: Equatable {
+        let startedAt: Int64
+    }
+
+    private static func hostIdentity(of session: SessionEntry) -> HostIdentity? {
+        guard session.isLive, let startedAt = session.hostStartedAtMs else { return nil }
+        return HostIdentity(startedAt: startedAt)
+    }
+
     func pane(
         for session: SessionEntry,
         workingDirectory: String?,
@@ -190,6 +206,18 @@ final class SurfaceCache: ObservableObject {
             // Defensive: a retained pane for a different home must not be
             // handed out (its attach child streams the wrong socket).
             drop(session.id)
+        }
+        let hostIdentity = Self.hostIdentity(of: session)
+        if let existing = panes[session.id], let hostIdentity {
+            if let known = existing.hostIdentity {
+                if known != hostIdentity {
+                    drop(session.id)
+                }
+            } else {
+                // A pane built before the Session's host was known adopts the
+                // first identity it sees; only a later CHANGE re-attaches.
+                panes[session.id]?.hostIdentity = hostIdentity
+            }
         }
         if let existing = panes[session.id] {
             // Working directory / command can change across restart; keep
@@ -241,6 +269,7 @@ final class SurfaceCache: ObservableObject {
             command: presentationCommand,
             workingDirectory: workingDirectory,
             sessionsDir: sessionsDir,
+            hostIdentity: hostIdentity,
             styleSignature: Self.styleSignature(
                 background: frameStyle.background,
                 canvasSample: sample,

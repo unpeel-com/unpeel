@@ -406,6 +406,14 @@ int32_t unpeel_native_bridge_remote_session_resume_agent(
     size_t *out_length
 );
 
+int32_t unpeel_native_bridge_remote_session_reload(
+    unpeel_native_bridge_remote_handle_t handle,
+    const uint8_t *session_id_pointer,
+    size_t session_id_length,
+    uint8_t **out_pointer,
+    size_t *out_length
+);
+
 /*
  * Replace one project's hand-ordered Session ranks. ordered_ids_json is a
  * UTF-8 JSON array of Session id strings (combined pinned + regular order).

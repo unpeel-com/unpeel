@@ -667,6 +667,10 @@ private actor StubPoolBackend: NativeRemoteBackendProtocol {
         throw StubPoolError.unexpected
     }
 
+    func reloadSession(sessionID _: String) async throws -> NativeRemoteEffectReceipt {
+        throw StubPoolError.unexpected
+    }
+
     func resumeAgent(sessionID _: String) async throws -> NativeRemoteEffectReceipt {
         throw StubPoolError.unexpected
     }

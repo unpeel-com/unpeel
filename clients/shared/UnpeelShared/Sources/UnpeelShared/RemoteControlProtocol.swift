@@ -10,6 +10,9 @@ public enum RemoteControlProtocol {
     public static let sessionOrderCapability = "session.order.set"
     public static let sessionRuntimeRestartCapability = "session.runtime.restart"
     public static let sessionRuntimeResumeCapability = "session.runtime.resume"
+    /// Replace a Session's host in place, keeping its id (Reload Terminal
+    /// for a live Session, Restart App for an App pane). Additive, 2026-09-07.
+    public static let sessionReloadCapability = "session.reload"
     public static let presetsSetCapability = "settings.presets.set"
     public static let workspaceSettingsSetCapability = "settings.workspace.set"
     /// The Host terminates TLS on its `/mobile` port with the same
@@ -688,6 +691,10 @@ public struct RemoteSessionSummary: Codable, Equatable, Identifiable, Sendable {
     public let activeAppID: String?
     public let activeAppName: String?
     public let activeAppTintHex: Int?
+    /// Identity of the Session's CURRENT host (the hosted child's kernel
+    /// start time): changes on every host replacement, including a same-id
+    /// `session.reload`. Absent on Hosts older than 2026-09-07.
+    public let hostStartedAtUnixMs: Int64?
     /// A phone currently owns this Session's PTY grid (`resize-desktop`):
     /// the Host publishes the grid so a desktop Controller letterboxes its
     /// surface to it and offers "fit to desktop". Additive (0.4.2); absent
@@ -735,6 +742,7 @@ public struct RemoteSessionSummary: Codable, Equatable, Identifiable, Sendable {
         activeAppID: String? = nil,
         activeAppName: String? = nil,
         activeAppTintHex: Int? = nil,
+        hostStartedAtUnixMs: Int64? = nil,
         phoneFitColumns: Int? = nil,
         phoneFitRows: Int? = nil,
         phoneFitSinceUnixMs: Int64? = nil,
@@ -770,6 +778,7 @@ public struct RemoteSessionSummary: Codable, Equatable, Identifiable, Sendable {
         self.activeAppID = activeAppID
         self.activeAppName = activeAppName
         self.activeAppTintHex = activeAppTintHex
+        self.hostStartedAtUnixMs = hostStartedAtUnixMs
         self.phoneFitColumns = phoneFitColumns
         self.phoneFitRows = phoneFitRows
         self.phoneFitSinceUnixMs = phoneFitSinceUnixMs
@@ -789,6 +798,7 @@ public struct RemoteSessionSummary: Codable, Equatable, Identifiable, Sendable {
         case notifyWhenDone, terminalBackgroundHex, capabilities, archived
         case spinnerColorHex
         case activeAppID, activeAppName, activeAppTintHex
+        case hostStartedAtUnixMs
         case phoneFitColumns, phoneFitRows, phoneFitSinceUnixMs
         case latestAlertBody, latestAlertAtUnixMs
         case cwd
@@ -826,6 +836,7 @@ public struct RemoteSessionSummary: Codable, Equatable, Identifiable, Sendable {
         activeAppID = try c.decodeIfPresent(String.self, forKey: .activeAppID)
         activeAppName = try c.decodeIfPresent(String.self, forKey: .activeAppName)
         activeAppTintHex = try c.decodeIfPresent(Int.self, forKey: .activeAppTintHex)
+        hostStartedAtUnixMs = try c.decodeIfPresent(Int64.self, forKey: .hostStartedAtUnixMs)
         phoneFitColumns = try c.decodeIfPresent(Int.self, forKey: .phoneFitColumns)
         phoneFitRows = try c.decodeIfPresent(Int.self, forKey: .phoneFitRows)
         phoneFitSinceUnixMs = try c.decodeIfPresent(Int64.self, forKey: .phoneFitSinceUnixMs)

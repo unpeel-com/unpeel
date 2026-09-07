@@ -417,6 +417,32 @@
       }
     },
     {
+      "id": "session-action.reload-success",
+      "method": "POST",
+      "path": "/mobile/session-action",
+      "body": {
+        "sessionID": "conformance-action-reload",
+        "action": "reload"
+      },
+      "expected": {
+        "native": 200,
+        "tui": 200
+      }
+    },
+    {
+      "id": "session-action.reload-unknown-session",
+      "method": "POST",
+      "path": "/mobile/session-action",
+      "body": {
+        "sessionID": "conformance-unknown",
+        "action": "reload"
+      },
+      "expected": {
+        "native": 404,
+        "tui": 404
+      }
+    },
+    {
       "id": "session-action.resume-agent-success",
       "method": "POST",
       "path": "/mobile/session-action",
