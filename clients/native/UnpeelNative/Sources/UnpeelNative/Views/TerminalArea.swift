@@ -882,7 +882,7 @@ struct TerminalHostView: NSViewRepresentable {
     var onActivate: (() -> Void)? = nil
     var onCommandClick: ((ClickablePath.Match, String) -> Bool)? = nil
 
-    final class SwapContainer: NSView {
+    final class SwapContainer: NSView, TerminalPaneActivating {
         var frameBackgroundColor = Theme.terminalBackgroundNSColor {
             didSet { updateLayer() }
         }
@@ -917,18 +917,6 @@ struct TerminalHostView: NSViewRepresentable {
         // is (translucent terminals swap the fill for .clear).
         override var isOpaque: Bool { frameBackgroundColor.alphaComponent >= 1 }
         override var wantsUpdateLayer: Bool { true }
-
-        override func hitTest(_ point: NSPoint) -> NSView? {
-            let hit = super.hitTest(point)
-            guard hit != nil,
-                  let event = window?.currentEvent ?? NSApp.currentEvent,
-                  event.type == .leftMouseDown
-                    || event.type == .rightMouseDown
-                    || event.type == .otherMouseDown
-            else { return hit }
-            onActivate?()
-            return hit
-        }
 
         /// Terminal background per appearance; AppKit re-runs updateLayer
         /// when the effective appearance flips, so the backdrop behind

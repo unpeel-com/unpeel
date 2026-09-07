@@ -131,6 +131,13 @@ release). The SwiftUI subtree is keyed by the tree's **structural identity**
 — shape, directions, and leaf ids, deliberately excluding ratios — so a
 divider drag never remounts a retained Metal terminal surface.
 
+Pointer focus is routed by `TerminalPaneWindow.sendEvent` to the frontmost
+local or remote terminal mount, before forwarding the original mouse press
+to AppKit. Mount `hitTest` methods must remain read-only: AppKit also calls
+them during SwiftUI layout and workspace replacement while `currentEvent`
+still contains an earlier click. Activating a pane there publishes inside
+the view update and can repeatedly invalidate the UI during fast switches.
+
 Multi-pane views work in every Host scope:
 
 - this Controller's local Sessions use retained `SurfaceCache` terminals;

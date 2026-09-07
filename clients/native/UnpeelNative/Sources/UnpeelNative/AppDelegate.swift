@@ -205,7 +205,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, SPUU
         let root = RootView(store: store, cache: surfaceCache)
             .defaultAppStorage(AppDefaults.shared)
 
-        let window = NSWindow(
+        let window = TerminalPaneWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,

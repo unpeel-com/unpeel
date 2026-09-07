@@ -210,7 +210,7 @@ struct RemoteTerminalPaneHostView: NSViewRepresentable {
     var remoteUploader: ((String, Data) async throws -> String)? = nil
 
     @MainActor
-    final class SwapContainer: NSView {
+    final class SwapContainer: NSView, TerminalPaneActivating {
         private(set) weak var attachedPane: RemoteGhosttyTerminalPane?
         var backgroundColor = Theme.terminalBackgroundNSColor {
             didSet { needsDisplay = true }
@@ -230,18 +230,6 @@ struct RemoteTerminalPaneHostView: NSViewRepresentable {
             super.layout()
             guard let pane = attachedPane, hosts(pane) else { return }
             pane.frame = bounds
-        }
-
-        override func hitTest(_ point: NSPoint) -> NSView? {
-            let hit = super.hitTest(point)
-            guard hit != nil,
-                  let event = window?.currentEvent ?? NSApp.currentEvent,
-                  event.type == .leftMouseDown
-                    || event.type == .rightMouseDown
-                    || event.type == .otherMouseDown
-            else { return hit }
-            onActivate?()
-            return hit
         }
 
         @discardableResult
