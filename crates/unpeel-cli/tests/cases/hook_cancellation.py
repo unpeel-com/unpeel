@@ -38,6 +38,19 @@ def control(home, session_id, data, write_id=None):
         return json.loads(client.makefile("rb").readline())
 
 
+def fixture_started(case, service, session_dir):
+    # On macOS a fresh executable can stall in _dyld_start before any code
+    # runs. Separate that bounded startup wait from the strict hook deadline.
+    def started():
+        try:
+            with open(os.path.join(session_dir, "output.bin"), "rb") as output:
+                return b"HOOK_FIXTURE_PROCESS_STARTED" in output.read()
+        except OSError:
+            return False
+    return case.check("fixture process starts before hook timing begins",
+                      bool(service.wait_for(started, timeout=90)))
+
+
 def body(case, runtime="claude"):
     home = case.home
     home.project("p", "hooks", home.root)
@@ -62,6 +75,7 @@ def hook():
     env = {key: os.environ[key] for key in ("HOME", "PATH")} if "muse-code" in REPORTER else None
     event = "BeforeAgent" if "/gemini/" in REPORTER else "UserPromptSubmit"
     subprocess.run(["bash", REPORTER], input=json.dumps({"hook_event_name": event}), text=True, check=True, env=env)
+print("HOOK_FIXTURE_PROCESS_STARTED", flush=True)
 hook()
 print("FAKE_AGENT_READY", flush=True)
 while True:
@@ -110,6 +124,8 @@ while True:
                        text=True, env=env, check=True, timeout=5, capture_output=True)
 
     try:
+        if not fixture_started(case, service, session_dir):
+            return
         if not case.check("opening hook makes the Session busy", bool(service.wait_for(lambda: status_is("busy"))), str(activity())):
             with open(os.path.join(session_dir, "output.bin"), "rb") as output:
                 case.note("PTY startup: " + repr(output.read()[-6000:]))

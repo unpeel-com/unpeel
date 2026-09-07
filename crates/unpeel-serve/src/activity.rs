@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 pub const HOOK_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
@@ -37,6 +37,10 @@ pub enum HookState {
 
 #[derive(Default)]
 struct Entry {
+    /// Foreground lifecycle and background work are independent. A main Stop
+    /// (or ESC) must not complete a child that is still reporting work.
+    background: HashMap<String, BackgroundActivity>,
+    background_expired: bool,
     /// A provider-reported cancellation needs only its next opening hook to
     /// rearm; unlike inferred input cancellation, it also covers client stops.
     native_cancelled: bool,
@@ -62,6 +66,8 @@ struct Entry {
     /// Newest accepted live/durable activity transition. Metadata-only hooks
     /// do not supersede a missed durable transition.
     last_transition_at: Option<SystemTime>,
+    /// Set by the managed-session scan; used to persist timeout decisions.
+    session_dir: Option<PathBuf>,
     /// Exact provenance for current hook assets. When present, this wins over
     /// wall-clock ordering across a manifest-commit race.
     last_hook_generation: Option<u64>,
@@ -86,6 +92,12 @@ struct Entry {
     foreground_identity_recorded: bool,
 }
 
+struct BackgroundActivity {
+    started_at: SystemTime,
+    deadline_at: SystemTime,
+    expired: bool,
+}
+
 /// Canonical event name from the wire's case/dash/space/underscore-insensitive
 /// variants (mirrors `HookServer.normalizedHookEventName`).
 pub fn normalize_event_name(raw: &str) -> String {
@@ -105,10 +117,12 @@ pub fn normalize_event_name(raw: &str) -> String {
             "UserPromptSubmit".into()
         }
         "stop" | "sessionend" => "Stop".into(),
-        // A child finishing cannot finish the parent turn.
-        "subagentstop" => "HookSeen".into(),
+        // Child activity is reconciled from independent durable markers;
+        // neither edge replaces the main turn's lifecycle.
+        "subagentstart" | "subagentstop" => "HookSeen".into(),
         "stopfailure" => "StopFailure".into(),
         "stopcancelled" | "stopcanceled" => "StopCancelled".into(),
+        "idle" => "Idle".into(),
         "permissionrequest" => "PermissionRequest".into(),
         _ => raw.trim().to_string(),
     }
@@ -122,7 +136,7 @@ fn starts_turn(canonical: &str) -> bool {
 /// state (the question renders in-terminal; attention would double-signal).
 fn is_latch_only(canonical: &str, tool_name: Option<&str>) -> bool {
     match canonical {
-        "Start" | "UserPromptSubmit" | "Stop" | "StopFailure" | "StopCancelled" => false,
+        "Start" | "UserPromptSubmit" | "Stop" | "StopFailure" | "StopCancelled" | "Idle" => false,
         "PermissionRequest" => tool_name == Some("AskUserQuestion"),
         _ => true,
     }
@@ -184,10 +198,16 @@ impl ActivityEngine {
         if latch_only {
             return true;
         }
+        // A provider idle heartbeat repairs a missing stop but cannot change
+        // an already-known successful, failed, or cancelled turn's outcome.
+        if canonical == "Idle" && entry.state == Some(HookState::Idle) {
+            return true;
+        }
         entry.last_transition_at = Some(now);
         match canonical.as_str() {
             "Start" | "UserPromptSubmit" => {
                 entry.completed = false;
+                entry.background_expired = false;
                 entry.last_turn_started_at = Some(unix_ms(now));
                 entry.state = Some(HookState::Busy);
                 entry.deadline_at = Some(now + HOOK_IDLE_TIMEOUT);
@@ -201,6 +221,12 @@ impl ActivityEngine {
             }
             "StopCancelled" => {
                 entry.native_cancelled = true;
+                entry.completed = false;
+                entry.state = Some(HookState::Idle);
+                entry.deadline_at = None;
+                entry.stopped_at = None;
+            }
+            "Idle" => {
                 entry.completed = false;
                 entry.state = Some(HookState::Idle);
                 entry.deadline_at = None;
@@ -262,8 +288,10 @@ impl ActivityEngine {
             if event_generation.is_none() {
                 entry.legacy_turn_started_at = Some(now);
             }
-        } else if matches!(canonical.as_str(), "Stop" | "StopFailure" | "StopCancelled")
-            && event_generation.is_none()
+        } else if matches!(
+            canonical.as_str(),
+            "Stop" | "StopFailure" | "StopCancelled" | "Idle"
+        ) && event_generation.is_none()
             && current_generation > 1
             && entry.confirmed_turn_generation != Some(current_generation)
             && launched_at.is_some_and(|launch| {
@@ -294,6 +322,12 @@ impl ActivityEngine {
         if !entry.hook_seen {
             return None;
         }
+        if entry.state == Some(HookState::Attention) {
+            return entry.state;
+        }
+        if entry.background.values().any(|activity| !activity.expired) {
+            return Some(HookState::Busy);
+        }
         entry.state
     }
 
@@ -305,8 +339,51 @@ impl ActivityEngine {
 
     pub fn is_completed(&self, session_id: &str) -> bool {
         self.entries.get(session_id).is_some_and(|entry| {
-            entry.hook_seen && entry.state == Some(HookState::Idle) && entry.completed
+            entry.hook_seen
+                && entry.state == Some(HookState::Idle)
+                && entry.completed
+                && !entry.background_expired
+                && entry.background.values().all(|activity| activity.expired)
         })
+    }
+
+    fn sync_background_from_disk(
+        &mut self,
+        session_id: &str,
+        dir: &Path,
+        generation: u64,
+        not_before_unix_ms: Option<u64>,
+    ) {
+        let Ok(activities) =
+            unpeel_core::hook_assets::read_background_hook_activity(dir, generation)
+        else {
+            return;
+        };
+        let entry = self.entries.entry(session_id.to_owned()).or_default();
+        let mut current = std::collections::HashSet::new();
+        for activity in activities {
+            if not_before_unix_ms.is_some_and(|epoch| unix_ms(activity.started_at) < epoch) {
+                continue;
+            }
+            current.insert(activity.id.clone());
+            if entry
+                .background
+                .get(&activity.id)
+                .is_some_and(|known| known.started_at == activity.started_at)
+            {
+                continue;
+            }
+            entry.hook_seen = true;
+            entry.background.insert(
+                activity.id,
+                BackgroundActivity {
+                    started_at: activity.started_at,
+                    deadline_at: activity.started_at + HOOK_IDLE_TIMEOUT,
+                    expired: false,
+                },
+            );
+        }
+        entry.background.retain(|id, _| current.contains(id));
     }
 
     pub fn sync_cancellation_from_disk(&mut self, session_id: &str, dir: &Path, generation: u64) {
@@ -431,25 +508,53 @@ impl ActivityEngine {
         now: SystemTime,
     ) {
         let entry = self.entries.entry(session_id.to_string()).or_default();
-        if entry.cancelled_at.is_some() || entry.native_cancelled {
-            return;
-        }
         let grew = entry
             .last_signal
             .is_some_and(|previous| previous != activity_signal);
         entry.last_signal = Some(activity_signal);
+        // Output can maintain a hook-established background lease, but can
+        // never create or revive one. Missing child-stop hooks therefore
+        // expire through the same bounded fallback as foreground activity.
+        for activity in entry
+            .background
+            .values_mut()
+            .filter(|activity| !activity.expired)
+        {
+            if grew {
+                activity.deadline_at = now + HOOK_IDLE_TIMEOUT;
+            } else if activity.deadline_at <= now {
+                activity.expired = true;
+                entry.background_expired = true;
+            }
+        }
+        if entry.cancelled_at.is_some() || entry.native_cancelled {
+            return;
+        }
         match entry.state {
             Some(HookState::Attention) if allow_attention_clear && grew => {
                 entry.state = Some(HookState::Busy);
                 entry.deadline_at = Some(now + HOOK_IDLE_TIMEOUT);
             }
             Some(HookState::Busy) => {
-                if grew {
-                    entry.deadline_at = Some(now + HOOK_IDLE_TIMEOUT);
-                } else if entry.deadline_at.is_some_and(|d| d <= now) {
+                if entry.deadline_at.is_some_and(|d| d <= now) {
                     entry.completed = false;
                     entry.state = Some(HookState::Idle);
                     entry.deadline_at = None;
+                    if let (Some(dir), Some(through)) =
+                        (&entry.session_dir, entry.last_transition_at)
+                    {
+                        if let Err(error) = unpeel_core::hook_assets::record_hook_expiry(
+                            dir,
+                            entry.runtime_launch_generation,
+                            through,
+                        ) {
+                            unpeel_core::hook_assets::append_trace_log_line(&format!(
+                                "Failed to persist hook expiry: {error}"
+                            ));
+                        }
+                    }
+                } else if grew {
+                    entry.deadline_at = Some(now + HOOK_IDLE_TIMEOUT);
                 }
             }
             Some(HookState::Idle) if distrust_stops && grew => {
@@ -476,11 +581,9 @@ impl ActivityEngine {
     }
 
     /// Re-latch from the durable seed each hook script writes
-    /// (`last-hook-event.json`). Only called when the in-memory latch is
-    /// missing (fresh TUI start). Timestamp anchoring mirrors
-    /// `UnpeelStore.seedHookActivity`: a turn-opening event is anchored at
-    /// `max(seed mtime, output.bin mtime)` because long turns outlive the
-    /// 5-minute timeout; everything else uses the seed's own mtime.
+    /// (`last-hook-event.json`), including missed live deliveries. Output can
+    /// extend a recovered opening event's lease, never its event timestamp:
+    /// using an output timestamp for ordering can suppress a subsequent Stop.
     pub fn seed_from_disk(
         &mut self,
         session_id: &str,
@@ -490,7 +593,17 @@ impl ActivityEngine {
         current_generation: u64,
     ) {
         self.observe_runtime_launch(session_id, current_generation, not_before_unix_ms);
+        self.entries
+            .entry(session_id.to_owned())
+            .or_default()
+            .session_dir = Some(session_dir.to_owned());
         self.sync_cancellation_from_disk(session_id, session_dir, current_generation);
+        self.sync_background_from_disk(
+            session_id,
+            session_dir,
+            current_generation,
+            not_before_unix_ms,
+        );
         let seed_path = session_dir.join("last-hook-event.json");
         let Ok(seed) = fs::File::open(&seed_path) else {
             return;
@@ -545,7 +658,8 @@ impl ActivityEngine {
             .and_then(serde_json::Value::as_u64);
 
         let canonical = normalize_event_name(name);
-        let mut seed_at = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+        let seed_at = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+        let mut lease_at = seed_at;
         let anchor = match canonical.as_str() {
             "UserPromptSubmit" => true,
             "Start" => anchor_start_to_output,
@@ -554,11 +668,11 @@ impl ActivityEngine {
         if starts_turn(&canonical) && anchor && !self.is_cancelled(session_id) {
             if let Ok(output_meta) = fs::metadata(session_dir.join("output.bin")) {
                 if let Ok(output_mtime) = output_meta.modified() {
-                    seed_at = seed_at.max(output_mtime);
+                    lease_at = lease_at.max(output_mtime);
                 }
             }
         }
-        self.apply_hook_event_for_runtime(
+        let accepted = self.apply_hook_event_for_runtime(
             session_id,
             &canonical,
             tool_name.as_deref(),
@@ -567,6 +681,16 @@ impl ActivityEngine {
             current_generation,
             not_before_unix_ms,
         );
+        if accepted && starts_turn(&canonical) {
+            let entry = self.entries.get_mut(session_id).unwrap();
+            if unpeel_core::hook_assets::hook_turn_expired(session_dir, current_generation, seed_at)
+            {
+                entry.state = Some(HookState::Idle);
+                entry.deadline_at = None;
+            } else {
+                entry.deadline_at = Some(lease_at + HOOK_IDLE_TIMEOUT);
+            }
+        }
     }
 
     pub fn remove_session(&mut self, session_id: &str) {
@@ -590,6 +714,209 @@ mod tests {
 
     fn at(ms: u64) -> SystemTime {
         SystemTime::UNIX_EPOCH + Duration::from_millis(ms)
+    }
+
+    fn timed_seed(dir: &Path, event: &str, generation: u64, modified: SystemTime) {
+        let path = dir.join("last-hook-event.json");
+        fs::write(
+            &path,
+            serde_json::json!({
+                "hook_event_name": event, "unpeel_runtime_generation": generation
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+    }
+
+    #[test]
+    fn recovered_opening_lease_does_not_change_event_ordering() {
+        let dir = tempfile::tempdir().unwrap();
+        timed_seed(dir.path(), "UserPromptSubmit", 1, at(1000));
+        let output = fs::File::create(dir.path().join("output.bin")).unwrap();
+        output.set_modified(at(10_000)).unwrap();
+        let mut engine = ActivityEngine::default();
+        engine.seed_from_disk("s", dir.path(), true, None, 1);
+        assert_eq!(
+            engine.entries["s"].deadline_at,
+            Some(at(10_000) + HOOK_IDLE_TIMEOUT)
+        );
+        timed_seed(dir.path(), "Stop", 1, at(2000));
+        engine.seed_from_disk("s", dir.path(), true, None, 1);
+        assert_eq!(engine.hook_owned_state("s"), Some(HookState::Idle));
+        assert!(
+            engine.is_completed("s"),
+            "a later output timestamp cannot hide a missed Stop"
+        );
+    }
+
+    #[test]
+    fn expired_turn_stays_idle_after_restart_and_redraw_but_new_turns_work() {
+        let dir = tempfile::tempdir().unwrap();
+        timed_seed(dir.path(), "UserPromptSubmit", 1, at(1000));
+        let mut engine = ActivityEngine::default();
+        engine.seed_from_disk("s", dir.path(), true, None, 1);
+        engine.note_output_and_sweep("s", 1, false, false, at(1000));
+        engine.note_output_and_sweep("s", 2, false, false, at(1000) + HOOK_IDLE_TIMEOUT);
+        assert_eq!(
+            engine.hook_owned_state("s"),
+            Some(HookState::Idle),
+            "a redraw after expiry cannot extend the lease"
+        );
+        let output = fs::File::create(dir.path().join("output.bin")).unwrap();
+        output.set_modified(at(900_000)).unwrap();
+        let mut restarted = ActivityEngine::default();
+        restarted.seed_from_disk("s", dir.path(), true, None, 1);
+        assert_eq!(restarted.hook_owned_state("s"), Some(HookState::Idle));
+        assert!(!restarted.is_completed("s"));
+        timed_seed(dir.path(), "UserPromptSubmit", 1, at(901_000));
+        restarted.seed_from_disk("s", dir.path(), true, None, 1);
+        assert_eq!(restarted.hook_owned_state("s"), Some(HookState::Busy));
+        timed_seed(dir.path(), "UserPromptSubmit", 2, at(1000));
+        restarted.seed_from_disk("s", dir.path(), true, None, 2);
+        assert_eq!(
+            restarted.hook_owned_state("s"),
+            Some(HookState::Busy),
+            "expiry cannot cross runtime generations"
+        );
+    }
+
+    #[test]
+    fn idle_backstop_repairs_missing_stop_without_rewriting_known_outcomes() {
+        for ending in ["Stop", "StopFailure", "StopCancelled", "Idle"] {
+            let mut engine = ActivityEngine::default();
+            engine.apply_hook_event("s", "UserPromptSubmit", None, at(1000));
+            engine.apply_hook_event("s", ending, None, at(2000));
+            engine.apply_hook_event("s", "Idle", None, at(3000));
+            assert_eq!(engine.hook_owned_state("s"), Some(HookState::Idle));
+            assert_eq!(engine.is_completed("s"), ending == "Stop");
+            engine.apply_hook_event("s", "UserPromptSubmit", None, at(4000));
+            assert_eq!(engine.hook_owned_state("s"), Some(HookState::Busy));
+        }
+    }
+
+    fn background_marker(dir: &Path, generation: u64, id: &str) -> std::path::PathBuf {
+        let directory = dir.join("background-hooks").join(generation.to_string());
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join(format!("{id}.json"));
+        fs::write(
+            &path,
+            serde_json::json!({
+                "activity_id": id, "unpeel_runtime_generation": generation
+            })
+            .to_string(),
+        )
+        .unwrap();
+        path
+    }
+
+    #[test]
+    fn background_children_outlive_main_stop_and_finish_independently() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = background_marker(dir.path(), 1, "first");
+        let second = background_marker(dir.path(), 1, "second");
+        let mut engine = ActivityEngine::default();
+        engine.observe_runtime_launch("s", 1, None);
+        engine.apply_hook_event("s", "UserPromptSubmit", None, SystemTime::now());
+        engine.sync_background_from_disk("s", dir.path(), 1, None);
+        engine.apply_hook_event("s", "Stop", None, SystemTime::now());
+        assert_eq!(engine.hook_owned_state("s"), Some(HookState::Busy));
+        assert!(!engine.is_completed("s"));
+        fs::remove_file(first).unwrap();
+        engine.sync_background_from_disk("s", dir.path(), 1, None);
+        assert_eq!(engine.hook_owned_state("s"), Some(HookState::Busy));
+        assert!(!engine.is_completed("s"));
+        fs::remove_file(second).unwrap();
+        engine.sync_background_from_disk("s", dir.path(), 1, None);
+        assert_eq!(engine.hook_owned_state("s"), Some(HookState::Idle));
+        assert!(engine.is_completed("s"));
+    }
+
+    #[test]
+    fn background_children_survive_foreground_cancellation_without_reporting_completion() {
+        for native in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let marker = background_marker(dir.path(), 1, "child");
+            let mut engine = ActivityEngine::default();
+            engine.observe_runtime_launch("s", 1, None);
+            engine.apply_hook_event("s", "UserPromptSubmit", None, at(1000));
+            engine.sync_background_from_disk("s", dir.path(), 1, None);
+            if native {
+                engine.apply_hook_event("s", "StopCancelled", None, at(2000));
+            } else {
+                engine.observe_cancellation(
+                    "s",
+                    &unpeel_core::hook_cancellation::Cancellation {
+                        runtime_generation: 1,
+                        cancelled_at: 2000,
+                        submitted_at: None,
+                    },
+                    1,
+                );
+            }
+            assert_eq!(engine.hook_owned_state("s"), Some(HookState::Busy));
+            assert!(!engine.is_completed("s"));
+            fs::remove_file(marker).unwrap();
+            engine.sync_background_from_disk("s", dir.path(), 1, None);
+            assert_eq!(engine.hook_owned_state("s"), Some(HookState::Idle));
+            assert!(!engine.is_completed("s"));
+        }
+    }
+
+    #[test]
+    fn background_recovery_is_generation_bound_and_does_not_replace_attention() {
+        let dir = tempfile::tempdir().unwrap();
+        background_marker(dir.path(), 1, "child");
+        fs::write(
+            dir.path().join("last-hook-event.json"),
+            r#"{"hook_event_name":"Stop","unpeel_runtime_generation":1}"#,
+        )
+        .unwrap();
+        let mut engine = ActivityEngine::default();
+        engine.seed_from_disk("s", dir.path(), true, None, 1);
+        assert_eq!(engine.hook_owned_state("s"), Some(HookState::Busy));
+        assert!(!engine.is_completed("s"));
+        engine.apply_hook_event("s", "PermissionRequest", None, SystemTime::now());
+        assert_eq!(engine.hook_owned_state("s"), Some(HookState::Attention));
+        engine.seed_from_disk("s", dir.path(), true, None, 2);
+        assert!(!engine.is_latched("s"));
+        assert_eq!(engine.hook_owned_state("s"), None);
+    }
+
+    #[test]
+    fn missing_background_stop_expires_without_completion_or_rescan_revival() {
+        let dir = tempfile::tempdir().unwrap();
+        background_marker(dir.path(), 1, "child");
+        let now = SystemTime::now();
+        let mut engine = ActivityEngine::default();
+        engine.observe_runtime_launch("s", 1, None);
+        engine.sync_background_from_disk("s", dir.path(), 1, None);
+        engine.apply_hook_event("s", "Stop", None, now);
+        engine.note_output_and_sweep("s", 10, true, false, now);
+        engine.note_output_and_sweep(
+            "s",
+            10,
+            true,
+            false,
+            now + HOOK_IDLE_TIMEOUT + Duration::from_secs(1),
+        );
+        assert_eq!(engine.hook_owned_state("s"), Some(HookState::Idle));
+        assert!(!engine.is_completed("s"));
+        engine.sync_background_from_disk("s", dir.path(), 1, None);
+        engine.note_output_and_sweep(
+            "s",
+            11,
+            true,
+            false,
+            now + HOOK_IDLE_TIMEOUT + Duration::from_secs(2),
+        );
+        assert_eq!(engine.hook_owned_state("s"), Some(HookState::Idle));
+        assert!(!engine.is_completed("s"));
     }
 
     #[test]
@@ -873,6 +1200,7 @@ mod tests {
         engine.apply_hook_event("s", "Start", None, t0);
 
         // Growth inside the window re-arms the deadline.
+        engine.note_output_and_sweep("s", 0, true, false, t0);
         engine.note_output_and_sweep("s", 100, true, false, t0 + Duration::from_secs(200));
         engine.note_output_and_sweep("s", 200, true, false, t0 + Duration::from_secs(400));
         assert_eq!(engine.hook_owned_state("s"), Some(HookState::Busy));

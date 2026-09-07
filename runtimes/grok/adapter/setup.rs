@@ -110,9 +110,9 @@ pub(crate) fn grok_hooks_json(script_path: &Path) -> Result<String, String> {
             "StopFailure": [
                 { "hooks": [ { "type": "command", "command": format!("{command} StopFailure") } ] }
             ],
-            // Grok deliberately skips Stop on ESC, Ctrl+C, and client stops.
-            // Its native cancellation event also avoids mistaking an ESC
-            // that dismisses a menu or edits the composer for an interrupt.
+            // Native cancellation covers Ctrl+C/client stops and ordinary
+            // interrupts. The Host's ESC fallback also covers early rewinds,
+            // which omit this event (and can delay the idle notification).
             "StopCancelled": [
                 { "hooks": [ { "type": "command", "command": format!("{command} StopCancelled") } ] }
             ],
@@ -121,7 +121,16 @@ pub(crate) fn grok_hooks_json(script_path: &Path) -> Result<String, String> {
             ],
             "Notification": [
                 {
-                    "matcher": "approval_required",
+                    // Grok's session-scoped backstop also covers rewind and
+                    // superseded turns, which can omit all three Stop events.
+                    // Idle is not evidence of successful completion.
+                    "matcher": "^idle_prompt$",
+                    "hooks": [
+                        { "type": "command", "command": format!("{command} Idle") }
+                    ]
+                },
+                {
+                    "matcher": "^(approval_required|permission_prompt)$",
                     "hooks": [
                         { "type": "command", "command": attention_command.clone() }
                     ]

@@ -1489,9 +1489,14 @@ final class UnpeelStore: ObservableObject {
         let path = dirPath + "/last-hook-event.json"
         guard let stamp = Self.statFile(path),
               let data = FileManager.default.contents(atPath: path),
-              let event = LastHookEvent.parse(data)
+              let parsedEvent = LastHookEvent.parse(data)
         else { return }
         let receivedAt = Self.stampDate(stamp)
+        let event = parsedEvent.respectingExpiry(
+            FileManager.default.contents(atPath: dirPath + "/hook-expiry.json"),
+            eventAt: receivedAt,
+            generation: runtimeGeneration
+        )
         let decision = Self.hookRuntimeDecision(
             eventGeneration: event.runtimeGeneration,
             hookEventName: event.hookEventName,

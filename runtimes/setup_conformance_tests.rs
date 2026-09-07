@@ -627,6 +627,7 @@ mod tests {
             let mut child = command
                 .env("HOME", &session_dir)
                 .env("UNPEEL_HOME", &session_dir)
+                .env("UNPEEL_HOOK_TRACE_FILE", session_dir.join("trace.log"))
                 .env("UNPEEL_SESSION_ID", "outcome")
                 .env("UNPEEL_SESSION_DIR", &session_dir)
                 .env("UNPEEL_RUNTIME_GENERATION", "7")
@@ -896,6 +897,7 @@ mod tests {
                 .env("HOME", &home)
                 .env("UNPEEL_HOME", &home)
                 .env("UNPEEL_SESSION_ID", "stalled")
+                .env("UNPEEL_HOOK_TRACE_FILE", home.join("trace.log"))
                 .env(
                     "UNPEEL_APP_PORT",
                     stalled[0].local_addr().unwrap().port().to_string(),

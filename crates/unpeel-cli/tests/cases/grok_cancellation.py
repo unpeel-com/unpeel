@@ -1,4 +1,4 @@
-"""Grok's installed native hooks settle ESC/Ctrl+C without a successful Stop.
+"""Grok's native outcomes and Host ESC fallback cover cancellation and rewind.
 
 A fake Grok runs in a real PTY and dispatches the registrations installed by
 the runtime adapter. All provider settings and hook assets stay in test HOME.
@@ -14,7 +14,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from harness import run, run_cli  # noqa: E402
-from hook_cancellation import control, read_json  # noqa: E402
+from hook_cancellation import control, fixture_started, read_json  # noqa: E402
 
 
 def body(case):
@@ -34,13 +34,21 @@ def hook(event):
         for command in entry["hooks"]:
             subprocess.run(command["command"], shell=True, executable="/bin/bash",
                            input=json.dumps({"hook_event_name": event}), text=True, check=True)
+print("HOOK_FIXTURE_PROCESS_STARTED", flush=True)
 hook("UserPromptSubmit")
 print("FAKE_GROK_READY", flush=True)
+rewind = False
 while True:
     data = os.read(0, 4096)
     if not data: break
+    if data == b"\\x12":
+        rewind = True
+        print("REWIND_MODE_READY", flush=True)
+        continue
     if data in (b"\\x1b", b"\\x03"):
-        hook("StopCancelled")
+        if not (rewind and data == b"\\x1b"):
+            hook("StopCancelled")
+        rewind = False
         print("CANCELLED", flush=True)
     elif data == b"\\x04": hook("Stop")
     elif data == b"\\x06": hook("StopFailure")
@@ -77,17 +85,23 @@ while True:
     def busy():
         return activity().get("raw_status") == "busy"
 
-    def report(event, deliver=True):
+    def report(event, deliver=True, payload=None, matcher=None):
         settings = read_json(home.path(".grok", "hooks", "unpeel.json"))
-        command = settings["hooks"][event][0]["hooks"][0]["command"]
-        env = dict(os.environ, UNPEEL_SESSION_ID=session_id, UNPEEL_SESSION_DIR=session_dir,
+        registrations = settings["hooks"][event]
+        registration = next((entry for entry in registrations if matcher in entry.get("matcher", "")), None) if matcher else registrations[0]
+        command = registration["hooks"][0]["command"]
+        env = dict(os.environ, HOME=home.root, UNPEEL_HOME=home.root,
+                   UNPEEL_HOOK_TRACE_FILE=home.path("hooks", "trace.log"),
+                   UNPEEL_SESSION_ID=session_id, UNPEEL_SESSION_DIR=session_dir,
                    UNPEEL_RUNTIME_GENERATION=str(home.manifests()[session_id]["runtime_launch_generation"]),
                    UNPEEL_APP_PORT=str(ready["hookPort"]) if deliver else "",
                    UNPEEL_APP_PORT_REGISTRY_FILE=home.path("no-ports"))
-        subprocess.run(command, shell=True, executable="/bin/bash", input="{}", text=True,
+        subprocess.run(command, shell=True, executable="/bin/bash", input=json.dumps(payload or {}), text=True,
                        env=env, capture_output=True, check=True, timeout=5)
 
     try:
+        if not fixture_started(case, service, session_dir):
+            return
         if not case.check("opening hook makes Grok busy", bool(service.wait_for(busy)), str(activity())):
             with open(os.path.join(session_dir, "output.bin"), "rb") as output:
                 case.note("PTY startup: " + repr(output.read()[-6000:]))
@@ -97,8 +111,9 @@ while True:
         case.check("arrow navigation leaves the turn busy", busy())
         control(home, session_id, "\x1b")
         case.check("ESC native cancellation clears the spinner without completion", bool(service.wait_for(idle_cancelled)), str(activity()))
-        case.check("Grok cancellation is hook-owned, without an input-inference marker", not os.path.exists(os.path.join(session_dir, "hook-cancellation.json")))
-        report("Notification")
+        case.check("ESC fallback is persisted for rewinds that omit native hooks",
+                   bool(service.wait_for(lambda: os.path.exists(os.path.join(session_dir, "hook-cancellation.json")))))
+        report("Notification", matcher="approval_required")
         report("Stop")
         service.read_for(0.4)
         case.check("late attention and Stop cannot revive or complete cancellation", idle_cancelled(), str(activity()))
@@ -122,6 +137,53 @@ while True:
         case.check("missed-delivery case starts busy", bool(service.wait_for(busy)))
         report("StopCancelled", deliver=False)
         case.check("durable StopCancelled recovers a missed HTTP delivery", bool(service.wait_for(idle_cancelled)), str(activity()))
+        report("SessionStart", deliver=False)
+        case.check("SessionStart metadata preserves the cancellation seed",
+                   read_json(os.path.join(session_dir, "last-hook-event.json")).get("hook_event_name") == "StopCancelled")
+        report("UserPromptSubmit", payload={"subagentType": "explore"})
+        service.read_for(0.3)
+        case.check("a subagent opening hook cannot revive the cancelled main turn", idle_cancelled())
+        control(home, session_id, "backstop case\r")
+        case.check("backstop case starts busy", bool(service.wait_for(busy)))
+        report("Stop", payload={"subagentType": "explore"})
+        service.read_for(0.3)
+        case.check("a subagent Stop cannot finish the main turn", busy())
+        report("Notification", matcher="idle_prompt", deliver=False)
+        case.check("idle backstop repairs a missing stop without claiming completion",
+                   bool(service.wait_for(idle_cancelled)), str(activity()))
+        report("SessionStart", deliver=False)
+        service.close()
+        service = case.serve(env=environment)
+        ready = service.ready(timeout=20)
+        case.check("idle backstop survives Host restart and later metadata",
+                   bool(ready) and bool(service.wait_for(idle_cancelled)), str(activity()))
+        control(home, session_id, "complete after backstop\r")
+        case.check("new prompt is detected through the changed Host port", bool(service.wait_for(busy)))
+        control(home, session_id, "\x04")
+        case.check("successful stop after reconnect completes", bool(service.wait_for(lambda: activity().get("completed") is True)))
+        seed_path = os.path.join(session_dir, "last-hook-event.json")
+        seed_mtime = os.stat(seed_path).st_mtime_ns
+        report("Notification", matcher="idle_prompt")
+        service.read_for(0.3)
+        case.check("idle pings preserve successful completion and its recency",
+                   activity().get("completed") is True and os.stat(seed_path).st_mtime_ns == seed_mtime)
+        control(home, session_id, "rewind before response\r")
+        case.check("early-rewind case starts busy", bool(service.wait_for(busy)))
+        control(home, session_id, "\x12")
+        def rewind_ready():
+            with open(os.path.join(session_dir, "output.bin"), "rb") as output:
+                return b"REWIND_MODE_READY" in output.read()
+        case.check("fixture will omit both stop and idle hooks", bool(service.wait_for(rewind_ready)))
+        control(home, session_id, "\x1b")
+        case.check("early ESC clears busy promptly without any Grok stop hook",
+                   bool(service.wait_for(idle_cancelled, timeout=2)), str(activity()))
+        case.check("the provider really left an unfinished opening seed",
+                   read_json(seed_path).get("hook_event_name") == "UserPromptSubmit")
+        service.close()
+        service = case.serve(env=environment)
+        ready = service.ready(timeout=20)
+        case.check("early-rewind cancellation survives Host restart",
+                   bool(ready) and bool(service.wait_for(idle_cancelled)), str(activity()))
     finally:
         run_cli(home, ["rm", session_id], env=environment, timeout=45)
 

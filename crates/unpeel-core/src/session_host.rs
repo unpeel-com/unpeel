@@ -297,7 +297,9 @@ pub struct HostedSessionManifest {
     /// zero. An in-place agent restart advances this only after the relaunch
     /// bytes were accepted by the PTY, allowing clients to discard hook/activity
     /// state that belonged to the preceding process without replacing the
-    /// Session or terminal identity.
+    /// Session or terminal identity. Background hook markers and expiry
+    /// watermarks share this scope: a replacement cannot inherit its
+    /// predecessor's running children or expired foreground turn.
     #[serde(default)]
     pub runtime_launch_generation: u64,
     /// True after Resume Agent has submitted a new managed launch but before

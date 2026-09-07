@@ -57,7 +57,8 @@ Hook-driven sessions:
 - `Start` and `UserPromptSubmit` mark the session busy
 - `Stop` marks it idle
 - `PermissionRequest` marks attention
-- `SubagentStop` is metadata only: a child finishing never completes its parent.
+- Child hooks update independent background activity; `SubagentStop` never
+  completes the main turn or another child.
 - Only a successful `Stop` counts as completed work. `StopFailure`, the idle
   timeout, and a user cancellation settle activity without a Finished event or
   a completion notification.
@@ -93,18 +94,22 @@ Hook-driven sessions:
   `UNPEEL_SESSION_DIR`, exported by the host next to `UNPEEL_SESSION_ID`).
   Hook scripts keep firing while no app instance is listening — the port POST
   just fails — so the file records transitions that happen with the app
-  closed. On rescan, `UnpeelStore.seedHookActivity` re-seeds an unlatched
-  hook-capable session from this file (`LastHookEvent` in
-  `SessionActivity.swift`). Seed timestamp: for an **open turn**
-  (Start/UserPromptSubmit with no Stop recorded after it) the seed is
-  anchored at `max(event mtime, output.bin mtime)` — turns routinely outlive
-  the 5-minute hook timeout, and a fresh output.bin means the agent is still
-  streaming right now; for everything else the event's own mtime is used, so
+  closed. On every rescan the Host checks this file for missed transitions.
+  For an **open turn** (Start/UserPromptSubmit with no Stop recorded after
+  it), the inactivity lease is anchored at `max(event mtime, output.bin
+  mtime)` because turns routinely outlive the five-minute hook timeout.
+  Event ordering always uses the event's own mtime, so a newer terminal
+  repaint cannot suppress a subsequently recovered Stop. For other events
+  only the event's own mtime is used, so
   a recorded Stop stays idle no matter how the TUI repaints and a dead
   mid-turn session (both timestamps stale) expires through the ordinary
   5-minute timeout on the first sweep. This restores busy/attention spinners
   for sessions that were mid-turn when the app closed, and correctly stays
   idle when the turn finished while it was closed.
+  Once that lease expires, `hook-expiry.json` records a generation-scoped
+  watermark under an exclusive lock and announces it on the state bus.
+  Restarting the Host or repainting an idle terminal cannot revive that
+  expired opener; a newer opening hook or a new runtime launch can.
 
 Recognized non-hook agent sessions:
 
@@ -232,11 +237,44 @@ Set `UNPEEL_MUSE_TEST_BINARY` to an installed Muse binary when running
 `crates/unpeel-cli/tests/run.sh muse_cancellation` to exercise the real echo
 provider instead of the deterministic substitute, still in a private HOME.
 
+### Background agents
+
+The Host keeps foreground lifecycle and background hook activity separately.
+A successful main Stop or a foreground ESC leaves the Session busy while a
+tracked child is active. The Session settles after the last child stops;
+foreground cancellation/failure still cannot produce a Finished notification.
+Attention takes precedence over background busy state.
+
+Claude's installed `SubagentStart`/`SubagentStop` hooks identify each child by
+`agent_id` ([provider contract](https://code.claude.com/docs/en/hooks#subagentstart)).
+The reporter atomically creates `background-hooks/<runtime-generation>/<id>.json`
+on start and removes only that file on stop, then broadcasts the ordinary hook.
+Separate files avoid concurrent child updates overwriting each other or the
+main `last-hook-event.json`. The Host reconciles the markers on rescan, including
+after a restart or missed POST; duplicate/unknown stops are harmless. A new
+managed runtime generation cannot inherit its predecessor's children.
+The current generation directory's modification time also advances the shared
+unread, Recent, and archive clock when the last child finishes.
+
+Background leases use the existing five-minute inactivity fallback: output
+changes may maintain hook-established work, but cannot create or revive it.
+An expired child never produces a completion notification. This fallback bounds
+stale state when a provider fails to emit its child stop. The reporter rejects
+missing/unsafe IDs and untagged launches. Background shells, servers, and
+watchers have no inferred lifecycle authority, and other providers retain their
+current behavior until their runtime packages report equivalent child events.
+
+Existing Claude processes need their hook configuration reloaded or a new
+provider invocation to register these two events. Children started before the
+new hooks were loaded cannot be reconstructed from a terminal counter.
+
 ### Runtime cancellation coverage
 
 Audited 2026-09-06 against all 14 shipped runtime packages. Native event
 normalization belongs in each package; the Host only consumes the common
-`Stop`, `StopFailure`, and `StopCancelled` outcomes. Neither cancellation nor
+`Stop`, `StopFailure`, `StopCancelled`, and `Idle` outcomes. An `Idle` backstop
+settles missing stops without changing an already-known outcome or creating
+a completion. Neither cancellation nor
 failure produces a Finished notification. Tool/session metadata does not
 replace a durable cancellation seed or reopen the cancelled turn.
 
@@ -250,12 +288,20 @@ replace a durable cancellation seed or reopen the cancelled turn.
 | fx | No lifecycle authority; no animated busy state. | Shipped catalog and Host authority guards. |
 | Gemini | Managed-launch ESC fallback for aborts that skip AfterAgent. | Installed 0.57.0 source; real Host/PTY regression with substitute provider. |
 | GitHub Copilot | Registers per-turn `agentStop` and `permissionRequest`; `sessionEnd.reason` distinguishes cancellation and failure. Single ESC does not imply cancel. | [Hook reference](https://docs.github.com/en/copilot/reference/hooks-reference); reporter tests. CLI not installed here; in-turn interrupt emission remains unverified. |
-| Grok | Native `StopCancelled` and `StopFailure` remain distinct from Stop. | Native contract; installed-hook Host/PTY regression with substitute provider. |
+| Grok | Native `StopCancelled` and `StopFailure` remain distinct from Stop. Managed ESC fallback covers early rewinds that omit cancellation hooks. `idle_prompt` repairs other omitted stops without claiming success; child turn events are ignored, and SessionStart preserves the durable outcome. | Installed-hook Host/PTY regression including early rewind, missed delivery, and repeated Host restarts; early rewind omission reproduced with live Grok 1.0.13. |
 | Kimi | Native Kimi Code `Interrupt` becomes cancellation. The older Python configuration does not accept that event. | [Native hooks reference](https://moonshotai.github.io/kimi-code/en/customization/hooks.md); reporter/config tests. Installed legacy Python build has no hooks; native Kimi Code not live-tested. |
 | Kiro | Uses native Stop; no inferred ESC because cancel can immediately submit queued steering. | Reporter/transport tests; [queue steering contract](https://kiro.dev/docs/cli/chat/queue-steering/). CLI absent; cancellation Stop emission remains unverified. |
 | Muse | Managed-launch ESC fallback; background work retains provider-owned controls. | Real 1.0.3 echo-provider cancellation and next prompt, plus Host/PTY regression. |
 | OpenCode | Root `session.error` records cancellation/failure; the following idle settles it. A successful response after recovery clears the error. Child sessions and duplicate idle events are ignored. | [Session processor](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/session/processor.ts); executable ordered-event plugin tests. |
 | Pi | No lifecycle authority; no animated busy state. | Shipped catalog and Host authority guards. |
+
+An app restart preserves running providers, including their loaded hook
+registrations. After a Grok registration update, `/hooks` → `r` reloads the
+files without restarting the agent. Legacy per-session PTY Hosts also keep
+their original input policy while alive; a new Grok Session is needed to
+pick up the immediate ESC fallback on those older Hosts. The native idle
+backstop works in existing Sessions after reloading hooks, but Grok 1.0.13
+can delay it for a minute after an early rewind.
 
 Copilot's [cancel controls](https://docs.github.com/en/copilot/concepts/agents/copilot-cli/cancel-and-roll-back)
 use a second ESC, with queued prompts and dialogs taking precedence. Kiro also

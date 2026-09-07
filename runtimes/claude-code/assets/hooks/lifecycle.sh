@@ -184,7 +184,39 @@ esac
 
 INPUT=$(add_runtime_generation_to_payload "$INPUT")
 
+# Each child owns a separate marker: concurrent children never overwrite one
+# another or the main turn's durable seed. Start hooks finish before the child
+# runs; Stop removes only that child's marker before broadcasting the event.
+# A generation directory prevents a departed runtime's children from keeping
+# its replacement busy. Untagged/manual launches retain metadata-only behavior.
+record_subagent_activity() {
+  case "${UNPEEL_RUNTIME_GENERATION:-}" in
+    ''|*[!0-9]*) return 0 ;;
+  esac
+  _child_id=$(printf '%s' "$INPUT" | grep -oE '"agent_id"[[:space:]]*:[[:space:]]*"[A-Za-z0-9_-]+"' | head -1 | grep -oE '"[^"]*"$' | tr -d '"')
+  [ -n "$_child_id" ] && [ "${#_child_id}" -le 160 ] || return 0
+  _child_session_dir="${UNPEEL_SESSION_DIR:-${UNPEEL_HOME:-$HOME/.unpeel}/app-sessions/$UNPEEL_SESSION_ID}"
+  [ -d "$_child_session_dir" ] || return 0
+  _child_dir="$_child_session_dir/background-hooks/$UNPEEL_RUNTIME_GENERATION"
+  _child_file="$_child_dir/$_child_id.json"
+  case "$LAST_EVENT_NAME" in
+    SubagentStart)
+      mkdir -p "$_child_dir" 2>/dev/null || return 0
+      _child_tmp="$_child_dir/.$_child_id.$$"
+      if printf '{"activity_id":"%s","unpeel_runtime_generation":%s}' \
+          "$_child_id" "$UNPEEL_RUNTIME_GENERATION" > "$_child_tmp" 2>/dev/null; then
+        mv -f "$_child_tmp" "$_child_file" 2>/dev/null \
+          || rm -f "$_child_tmp" 2>/dev/null || true
+      fi
+      ;;
+    SubagentStop) rm -f "$_child_file" 2>/dev/null || true ;;
+  esac
+}
+
 case "$LAST_EVENT_NAME" in
+  SubagentStart|SubagentStop)
+    record_subagent_activity
+    ;;
   Start|UserPromptSubmit|Stop|StopFailure|PermissionRequest)
     record_last_hook_event "$LAST_EVENT_NAME" "$LAST_TOOL_NAME"
     ;;

@@ -245,6 +245,7 @@ fn has_real_provider_lifecycle(session_id: &str) -> bool {
                 | "Stop"
                 | "StopFailure"
                 | "StopCancelled"
+                | "Idle"
                 | "PermissionRequest"
         )
     )
@@ -1269,7 +1270,21 @@ pub fn last_activity_ms(session_id: &str, command: &str) -> Option<u64> {
     if crate::integrations::uses_hook_port(crate::integrations::command_head(command)) {
         // A hook-capable session with no seed yet has simply never had a
         // turn — its creation time is the honest answer.
-        return mtime("last-hook-event.json");
+        let foreground = mtime("last-hook-event.json");
+        // A child can finish long after the main Stop. Its current-generation
+        // directory changes on marker creation/removal, so unread and archive
+        // clocks follow that finish without overwriting the foreground seed.
+        let background = if dir.join("background-hooks").is_dir() {
+            crate::session_host::load_manifest(session_id).and_then(|manifest| {
+                mtime(&format!(
+                    "background-hooks/{}",
+                    manifest.runtime_launch_generation
+                ))
+            })
+        } else {
+            None
+        };
+        return foreground.max(background);
     }
     // The host's parsed-screen change stamp beats output.bin's mtime: the
     // text only changes when the screen really shows something new, so it

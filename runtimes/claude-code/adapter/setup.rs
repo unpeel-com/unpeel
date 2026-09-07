@@ -19,6 +19,8 @@ pub(crate) const HOOK_EVENTS: &[&str] = &[
     "Stop",
     "StopFailure",
     "PermissionRequest",
+    "SubagentStart",
+    "SubagentStop",
 ];
 pub fn install_claude_hooks() -> Result<(), String> {
     let script_path = claude_hook_script_path();

@@ -4,7 +4,11 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+mod background;
+mod expiry;
 mod scripts;
+pub use background::{read_background_hook_activity, BackgroundHookActivity};
+pub use expiry::{hook_turn_expired, record_hook_expiry};
 pub(crate) use scripts::NOTIFY_HOOK_SCRIPT;
 
 const TRACE_LOG_MAX_BYTES: u64 = 10 * 1024 * 1024;

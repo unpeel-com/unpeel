@@ -1,5 +1,42 @@
 import XCTest
+import Testing
 @testable import UnpeelNative
+
+@MainActor
+struct HookRestartTests {
+    @Test(arguments: ["stop_cancelled", "stop_failure", "idle"])
+    func unsuccessfulTurnSeedsIdle(eventName: String) throws {
+        let event = try #require(LastHookEvent.parse(Data(
+            "{\"hook_event_name\":\"\(eventName)\"}".utf8
+        )))
+        let engine = SessionActivityEngine()
+        engine.applyHookEvent(sessionID: "s", hookEventName: event.hookEventName, latchOnly: event.latchOnly)
+        #expect(engine.hookOwnedState("s") == .idle)
+        #expect(!event.startsTurn)
+    }
+
+    @Test(arguments: ["SubagentStart", "SubagentStop"])
+    func childEventsCannotChangeForegroundSeed(eventName: String) throws {
+        let event = try #require(LastHookEvent.parse(Data(
+            "{\"hook_event_name\":\"\(eventName)\"}".utf8
+        )))
+        let engine = SessionActivityEngine()
+        engine.applyHookEvent(sessionID: "s", hookEventName: "UserPromptSubmit")
+        engine.applyHookEvent(sessionID: "s", hookEventName: event.hookEventName, latchOnly: event.latchOnly)
+        #expect(engine.hookOwnedState("s") == .busy)
+    }
+
+    @Test func expiryOnlySuppressesOlderOpenersFromTheSameLaunch() throws {
+        let start = try #require(LastHookEvent.parse(Data(
+            #"{"hook_event_name":"UserPromptSubmit","unpeel_runtime_generation":7}"#.utf8
+        )))
+        let expiry = Data(#"{"runtime_generation":7,"through":{"secs_since_epoch":100,"nanos_since_epoch":0}}"#.utf8)
+        #expect(start.respectingExpiry(expiry, eventAt: Date(timeIntervalSince1970: 99), generation: 7).hookEventName == "Idle")
+        #expect(start.respectingExpiry(expiry, eventAt: Date(timeIntervalSince1970: 101), generation: 7).startsTurn)
+        #expect(start.respectingExpiry(expiry, eventAt: Date(timeIntervalSince1970: 99), generation: 8).startsTurn)
+        #expect(start.respectingExpiry(Data("broken".utf8), eventAt: Date(timeIntervalSince1970: 99), generation: 7).startsTurn)
+    }
+}
 
 @MainActor
 final class SessionActivityTests: XCTestCase {

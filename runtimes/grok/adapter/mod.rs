@@ -87,7 +87,10 @@ pub(crate) const INTEGRATION: Integration = Integration::new(
     Some(configure_host_command),
 )
 .with_startup_command(prepare_startup_command)
-.with_resume_adapter(resume::ADAPTER);
+.with_resume_adapter(resume::ADAPTER)
+// ESC before the first response rewinds the prompt; Grok intentionally
+// omits StopCancelled for that path. The idle ping can arrive much later.
+.with_escape_cancellation();
 
 #[cfg(test)]
 mod tests {

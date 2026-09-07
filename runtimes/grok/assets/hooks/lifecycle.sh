@@ -2,6 +2,11 @@
 INPUT=$(cat)
 # Global provider hooks must be inert outside a hosted Unpeel Session.
 [ -n "${UNPEEL_SESSION_ID:-}" ] || exit 0
+# Native Grok invokes turn hooks inside subagents too. Those events belong
+# to the child, never to the foreground turn represented by this reporter.
+if printf '%s' "$INPUT" | grep -qE '"subagent(Type|_type)"[[:space:]]*:[[:space:]]*"[^"[:space:]][^"]*"'; then
+  exit 0
+fi
 TRACE_FILE="${UNPEEL_HOOK_TRACE_FILE:-${UNPEEL_HOME:-$HOME/.unpeel}/hooks/trace.log}"
 mkdir -p "$(dirname "$TRACE_FILE")" >/dev/null 2>&1 || true
 UNPEEL_PORT_REGISTRY_FILE="${UNPEEL_APP_PORT_REGISTRY_FILE:-${UNPEEL_HOME:-$HOME/.unpeel}/app-ports}"
@@ -22,9 +27,17 @@ runtime_generation_json_field() {
 record_last_hook_event() {
   _record_event_name="$1"
   _record_tool_name="$2"
+  # Session metadata must not erase a Stop/cancellation needed after restart.
+  [ "$_record_event_name" != HookSeen ] || return 0
   [ -n "${UNPEEL_SESSION_ID:-}" ] || return 0
   _record_dir="${UNPEEL_SESSION_DIR:-${UNPEEL_HOME:-$HOME/.unpeel}/app-sessions/$UNPEEL_SESSION_ID}"
   [ -d "$_record_dir" ] || return 0
+  # Repeated idle pings must preserve the known turn outcome and its recency.
+  if [ "$_record_event_name" = Idle ] && [ -f "$_record_dir/last-hook-event.json" ]; then
+    if grep -qE '"hook_event_name"[[:space:]]*:[[:space:]]*"(Stop|StopFailure|StopCancelled|Idle)"' "$_record_dir/last-hook-event.json"; then
+      return 0
+    fi
+  fi
   _record_name_json="$(json_escape_string "$_record_event_name")"
   _record_generation="$(runtime_generation_json_field)"
   if [ -n "$_record_tool_name" ]; then
@@ -128,7 +141,7 @@ post_hook_event_to_current_ports() {
 EVENT_TYPE="$1"
 TOOL_NAME=""
 case "$EVENT_TYPE" in
-  HookSeen|Start|UserPromptSubmit|Stop|StopFailure|StopCancelled) ;;
+  HookSeen|Start|UserPromptSubmit|Stop|StopFailure|StopCancelled|Idle) ;;
   Attention)
     EVENT_TYPE="PermissionRequest"
     TOOL_NAME="$(extract_hook_tool_name || true)"
@@ -138,6 +151,11 @@ esac
 
 record_last_hook_event "$EVENT_TYPE" "$TOOL_NAME"
 
+# Idle pings wake the Host to reconcile the durable record. A ping delayed
+# behind a new prompt must not directly clear that newer live turn.
+DELIVERY_EVENT="$EVENT_TYPE"
+[ "$EVENT_TYPE" != Idle ] || DELIVERY_EVENT=HookSeen
+
 _hook_post_results=""
 if [ -n "$UNPEEL_SESSION_ID" ]; then
   # Posts go out synchronously and in order: backgrounded fire-and-forget
@@ -145,12 +163,12 @@ if [ -n "$UNPEEL_SESSION_ID" ]; then
   # event), and concurrent posts could arrive out of order. Set
   # UNPEEL_HOOK_POST_SYNC=0 to restore backgrounded posts.
   if [ "${UNPEEL_HOOK_POST_SYNC:-1}" = "1" ]; then
-    post_hook_event "$EVENT_TYPE" "$UNPEEL_SESSION_ID" "${UNPEEL_APP_PORT:-}" "$TOOL_NAME" || true
-    post_hook_event_to_current_ports "$EVENT_TYPE" "$UNPEEL_SESSION_ID" "${UNPEEL_APP_PORT:-}" "$TOOL_NAME" || true
+    post_hook_event "$DELIVERY_EVENT" "$UNPEEL_SESSION_ID" "${UNPEEL_APP_PORT:-}" "$TOOL_NAME" || true
+    post_hook_event_to_current_ports "$DELIVERY_EVENT" "$UNPEEL_SESSION_ID" "${UNPEEL_APP_PORT:-}" "$TOOL_NAME" || true
   else
     (
-      post_hook_event "$EVENT_TYPE" "$UNPEEL_SESSION_ID" "${UNPEEL_APP_PORT:-}" "$TOOL_NAME" || true
-      post_hook_event_to_current_ports "$EVENT_TYPE" "$UNPEEL_SESSION_ID" "${UNPEEL_APP_PORT:-}" "$TOOL_NAME" || true
+      post_hook_event "$DELIVERY_EVENT" "$UNPEEL_SESSION_ID" "${UNPEEL_APP_PORT:-}" "$TOOL_NAME" || true
+      post_hook_event_to_current_ports "$DELIVERY_EVENT" "$UNPEEL_SESSION_ID" "${UNPEEL_APP_PORT:-}" "$TOOL_NAME" || true
     ) &
   fi
 fi

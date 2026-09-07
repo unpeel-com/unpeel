@@ -126,10 +126,10 @@ final class SessionActivityEngine {
         now: Date = Date()
     ) -> Transition {
         var entry = entries[sessionID] ?? Entry()
+        if hookEventName == "Idle", entry.hookSeen, entry.state == .idle { return .none }
         entry.hookSeen = true
         entry.lastHookEventAt = now
-        entry.lastHookCompletedTurn = !latchOnly
-            && (hookEventName == "Stop" || hookEventName == "StopFailure")
+        entry.lastHookCompletedTurn = !latchOnly && hookEventName == "Stop"
         entry.lastHookEventName = hookEventName
         entry.lastHookWasLatchOnly = latchOnly
         entry.lastHookRuntimeGeneration = runtimeGeneration
@@ -157,6 +157,11 @@ final class SessionActivityEngine {
             entry.state = .idle
             entry.deadlineAt = nil
             entry.stoppedAt = now
+            return .idle
+        case "StopCancelled", "Idle":
+            entry.state = .idle
+            entry.deadlineAt = nil
+            entry.stoppedAt = nil
             return .idle
         case "PermissionRequest":
             entry.state = .attention
@@ -378,7 +383,7 @@ struct LastHookEvent {
         let name = Self.normalizedHookEventName(rawName)
         let latchOnly: Bool
         switch name {
-        case "Start", "UserPromptSubmit", "Stop", "StopFailure":
+        case "Start", "UserPromptSubmit", "Stop", "StopFailure", "StopCancelled", "Idle":
             latchOnly = false
         case "PermissionRequest":
             latchOnly = (json["tool_name"] as? String) == "AskUserQuestion"
@@ -410,14 +415,45 @@ struct LastHookEvent {
         case "user_prompt_submit", "userpromptsubmit", "user_prompt_submitted",
              "before_submit_prompt", "beforesubmitprompt":
             return "UserPromptSubmit"
-        case "stop", "session_end", "sessionend", "subagent_stop", "subagentstop":
+        case "stop", "session_end", "sessionend":
             return "Stop"
+        case "subagent_start", "subagentstart", "subagent_stop", "subagentstop":
+            return "HookSeen"
         case "stop_failure", "stopfailure":
             return "StopFailure"
+        case "stop_cancelled", "stopcancelled", "stop_canceled", "stopcanceled":
+            return "StopCancelled"
+        case "idle":
+            return "Idle"
         case "permission_request", "permissionrequest":
             return "PermissionRequest"
         default:
             return trimmed
+        }
+    }
+
+    /// The Host persists timeouts so reopening a Controller cannot resurrect
+    /// the same abandoned turn from an old opener and a recent TUI redraw.
+    func respectingExpiry(_ data: Data?, eventAt: Date, generation: UInt64) -> Self {
+        guard startsTurn, let data,
+              let expiry = try? JSONDecoder().decode(Expiry.self, from: data),
+              expiry.runtime_generation == generation,
+              expiry.through.nanos_since_epoch < 1_000_000_000
+        else { return self }
+        let through = Date(timeIntervalSince1970:
+            TimeInterval(expiry.through.secs_since_epoch)
+                + TimeInterval(expiry.through.nanos_since_epoch) / 1_000_000_000)
+        guard eventAt <= through else { return self }
+        return Self(hookEventName: "Idle", latchOnly: false, runtimeGeneration: runtimeGeneration)
+    }
+
+    private struct Expiry: Decodable {
+        let runtime_generation: UInt64
+        let through: Timestamp
+
+        struct Timestamp: Decodable {
+            let secs_since_epoch: UInt64
+            let nanos_since_epoch: UInt32
         }
     }
 
