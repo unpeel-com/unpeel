@@ -111,11 +111,20 @@ if (!args['skip-build'] && process.platform === 'darwin') {
   for (const triple of triples) {
     run('cargo', ['build', '--release', '--target', triple], { cwd: designDir })
   }
+  // A workspace member (crates/apps/<app>) builds into the WORKSPACE's
+  // target dir, not its own: ask cargo rather than guessing.
+  const metadata = spawnSync(
+    'cargo',
+    ['metadata', '--no-deps', '--format-version', '1'],
+    { cwd: designDir, encoding: 'utf8' }
+  )
+  if (metadata.status !== 0) throw new Error('cargo metadata failed')
+  const targetDir = JSON.parse(metadata.stdout).target_directory
   const stage = mkdtempSync(resolve(tmpdir(), `${bin}-`))
   const out = resolve(stage, bin)
   run('lipo', [
     '-create', '-output', out,
-    ...triples.map((t) => resolve(designDir, 'target', t, 'release', bin))
+    ...triples.map((t) => resolve(targetDir, t, 'release', bin))
   ])
   // lipo drops the arm64 slice's linker-generated signature; re-sign ad hoc.
   run('codesign', ['--force', '--sign', '-', out])
