@@ -1400,9 +1400,9 @@ struct TerminalPaneContainer: View {
                 if isAuxiliaryRegion, entry != nil {
                     // Panel membership mark: these panes are "pinned to the
                     // project sidebar" (the context-menu verb's counterpart).
-                    ChromeIconView(icon: .pushPin, size: 11)
-                        .foregroundStyle(Theme.mutedForeground.opacity(0.7))
-                        .frame(width: 14, height: 14)
+                    ChromeIconView(icon: .pushPin, size: 13)
+                        .foregroundStyle(Theme.foreground.opacity(0.75))
+                        .frame(width: 16, height: 16)
                         .padding(.leading, 4)
                         .allowsHitTesting(false)
                 }
