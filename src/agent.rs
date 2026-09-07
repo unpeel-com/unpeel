@@ -235,18 +235,58 @@ impl AgentBridge {
 fn resolve_agent_project_context(
     client: &mut McpClient,
 ) -> Result<AgentProjectContext, AgentError> {
-    let (session_id, label) = resolve_agent(client)?;
-    let agents = client
-        .call_tool("agents", &json!({ "action": "list" }))
-        .ok();
     let group = client
         .call_tool(
             "sessions",
             &json!({ "action": "list_group", "include_exited": false }),
         )
         .ok();
+    // Following is about WHERE the neighbor works, not whether it is an
+    // agent: a plain terminal opened inside a worktree beside this App is
+    // the folder to show. Sending text still targets agents only.
+    if let Some(current) = client
+        .call_tool("sessions", &json!({ "action": "current" }))
+        .ok()
+        && let Some(context) = adjacent_follow_context(&current, group.as_ref())
+    {
+        return Ok(context);
+    }
+    let (session_id, label) = resolve_agent(client)?;
+    let agents = client
+        .call_tool("agents", &json!({ "action": "list" }))
+        .ok();
     project_context_for_target(&session_id, &label, agents.as_ref(), group.as_ref())
         .ok_or_else(|| AgentError::new("agent project context unavailable"))
+}
+
+/// The running Session beside this pane, whatever it runs, as a place to
+/// follow. Left first (the main content for a sidebar-pinned App), then the
+/// other directions.
+fn adjacent_follow_context(current: &Value, group: Option<&Value>) -> Option<AgentProjectContext> {
+    let neighbors = current.pointer("/pane_context/neighbors")?;
+    let entry = ["left", "right", "up", "down"]
+        .iter()
+        .filter_map(|direction| neighbors.get(*direction))
+        .find(|entry| {
+            string_field(entry, "state") == "running"
+                && Path::new(&string_field(entry, "cwd")).is_absolute()
+                && !string_field(entry, "session_id").is_empty()
+        })?;
+    let session_id = string_field(entry, "session_id");
+    let project_id = group
+        .and_then(|value| value.get("sessions"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find(|session| string_field(session, "id") == session_id)
+        .map(|session| string_field(session, "project_id"))
+        .unwrap_or_default();
+    Some(AgentProjectContext {
+        label: label_or(entry, "label", &string_field(entry, "runtime_id")),
+        session_id,
+        project_id,
+        cwd: PathBuf::from(string_field(entry, "cwd")),
+    })
 }
 
 fn project_context_for_target(
@@ -577,6 +617,34 @@ impl Drop for McpClient {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn following_takes_any_running_neighbor_but_prefers_the_left_one() {
+        let current = json!({
+            "pane_context": {
+                "neighbors": {
+                    "left": { "kind": "terminal", "state": "running", "cwd": "/tmp/wt/feature", "session_id": "shell", "label": "zsh", "runtime_id": "" },
+                    "right": { "kind": "agent", "state": "running", "cwd": "/tmp/main", "session_id": "agent", "label": "Claude", "runtime_id": "claude" },
+                    "up": null,
+                    "down": null
+                }
+            }
+        });
+        let group = json!({ "sessions": [ { "id": "shell", "project_id": "proj-wt" } ] });
+        let context = super::adjacent_follow_context(&current, Some(&group)).unwrap();
+        assert_eq!(context.session_id, "shell");
+        assert_eq!(context.cwd, std::path::PathBuf::from("/tmp/wt/feature"));
+        assert_eq!(context.project_id, "proj-wt");
+
+        // An exited or cwd-less neighbor is skipped in favor of the next.
+        let current = json!({ "pane_context": { "neighbors": {
+            "left": { "kind": "terminal", "state": "exited", "cwd": "/tmp/old", "session_id": "gone" },
+            "right": { "kind": "agent", "state": "running", "cwd": "/tmp/main", "session_id": "agent", "label": "Claude" },
+            "up": null, "down": null } } });
+        assert_eq!(super::adjacent_follow_context(&current, None).unwrap().session_id, "agent");
+        let none = json!({ "pane_context": { "neighbors": { "left": null, "right": null, "up": null, "down": null } } });
+        assert!(super::adjacent_follow_context(&none, None).is_none());
+    }
+
     use super::*;
 
     #[test]
