@@ -88,7 +88,7 @@ pub fn run(
             &mut published,
         )?;
         if needs_draw {
-            let title = folder_title(explorer.cwd());
+            let title = folder_title(explorer.cwd(), explorer.navigation_root());
             if title != session_title {
                 reporter.set_title(&title);
                 session_title = title;
@@ -827,17 +827,46 @@ fn render_component_frame(
 }
 
 
-/// Sidebar title for a browsed folder: its name, or the whole path when it
-/// has none (a filesystem root).
-fn folder_title(path: &std::path::Path) -> String {
-    path.file_name()
+/// Sidebar title for a browsed folder. At the project root it is the
+/// project's own name; below it, the path from that root with a leading
+/// slash (`/docs/agents`), so a deep folder reads as "where in the project"
+/// rather than a bare basename. Outside any root (or with no root) it falls
+/// back to the folder's name, or the whole path for a filesystem root.
+fn folder_title(cwd: &std::path::Path, root: Option<&std::path::Path>) -> String {
+    if let Some(root) = root
+        && let Ok(relative) = cwd.strip_prefix(root)
+        && !relative.as_os_str().is_empty()
+    {
+        let inside = relative
+            .components()
+            .map(|component| component.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/");
+        return format!("/{inside}");
+    }
+    cwd.file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| path.display().to_string())
+        .unwrap_or_else(|| cwd.display().to_string())
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn folder_title_is_the_project_name_at_root_and_a_rooted_path_below_it() {
+        use std::path::Path;
+        let root = Path::new("/Users/me/Dev/unpeel");
+        assert_eq!(super::folder_title(root, Some(root)), "unpeel");
+        assert_eq!(
+            super::folder_title(Path::new("/Users/me/Dev/unpeel/docs/agents"), Some(root)),
+            "/docs/agents"
+        );
+        // Outside the root, or without one, the folder name stands alone.
+        assert_eq!(super::folder_title(Path::new("/tmp/notes"), Some(root)), "notes");
+        assert_eq!(super::folder_title(Path::new("/tmp/notes"), None), "notes");
+        assert_eq!(super::folder_title(Path::new("/"), None), "/");
+    }
+
     use std::path::PathBuf;
 
     use ratatui::backend::TestBackend;
