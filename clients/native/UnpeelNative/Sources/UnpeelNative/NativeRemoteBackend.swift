@@ -555,7 +555,8 @@ final class NativeRemoteBackend: @unchecked Sendable {
     init(
         directEndpoint: URL,
         authToken: String,
-        expectedHostID: String
+        expectedHostID: String,
+        certificateFingerprint: String? = nil
     ) throws {
         guard unpeel_native_bridge_abi_version() == Self.supportedABIVersion else {
             throw NativeRemoteBackendError(
@@ -572,7 +573,20 @@ final class NativeRemoteBackend: @unchecked Sendable {
         var outputLength = 0
         let result = endpoint.withUnsafeBytes { endpointBytes in
             bearer.withUnsafeBytes { bearerBytes in
-                unpeel_native_bridge_remote_direct_open(
+                if let certificateFingerprint {
+                    return Data(certificateFingerprint.utf8).withUnsafeBytes { pinBytes in
+                        unpeel_native_bridge_remote_direct_open_pinned(
+                            endpointBytes.bindMemory(to: UInt8.self).baseAddress,
+                            endpointBytes.count,
+                            bearerBytes.bindMemory(to: UInt8.self).baseAddress,
+                            bearerBytes.count,
+                            pinBytes.bindMemory(to: UInt8.self).baseAddress,
+                            pinBytes.count,
+                            &openedHandle, &outputPointer, &outputLength
+                        )
+                    }
+                }
+                return unpeel_native_bridge_remote_direct_open(
                     endpointBytes.bindMemory(to: UInt8.self).baseAddress,
                     endpointBytes.count,
                     bearerBytes.bindMemory(to: UInt8.self).baseAddress,

@@ -860,11 +860,12 @@ enum RemoteHostBackendFactory {
                 expectedHostID: expectedHostID,
                 requireHostService: true
             )
-        case let .direct(endpoint, authToken, expectedHostID):
+        case let .direct(endpoint, authToken, expectedHostID, certificateFingerprint):
             return try NativeRemoteBackend(
                 directEndpoint: endpoint,
                 authToken: authToken,
-                expectedHostID: expectedHostID
+                expectedHostID: expectedHostID,
+                certificateFingerprint: certificateFingerprint
             )
         case let .link(credentials, controllerDeviceID, authToken, expectedHostID):
             return try NativeRemoteBackend(

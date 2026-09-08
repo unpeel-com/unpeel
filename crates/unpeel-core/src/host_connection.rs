@@ -125,6 +125,10 @@ pub enum DeliveryState {
 pub enum HostConnectionError {
     InvalidTarget(String),
     Configuration(String),
+    /// The Host answered, but not with the pinned TLS this Controller
+    /// requires: it predates certificate-pinned Direct (0.5.3) and must be
+    /// upgraded. Distinct from a pin mismatch, which is a pairing problem.
+    HostUpgradeRequired(String),
     Closed,
     ClosedRequest(u64),
     RequestIdExhausted,
@@ -176,7 +180,10 @@ impl HostConnectionError {
             Self::Disconnected { delivery, .. } | Self::TimedOut { delivery, .. } => {
                 Some(*delivery)
             }
-            Self::InvalidTarget(_) | Self::Configuration(_) | Self::RequestIdExhausted => None,
+            Self::InvalidTarget(_)
+            | Self::Configuration(_)
+            | Self::HostUpgradeRequired(_)
+            | Self::RequestIdExhausted => None,
         }
     }
 
@@ -201,6 +208,9 @@ impl fmt::Display for HostConnectionError {
         match self {
             Self::InvalidTarget(message) => write!(formatter, "invalid Host target: {message}"),
             Self::Configuration(message) => write!(formatter, "Host connection: {message}"),
+            Self::HostUpgradeRequired(message) => {
+                write!(formatter, "Host upgrade required: {message}")
+            }
             Self::Closed => write!(formatter, "Host connection is closed"),
             Self::ClosedRequest(id) => {
                 write!(

@@ -295,6 +295,7 @@ pub struct DirectHostConnection {
     connection_id: uuid::Uuid,
     endpoint: DirectHostEndpoint,
     auth_token: String,
+    tls_config: Option<Arc<rustls::ClientConfig>>,
     closed: AtomicBool,
     state: Mutex<ConnectionState>,
     in_flight: Mutex<HashSet<u64>>,
@@ -304,6 +305,24 @@ pub struct DirectHostConnection {
 }
 
 impl DirectHostConnection {
+    /// Authenticate the paired Host before sending any HTTP bytes, including
+    /// its bearer. Pairing's legacy http-shaped endpoint retains its port.
+    pub fn new_pinned(
+        endpoint: DirectHostEndpoint,
+        auth_token: impl Into<String>,
+        fingerprint: &str,
+    ) -> Result<Self, HostConnectionError> {
+        if fingerprint.len() != 64 || !fingerprint.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(HostConnectionError::Configuration(
+                "A paired SHA-256 certificate pin is required".into(),
+            ));
+        }
+        let mut connection = Self::new(endpoint, auth_token)?;
+        connection.tls_config = Some(Arc::new(crate::remote_attach::pinned_client_config(Some(
+            fingerprint.to_owned(),
+        ))));
+        Ok(connection)
+    }
     pub fn new(
         endpoint: DirectHostEndpoint,
         auth_token: impl Into<String>,
@@ -335,6 +354,7 @@ impl DirectHostConnection {
             connection_id: uuid::Uuid::new_v4(),
             endpoint,
             auth_token,
+            tls_config: None,
             closed: AtomicBool::new(false),
             state: Mutex::new(ConnectionState { generation: None }),
             in_flight: Mutex::new(HashSet::new()),
@@ -478,6 +498,21 @@ impl DirectHostConnection {
 
         let mut stream = connect(&self.endpoint.host, self.endpoint.port, &deadline)?;
         let _active_socket = generation.register_socket(request.id, &stream)?;
+        let mut stream = if let Some(config) = &self.tls_config {
+            let server_name = rustls::pki_types::ServerName::try_from(self.endpoint.host.clone())
+                .map_err(|_| HttpFailure::protocol("invalid TLS Host name"))?;
+            let mut connection = rustls::ClientConnection::new(Arc::clone(config), server_name)
+                .map_err(|_| HttpFailure::protocol("could not configure Host TLS"))?;
+            while connection.is_handshaking() {
+                let timeout = Some(deadline.remaining(false)?);
+                stream.set_read_timeout(timeout).map_err(tls_failure)?;
+                stream.set_write_timeout(timeout).map_err(tls_failure)?;
+                connection.complete_io(&mut stream).map_err(tls_failure)?;
+            }
+            DirectStream::Tls(Box::new(rustls::StreamOwned::new(connection, stream)))
+        } else {
+            DirectStream::Plain(stream)
+        };
         let mut wrote_any = false;
         write_all_deadline(&mut stream, request_head, &deadline, &mut wrote_any)?;
         write_all_deadline(&mut stream, &request.body, &deadline, &mut wrote_any)?;
@@ -785,8 +820,78 @@ fn connect(host: &str, port: u16, deadline: &Deadline) -> Result<TcpStream, Http
     }
 }
 
+/// Classify a handshake failure. Nothing has been sent yet at this point, so
+/// every outcome is `NotSent`; the distinction is what the user must do:
+/// a certificate the pin rejects means "pair again", a peer that does not
+/// speak pinned TLS at all means "upgrade the Host", and anything else is
+/// ordinary reachability that the Direct → Link fallback handles.
+fn tls_failure(error: io::Error) -> HttpFailure {
+    let rustls_error = error
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<rustls::Error>());
+    match rustls_error {
+        Some(rustls::Error::InvalidCertificate(_)) | Some(rustls::Error::General(_)) => {
+            HttpFailure::Authentication(format!(
+                "Host certificate does not match the paired pin: {error}"
+            ))
+        }
+        Some(rustls::Error::InvalidMessage(_))
+        | Some(rustls::Error::PeerIncompatible(_))
+        | Some(rustls::Error::PeerMisbehaved(_))
+        | Some(rustls::Error::AlertReceived(_)) => HttpFailure::HostNotTls(format!(
+            "Host did not answer with pinned TLS; it needs Unpeel 0.5.3 or newer: {error}"
+        )),
+        _ => HttpFailure::Io {
+            delivery: DeliveryState::NotSent,
+            message: format!("Host TLS handshake failed: {error}"),
+        },
+    }
+}
+
+enum DirectStream {
+    Plain(TcpStream),
+    Tls(Box<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>),
+}
+
+impl DirectStream {
+    fn socket(&self) -> &TcpStream {
+        match self {
+            Self::Plain(stream) => stream,
+            Self::Tls(stream) => &stream.sock,
+        }
+    }
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        self.socket().set_read_timeout(timeout)
+    }
+    fn set_write_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        self.socket().set_write_timeout(timeout)
+    }
+}
+impl Read for DirectStream {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Self::Plain(stream) => stream.read(bytes),
+            Self::Tls(stream) => stream.read(bytes),
+        }
+    }
+}
+impl Write for DirectStream {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        match self {
+            Self::Plain(stream) => stream.write(bytes),
+            Self::Tls(stream) => stream.write(bytes),
+        }
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Self::Plain(stream) => stream.flush(),
+            Self::Tls(stream) => stream.flush(),
+        }
+    }
+}
+
 fn write_all_deadline(
-    stream: &mut TcpStream,
+    stream: &mut DirectStream,
     bytes: &[u8],
     deadline: &Deadline,
     wrote_any: &mut bool,
@@ -837,7 +942,10 @@ struct HttpResponse {
     body: Vec<u8>,
 }
 
-fn read_response(stream: &mut TcpStream, deadline: &Deadline) -> Result<HttpResponse, HttpFailure> {
+fn read_response(
+    stream: &mut DirectStream,
+    deadline: &Deadline,
+) -> Result<HttpResponse, HttpFailure> {
     let mut buffer = Vec::with_capacity(4096);
     let header_end = loop {
         if let Some(position) = buffer.windows(4).position(|window| window == b"\r\n\r\n") {
@@ -1000,7 +1108,7 @@ fn is_http_token_byte(byte: u8) -> bool {
 }
 
 fn read_some(
-    stream: &mut TcpStream,
+    stream: &mut DirectStream,
     deadline: &Deadline,
     out: &mut Vec<u8>,
     max: usize,
@@ -1052,7 +1160,7 @@ fn read_some(
 }
 
 fn read_to_eof_bounded(
-    stream: &mut TcpStream,
+    stream: &mut DirectStream,
     deadline: &Deadline,
     mut body: Vec<u8>,
 ) -> Result<Vec<u8>, HttpFailure> {
@@ -1080,7 +1188,7 @@ fn read_to_eof_bounded(
 }
 
 fn read_chunked_body(
-    stream: &mut TcpStream,
+    stream: &mut DirectStream,
     deadline: &Deadline,
     mut wire: Vec<u8>,
 ) -> Result<Vec<u8>, HttpFailure> {
@@ -1166,6 +1274,8 @@ fn read_chunked_body(
 }
 
 enum HttpFailure {
+    Authentication(String),
+    HostNotTls(String),
     GenerationChanged,
     Eof {
         delivery: DeliveryState,
@@ -1189,6 +1299,8 @@ impl HttpFailure {
 
     fn with_sent_request(self) -> Self {
         match self {
+            Self::Authentication(message) => Self::Authentication(message),
+            Self::HostNotTls(message) => Self::HostNotTls(message),
             Self::GenerationChanged => Self::GenerationChanged,
             Self::Eof { .. } => Self::Eof {
                 delivery: DeliveryState::OutcomeUnknown,
@@ -1205,6 +1317,8 @@ impl HttpFailure {
 
     fn into_public(self, request_id: u64, semantics: RequestSemantics) -> HostConnectionError {
         match self {
+            Self::Authentication(message) => HostConnectionError::Configuration(message),
+            Self::HostNotTls(message) => HostConnectionError::HostUpgradeRequired(message),
             Self::GenerationChanged => {
                 unreachable!("generation changes are translated with their expected token")
             }
@@ -1243,6 +1357,118 @@ mod tests {
     use std::net::TcpListener;
     use std::sync::mpsc;
     use std::thread;
+
+    #[derive(Debug)]
+    struct TestCertificate(Arc<rustls::sign::CertifiedKey>);
+    impl rustls::server::ResolvesServerCert for TestCertificate {
+        fn resolve(
+            &self,
+            _: rustls::server::ClientHello<'_>,
+        ) -> Option<Arc<rustls::sign::CertifiedKey>> {
+            Some(Arc::clone(&self.0))
+        }
+    }
+
+    #[test]
+    fn pinned_tls_checks_certificate_and_proof_of_private_key_before_bearer() {
+        use sha2::{Digest, Sha256};
+        for (wrong_pin, wrong_key) in [(false, false), (true, false), (false, true)] {
+            let certified = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+            let fingerprint = format!("{:x}", Sha256::digest(certified.cert.der()));
+            let key = if wrong_key {
+                rcgen::KeyPair::generate().unwrap()
+            } else {
+                certified.key_pair
+            };
+            let key = rustls::pki_types::PrivatePkcs8KeyDer::from(key.serialize_der());
+            let signing_key = rustls::crypto::ring::sign::any_supported_type(&key.into()).unwrap();
+            // A malicious peer can copy the pinned public certificate. It
+            // must still prove possession of its private key in the handshake.
+            let resolver = TestCertificate(Arc::new(rustls::sign::CertifiedKey::new(
+                vec![certified.cert.der().clone()],
+                signing_key,
+            )));
+            let config = Arc::new(
+                rustls::ServerConfig::builder()
+                    .with_no_client_auth()
+                    .with_cert_resolver(Arc::new(resolver)),
+            );
+            let server = TestServer::scripted(1, move |_, socket| {
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let connection = rustls::ServerConnection::new(Arc::clone(&config)).unwrap();
+                let mut stream = rustls::StreamOwned::new(connection, socket);
+                let mut request = [0_u8; 4096];
+                let read = stream.read(&mut request);
+                if wrong_pin || wrong_key {
+                    assert!(
+                        read.is_err() || read.unwrap() == 0,
+                        "unauthenticated peer received application data"
+                    );
+                } else {
+                    let read = read.unwrap();
+                    assert!(
+                        String::from_utf8_lossy(&request[..read]).contains("Bearer test-secret")
+                    );
+                    stream
+                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
+                        .unwrap();
+                    stream.flush().unwrap();
+                }
+            });
+            let pin = if wrong_pin {
+                "00".repeat(32)
+            } else {
+                fingerprint
+            };
+            let connection =
+                DirectHostConnection::new_pinned(server.endpoint.clone(), "test-secret", &pin)
+                    .unwrap();
+            let result = call(
+                &connection,
+                None,
+                HostCall::new("GET", "/mobile/bootstrap", RequestSemantics::ReadOnly),
+            );
+            if wrong_pin || wrong_key {
+                assert!(
+                    matches!(result, Err(HostConnectionError::Configuration(_))),
+                    "{result:?}"
+                );
+            } else {
+                assert_eq!(result.unwrap().status, 200);
+            }
+        }
+    }
+
+    /// A Host that still serves plaintext `/mobile` answers the ClientHello
+    /// with HTTP bytes. That is an upgrade problem, not a pairing problem,
+    /// and must not be reported as a pin mismatch.
+    #[test]
+    fn pinned_tls_reports_a_plaintext_host_as_needing_an_upgrade() {
+        let server = TestServer::scripted(1, |_, mut socket| {
+            let mut hello = [0_u8; 4096];
+            let _ = socket.read(&mut hello);
+            let _ = socket.write_all(
+                b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+        });
+        let connection = DirectHostConnection::new_pinned(
+            server.endpoint.clone(),
+            "test-secret",
+            &"ab".repeat(32),
+        )
+        .unwrap();
+        let result = call(
+            &connection,
+            None,
+            HostCall::new("GET", "/mobile/bootstrap", RequestSemantics::ReadOnly),
+        );
+        assert!(
+            matches!(result, Err(HostConnectionError::HostUpgradeRequired(_))),
+            "{result:?}"
+        );
+    }
 
     struct TestServer {
         endpoint: DirectHostEndpoint,

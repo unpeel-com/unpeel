@@ -600,7 +600,7 @@ final class RemoteHostRuntimeTests: XCTestCase {
             expectedHostID: "studio"
         )
 
-        guard case let .direct(actualEndpoint, token, hostID) = captured else {
+        guard case let .direct(actualEndpoint, token, hostID, _) = captured else {
             return XCTFail("Expected the paired direct transport")
         }
         XCTAssertEqual(actualEndpoint, endpoint)
@@ -2935,7 +2935,7 @@ final class RemoteHostRuntimeTests: XCTestCase {
             endpoint: URL(string: "http://host.local:4321/mobile")!,
             controllerDeviceID: "controller",
             pairedAtUnixMs: 1,
-            certificateFingerprint: "durable-pairing-fingerprint"
+            certificateFingerprint: String(repeating: "a", count: 64)
         )
     }
 

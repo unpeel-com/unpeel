@@ -155,6 +155,19 @@ int32_t unpeel_native_bridge_remote_direct_open(
     size_t *out_length
 );
 
+/* Paired TLS; requires the SHA-256 fingerprint from authenticated pairing. */
+int32_t unpeel_native_bridge_remote_direct_open_pinned(
+    const uint8_t *endpoint_pointer,
+    size_t endpoint_length,
+    const uint8_t *bearer_pointer,
+    size_t bearer_length,
+    const uint8_t *pin_pointer,
+    size_t pin_length,
+    unpeel_native_bridge_remote_handle_t *out_handle,
+    uint8_t **out_pointer,
+    size_t *out_length
+);
+
 /*
  * Register a Link-backed RemoteSessionBackend. The callbacks must delegate to
  * the shared Swift RemoteRelayConnection; Rust retains context until close,

@@ -76,7 +76,7 @@ enum RemoteHostTransport: Sendable {
         workspaceName: String,
         expectedHostID: String?
     )
-    case direct(endpoint: URL, authToken: String, expectedHostID: String)
+    case direct(endpoint: URL, authToken: String, expectedHostID: String, certificateFingerprint: String? = nil)
     case link(
         credentials: RelayCredentials,
         controllerDeviceID: String,
@@ -89,7 +89,7 @@ enum RemoteHostTransport: Sendable {
         case let .ssh(_, expectedHostID, _, _): expectedHostID
         case let .localGateway(_, _, expectedHostID): expectedHostID
         case let .localService(_, _, expectedHostID): expectedHostID
-        case let .direct(_, _, expectedHostID): expectedHostID
+        case let .direct(_, _, expectedHostID, _): expectedHostID
         case let .link(_, _, _, expectedHostID): expectedHostID
         }
     }
@@ -657,11 +657,12 @@ final class RemoteHostRuntime: ObservableObject {
                     expectedHostID: expectedHostID,
                     requireHostService: true
                 )
-            case let .direct(endpoint, authToken, expectedHostID):
+            case let .direct(endpoint, authToken, expectedHostID, certificateFingerprint):
                 try NativeRemoteBackend(
                     directEndpoint: endpoint,
                     authToken: authToken,
-                    expectedHostID: expectedHostID
+                    expectedHostID: expectedHostID,
+                    certificateFingerprint: certificateFingerprint
                 )
             case let .link(credentials, controllerDeviceID, authToken, expectedHostID):
                 try NativeRemoteBackend(
@@ -800,12 +801,30 @@ final class RemoteHostRuntime: ObservableObject {
                 expectedHostID: record.hostID
             )
             : nil
+        // The Host advertises one certificate for /mobile and the WSS
+        // streamer (since 0.5.3), so its fingerprint is the authoritative pin;
+        // the pin observed during the pairing exchange is the fallback.
+        let storedPin = record.remoteServerCertificateFingerprint ?? record.certificateFingerprint
+        guard let pin = storedPin, pin.count == 64,
+              pin.utf8.allSatisfy({ (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0) })
+        else {
+            // Legacy records can still use their authenticated E2E Link.
+            // Never send the saved bearer to an unverified LAN endpoint.
+            if let link { connect(link, pairedPlan: nil) }
+            else {
+                requirePairingRepair(
+                    message: "This Host was paired before Direct connections were certificate-pinned. Pair it again to reach it directly."
+                )
+            }
+            return
+        }
         let plan = PairedHostConnectionPlan(
             hostID: record.hostID,
             direct: .direct(
                 endpoint: record.endpoint,
                 authToken: credentials.authToken,
-                expectedHostID: record.hostID
+                expectedHostID: record.hostID,
+                certificateFingerprint: pin
             ),
             link: link
         )
@@ -876,11 +895,11 @@ final class RemoteHostRuntime: ObservableObject {
     /// Keep the selected remote scope fail-closed when its saved pairing was
     /// minted for a different Controller identity. The only recovery is an
     /// explicit re-pair; presenting idle/disconnected would hide that fact.
-    func requirePairingRepair() {
+    func requirePairingRepair(
+        message: String = "This Host was paired with a different Controller identity. Pair it again."
+    ) {
         disconnect()
-        connectionState = .repairRequired(
-            message: "This Host was paired with a different Controller identity. Pair it again."
-        )
+        connectionState = .repairRequired(message: message)
     }
 
     func selectSession(_ sessionID: String) {
@@ -1833,9 +1852,11 @@ final class RemoteHostRuntime: ObservableObject {
         guard let bridgeError = error as? NativeRemoteBackendError else { return false }
         let terminalState: RemoteHostConnectionState
         switch bridgeError.code {
-        case "host_identity_changed":
+        case "host_identity_changed", "host_connection_configuration":
             terminalState = .repairRequired(message: bridgeError.message)
-        case "incompatible_host_protocol":
+        case "incompatible_host_protocol", "host_upgrade_required":
+            // A Host that predates pinned Direct is an upgrade problem, never
+            // a reason to tell the user to pair again.
             terminalState = .incompatible(message: bridgeError.message)
         default:
             return false

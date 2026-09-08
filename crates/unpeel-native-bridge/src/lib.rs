@@ -1568,6 +1568,14 @@ fn open_local_gateway_remote(config: &[u8]) -> Result<RemoteHandle, NativeRemote
 }
 
 fn open_direct_remote(endpoint: &[u8], bearer: &[u8]) -> Result<RemoteHandle, NativeRemoteError> {
+    open_direct_remote_with_pin(endpoint, bearer, None)
+}
+
+fn open_direct_remote_with_pin(
+    endpoint: &[u8],
+    bearer: &[u8],
+    pin: Option<&str>,
+) -> Result<RemoteHandle, NativeRemoteError> {
     let endpoint_uri = std::str::from_utf8(endpoint).map_err(|_| {
         NativeRemoteError::invalid_input(
             "invalid_host_endpoint_utf8",
@@ -1594,7 +1602,11 @@ fn open_direct_remote(endpoint: &[u8], bearer: &[u8]) -> Result<RemoteHandle, Na
             "Direct Host bearer must not be empty; pair this Controller again",
         ));
     }
-    let connection = DirectHostConnection::new(endpoint, bearer).map_err(|error| {
+    let connection = match pin {
+        Some(pin) => DirectHostConnection::new_pinned(endpoint, bearer, pin),
+        None => DirectHostConnection::new(endpoint, bearer),
+    }
+    .map_err(|error| {
         NativeRemoteError::invalid_input(
             "invalid_host_bearer",
             format!("Direct Host bearer is malformed: {error}. Pair this Controller again"),
@@ -2432,6 +2444,7 @@ fn remote_connection_error_code(error: &HostConnectionError) -> &'static str {
     match error {
         HostConnectionError::InvalidTarget(_) => "invalid_host_target",
         HostConnectionError::Configuration(_) => "host_connection_configuration",
+        HostConnectionError::HostUpgradeRequired(_) => "host_upgrade_required",
         HostConnectionError::Closed | HostConnectionError::ClosedRequest(_) => {
             "host_connection_closed"
         }
@@ -3223,6 +3236,64 @@ pub unsafe extern "C" fn unpeel_native_bridge_remote_direct_open(
             NativeRemoteError::invalid_input("invalid_host_bearer_buffer", message)
         })?;
         open_direct_remote(endpoint, bearer)
+    }));
+    match outcome {
+        Ok(Ok(handle)) => {
+            *out_handle = handle;
+            RESULT_OK
+        }
+        Ok(Err(error)) => {
+            let result = error.result;
+            return_bytes(encode_remote_error(error), out_pointer, out_length);
+            result
+        }
+        Err(_) => {
+            return_bytes(remote_panic_error(), out_pointer, out_length);
+            ERROR_PANIC
+        }
+    }
+}
+
+/// Open a paired TLS connection. The pin authenticates the Host before bearer transmission.
+///
+/// # Safety
+/// All input buffers must be readable and all output pointers writable.
+#[no_mangle]
+pub unsafe extern "C" fn unpeel_native_bridge_remote_direct_open_pinned(
+    endpoint_pointer: *const u8,
+    endpoint_length: usize,
+    bearer_pointer: *const u8,
+    bearer_length: usize,
+    pin_pointer: *const u8,
+    pin_length: usize,
+    out_handle: *mut RemoteHandle,
+    out_pointer: *mut *mut u8,
+    out_length: *mut usize,
+) -> i32 {
+    if out_handle.is_null() || out_pointer.is_null() || out_length.is_null() {
+        return ERROR_INVALID_INPUT;
+    }
+    *out_handle = 0;
+    *out_pointer = ptr::null_mut();
+    *out_length = 0;
+
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        let endpoint = input_bytes(endpoint_pointer, endpoint_length).map_err(|message| {
+            NativeRemoteError::invalid_input("invalid_host_endpoint_buffer", message)
+        })?;
+        let bearer = input_bytes(bearer_pointer, bearer_length).map_err(|message| {
+            NativeRemoteError::invalid_input("invalid_host_bearer_buffer", message)
+        })?;
+        let pin = input_bytes(pin_pointer, pin_length).map_err(|message| {
+            NativeRemoteError::invalid_input("invalid_certificate_pin", message)
+        })?;
+        let pin = std::str::from_utf8(pin).map_err(|_| {
+            NativeRemoteError::invalid_input(
+                "invalid_certificate_pin",
+                "Certificate pin must be hexadecimal",
+            )
+        })?;
+        open_direct_remote_with_pin(endpoint, bearer, Some(pin))
     }));
     match outcome {
         Ok(Ok(handle)) => {
