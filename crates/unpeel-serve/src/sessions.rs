@@ -2142,12 +2142,13 @@ pub fn mobile_snapshot(
 
     MobileSnapshot {
         bootstrap: serde_json::json!({
-            // An isolated workspace names itself like the desktop's
-            // workspace picker does; the default workspace stays the Mac.
-            // The pairing invitation reuses this name, so a phone's
-            // Workspaces list shows it too.
-            "macName": crate::app_context::isolated_workspace_name()
-                .unwrap_or_else(hostname_short),
+            // The workspace names itself like the desktop's workspace
+            // picker does (a registered workspace's name, or the default
+            // workspace's rename); only an unnamed default workspace reads
+            // as the machine. The pairing invitation and the Bonjour
+            // service reuse this name, so a phone's Workspaces list and
+            // another Mac's Nearby list show it too.
+            "macName": crate::app_context::advertised_host_name(overlay),
             "folders": folders,
             "projects": projects,
             "presets": presets,
@@ -2179,19 +2180,6 @@ pub fn scan_project_of(session_id: &str) -> Option<String> {
     serde_json::from_slice::<HostedSessionManifest>(&raw)
         .ok()
         .map(|m| m.session.project_id)
-}
-
-fn hostname_short() -> String {
-    let mut buffer = [0u8; 256];
-    let rc = unsafe { libc::gethostname(buffer.as_mut_ptr() as *mut libc::c_char, buffer.len()) };
-    if rc == 0 {
-        let name = buffer.split(|&b| b == 0).next().unwrap_or(&[]);
-        String::from_utf8_lossy(name)
-            .trim_end_matches(".local")
-            .to_string()
-    } else {
-        "Mac".into()
-    }
 }
 
 #[cfg(test)]

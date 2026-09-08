@@ -275,13 +275,73 @@ fn valid_native_artifact_chunk(value: &serde_json::Value, query: &HashMap<String
         && next_offset.saturating_sub(offset) == bytes.len() as u64
 }
 
+/// The running Bonjour registration and the name it was registered under.
+struct BonjourAdvertisement {
+    name: String,
+    child: Option<std::process::Child>,
+}
+
+impl BonjourAdvertisement {
+    fn retire(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+/// Bonjour: same service/TXT contract as the app once used. macOS ships
+/// `dns-sd`; Linux hosts use avahi's `avahi-publish-service` when present.
+/// Neither is required — the phone's saved endpoint still works, and
+/// rediscovery only needs this after an address change. The service name is
+/// the workspace title a Nearby list shows.
+fn spawn_bonjour(name: &str, port: u16, mac_id: &str) -> Option<std::process::Child> {
+    let port = port.to_string();
+    let txt = format!("macid={mac_id}");
+    std::process::Command::new("dns-sd")
+        .args(["-R", name, "_unpeel-remote._tcp", ".", &port, &txt])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()
+        .or_else(|| {
+            std::process::Command::new("avahi-publish-service")
+                .args([name, "_unpeel-remote._tcp", &port, &txt])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .ok()
+        })
+}
+
+/// The name this listener advertises (pairing, Bonjour, the plain pair
+/// fallback): the published bootstrap's `macName` — the workspace title —
+/// or, before the first snapshot, the same resolution from disk.
+fn advertised_name(snapshot: &SharedSnapshot) -> String {
+    snapshot
+        .lock()
+        .ok()
+        .and_then(|guard| {
+            guard
+                .bootstrap
+                .get("macName")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| crate::app_context::advertised_host_name(crate::overlay::load().as_ref()))
+}
+
 pub struct MobileServer {
     pub port: u16,
     /// Lowercase hex SHA-256 of the Host certificate this listener serves;
     /// the pin a Controller holds for `/mobile` and the WSS streamer alike.
     pub certificate_fingerprint: String,
     shutdown: Arc<std::sync::atomic::AtomicBool>,
-    bonjour: Arc<Mutex<Option<std::process::Child>>>,
+    bonjour: Arc<Mutex<BonjourAdvertisement>>,
     remote: Arc<Mutex<crate::remote_streamer::RemoteStreamer>>,
     accept_thread: Mutex<Option<std::thread::JoinHandle<()>>>,
     active_connections: Arc<Mutex<HashMap<u64, TcpStream>>>,
@@ -306,6 +366,28 @@ impl MobileServer {
         restore_server_port_at(&mobile_dir(), self.port)
     }
 
+    /// Re-register the Bonjour service under a new name — the workspace was
+    /// renamed since the listener started — so a Nearby list shows the
+    /// current workspace title without a Host restart. Same name: no-op.
+    pub fn readvertise(&self, name: &str) {
+        let name = name.trim();
+        if name.is_empty() {
+            return;
+        }
+        let Ok(mut guard) = self.bonjour.lock() else {
+            return;
+        };
+        if guard.name == name {
+            return;
+        }
+        guard.retire();
+        let mac_id = std::fs::read_to_string(mobile_dir().join("mac-id"))
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+        guard.name = name.to_owned();
+        guard.child = spawn_bonjour(name, self.port, &mac_id);
+    }
+
     /// Stand down: stop accepting, kill the Bonjour advertisement. Called
     /// the moment the app becomes reachable again (it owns the phone
     /// endpoint) and on TUI exit.
@@ -322,10 +404,7 @@ impl MobileServer {
         // compare-delete the successor's lease.
         clear_tui_owner_port_at(&mobile_dir(), self.port);
         if let Ok(mut guard) = self.bonjour.lock() {
-            if let Some(mut child) = guard.take() {
-                let _ = child.kill();
-                let _ = child.wait();
-            }
+            guard.retire();
         }
         if let Ok(mut streamer) = self.remote.lock() {
             streamer.stop();
@@ -2149,7 +2228,7 @@ fn handle_pairing_invitation(
             std::fs::read_to_string(mobile_dir().join("mac-id"))
                 .map(|value| value.trim().to_owned())
                 .unwrap_or_default(),
-            hostname(),
+            advertised_name(snapshot),
         )
     });
     if mac_id.is_empty() {
@@ -2374,7 +2453,7 @@ fn handle_connection(
                 let mac_id = std::fs::read_to_string(mobile_dir().join("mac-id"))
                     .map(|s| s.trim().to_string())
                     .unwrap_or_default();
-                let (status, body) = pairing.handle_pair(&request.body, &mac_id, &hostname());
+                let (status, body) = pairing.handle_pair(&request.body, &mac_id, &advertised_name(&snapshot));
                 // Pairing is a one-shot exchange. Force-close even when the
                 // URLSession client requested HTTP/1.1 keep-alive so a
                 // `pair --serve` handoff never retains this listener's port.
@@ -2610,43 +2689,15 @@ fn start_impl(
         return None;
     }
 
-    // Bonjour: same service/TXT contract as the app. macOS ships `dns-sd`;
-    // Linux hosts use avahi's `avahi-publish-service` when present. Neither
-    // is required — the phone's saved endpoint still works, and rediscovery
-    // only needs this after an address change.
+    // Bonjour advertises the workspace title so a Nearby list reads it.
     let mac_id = std::fs::read_to_string(mobile_dir().join("mac-id"))
         .map(|s| s.trim().to_string())
         .unwrap_or_default();
-    let name = hostname();
-    let bonjour_child = std::process::Command::new("dns-sd")
-        .args([
-            "-R",
-            &name,
-            "_unpeel-remote._tcp",
-            ".",
-            &port.to_string(),
-            &format!("macid={mac_id}"),
-        ])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .ok()
-        .or_else(|| {
-            std::process::Command::new("avahi-publish-service")
-                .args([
-                    &name,
-                    "_unpeel-remote._tcp",
-                    &port.to_string(),
-                    &format!("macid={mac_id}"),
-                ])
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-                .ok()
-        });
-    let bonjour = Arc::new(Mutex::new(bonjour_child));
+    let name = advertised_name(&snapshot);
+    let bonjour = Arc::new(Mutex::new(BonjourAdvertisement {
+        name: name.clone(),
+        child: spawn_bonjour(&name, port, &mac_id),
+    }));
     // The WSS terminal server: standalone, verifies paired-device tokens
     // itself, writes its port + TLS fingerprint into ~/.unpeel/remote.json —
     // which /mobile/bootstrap relays so the phone gets its full terminal
@@ -2761,18 +2812,6 @@ fn start_impl(
         active_connections,
         worker_threads,
     })
-}
-
-pub(crate) fn hostname() -> String {
-    let mut buffer = [0u8; 256];
-    let rc = unsafe { libc::gethostname(buffer.as_mut_ptr() as *mut libc::c_char, buffer.len()) };
-    if rc == 0 {
-        let name = buffer.split(|&b| b == 0).next().unwrap_or(&[]);
-        let name = String::from_utf8_lossy(name).into_owned();
-        name.trim_end_matches(".local").to_string()
-    } else {
-        "Mac".into()
-    }
 }
 
 #[cfg(test)]
@@ -3705,7 +3744,7 @@ non-ephemeral ports — a product regression, not a port race. Attempts: {failur
                     port,
                     certificate_fingerprint: String::new(),
                     shutdown,
-                    bonjour: Arc::new(Mutex::new(None)),
+                    bonjour: Arc::new(Mutex::new(BonjourAdvertisement { name: String::new(), child: None })),
                     remote: Arc::new(Mutex::new(
                         crate::remote_streamer::RemoteStreamer::stopped_for_tests(),
                     )),

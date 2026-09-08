@@ -54,6 +54,8 @@ mod ghostty_vt;
 pub mod hook_assets;
 #[cfg(feature = "native-host")]
 pub mod hook_cancellation;
+#[cfg(feature = "native-host")]
+pub mod host_name;
 #[cfg(feature = "controller-core")]
 pub mod host_connection;
 #[cfg(feature = "native-host")]

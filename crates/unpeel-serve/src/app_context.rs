@@ -234,6 +234,21 @@ pub(crate) fn isolated_workspace_name() -> Option<String> {
     isolated_workspace_name_at(&explicit_home, &real_unpeel)
 }
 
+/// The name this Host advertises to Controllers: pairing invitations,
+/// bootstrap `macName`, and the Bonjour service a Nearby list shows. It is
+/// the workspace's own name — a registered workspace's picker name, or the
+/// default workspace's rename — and only an unnamed default workspace falls
+/// back to the machine's user-facing name. Never the raw DNS hostname.
+pub(crate) fn advertised_host_name(overlay: Option<&NativeOverlay>) -> String {
+    isolated_workspace_name()
+        .or_else(|| {
+            overlay
+                .and_then(|overlay| overlay.default_workspace_name.clone())
+                .filter(|name| valid_wire_text(name, 1024))
+        })
+        .unwrap_or_else(unpeel_core::host_name::machine_display_name)
+}
+
 fn isolated_workspace_name_at(explicit_home: &Path, real_unpeel: &Path) -> Option<String> {
     if normalized_path(explicit_home) == normalized_path(real_unpeel) {
         return None;
@@ -385,5 +400,26 @@ mod tests {
             }
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn advertised_host_name_prefers_the_workspace_rename_over_the_machine() {
+        let overlay = NativeOverlay {
+            default_workspace_name: Some("Unpeel".into()),
+            ..NativeOverlay::default()
+        };
+        // A default-home worker (no UNPEEL_HOME in this test process) names
+        // itself after the renamed default workspace.
+        if std::env::var_os("UNPEEL_HOME").is_none_or(|home| home.is_empty()) {
+            assert_eq!(advertised_host_name(Some(&overlay)), "Unpeel");
+        }
+        let machine = advertised_host_name(None);
+        assert!(!machine.is_empty());
+        assert!(!machine.ends_with(".lan") && !machine.ends_with(".local"), "{machine}");
+        let blank = NativeOverlay {
+            default_workspace_name: Some("   ".into()),
+            ..NativeOverlay::default()
+        };
+        assert_eq!(advertised_host_name(Some(&blank)), machine);
     }
 }

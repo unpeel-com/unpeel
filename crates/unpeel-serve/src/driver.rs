@@ -1151,8 +1151,17 @@ impl HostRuntime {
         );
         self.computer
             .decorate_workspace_settings(&mut next.bootstrap);
+        let advertised = next
+            .bootstrap
+            .get("macName")
+            .and_then(|value| value.as_str())
+            .map(str::to_owned);
         if let Ok(mut snapshot) = self.snapshot.lock() {
             *snapshot = next;
+        }
+        // A workspace rename reaches Nearby lists without a Host restart.
+        if let (Some(server), Some(name)) = (self.mobile_server.as_ref(), advertised) {
+            server.readvertise(&name);
         }
     }
 
