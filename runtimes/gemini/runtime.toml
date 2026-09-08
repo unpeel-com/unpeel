@@ -22,6 +22,11 @@ window_padding_x = 8
 official_url = "https://github.com/google-gemini/gemini-cli"
 command = "npm install -g @google/gemini-cli"
 
+[updates]
+version_args = ["--version"]
+latest_url = "https://registry.npmjs.org/@google/gemini-cli/latest"
+json_pointer = "/version"
+
 [detection]
 command_aliases = ["gemini"]
 process_aliases = ["gemini"]

@@ -1137,8 +1137,6 @@ extension ProjectRowView: @MainActor Equatable {
             && lhs.showsBusyShimmer == rhs.showsBusyShimmer
             && lhs.quickGroups == rhs.quickGroups
             && lhs.menuPresets == rhs.menuPresets
-            && lhs.addableApps == rhs.addableApps
-            && (lhs.onAddApp == nil) == (rhs.onAddApp == nil)
             && lhs.folderColor == rhs.folderColor
             && lhs.showsWorktreeCreate == rhs.showsWorktreeCreate
             && lhs.showsLocalProjectVerbs == rhs.showsLocalProjectVerbs
@@ -1350,8 +1348,6 @@ struct ProjectNodeView: View {
             showsBusyShimmer: showsBusyShimmer,
             quickGroups: store.displayQuickPresetGroups,
             menuPresets: store.displayAvailablePresets,
-            addableApps: store.addableApps,
-            onAddApp: { store.addAppPreset($0) },
             folderColor: isLocalMachine ? store.projectFolderColor(for: node.id) : nil,
             // Worktree menu toggle gate (ProjectItem.svelte:843-848):
             // real project (not a plain folder), not a worktree child,
@@ -1412,7 +1408,7 @@ struct ProjectNodeView: View {
             onSetSessionDateSorted: { dateSorted in
                 store.setSessionDateSorted(dateSorted, for: node.id)
             },
-            onManagePresets: { store.openSettings(tab: .presets) },
+            onManagePresets: { store.openSettings(tab: .agentsApps) },
             workspaceMoveTargets: node.project.parentProjectID == nil
                 && isLocalMachine
                 ? workspaceMoveTargets
@@ -1582,12 +1578,10 @@ struct ProjectNodeView: View {
                             sourcePresetID: preset.command.isEmpty ? nil : preset.id
                         )
                     },
-                    onManagePresets: { store.openSettings(tab: .presets) },
+                    onManagePresets: { store.openSettings(tab: .agentsApps) },
                     showsManagePresets: store.selectedHostScope == .local,
                     archivedCount: archivedSessionCount,
-                    onOpenArchived: { store.openArchivedSessions(projectID: node.id) },
-                    addableApps: store.addableApps,
-                    onAddApp: { store.addAppPreset($0) }
+                    onOpenArchived: { store.openArchivedSessions(projectID: node.id) }
                 )
             }
 
@@ -1826,8 +1820,6 @@ struct EmptySessionsPlaceholderRow: View {
     var showsManagePresets = true
     var archivedCount = 0
     var onOpenArchived: (() -> Void)?
-    var addableApps: [InstalledAppInfo] = []
-    var onAddApp: ((InstalledAppInfo) -> Void)?
 
     @State private var hovering = false
 
@@ -1840,9 +1832,7 @@ struct EmptySessionsPlaceholderRow: View {
                     onManagePresets: onManagePresets,
                     showsManagePresets: showsManagePresets,
                     archivedCount: archivedCount,
-                    onOpenArchived: onOpenArchived,
-                    addableApps: addableApps,
-                    onAddApp: onAddApp
+                    onOpenArchived: onOpenArchived
                 )
             } label: {
                 Text(label)
@@ -1920,17 +1910,12 @@ struct ProjectRowView: View {
     let quickGroups: [QuickPresetGroup]
     /// All enabled presets, backing the "+" new-session menu.
     let menuPresets: [Preset]
-    /// Installed Apps not yet in the launch list — the "Apps you can add"
-    /// section of the "+" menu. Empty outside local scope.
-    var addableApps: [InstalledAppInfo] = []
-    var onAddApp: ((InstalledAppInfo) -> Void)?
     /// Optional native-only tint for this project's glass folder glyph.
     var folderColor: ProjectFolderColor?
     /// Whether the context menu offers New worktree… (gate: not a folder,
     /// not a worktree child, is a git repo — ProjectItem.svelte:843-848).
     var showsWorktreeCreate = false
-    /// Pure-`.local` gate: native preset management (Manage Agents & Apps…)
-    /// edits this instance's own home, so it stays off in a scoped workspace.
+    /// Controls project operations that still require a local filesystem.
     var showsLocalProjectVerbs = true
     /// Whether the organization verbs (Rename, Folder color, Sort sessions,
     /// New group…, Remove group/worktree) are offered. True in `.local` AND
@@ -2192,11 +2177,9 @@ struct ProjectRowView: View {
                     forceExpanded: debugHover,
                     onLaunch: onLaunchPreset,
                     onManagePresets: onManagePresets,
-                    showsManagePresets: showsLocalProjectVerbs,
+                    showsManagePresets: true,
                     archivedCount: archivedSessionCount,
-                    onOpenArchived: onOpenArchived,
-                    addableApps: addableApps,
-                    onAddApp: onAddApp
+                    onOpenArchived: onOpenArchived
                 )
                 // The pill overflows the row's trailing inset a little so its
                 // "+" sits on the same edge as the session rows' hover
@@ -2515,8 +2498,6 @@ struct QuickPresetStrip: View {
     var showsManagePresets = true
     var archivedCount = 0
     var onOpenArchived: (() -> Void)?
-    var addableApps: [InstalledAppInfo] = []
-    var onAddApp: ((InstalledAppInfo) -> Void)?
 
     @State private var hovering = false
     @State private var plusHovering = false
@@ -2569,9 +2550,7 @@ struct QuickPresetStrip: View {
                 onManagePresets: onManagePresets,
                 showsManagePresets: showsManagePresets,
                 archivedCount: archivedCount,
-                onOpenArchived: onOpenArchived,
-                addableApps: addableApps,
-                onAddApp: onAddApp
+                onOpenArchived: onOpenArchived
             )
         } label: {
             // plusIcon (icons.ts:21) at 16px, centered in the same 22×22
@@ -2660,9 +2639,7 @@ func newSessionMenuContent(
     onManagePresets: @escaping () -> Void,
     showsManagePresets: Bool = true,
     archivedCount: Int = 0,
-    onOpenArchived: (() -> Void)? = nil,
-    addableApps: [InstalledAppInfo] = [],
-    onAddApp: ((InstalledAppInfo) -> Void)? = nil
+    onOpenArchived: (() -> Void)? = nil
 ) -> some View {
     PresetMenuButton(preset: .newTerminal) {
         onLaunch(.newTerminal)
@@ -2672,22 +2649,6 @@ func newSessionMenuContent(
         ForEach(menuPresets) { preset in
             PresetMenuButton(preset: preset) {
                 onLaunch(preset)
-            }
-        }
-    }
-    if let onAddApp, !addableApps.isEmpty {
-        Divider()
-        Section("Apps you can add") {
-            ForEach(addableApps) { app in
-                Button {
-                    onAddApp(app)
-                } label: {
-                    Label {
-                        Text(app.name)
-                    } icon: {
-                        Image(systemName: "plus")
-                    }
-                }
             }
         }
     }
@@ -2767,7 +2728,7 @@ private struct QuickPresetMenuChip: View {
                 .fill(hovering ? Theme.hoverRow : .clear)
         )
         .background(HoverReporter { hovering = $0 })
-        .help("Start \(group.cli.displayName)…")
+        .help("Start \(group.displayName)…")
     }
 }
 

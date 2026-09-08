@@ -115,7 +115,7 @@ fn base_url() -> String {
         .unwrap_or_else(|| DEFAULT_BASE_URL.into())
 }
 
-fn release_url(app: &CatalogApp, target: &str) -> String {
+pub(crate) fn release_url(app: &CatalogApp, target: &str) -> String {
     let channel = std::env::var("UNPEEL_CHANNEL")
         .ok()
         .filter(|value| matches!(value.as_str(), "alpha" | "beta" | "stable"))
@@ -375,13 +375,11 @@ pub fn unlink(home: &Path, app_id: &str) -> Result<bool, String> {
     }
 }
 
-/// True when the managed slot is a dev-mode link rather than a release.
+/// True when the resolved managed binary is a dev-mode link.
 pub fn is_linked(home: &Path, app: &CatalogApp) -> bool {
-    install_dirs(home).into_iter().any(|dir| {
-        std::fs::symlink_metadata(dir.join(&app.binary))
-            .map(|metadata| metadata.file_type().is_symlink())
-            .unwrap_or(false)
-    })
+    resolved_binary_path(home, app)
+        .and_then(|path| std::fs::symlink_metadata(path).ok())
+        .is_some_and(|metadata| metadata.file_type().is_symlink())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -448,11 +446,17 @@ pub fn status(home: &Path, app: &CatalogApp) -> AppStatus {
 }
 
 pub fn catalog_wire() -> Value {
-    let installed = apps_mcp::installed_apps()
+    let installed = apps_mcp::discovered_apps()
         .into_iter()
         .map(|app| app.id)
         .collect::<std::collections::HashSet<_>>();
     let home = crate::app_paths::unpeel_home();
+    // Shell startup files may put an older CLI first in PATH. Use the CLI
+    // shipped beside this Host, including a remote Host's own absolute path.
+    let cli = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|parent| parent.join("unpeel")))
+        .filter(|path| path.is_file());
     Value::Array(
         apps_mcp::catalog_apps()
             .into_iter()
@@ -473,6 +477,10 @@ pub fn catalog_wire() -> Value {
                     "resourceKinds": app.resource_kinds,
                     "defaultFor": app.default_for,
                     "installed": installed.contains(&app.id),
+                    "installCommand": cli.as_ref().map(|cli| format!("{} apps {} {} --yes",
+                        crate::integrations::shared::shell_quote(&cli.to_string_lossy()),
+                        if installed.contains(&app.id) { "update" } else { "install" },
+                        crate::integrations::shared::shell_quote(&app.id))),
                 })
             })
             .collect(),

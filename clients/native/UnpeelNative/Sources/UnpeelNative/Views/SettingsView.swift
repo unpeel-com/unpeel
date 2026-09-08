@@ -23,7 +23,7 @@
 //                 no ambience presets natively yet). Persists as a native
 //                 UserDefaults overlay over the read-only app-state.json
 //                 `theme` (the native app must never write that file).
-//  - Presets   → PresetsSettingsPanel (full parity, native overlay storage)
+//  - Agents & Apps → installation, activation, and Host-owned launch commands
 //  - Worktrees → WorktreesSettingsPanel (gated on the Git worktrees
 //                experiment: agent-worktree discovery + this workspace's list)
 //  - Advanced  → AdvancedSettingsPanel (resource diagnostics, old-session
@@ -46,6 +46,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     // the scope selector below). Remote keeps inbound
     // devices, Link, and legacy license.
     case workspaces
+    case agentsApps
     case presets
     case appearance
     case mobile
@@ -72,6 +73,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     /// app state, but accepting it keeps existing snapshot/dev commands valid.
     static func compatibleRawValue(_ rawValue: String) -> SettingsTab? {
         switch rawValue {
+        case "presets": return .agentsApps
         case "profiles": return .workspaces
         case "features": return .features
         default: return SettingsTab(rawValue: rawValue)
@@ -93,7 +95,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
             // The Browser panel follows its (still experimental) feature.
             case .browser: return UnpeelFeatureFlags.isEnabled(.browserMcp)
             // Keep the saved enum case readable, but never show its old panel.
-            case .computer:
+            case .computer, .presets:
                 return false
             case .workspaces: return UnpeelFeatureFlags.isEnabled(.workspaces)
             // Git worktrees is a Features toggle; its panel only exists while
@@ -110,7 +112,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     /// `settings.presets.set` is the first.
     static var hostScopedCases: [SettingsTab] {
         [
-            .presets, .appearance, .transcripts, .notifications, .sessions,
+            .agentsApps, .presets, .appearance, .transcripts, .notifications, .sessions,
             .browser, .computer, .features, .advanced,
         ]
     }
@@ -118,6 +120,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .appearance: return "Appearance"
+        case .agentsApps: return "Agents & Apps"
         case .presets: return "Agents & Apps"
         case .mobile: return "Remote Control"
         case .workspaces: return "Workspaces"
@@ -137,6 +140,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     var icon: ChromeIcon {
         switch self {
         case .appearance: return .settingsAppearance
+        case .agentsApps: return .settingsAgentsApps
         case .presets: return .settingsPresets
         case .mobile: return .settingsRemote
         case .workspaces: return .settingsWorkspaces
@@ -2093,9 +2097,13 @@ struct SettingsContentHost: View {
         // with Host settings verbs can actually edit it; the rest say so
         // honestly instead of silently editing this instance.
         if store.selectedHostScope != .local, selectedTab != .workspaces {
-            if selectedTab == .presets {
+            if selectedTab == .agentsApps {
+                AgentsAppsSettingsPanel(store: store, runtime: store.remoteHostRuntime)
+                    .id(store.selectedHostScope.paneScopeID)
+            } else if selectedTab == .presets {
                 // Preset editing uses the Host's preset verbs.
-                HostPresetsSettingsPanel(store: store, runtime: store.remoteHostRuntime)
+                AgentsAppsSettingsPanel(store: store, runtime: store.remoteHostRuntime)
+                    .id(store.selectedHostScope.paneScopeID)
             } else if selectedTab == .mobile {
                 // Pairing follows the scope (one pairing = one workspace);
                 // the panel itself branches on the selected scope kind.
@@ -2192,8 +2200,12 @@ struct SettingsContentHost: View {
         switch selectedTab {
         case .appearance:
             AppearanceSettingsPanel(store: store)
+        case .agentsApps:
+            AgentsAppsSettingsPanel(store: store, runtime: store.remoteHostRuntime)
+                .id(store.selectedHostScope.paneScopeID)
         case .presets:
-            PresetsSettingsPanel(store: store)
+            AgentsAppsSettingsPanel(store: store, runtime: store.remoteHostRuntime)
+                    .id(store.selectedHostScope.paneScopeID)
         case .transcripts:
             TranscriptsSettingsPanel(store: store)
         case .notifications:

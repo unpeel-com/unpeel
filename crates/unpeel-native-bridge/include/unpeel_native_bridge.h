@@ -580,6 +580,13 @@ int32_t unpeel_native_bridge_remote_session_metrics(
     size_t *out_length
 );
 
+/* Lazy update availability from the selected Host. Returns owned JSON. */
+int32_t unpeel_native_bridge_remote_plugin_updates(
+    unpeel_native_bridge_remote_handle_t handle,
+    uint8_t **out_pointer,
+    size_t *out_length
+);
+
 /* Remove the handle, discard all owned pages, and disconnect its SSH process. */
 int32_t unpeel_native_bridge_remote_close(
     unpeel_native_bridge_remote_handle_t handle,

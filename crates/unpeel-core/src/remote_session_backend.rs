@@ -210,6 +210,10 @@ pub struct RemoteProjectSummary {
 #[serde(rename_all = "camelCase")]
 pub struct RemotePresetSummary {
     pub id: String,
+    #[serde(default, rename = "pluginID", skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    #[serde(default, rename = "projectID", skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
     pub label: String,
     pub command: String,
     #[serde(default, rename = "cliID")]
@@ -375,6 +379,8 @@ pub struct RemotePaneGroupSummary {
 #[serde(rename_all = "camelCase")]
 pub struct RemoteAppSummary {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_command: Option<String>,
     pub name: String,
     #[serde(default)]
     pub description: String,
@@ -1059,6 +1065,8 @@ impl RemoteProjectOrganizationPatch {
 /// whitelist before anything applies.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RemoteWorkspaceSettingsPatch {
+    pub plugin_order: Option<Vec<String>>,
+    pub plugin_activation: Option<RemotePluginActivationPatch>,
     pub auto_stop_archive_minutes: Option<i64>,
     pub transcript_settings: Option<RemoteTranscriptSettingsUpdate>,
     pub appearance_settings: Option<RemoteAppearanceSettingsUpdate>,
@@ -1107,7 +1115,9 @@ struct AppOpenWire<'a> {
 
 impl RemoteWorkspaceSettingsPatch {
     fn is_empty(&self) -> bool {
-        self.transcript_settings.is_none()
+        self.plugin_order.is_none()
+            && self.plugin_activation.is_none()
+            && self.transcript_settings.is_none()
             && self.appearance_settings.is_none()
             && self.notification_settings.is_none()
             && self.experimental_settings.is_none()
@@ -1243,6 +1253,12 @@ pub struct RemoteExperimentalSettings {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteWorkspaceSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_order: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_activation: Option<HashMap<String, bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available_agents: Option<Vec<RemoteAgentSummary>>,
     #[serde(default)]
     pub transcript_settings: Option<RemoteTranscriptSettings>,
     #[serde(default)]
@@ -1260,8 +1276,31 @@ pub struct RemoteWorkspaceSettings {
     pub mcp_auto_add_browser_screenshots: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemotePluginActivationPatch {
+    pub id: String,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteAgentSummary {
+    pub id: String,
+    pub name: String,
+    pub command: String,
+    pub installed: bool,
+    pub install_command: Option<String>,
+    #[serde(rename = "websiteURL")]
+    pub website_url: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct WorkspaceSettingsWire<'a> {
+    #[serde(rename = "pluginOrder", skip_serializing_if = "Option::is_none")]
+    plugin_order: Option<&'a Vec<String>>,
+    #[serde(rename = "pluginActivation", skip_serializing_if = "Option::is_none")]
+    plugin_activation: Option<&'a RemotePluginActivationPatch>,
     #[serde(rename = "transcriptSettings", skip_serializing_if = "Option::is_none")]
     transcript_settings: Option<&'a RemoteTranscriptSettingsUpdate>,
     #[serde(rename = "appearanceSettings", skip_serializing_if = "Option::is_none")]
@@ -2322,6 +2361,8 @@ impl RemoteSessionBackend {
         let body = encode_effect_body(
             OPERATION,
             &WorkspaceSettingsWire {
+                plugin_order: patch.plugin_order.as_ref(),
+                plugin_activation: patch.plugin_activation.as_ref(),
                 transcript_settings: patch.transcript_settings.as_ref(),
                 appearance_settings: patch.appearance_settings.as_ref(),
                 notification_settings: patch.notification_settings.as_ref(),
@@ -2338,7 +2379,13 @@ impl RemoteSessionBackend {
         self.inner.perform_effect(
             &effect_turn,
             OPERATION,
-            WORKSPACE_SETTINGS_CAPABILITY,
+            if patch.plugin_order.is_some() {
+                "settings.plugins.order"
+            } else if patch.plugin_activation.is_some() {
+                "settings.plugins.set"
+            } else {
+                WORKSPACE_SETTINGS_CAPABILITY
+            },
             WORKSPACE_SETTINGS_PATH,
             body,
         )
@@ -2781,6 +2828,20 @@ impl RemoteSessionBackend {
             rows: wire.rows,
             output_offset: wire.output_offset,
             captured_at_unix_ms: wire.captured_at_unix_ms,
+        })
+    }
+
+    /// Lazy Host-owned update checks; this read returns cached/pending results
+    /// immediately and never runs an installer.
+    pub fn read_plugin_updates(&self) -> Result<Value, RemoteSessionBackendError> {
+        let body = self.inner.perform_read(
+            "plugin updates",
+            "settings.plugins.updates.read",
+            "/mobile/plugin-updates",
+            &[],
+        )?;
+        serde_json::from_slice(&body).map_err(|error| RemoteSessionBackendError::InvalidResponse {
+            operation: "plugin updates", message: error.to_string(),
         })
     }
 
@@ -6470,6 +6531,71 @@ mod tests {
     ];
 
     #[test]
+    fn plugin_inventory_survives_the_controller_bridge_and_activation_uses_the_bound_host() {
+        let connection = ScriptedConnection::new();
+        let generation = connection.generation(1);
+        let mut bootstrap = bootstrap_json(
+            Some("host-1"),
+            HOST_PROTOCOL_MAJOR,
+            Some(&[
+                BOOTSTRAP_CAPABILITY,
+                OUTPUT_CAPABILITY,
+                "settings.plugins.set",
+            ]),
+        );
+        bootstrap["workspaceSettings"] = json!({
+            "autoStopArchiveMinutes":120, "sidebarStoppedLimit":5,
+            "browserDefaultAccess":"on", "mcpNonchildWriteAccess":"ask", "computerAccess":"ask",
+            "mcpWorktreeAccess":false, "mcpAutoAddBrowserScreenshots":true,
+            "pluginActivation":{"com.openai.codex":false},
+            "availableAgents":[{"id":"com.openai.codex","name":"Codex","command":"codex",
+                "installed":true,"websiteURL":"https://openai.com/codex"}]
+        });
+        bootstrap["availableApps"] = json!([{"id":"unpeel.app.markdown", "name":"Markdown",
+            "command":"unpeel-markdown", "installCommand":"/remote/bin/unpeel apps install unpeel.app.markdown --yes"}]);
+        add_bootstrap(&connection, generation, bootstrap);
+        connection.push(reply_step(
+            expected_effect(
+                generation,
+                WORKSPACE_SETTINGS_PATH,
+                json!({"pluginActivation":{"id":"com.openai.codex","active":true}}),
+            ),
+            generation,
+            200,
+            br#"{"ok":true}"#.to_vec(),
+        ));
+        let backend = RemoteSessionBackend::new(connection.clone());
+        let snapshot = backend.bootstrap().unwrap();
+        let wire = serde_json::to_value(&snapshot.snapshot).unwrap();
+        assert_eq!(
+            wire["availableApps"][0]["installCommand"],
+            "/remote/bin/unpeel apps install unpeel.app.markdown --yes"
+        );
+        assert_eq!(
+            wire["workspaceSettings"]["pluginActivation"]["com.openai.codex"],
+            false
+        );
+        assert_eq!(
+            wire["workspaceSettings"]["availableAgents"][0]["installed"],
+            true
+        );
+        assert_eq!(
+            wire["workspaceSettings"]["availableAgents"][0]["websiteURL"],
+            "https://openai.com/codex"
+        );
+        backend
+            .set_workspace_settings(&RemoteWorkspaceSettingsPatch {
+                plugin_activation: Some(RemotePluginActivationPatch {
+                    id: "com.openai.codex".into(),
+                    active: true,
+                }),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(connection.remaining(), 0);
+    }
+
+    #[test]
     fn lifecycle_and_organization_effects_use_v1_wire_contracts() {
         let connection = ScriptedConnection::new();
         let generation = connection.generation(1);
@@ -7155,6 +7281,32 @@ mod tests {
         ));
         assert!(!backend.needs_bootstrap());
         assert_eq!(connection.remaining(), 0);
+    }
+
+    #[test]
+    fn plugin_update_read_preserves_host_results_and_requires_its_capability() {
+        for supported in [false, true] {
+            let connection = ScriptedConnection::new();
+            let generation = connection.generation(1);
+            let mut capabilities = vec![BOOTSTRAP_CAPABILITY];
+            if supported { capabilities.push("settings.plugins.updates.read"); }
+            add_bootstrap(&connection, generation,
+                bootstrap_json(Some("host-1"), HOST_PROTOCOL_MAJOR, Some(&capabilities)));
+            let response = json!({"checking":false,"items":[{"id":"remote-app","state":"available","installedVersion":"1.0.0","latestVersion":"1.1.0","updateAvailable":true}]});
+            if supported {
+                connection.push(reply_step(expected_read(generation, "/mobile/plugin-updates", vec![]),
+                    generation, 200, serde_json::to_vec(&response).unwrap()));
+            }
+            let backend = RemoteSessionBackend::new(connection.clone());
+            backend.bootstrap().unwrap();
+            if supported {
+                assert_eq!(backend.read_plugin_updates().unwrap(), response);
+            } else {
+                assert!(matches!(backend.read_plugin_updates(), Err(RemoteSessionBackendError::MissingCapability(_))));
+                assert_eq!(connection.calls().len(), 1);
+            }
+            assert_eq!(connection.remaining(), 0);
+        }
     }
 
     #[test]

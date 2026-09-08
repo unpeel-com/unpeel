@@ -558,6 +558,8 @@ final class RemoteHostRuntime: ObservableObject {
     /// explicitly reported its mounted panes, navigation selection must never
     /// collapse that renderer-owned set.
     private var presentedSessionsAreViewOwned = false
+    private var contentTerminalSessionIDs: Set<String> = []
+    private var auxiliaryTerminalSessions: [UUID: Set<String>] = [:]
     /// A Controller-created Session may not be in the published snapshot yet.
     /// The first bootstrap that reports it selects it, exactly like a local
     /// spawn selects its new row.
@@ -864,6 +866,8 @@ final class RemoteHostRuntime: ObservableObject {
         successfulLinkRefreshes = 0
         paneCache.removeAll()
         presentedTerminalSessionIDs.removeAll()
+        contentTerminalSessionIDs.removeAll()
+        auxiliaryTerminalSessions.removeAll()
         latestViewportByPane.removeAll()
         paneCursorReady.removeAll()
         incompleteUTF8InputBySession.removeAll()
@@ -927,7 +931,27 @@ final class RemoteHostRuntime: ObservableObject {
         replacePresentedTerminalSessions(sessionIDs)
     }
 
+    /// Settings and other embedded terminals own their presentation separately
+    /// from workspace navigation, so either view can refresh without unmounting
+    /// the other's pane. Removing an owner releases only its presentation.
+    func setAuxiliaryTerminalSessions(_ sessionIDs: Set<String>, owner: UUID) {
+        if sessionIDs.isEmpty {
+            auxiliaryTerminalSessions.removeValue(forKey: owner)
+        } else {
+            auxiliaryTerminalSessions[owner] = sessionIDs
+        }
+        updatePresentedTerminalSessions()
+    }
+
     private func replacePresentedTerminalSessions(_ sessionIDs: Set<String>) {
+        contentTerminalSessionIDs = sessionIDs
+        updatePresentedTerminalSessions()
+    }
+
+    private func updatePresentedTerminalSessions() {
+        let sessionIDs = auxiliaryTerminalSessions.values.reduce(contentTerminalSessionIDs) {
+            $0.union($1)
+        }
         let validIDs = Set(snapshot?.sessions.map(\.id) ?? [])
         let next = sessionIDs.intersection(validIDs)
         guard next != presentedTerminalSessionIDs else {
@@ -1216,6 +1240,8 @@ final class RemoteHostRuntime: ObservableObject {
             snapshot = nil
             selectedSessionID = nil
             presentedTerminalSessionIDs.removeAll()
+            contentTerminalSessionIDs.removeAll()
+            auxiliaryTerminalSessions.removeAll()
             pendingCreatedSelectionID = nil
             pendingOptimisticCreatedSession = nil
             directDataPlaneSelectionIntent = nil
@@ -2029,7 +2055,7 @@ final class RemoteHostRuntime: ObservableObject {
         }
         if !presentedTerminalSessionIDs.isSubset(of: validIDs) {
             replacePresentedTerminalSessions(
-                presentedTerminalSessionIDs.intersection(validIDs)
+                contentTerminalSessionIDs.intersection(validIDs)
             )
         }
 
@@ -3721,6 +3747,34 @@ extension RemoteHostRuntime {
             operation: "workspace settings"
         ) { backend in
             _ = try await backend.setWorkspaceSettings(patch: patch)
+        }
+    }
+
+    func pluginUpdates() async throws -> RemotePluginUpdates {
+        let (connection, _) = try requireConnection(
+            capability: RemoteControlProtocol.pluginUpdatesCapability, operation: "check for updates")
+        let updates = try await connection.backend.pluginUpdates()
+        guard isCurrent(connection), connectionBootstrapped else { throw CancellationError() }
+        return updates
+    }
+
+    func setPluginOrder(_ ids: [String]) async throws {
+        try await performOrganizationVerb(
+            capability: RemoteControlProtocol.pluginsOrderCapability,
+            operation: "reorder agents and apps"
+        ) { backend in
+            _ = try await backend.setWorkspaceSettings(patch: RemoteWorkspaceSettingsPatch(pluginOrder: ids))
+        }
+    }
+
+    func setPluginActive(id: String, active: Bool) async throws {
+        try await performOrganizationVerb(
+            capability: RemoteControlProtocol.pluginsSetCapability,
+            operation: active ? "activate plugin" : "deactivate plugin"
+        ) { backend in
+            _ = try await backend.setWorkspaceSettings(patch: RemoteWorkspaceSettingsPatch(
+                pluginActivation: RemotePluginActivationPatch(id: id, active: active)
+            ))
         }
     }
 

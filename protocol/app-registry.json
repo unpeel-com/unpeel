@@ -37,21 +37,6 @@
       "unpeel-filetree path/to/project"
     ]
   },
-  "github-issues": {
-    "id": "unpeel.app.github-issues",
-    "channel": "stable",
-    "binary": "unpeel-github-issues",
-    "name": "GitHub Issues",
-    "version": "0.1.0",
-    "description": "Borderless GitHub issue list and detail browser for the current Git project",
-    "media_types": [],
-    "resource_kinds": [
-      "github.repository"
-    ],
-    "try": [
-      "unpeel-github-issues path/to/project"
-    ]
-  },
   "markdown": {
     "id": "unpeel.app.markdown",
     "channel": "stable",

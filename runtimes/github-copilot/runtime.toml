@@ -17,6 +17,11 @@ window_padding_x = 8
 official_url = "https://github.com/github/copilot-cli"
 command = "npm install -g @github/copilot"
 
+[updates]
+version_args = ["--version"]
+latest_url = "https://registry.npmjs.org/@github/copilot/latest"
+json_pointer = "/version"
+
 [detection]
 command_aliases = ["copilot"]
 process_aliases = ["copilot", "github-copilot", "ghcs"]

@@ -22,6 +22,11 @@ window_padding_x = 8
 official_url = "https://openai.com/codex"
 command = "npm install -g @openai/codex"
 
+[updates]
+version_args = ["--version"]
+latest_url = "https://registry.npmjs.org/@openai/codex/latest"
+json_pointer = "/version"
+
 [detection]
 command_aliases = ["codex"]
 process_aliases = ["codex"]

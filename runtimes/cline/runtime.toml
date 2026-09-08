@@ -22,6 +22,11 @@ window_padding_x = 8
 official_url = "https://cline.bot"
 command = "npm install -g cline"
 
+[updates]
+version_args = ["--version"]
+latest_url = "https://registry.npmjs.org/cline/latest"
+json_pointer = "/version"
+
 [detection]
 command_aliases = ["cline"]
 process_aliases = ["cline"]

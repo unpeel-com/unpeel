@@ -12,7 +12,8 @@ Preset model (`Preset` in `crates/unpeel-core/src/state.rs`):
 Where presets are stored (since the overlay migration, 2026-08-08):
 
 - **`~/.unpeel/app-state.json` `presets` is the single source of truth — the
-  array order IS the display order.** Both UIs read and write it: the app
+  array order defines command order within each plugin.** `plugin_order`
+  defines the plugin rows. Both UIs read and write the shared file: the app
   edits it through `PresetStateFile.swift` (raw-JSON read-modify-write that
   preserves unmodelled keys, atomic temp+rename — the Swift twin of the Rust
   `app_state::edit`), and the CLI (`unpeel presets`) through `app_state::edit`.
@@ -39,60 +40,90 @@ Where presets are stored (since the overlay migration, 2026-08-08):
 Quick preset selection rules (`Presets.swift`):
 
 - Only supported tool commands can be marked `quick_launch` (`sanitized()`).
-- Any number of presets can be starred — there is no one-per-CLI rule. The
-  sidebar strip shows **one chip per CLI** (`collectQuickPresetGroups` →
-  `QuickPresetGroup`): a single starred preset launches directly; 2+ starred
-  presets of one CLI render the chip as a dropdown menu
+- Quick access is selected once per agent or App. The
+  sidebar strip shows **one chip per agent or App** (`collectQuickPresetGroups` →
+  `QuickPresetGroup`): one command launches directly; multiple commands
+  render the chip as a dropdown menu
   (`QuickPresetMenuChip` in `SidebarView.swift`).
 - A blank-terminal pseudo-preset (`command == ""`) launches a plain shell instead of an agent CLI.
 
-### The flat preset list (native, merged 2026-07-27)
+### Agents & Apps
 
-There is **one concept: a flat, user-ordered list of command presets** — the
-old per-CLI machinery (grouped Presets sections, CLI availability toggles,
-per-CLI default radio, per-CLI display order) was merged away. The CLI is
-auto-detected from each command's head (`SetupTool.detect`); the flat
-`PresetsSettingsPanel` is the app's control surface (inline command editing,
-drag reorder, star, add, and right-click Delete on one screen; no PATH or
-install-status section), and `unpeel presets` (list/add/remove/star/unstar/
-enable/disable/edit/reorder) is its scriptable peer:
+`AgentsAppsSettingsPanel` combines installation, activation, and launch command
+editing for the selected Host, including local loopback. One searchable list
+contains compact agent and App rows under Active and Inactive. Each row aligns
+its icon, commands, and controls in columns with a 5-point gap between rows.
+The app name is available on icon hover and to accessibility. The default
+Overview shows installed agents and all Apps, including Apps available to
+install; the Not Installed filter also exposes uninstalled agents. Commands
+edit inline; the “+” shown on command hover inserts another command below.
+Each agent or App has one cursor-shaped Quick Launch toggle for all its
+commands. New variants inherit that choice. Controls appear in this order:
+Install/Update, Quick Launch, activation. Single-command rows are 36 points
+tall; additional commands expand only the command column and row height.
+The legacy Presets settings route redirects to Agents & Apps.
 
-- **Order** = the `presets` array order in app-state.json, everywhere
-  (Presets panel, sidebar "+" menu, phone preset drawer, quick strip,
-  `unpeel presets list`).
-  `movePresets` is the app-side reorder API (`applyPresetOrder` rewrites the
-  array; rows not in the visible order keep their relative position at the
-  end). The legacy `unpeel.native.presetOrder` key is written only by
-  un-migrated installs, plus once by usage seeding as its one-shot guard.
-- **Default = topmost.** `defaultPreset(for cli:)` is the CLI's first preset
-  in list order — reordering IS choosing the default. Internal
-  controller-driven starts resolve a bare CLI-id `preset_id` (e.g.
-  `"claude"`) to it; `list_presets` flags it with `"default": true`.
-- **Present or deleted.** The native app has no disabled preset state. It
-  treats legacy `enabled: false` rows as active so they cannot become
-  stranded, and deletion removes the row. `availablePresets`
-  (sidebar/"+"/phone) is the full global preset list; PATH availability does
-  not hide commands or gate launching them.
-- **Favorite** = `quick_launch` (the star on the panel rows); see the
-  grouping rules above for how stars become strip chips.
-- **Scriptable organization** = `unpeel presets star|unstar <label|id>`,
-  `enable|disable <label|id>`, and `reorder <label|id> <position>`. Selectors
-  resolve an exact id before an exact label and reject ambiguous labels;
-  positions are 1-based. Every mutation uses `app_state::edit`, preserves
-  unknown document/row fields, announces over the state bus, and is flushed
-  before the one-shot CLI exits. Reorder writes the array order, so it also
-  changes the default. Enable/disable retains the legacy `enabled` contract
-  for headless/Host consumers; the current native local preset product
-  still treats stored global rows as enabled and uses deletion for removal.
-- **Migration**: `migrateCLIPreferencesIfNeeded` (UnpeelStore) runs once
-  (guard: `presetOrder` key absent) and folds the legacy keys
-  (`unpeel.native.cliOrder`/`cliDefaults`/`cliAvailability`) into the flat
-  list — old derived order reproduced and explicit defaults hoisted above
-  their CLI siblings. The legacy keys are left in
-  place (never deleted): defaults are shared by bundle id, so an older build
-  running side by side must keep its state. First-run
-  usage seeding (`seedPresetPreferencesFromUsage`, off the startup PATH scan)
-  orders presets by each CLI's session-store usage and stars the top 3 used
-  CLIs' leading presets. There is no first-run onboarding wizard (removed
-  2026-07-28): fresh installs boot straight into the main UI with builtin
-  presets seeded and the experimental superpowers on by default.
+- **Host inventory:** bootstrap `workspaceSettings.availableAgents` reports
+  installed agent binaries and the Host catalog's install commands. App metadata
+  uses `availableApps`. Controllers never infer remote installation from local
+  PATH. Install and Update run in a terminal on the selected Host.
+  Installed agents use their runtime's dedicated update recipe when supplied;
+  Claude uses its native installer for new installs and `claude update` for
+  existing installs, avoiding npm overwriting a native launcher.
+- **Activation:** `settings.plugins.set` advertises the additive
+  `pluginActivation: {id, active}` patch on `/mobile/workspace-settings`.
+  `app-state.json` stores `plugin_activation`, keyed by catalog identity (custom
+  commands use `preset:<id>`). Missing entries mean active. Updates merge under
+  the shared file lock and announce through the state bus. Deactivation preserves
+  commands, quick-launch choices, binaries, and running sessions. It removes
+  launch choices and excludes Apps from App/MCP discovery and resource opens.
+- **Defaults:** both Host implementations call `plugins::project_presets`.
+  Installed agents and Apps without saved commands receive a generated default.
+  Editing it materializes a saved preset. Adding a variant preserves the default;
+  the first global command per plugin is the default. Deleting the last saved
+  command restores the generated one. Activation hides the whole plugin.
+- **Order:** `settings.plugins.order` advertises `pluginOrder: [id, ...]` on the
+  workspace-settings route, stored as `plugin_order`. Preset rows carry optional
+  `pluginID`. Commands stay grouped in plugin order, with their saved array order
+  inside each group. Reordering a filtered subset preserves hidden entries and
+  unknown identities. The native list uses a detached drag card, sidebar spring
+  motion, variable-height slots, cancellation, and edge auto-scroll. Only leaf row
+  modifiers observe drag state; the full settings pane never rebuilds on
+  insertion changes. The gap stays open until the card lands, then order and
+  offsets swap in one transaction without animation. Toggle
+  changes animate the same row between Active and Inactive. Reduced Motion is
+  respected. Move Up/Down accessibility actions provide a drag alternative.
+- **Commands:** editing, adding variants, making a command the default, and Quick
+  Launch use `settings.presets.set`. The shared preset array remains the single
+  truth, preserving unknown fields and legacy project rows.
+- **Compatibility:** older Hosts retain supported operations. Clients check each
+  advertised capability and require a Host update for unsupported controls.
+
+Legacy UserDefaults preset migration and first-run usage seeding continue to
+fold into the shared file once; no new Controller-side preset overlay is added.
+
+Install and Update open a live Host terminal below the Agents & Apps list.
+Update is shown only after a successful Host check finds a newer release.
+Opening this pane starts `settings.plugins.updates.read` on
+`GET /mobile/plugin-updates`; bootstrap never starts probes or network work.
+The Host caches results for 15 minutes by installation identity, invalidates
+them when a binary/record changes, and limits checks to three at a time.
+Release Apps compare their recorded archive digest to the channel's latest
+checksum; agent version probes and upstream metadata come from their runtime
+packages. Linked builds, unknown versions, and failed checks do not offer an
+update. Closing Settings cancels polling; all checks remain scoped to the Host.
+The installer is a regular background-created session; Settings and the current
+workspace selection stay open. A separate presentation owner keeps its terminal
+stream alive across workspace refreshes. Hiding it only unmounts the pane; the
+session remains available in the workspace. App actions run the Host's
+`unpeel apps install/update` command through that same terminal. The Host
+publishes the absolute installer command in `availableApps[].installCommand`,
+using its bundled sibling CLI so shell PATH changes cannot select an older CLI.
+
+The preset wire carries optional `projectID` for legacy rows. Controllers show
+only global rows; editing, removing, and reordering global commands preserve
+project overrides, including overrides that reuse a global preset ID.
+
+For a private-home UI snapshot, combine `UNPEEL_SNAPSHOT` and
+`UNPEEL_OPEN_SETTINGS=agentsApps` with `UNPEEL_TEST_SETTINGS_COMMAND=<command>`
+to exercise the embedded terminal through the real Host session path.

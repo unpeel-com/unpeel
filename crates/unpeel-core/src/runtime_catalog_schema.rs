@@ -30,6 +30,8 @@ pub struct RuntimeDescriptor {
     pub display: RuntimeDisplay,
     #[serde(default)]
     pub install: Option<RuntimeInstall>,
+    #[serde(default)]
+    pub updates: Option<RuntimeUpdates>,
     pub detection: RuntimeDetection,
     /// Inherited provider process identity that must not cross into a new
     /// hosted Session. The Host applies every built-in runtime's list at its
@@ -120,6 +122,35 @@ pub struct RuntimeInstall {
     pub official_url: String,
     #[serde(default)]
     pub command: Option<String>,
+    /// Existing installations may have a dedicated updater. The Host selects
+    /// this recipe after checking its own executable inventory.
+    #[serde(default)]
+    pub update_command: Option<String>,
+}
+
+/// Read-only update metadata. Commands and upstream release sources stay in
+/// the runtime package; the Host supplies bounded execution and caching.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeUpdates {
+    pub version_args: Vec<String>,
+    pub latest_url: String,
+    #[serde(default)]
+    pub json_pointer: Option<String>,
+    #[serde(default)]
+    pub version_prefix: Option<String>,
+    #[serde(default)]
+    pub version_suffix: Option<String>,
+    #[serde(default)]
+    pub date_version: bool,
+    #[serde(default)]
+    pub channel_env: Option<String>,
+    #[serde(default)]
+    pub channel_settings_path: Option<String>,
+    #[serde(default)]
+    pub channel_settings_pointer: Option<String>,
+    #[serde(default)]
+    pub channel_urls: BTreeMap<String, String>,
 }
 
 fn default_icon() -> String {
@@ -585,14 +616,42 @@ pub fn validate_runtime_descriptors(
                     "{prefix}: install.official_url must be an https URL"
                 ));
             }
-            if install
-                .command
-                .as_deref()
-                .is_some_and(|command| command.trim().is_empty())
-            {
-                errors.push(format!(
-                    "{prefix}: install.command must not be empty when present"
-                ));
+            for (field, command) in [
+                ("command", &install.command),
+                ("update_command", &install.update_command),
+            ] {
+                if command.as_deref().is_some_and(|command| command.trim().is_empty()) {
+                    errors.push(format!(
+                        "{prefix}: install.{field} must not be empty when present"
+                    ));
+                }
+            }
+        }
+
+        if let Some(updates) = &descriptor.updates {
+            if !updates.latest_url.starts_with("https://") || updates.latest_url.chars().any(char::is_whitespace) {
+                errors.push(format!("{prefix}: updates.latest_url must be an https URL"));
+            }
+            if updates.version_args.is_empty() || updates.version_args.len() > 8
+                || updates.version_args.iter().any(|arg| arg.is_empty() || arg.len() > 128 || arg.chars().any(char::is_control)) {
+                errors.push(format!("{prefix}: updates.version_args must contain bounded nonempty arguments"));
+            }
+            if updates.json_pointer.as_ref().is_some_and(|pointer| !pointer.starts_with('/')) {
+                errors.push(format!("{prefix}: updates.json_pointer must start with /"));
+            }
+            if [&updates.version_prefix, &updates.version_suffix].into_iter().flatten().any(String::is_empty) {
+                errors.push(format!("{prefix}: updates version delimiters must not be empty"));
+            }
+            if updates.channel_settings_path.as_ref().is_some_and(|path| path.is_empty() ||
+                Path::new(path).components().any(|component| !matches!(component, std::path::Component::Normal(_)))) {
+                errors.push(format!("{prefix}: updates.channel_settings_path must be a safe home-relative path"));
+            }
+            if updates.channel_settings_path.is_some() != updates.channel_settings_pointer.is_some()
+                || updates.channel_settings_pointer.as_ref().is_some_and(|pointer| !pointer.starts_with('/')) {
+                errors.push(format!("{prefix}: updates channel settings require a path and JSON pointer"));
+            }
+            if updates.channel_urls.values().any(|url| !url.starts_with("https://") || url.chars().any(char::is_whitespace)) {
+                errors.push(format!("{prefix}: updates.channel_urls must contain https URLs"));
             }
         }
 
@@ -1315,6 +1374,26 @@ attention_reliable = true
     fn parsed(slug: &str, id: &str) -> DiscoveredRuntimeDescriptor {
         parse_runtime_descriptor(slug, format!("/{slug}/runtime.toml"), &descriptor(slug, id))
             .unwrap()
+    }
+
+    #[test]
+    fn install_update_recipe_is_optional_and_rejects_blank_values() {
+        let legacy = parsed("alpha", "com.example.alpha");
+        assert!(legacy.descriptor.install.as_ref().unwrap().update_command.is_none());
+        assert!(validate_runtime_descriptors(vec![legacy]).is_ok());
+
+        for (command, valid) in [("command alpha update", true), ("   ", false)] {
+            let raw = descriptor("alpha", "com.example.alpha").replace(
+                "[install]",
+                &format!("[install]\nupdate_command = {command:?}"),
+            );
+            let runtime = parse_runtime_descriptor("alpha", "/alpha/runtime.toml", &raw).unwrap();
+            let result = validate_runtime_descriptors(vec![runtime]);
+            assert_eq!(result.is_ok(), valid);
+            if let Err(error) = result {
+                assert!(error.to_string().contains("install.update_command"));
+            }
+        }
     }
 
     #[test]

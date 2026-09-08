@@ -314,7 +314,7 @@ enum Snapshot {
         // inline editor; there is no preset drill-in route anymore.
         if let presetDebug = env["UNPEEL_DEBUG_OPEN_PRESETS"], !presetDebug.isEmpty {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                store.openSettings(tab: .presets)
+                store.openSettings(tab: .agentsApps)
             }
         }
 

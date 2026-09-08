@@ -5,7 +5,7 @@ import Security
 public enum RemoteControlProtocol {
     public static let version = 1
     public static let hostMajorVersion = 1
-    public static let hostMinorVersion = 15
+    public static let hostMinorVersion = 19
     public static let resumableArtifactUploadCapability = "artifact.upload.resumable"
     public static let sessionOrderCapability = "session.order.set"
     public static let sessionRuntimeRestartCapability = "session.runtime.restart"
@@ -14,6 +14,9 @@ public enum RemoteControlProtocol {
     /// for a live Session, Restart App for an App pane). Additive, 2026-09-07.
     public static let sessionReloadCapability = "session.reload"
     public static let presetsSetCapability = "settings.presets.set"
+    public static let pluginsOrderCapability = "settings.plugins.order"
+    public static let pluginsSetCapability = "settings.plugins.set"
+    public static let pluginUpdatesCapability = "settings.plugins.updates.read"
     public static let workspaceSettingsSetCapability = "settings.workspace.set"
     /// The Host terminates TLS on its `/mobile` port with the same
     /// self-signed certificate the `unpeel-host __remote__` WSS server pins
@@ -524,6 +527,8 @@ public struct RemoteArchivedSessionsResponse: Codable, Equatable, Sendable {
 
 public struct RemotePresetSummary: Codable, Equatable, Identifiable, Sendable {
     public let id: String
+    public let pluginID: String?
+    public let projectID: String?
     public let label: String
     public let command: String
     public let cliID: String?
@@ -542,9 +547,13 @@ public struct RemotePresetSummary: Codable, Equatable, Identifiable, Sendable {
         enabled: Bool = true,
         quickLaunch: Bool = false,
         isDefault: Bool = false,
-        tintColorHex: Int? = nil
+        tintColorHex: Int? = nil,
+        projectID: String? = nil,
+        pluginID: String? = nil
     ) {
         self.id = id
+        self.pluginID = pluginID
+        self.projectID = projectID
         self.label = label
         self.command = command
         self.cliID = cliID
@@ -1085,6 +1094,7 @@ public struct RemoteAppSummary: Codable, Equatable, Identifiable, Sendable {
     public let version: String?
     public let installedVersion: String?
     public let updateAvailable: Bool
+    public let installCommand: String?
     public let command: String
     public let mediaTypes: [String]
     public let fileExtensions: [String: String]
@@ -1106,9 +1116,11 @@ public struct RemoteAppSummary: Codable, Equatable, Identifiable, Sendable {
         fileExtensions: [String: String] = [:],
         resourceKinds: [String] = [],
         defaultFor: [String] = [],
-        installed: Bool = false
+        installed: Bool = false,
+        installCommand: String? = nil
     ) {
         self.id = id
+        self.installCommand = installCommand
         self.name = name
         self.description = description
         self.tint = tint
@@ -1126,11 +1138,12 @@ public struct RemoteAppSummary: Codable, Equatable, Identifiable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id, name, description, tint, iconSvg, version, installedVersion, updateAvailable
-        case command, mediaTypes, fileExtensions, resourceKinds, defaultFor, installed
+        case installCommand, command, mediaTypes, fileExtensions, resourceKinds, defaultFor, installed
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        installCommand = try container.decodeIfPresent(String.self, forKey: .installCommand)
         id = try container.decode(String.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
         description = try container.decodeIfPresent(String.self, forKey: .description) ?? ""
@@ -2376,7 +2389,42 @@ public struct RemoteExperimentalSettings: Codable, Equatable, Sendable {
     }
 }
 
+/// The selected Host's agent inventory; no Controller-side PATH guesses.
+public struct RemotePluginUpdate: Codable, Equatable, Identifiable, Sendable {
+    public let id: String
+    public let state: String
+    public let installedVersion: String?
+    public let latestVersion: String?
+    public let updateAvailable: Bool
+}
+
+public struct RemotePluginUpdates: Codable, Equatable, Sendable {
+    public let checking: Bool
+    public let items: [RemotePluginUpdate]
+}
+
+public struct RemoteAgentSummary: Codable, Equatable, Identifiable, Sendable {
+    public let id: String
+    public let name: String
+    public let command: String
+    public let installed: Bool
+    public let installCommand: String?
+    public let websiteURL: String?
+}
+
+public struct RemotePluginActivationPatch: Codable, Equatable, Sendable {
+    public let id: String
+    public let active: Bool
+
+    public init(id: String, active: Bool) {
+        self.id = id
+        self.active = active
+    }
+}
+
 public struct RemoteWorkspaceSettingsPatch: Codable, Equatable, Sendable {
+    public let pluginOrder: [String]?
+    public let pluginActivation: RemotePluginActivationPatch?
     public let transcriptSettings: RemoteTranscriptSettingsUpdate?
     public let appearanceSettings: RemoteAppearanceSettingsUpdate?
     public let notificationSettings: RemoteNotificationSettingsUpdate?
@@ -2390,6 +2438,8 @@ public struct RemoteWorkspaceSettingsPatch: Codable, Equatable, Sendable {
     public let mcpAutoAddBrowserScreenshots: Bool?
 
     public init(
+        pluginOrder: [String]? = nil,
+        pluginActivation: RemotePluginActivationPatch? = nil,
         transcriptSettings: RemoteTranscriptSettingsUpdate? = nil,
         appearanceSettings: RemoteAppearanceSettingsUpdate? = nil,
         notificationSettings: RemoteNotificationSettingsUpdate? = nil,
@@ -2402,6 +2452,8 @@ public struct RemoteWorkspaceSettingsPatch: Codable, Equatable, Sendable {
         mcpWorktreeAccess: Bool? = nil,
         mcpAutoAddBrowserScreenshots: Bool? = nil
     ) {
+        self.pluginOrder = pluginOrder
+        self.pluginActivation = pluginActivation
         self.transcriptSettings = transcriptSettings
         self.appearanceSettings = appearanceSettings
         self.notificationSettings = notificationSettings
@@ -2416,7 +2468,8 @@ public struct RemoteWorkspaceSettingsPatch: Codable, Equatable, Sendable {
     }
 
     public var isEmpty: Bool {
-        transcriptSettings == nil
+        pluginOrder == nil && pluginActivation == nil
+            && transcriptSettings == nil
             && appearanceSettings == nil
             && notificationSettings == nil
             && experimentalSettings == nil
@@ -2431,6 +2484,9 @@ public struct RemoteWorkspaceSettingsPatch: Codable, Equatable, Sendable {
 /// on bootstrap (absent on pre-minor-10 Hosts; nested groups may be absent on
 /// older minor versions).
 public struct RemoteWorkspaceSettings: Codable, Equatable, Sendable {
+    public let pluginOrder: [String]?
+    public let pluginActivation: [String: Bool]?
+    public let availableAgents: [RemoteAgentSummary]?
     public let transcriptSettings: RemoteTranscriptSettings?
     public let appearanceSettings: RemoteAppearanceSettings?
     public let notificationSettings: RemoteNotificationSettings?
@@ -2444,6 +2500,9 @@ public struct RemoteWorkspaceSettings: Codable, Equatable, Sendable {
     public let mcpAutoAddBrowserScreenshots: Bool
 
     public init(
+        pluginOrder: [String]? = nil,
+        pluginActivation: [String: Bool]? = nil,
+        availableAgents: [RemoteAgentSummary]? = nil,
         transcriptSettings: RemoteTranscriptSettings? = nil,
         appearanceSettings: RemoteAppearanceSettings? = nil,
         notificationSettings: RemoteNotificationSettings? = nil,
@@ -2456,6 +2515,9 @@ public struct RemoteWorkspaceSettings: Codable, Equatable, Sendable {
         mcpWorktreeAccess: Bool,
         mcpAutoAddBrowserScreenshots: Bool
     ) {
+        self.pluginOrder = pluginOrder
+        self.pluginActivation = pluginActivation
+        self.availableAgents = availableAgents
         self.transcriptSettings = transcriptSettings
         self.appearanceSettings = appearanceSettings
         self.notificationSettings = notificationSettings

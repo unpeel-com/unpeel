@@ -943,6 +943,145 @@
         "native": 404,
         "tui": 404
       }
+    },
+    {
+      "id": "plugins.invalid-id",
+      "method": "POST",
+      "path": "/mobile/workspace-settings",
+      "body": {
+        "pluginActivation": {
+          "id": "unknown.plugin",
+          "active": false
+        }
+      },
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "plugins.invalid-active",
+      "method": "POST",
+      "path": "/mobile/workspace-settings",
+      "body": {
+        "pluginActivation": {
+          "id": "com.anthropic.claude-code",
+          "active": "no"
+        }
+      },
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "plugins.missing-id",
+      "method": "POST",
+      "path": "/mobile/workspace-settings",
+      "body": {
+        "pluginActivation": {
+          "active": true
+        }
+      },
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "plugins.deactivate",
+      "method": "POST",
+      "path": "/mobile/workspace-settings",
+      "body": {
+        "pluginActivation": {
+          "id": "unpeel.app.markdown",
+          "active": false
+        }
+      },
+      "expected": {
+        "native": 200,
+        "tui": 200
+      }
+    },
+    {
+      "id": "plugins.activate",
+      "method": "POST",
+      "path": "/mobile/workspace-settings",
+      "body": {
+        "pluginActivation": {
+          "id": "unpeel.app.markdown",
+          "active": true
+        }
+      },
+      "expected": {
+        "native": 200,
+        "tui": 200
+      }
+    },
+    {
+      "id": "plugins.order.invalid-type",
+      "method": "POST",
+      "path": "/mobile/workspace-settings",
+      "body": {
+        "pluginOrder": "claude"
+      },
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "plugins.order.duplicate",
+      "method": "POST",
+      "path": "/mobile/workspace-settings",
+      "body": {
+        "pluginOrder": [
+          "com.openai.codex",
+          "com.openai.codex"
+        ]
+      },
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "plugins.order.unknown",
+      "method": "POST",
+      "path": "/mobile/workspace-settings",
+      "body": {
+        "pluginOrder": [
+          "does.not.exist"
+        ]
+      },
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
+      "id": "plugins.order.valid",
+      "method": "POST",
+      "path": "/mobile/workspace-settings",
+      "body": {
+        "pluginOrder": [
+          "unpeel.app.markdown",
+          "com.anthropic.claude-code"
+        ]
+      },
+      "expected": {
+        "native": 200,
+        "tui": 200
+      }
+    },
+    {
+      "id": "plugin-updates.read",
+      "method": "GET",
+      "path": "/mobile/plugin-updates",
+      "expected": {
+        "native": 200,
+        "tui": 200
+      }
     }
   ],
   "additiveBootstrapFields": [

@@ -21,6 +21,11 @@ window_padding_x = 8
 [install]
 official_url = "https://kiro.dev"
 
+[updates]
+version_args = ["--version"]
+latest_url = "https://prod.download.cli.kiro.dev/stable/latest/manifest.json"
+json_pointer = "/version"
+
 [detection]
 command_aliases = ["kiro-cli"]
 process_aliases = ["kiro", "kiro-cli"]

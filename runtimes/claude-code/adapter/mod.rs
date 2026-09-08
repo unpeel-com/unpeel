@@ -58,6 +58,40 @@ mod tests {
     use super::startup_command;
 
     #[test]
+    fn inventory_selects_native_install_or_plain_shell_update() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let dirs = [root.path().to_path_buf()];
+        let inventory = || {
+            crate::plugins::agents_wire_in_dirs(&dirs)
+                .as_array().unwrap().iter()
+                .find(|row| row["id"] == "com.anthropic.claude-code")
+                .unwrap().clone()
+        };
+        let missing = inventory();
+        assert_eq!(missing["installed"], false);
+        assert_eq!(missing["installCommand"], "curl -fsSL https://claude.ai/install.sh | bash");
+
+        let executable = root.path().join("claude");
+        std::fs::write(&executable, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n").unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let installed = inventory();
+        assert_eq!(installed["installed"], true);
+        let update = installed["installCommand"].as_str().unwrap();
+        // The updater must not launch a managed Claude session, inject MCP
+        // flags, or run npm over an existing native installation.
+        assert!(crate::integrations::runtime_for_command(update).is_none());
+        let output = std::process::Command::new("/bin/sh")
+            .args(["-c", update])
+            .env("PATH", root.path())
+            .env("UNPEEL_HOME", root.path().join("state"))
+            .output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(String::from_utf8(output.stdout).unwrap(), "update\n");
+    }
+
+    #[test]
     fn appends_one_unified_config_when_any_domain_is_enabled() {
         assert_eq!(startup_command("claude", false), "claude");
 

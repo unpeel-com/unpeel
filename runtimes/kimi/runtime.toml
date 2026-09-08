@@ -21,6 +21,11 @@ window_padding_x = 8
 [install]
 official_url = "https://kimi.com"
 
+[updates]
+version_args = ["--version"]
+latest_url = "https://pypi.org/pypi/kimi-cli/json"
+json_pointer = "/info/version"
+
 [detection]
 command_aliases = ["kimi"]
 process_aliases = ["kimi", "kimi-code"]

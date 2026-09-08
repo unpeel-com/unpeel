@@ -164,6 +164,7 @@ def seed_conformance_home(root):
         "conformance-restart",
         "conformance-stop-exited",
         "conformance-action-restart",
+        "conformance-action-reload",
         "conformance-restart-agent-exited",
         "conformance-resume-agent-exited",
         "conformance-remove",

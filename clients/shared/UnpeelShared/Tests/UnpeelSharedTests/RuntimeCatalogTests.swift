@@ -61,7 +61,7 @@ final class RuntimeCatalogTests: XCTestCase {
         XCTAssertEqual(claude.defaultPreset?.command, "claude")
         XCTAssertEqual(claude.kind, .agent)
         XCTAssertEqual(claude.tintColorHex, 0xD97757)
-        XCTAssertEqual(claude.installCommand, "npm install -g @anthropic-ai/claude-code")
+        XCTAssertEqual(claude.installCommand, "curl -fsSL https://claude.ai/install.sh | bash")
         XCTAssertEqual(claude.lifecycleSource, "hooks")
         XCTAssertTrue(claude.capabilities.contains(.restartAgent))
         XCTAssertTrue(claude.capabilities.contains(.transcript))

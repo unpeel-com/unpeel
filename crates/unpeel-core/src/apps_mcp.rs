@@ -280,6 +280,16 @@ pub use crate::app_resources::valid_resource_kind;
 /// Resolve the central App catalog against the Host's PATH on every call.
 /// A catalog entry is installed only while its declared binary resolves.
 pub fn installed_apps() -> Vec<InstalledApp> {
+    let state = crate::app_state::load().unwrap_or_default();
+    discovered_apps()
+        .into_iter()
+        .filter(|app| crate::plugins::active(&state, &app.id))
+        .collect()
+}
+
+/// Physical inventory, including deactivated Apps. Management UIs must be
+/// able to reactivate a binary that runtime/MCP discovery no longer offers.
+pub fn discovered_apps() -> Vec<InstalledApp> {
     installed_apps_at(&catalog_apps(), &crate::setup::search_dirs())
 }
 

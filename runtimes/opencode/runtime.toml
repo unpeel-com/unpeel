@@ -22,6 +22,11 @@ icon_template = false
 official_url = "https://opencode.ai"
 command = "npm install -g opencode-ai"
 
+[updates]
+version_args = ["--version"]
+latest_url = "https://registry.npmjs.org/opencode-ai/latest"
+json_pointer = "/version"
+
 [detection]
 command_aliases = ["opencode"]
 process_aliases = ["opencode", "opencode2"]

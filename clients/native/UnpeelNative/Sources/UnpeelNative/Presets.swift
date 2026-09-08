@@ -40,18 +40,6 @@ struct Preset: Identifiable, Hashable, Codable {
     }
 }
 
-/// One installed Unpeel App the launch list can offer to add as a preset.
-/// Sourced from `unpeel-host __apps__ list`; Rust resolves the central App
-/// catalog against the Host's PATH so native does not duplicate discovery.
-struct InstalledAppInfo: Identifiable, Hashable, Codable, Sendable {
-    let id: String
-    let name: String
-    var version: String? = nil
-    let command: String
-    var description: String = ""
-    var tint: String? = nil
-}
-
 extension Preset {
     /// Blank-terminal pseudo-preset (stores/presets.ts:14-23).
     static let newTerminalID = "__new_terminal__"
@@ -347,32 +335,42 @@ struct ToolScanReport: Equatable, Sendable {
 /// renders one chip per group: a single starred preset launches directly,
 /// two or more turn the chip into a dropdown menu.
 struct QuickPresetGroup: Identifiable, Equatable {
-    let cli: SetupTool
+    let cli: SetupTool?
+    let app: RemoteAppSummary?
     let presets: [Preset]
 
-    var id: String { cli.rawValue }
-    /// The group's launch target for single-click surfaces (⌘N, snapshot
-    /// tests): the topmost starred preset — consistent with the
-    /// order-derived per-CLI default.
+    init(cli: SetupTool, presets: [Preset]) {
+        self.cli = cli; self.app = nil; self.presets = presets
+    }
+    init(app: RemoteAppSummary, presets: [Preset]) {
+        self.cli = nil; self.app = app; self.presets = presets
+    }
+    var id: String { cli?.rawValue ?? app?.id ?? leader.id }
+    var displayName: String { cli?.displayName ?? app?.name ?? leader.label }
     var leader: Preset { presets[0] }
 }
 
-/// Group starred, enabled presets by CLI, preserving the flat list order
-/// (groups ordered by their first starred preset; presets within a group
-/// keep list order). Unknown-head commands can't be starred (`sanitized()`),
-/// so every group has a CLI.
-func collectQuickPresetGroups(_ items: [Preset]) -> [QuickPresetGroup] {
-    var cliOrder: [SetupTool] = []
-    var byCLI: [SetupTool: [Preset]] = [:]
-
-    for preset in items {
-        guard preset.quickLaunch, preset.enabled else { continue }
-        guard let cli = SetupTool.detect(in: preset.command) else { continue }
-        if byCLI[cli] == nil { cliOrder.append(cli) }
-        byCLI[cli, default: []].append(preset)
+/// One quick-access chip per agent or App, with its command variants in order.
+/// App identity comes from the selected Host's inventory.
+func collectQuickPresetGroups(_ items: [Preset], apps: [RemoteAppSummary] = []) -> [QuickPresetGroup] {
+    var order: [String] = []
+    var groups: [String: [Preset]] = [:]
+    var identities: [String: (SetupTool?, RemoteAppSummary?)] = [:]
+    for preset in items where preset.enabled {
+        let cli = SetupTool.detect(in: preset.command)
+        let executable = preset.command.split(separator: " ").first.map(String.init) ?? ""
+        let head = URL(fileURLWithPath: executable.trimmingCharacters(in: CharacterSet(charactersIn: "'\""))).lastPathComponent
+        let app = apps.first { $0.command == head }
+        guard let id = cli?.rawValue ?? app?.id else { continue }
+        if groups[id] == nil { order.append(id); identities[id] = (cli, app) }
+        groups[id, default: []].append(preset)
     }
-
-    return cliOrder.map { QuickPresetGroup(cli: $0, presets: byCLI[$0] ?? []) }
+    return order.compactMap { id in
+        guard let identity = identities[id], let presets = groups[id], presets.contains(where: \.quickLaunch) else { return nil }
+        if let cli = identity.0 { return QuickPresetGroup(cli: cli, presets: presets) }
+        if let app = identity.1 { return QuickPresetGroup(app: app, presets: presets) }
+        return nil
+    }
 }
 
 // MARK: - On-disk decoding

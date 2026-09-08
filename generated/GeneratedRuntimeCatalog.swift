@@ -111,7 +111,7 @@ public enum UnpeelRuntimeCatalog {
             iconLicense: "vendor-brand-asset",
             windowPaddingX: 8,
             installURL: "https://claude.com/claude-code",
-            installCommand: "npm install -g @anthropic-ai/claude-code",
+            installCommand: "curl -fsSL https://claude.ai/install.sh | bash",
             commandAliases: ["claude"],
             processAliases: ["claude", "claude-code"],
             searchPathSuffixes: [],

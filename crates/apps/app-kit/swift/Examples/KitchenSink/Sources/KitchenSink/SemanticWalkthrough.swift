@@ -8,8 +8,6 @@ extension DemoKind {
             ["Provider catalog", "Provider detail", "Alerts"]
         case .diffsApp:
             ["Changed-file list", "Full diff detail"]
-        case .githubIssuesApp:
-            ["Filtered issue list", "Full issue detail"]
         case .markdownApp:
             [
                 "Workspace chooser", "Note picker", "New-note form", "Markdown editor",
@@ -102,9 +100,6 @@ extension HostedAppSession {
         case (.diffsApp, .page(let page)):
             if case .content = page.body { return ["Full diff detail"] }
             return ["Changed-file list"]
-        case (.githubIssuesApp, .page(let page)):
-            if case .content = page.body { return ["Full issue detail"] }
-            return ["Filtered issue list"]
         case (.markdownApp, .page(let page)):
             if page.title == "Choose your notes folder" { return ["Workspace chooser"] }
             if page.title == "New note" { return ["New-note form"] }
@@ -136,12 +131,6 @@ extension HostedAppSession {
                 step: step,
                 snapshot: snapshot,
                 excluding: ["refresh-diffs"]
-            )
-        case .githubIssuesApp:
-            return listDetailAction(
-                step: step,
-                snapshot: snapshot,
-                excluding: ["refresh-issues", "issue-status"]
             )
         case .markdownApp:
             return markdownAction(step: step, snapshot: snapshot)

@@ -21,6 +21,12 @@ icon_license = "vendor-brand-asset"
 official_url = "https://x.ai"
 command = "curl -fsSL https://x.ai/cli/install.sh | bash"
 
+[updates]
+version_args = ["--version"]
+latest_url = "https://x.ai/cli/stable"
+channel_env = "GROK_CHANNEL"
+channel_urls = { stable = "https://x.ai/cli/stable", alpha = "https://x.ai/cli/alpha", enterprise = "https://x.ai/cli/enterprise" }
+
 [detection]
 command_aliases = ["grok"]
 process_aliases = ["grok", "grok-build"]

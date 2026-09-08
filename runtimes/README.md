@@ -63,8 +63,19 @@ Important fields:
   full-bleed TUIs such as Grok and OpenCode omit it.
 - `detection`: conservative command/process aliases, package path signatures,
   and optional home-relative executable search paths.
+- `install.command`: the fresh-install recipe. An optional `install.update_command`
+  overrides it for an existing installation. The Host selects the recipe using
+  its executable inventory and publishes it as `availableAgents[].installCommand`.
+  Update recipes remain Host-owned; the generated client catalog contains only
+  the fresh-install command. Use a shell maintenance invocation (for example,
+  `command agent update`) so an updater does not start a managed agent session.
 - `environment.strip_inherited`: provider identity/session variables that a
   nested Unpeel Host must remove before opening a new terminal.
+- `updates`: optional read-only release lookup (`version_args`, `latest_url`,
+  optional JSON pointer or version delimiters). Checks run lazily on the Host
+  when Agents & Apps is visible, never during bootstrap. Unknown versions and
+  failed lookups do not claim an update. These recipes are not generated into
+  the client catalog.
 - `usage.stores`: optional bounded, home-relative session-file patterns used
   only to rank an existing user's agents during first-run preset seeding.
 - `lifecycle`: source, authority, fallback, reliability claims, and the

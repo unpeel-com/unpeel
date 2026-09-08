@@ -1106,7 +1106,7 @@ final class UnpeelStore: ObservableObject {
 
     /// Active settings tab (App.svelte shellView.tab); defaults to the
     /// first tab in the nav.
-    @Published var settingsTab: SettingsTab = .presets
+    @Published var settingsTab: SettingsTab = .agentsApps
 
     /// Keys of the features (Settings ▸ Features) that are currently
     /// enabled. Seeded from the registry so an env override or a
@@ -2024,7 +2024,6 @@ final class UnpeelStore: ObservableObject {
             self.performRescan(snapshot: snapshot)
             self.repairDuplicatePresetsOnce()
             self.restorePersistedSessionSelection()
-            self.refreshInstalledApps()
             self.initialScanTask = nil
         }
     }
@@ -4021,7 +4020,7 @@ final class UnpeelStore: ObservableObject {
                 ? .presets
                 : tab
         } else if settingsTab == .mobile && !UnpeelFeatureFlags.mobileRemoteControlEnabled {
-            settingsTab = .presets
+            settingsTab = .agentsApps
         }
         // The settings nav takes over the sidebar list area; drop the
         // main-pane library so Back always returns to the project tree.
@@ -5586,11 +5585,9 @@ final class UnpeelStore: ObservableObject {
             // republishes the launch list, but never fed these lists, so a
             // just-added agent kept being offered (0.4.0 duplicate-Add bug).
             reloadSharedPresets()
-            refreshInstalledApps()
             return
         }
         performRescan(snapshot: collectScanSnapshot())
-        refreshInstalledApps()
     }
 
     /// Which preset lists a `rescan()` refreshes: the disk projection path
@@ -10623,7 +10620,9 @@ final class UnpeelStore: ObservableObject {
         fromSessionID sessionID: String
     ) -> Bool {
         let snapshot = remoteHostRuntime.snapshot
-        let apps = snapshot?.availableApps ?? []
+        let apps = (snapshot?.availableApps ?? []).filter {
+            snapshot?.workspaceSettings?.pluginActivation?[$0.id] != false
+        }
         guard let mediaType = RemoteAppSummary.mediaType(forPath: path, in: apps) else {
             return false
         }
@@ -13371,148 +13370,6 @@ final class UnpeelStore: ObservableObject {
         return preset
     }
 
-    // MARK: - Installed Apps (launch-list "Apps you can add")
-
-    /// Installed Unpeel Apps read from `unpeel-host __apps__ list`. Rust owns
-    /// the central catalog + PATH resolution; native does not duplicate it.
-    /// Refreshed on a throttle from `rescan()`.
-    @Published private(set) var installedApps: [InstalledAppInfo] = []
-    private var installedAppsRefreshInFlight = false
-    private var installedAppsRefreshedAt: Date?
-    /// Apps are installed rarely, so a background probe every few seconds is
-    /// plenty and keeps `rescan()` cheap.
-    private static let installedAppsRefreshInterval: TimeInterval = 5
-
-    /// Installed apps not already present in the launch list (matched on the
-    /// exact launch command), so the menu only offers apps you haven't added.
-    /// Local reads this Mac's scan; every other scope reads the selected
-    /// Host's catalog (installed there) minus that Host's launch list, so a
-    /// sibling workspace and a remote Host get the same menu.
-    var addableApps: [InstalledAppInfo] {
-        guard selectedHostScope == .local else {
-            guard let snapshot = remoteHostRuntime.snapshot else { return [] }
-            let existing = Set(
-                snapshot.presets.map { $0.command.trimmingCharacters(in: .whitespaces) }
-            )
-            return (snapshot.availableApps ?? [])
-                .filter { $0.installed && !existing.contains($0.command) }
-                .map {
-                    InstalledAppInfo(
-                        id: $0.id,
-                        name: $0.name,
-                        command: $0.command,
-                        description: $0.description,
-                        tint: $0.tint
-                    )
-                }
-        }
-        let existing = Set(
-            availablePresets.map { $0.command.trimmingCharacters(in: .whitespaces) }
-        )
-        return installedApps.filter {
-            !existing.contains($0.command.trimmingCharacters(in: .whitespaces))
-        }
-    }
-
-    /// Add an installed App to the launch list as a preset (label = app name),
-    /// then refresh so it drops out of "Apps you can add". Outside Local the
-    /// preset is created on the selected Host through `settings.presets.set`.
-    func addAppPreset(_ app: InstalledAppInfo) {
-        guard selectedHostScope == .local else {
-            Task { @MainActor in
-                try? await remoteHostRuntime.setPreset(
-                    RemotePresetPatch(command: app.command, label: app.name)
-                )
-            }
-            return
-        }
-        addPreset(command: app.command, label: app.name)
-        installedAppsRefreshedAt = nil
-        refreshInstalledApps()
-    }
-
-    /// Background-probe the installed-app registry, throttled. Safe to call
-    /// often (from `rescan()`); at most one probe runs at a time.
-    func refreshInstalledApps(force: Bool = false) {
-        if !force,
-           let at = installedAppsRefreshedAt,
-           Date().timeIntervalSince(at) < Self.installedAppsRefreshInterval {
-            return
-        }
-        guard !installedAppsRefreshInFlight else { return }
-        installedAppsRefreshInFlight = true
-        installedAppsRefreshedAt = Date()
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            let apps = Self.readInstalledApps()
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.installedAppsRefreshInFlight = false
-                if self.installedApps != apps { self.installedApps = apps }
-            }
-        }
-    }
-
-    private static func readInstalledApps() -> [InstalledAppInfo] {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: LaunchConfig.hostBinary)
-        process.arguments = ["__apps__", "list"]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        guard (try? process.run()) != nil else { return [] }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0,
-              let apps = try? JSONDecoder().decode([InstalledAppInfo].self, from: data)
-        else { return [] }
-        return apps
-    }
-
-    // MARK: - Agents (add removed / install missing)
-
-    /// Installed agent CLIs (on PATH) that aren't already in the launch list —
-    /// one click re-adds a removed agent. Local scope only; remote scope adds
-    /// agents through the Host protocol (Phase 3).
-    var addableAgents: [SetupTool] {
-        guard selectedHostScope == .local, let report = setupToolReport else { return [] }
-        let existing = Set(mergedPresets.compactMap { SetupTool.detect(in: $0.command) })
-        return report.installedStatuses.map(\.tool).filter { !existing.contains($0) }
-    }
-
-    /// Agent CLIs not on PATH that we know how to install (have a trusted
-    /// install one-liner in the runtime catalog). Local scope only.
-    var installableAgents: [SetupTool] {
-        guard selectedHostScope == .local, let report = setupToolReport else { return [] }
-        return report.missingStatuses.map(\.tool).filter { $0.installCommand != nil }
-    }
-
-    /// Missing agent CLIs with no trusted install command — offer their vendor
-    /// page (a guessed package name could install a squatted lookalike).
-    var gettableAgents: [SetupTool] {
-        guard selectedHostScope == .local, let report = setupToolReport else { return [] }
-        return report.missingStatuses
-            .map(\.tool)
-            .filter { $0.installCommand == nil && $0.websiteURL != nil }
-    }
-
-    /// Add an installed agent back to the launch list as its default preset.
-    func addAgentPreset(_ tool: SetupTool) {
-        addPreset(command: tool.defaultPresetCommand, label: tool.displayName)
-    }
-
-    /// Install a missing agent by running its install one-liner as a visible
-    /// terminal session on the currently-scoped host. Locally that opens a
-    /// terminal on this Mac; the same `launchSession` path carries the command
-    /// to a remote Host too. No trusted command → open the vendor page.
-    func installAgentSession(_ tool: SetupTool) {
-        guard let command = tool.installCommand else {
-            if let url = tool.websiteURL { NSWorkspace.shared.open(url) }
-            return
-        }
-        guard let projectID = defaultLaunchProjectID else { return }
-        launchSession(projectID: projectID, command: command)
-    }
-
     /// Install a missing agent on a REMOTE Host, as seamlessly as possible: the
     /// catalog one-liners assume a user-writable environment that a fresh Linux
     /// Host lacks, so the command is wrapped to (1) use a user-owned npm prefix
@@ -15804,12 +15661,12 @@ extension UnpeelStore {
         remoteProjectSummariesByID = projectSummaries
         remoteSummariesByID = summaries
         remoteSessionOrderByProject = orderByProject
-        remotePresetSummaries = snapshot.presets
+        remotePresetSummaries = snapshot.presets.filter { $0.projectID == nil }
 
         // Presets: the Host's enabled list, in Host order; stars become the
         // same quick-launch chips the local strip renders.
         let presets = snapshot.presets
-            .filter(\.enabled)
+            .filter { $0.enabled && $0.projectID == nil }
             .map { summary in
                 Preset(
                     id: summary.id,
@@ -15820,7 +15677,7 @@ extension UnpeelStore {
                 )
             }
         remotePresets = presets
-        remoteQuickPresetGroups = Self.quickPresetGroups(from: presets)
+        remoteQuickPresetGroups = collectQuickPresetGroups(presets, apps: snapshot.availableApps ?? [])
 
         // Build the tree with the exact local algorithm: top-level projects,
         // inline child folders (worktrees + groups), sessions in Host order
@@ -16135,22 +15992,6 @@ extension UnpeelStore {
         entry.worktreeBranch = summary.worktreeBranch
         entry.cwd = summary.cwd
         return entry
-    }
-
-    /// Quick-strip groups from a flat preset list — same rules as the local
-    /// strip: starred presets grouped per CLI, flat-list order.
-    private static func quickPresetGroups(from presets: [Preset]) -> [QuickPresetGroup] {
-        var groups: [SetupTool: [Preset]] = [:]
-        var order: [SetupTool] = []
-        for preset in presets where preset.quickLaunch {
-            guard let cli = SetupTool.detect(in: preset.command) else { continue }
-            if groups[cli] == nil { order.append(cli) }
-            groups[cli, default: []].append(preset)
-        }
-        return order.compactMap { cli in
-            guard let presets = groups[cli], !presets.isEmpty else { return nil }
-            return QuickPresetGroup(cli: cli, presets: presets)
-        }
     }
 
     // MARK: Remote verbs

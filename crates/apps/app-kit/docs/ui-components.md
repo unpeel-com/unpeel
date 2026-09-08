@@ -26,8 +26,8 @@ cargo run --example charts --no-default-features
 ```
 
 On macOS, the independent Kitchen Sink package exercises those binaries,
-the Charts and other component examples, and the five sibling Apps (Usage, Diffs, GitHub
-Issues, Markdown, and File Tree) through real libghostty PTYs, the native
+the Charts and other component examples, and the four sibling Apps (Usage, Diffs,
+Markdown, and File Tree) through real libghostty PTYs, the native
 SwiftUI renderer, and the actual TypeScript DOM renderers inside `WKWebView`,
 without Unpeel installed:
 
@@ -678,8 +678,7 @@ The three interpretations are peers:
   accelerator grammar without stealing printable keys from an active editor.
 
 Usage publishes Alerts and Refresh here instead of adding command-shaped List
-rows. Diffs publishes Refresh on both list and detail Pages; GitHub Issues
-publishes Refresh/Reload according to its current Page; Filetree publishes
+rows. Diffs publishes Refresh on both list and detail Pages; Filetree publishes
 Refresh and Show/Hide Hidden on its Tree; Markdown publishes picker and editor
 commands on their respective Tree/MarkdownEditor roots. Consequently the
 Kitchen Sink component inspector, native toolbar, web footer, terminal hint
@@ -1172,21 +1171,20 @@ Caret/drop-hover visuals, local drag maps, and syntax colors remain
 platform-specific presentation rather than alternate App state surfaces.
 Unsupported renderers still receive the complete TUI.
 
-### Five-App cross-platform audit
+### Four-App cross-platform audit
 
 Kitchen Sink now builds and spawns the Charts showcase plus Usage, Diffs,
-GitHub Issues, Markdown, and File Tree against isolated deterministic fixtures. Its screen walker drives
+Markdown, and File Tree against isolated deterministic fixtures. Its screen walker drives
 the live App reducers over `ui.sock`; it does not substitute fixture snapshots
 for the Apps. The current verified inventory is:
 
 - Usage: provider catalog, provider detail, and Alerts;
 - Diffs: changed-file list and complete styled Content detail;
-- GitHub Issues: semantic filter/list and complete issue Content detail;
 - Markdown: workspace chooser, Tree picker, new-note form, editor, context
   menu, and slash insert menu; and
 - File Tree: root and nested Tree screens, including filter and context menu.
 
-All five report **Terminal-only surfaces: none**. The retained Tree delta used
+All four report **Terminal-only surfaces: none**. The retained Tree delta used
 for directory navigation clears a disappearing selection before splicing the
 new child collection, keeping every intermediate revision valid in Rust,
 Swift, and web. The reproducible command and captured report live in

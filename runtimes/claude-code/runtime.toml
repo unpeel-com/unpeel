@@ -20,7 +20,16 @@ window_padding_x = 8
 
 [install]
 official_url = "https://claude.com/claude-code"
-command = "npm install -g @anthropic-ai/claude-code"
+command = "curl -fsSL https://claude.ai/install.sh | bash"
+# The shell builtin keeps this maintenance command out of managed agent launch.
+update_command = "command claude update"
+
+[updates]
+version_args = ["--version"]
+latest_url = "https://downloads.claude.ai/claude-code-releases/latest"
+channel_settings_path = ".claude/settings.json"
+channel_settings_pointer = "/autoUpdatesChannel"
+channel_urls = { stable = "https://downloads.claude.ai/claude-code-releases/stable", latest = "https://downloads.claude.ai/claude-code-releases/latest" }
 
 [detection]
 command_aliases = ["claude"]

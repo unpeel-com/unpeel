@@ -25,6 +25,10 @@ command = "curl -fsSL https://fx.sh/setup.sh | bash"
 # `fx` is also the name of a popular JSON viewer (antonmedv/fx). Detection is
 # alias-based and cannot tell them apart; either binary only gains foreground
 # presentation. Neither output nor screen changes assert lifecycle state.
+[updates]
+version_args = ["--version"]
+latest_url = "https://releases.fx.sh/latest.txt"
+
 [detection]
 command_aliases = ["fx"]
 process_aliases = ["fx"]

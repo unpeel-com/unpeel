@@ -6,7 +6,6 @@ import UnpeelAppKitUI
 enum DemoKind: String, CaseIterable, Identifiable, Sendable {
     case usageApp = "usage-app"
     case diffsApp = "diffs-app"
-    case githubIssuesApp = "github-issues-app"
     case markdownApp = "markdown-app"
     case filetreeApp = "filetree-app"
     case charts
@@ -22,7 +21,6 @@ enum DemoKind: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .usageApp: "Usage App"
         case .diffsApp: "Diffs App"
-        case .githubIssuesApp: "GitHub Issues App"
         case .markdownApp: "Markdown App"
         case .filetreeApp: "File Tree App"
         case .charts: "Charts"
@@ -38,7 +36,6 @@ enum DemoKind: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .usageApp: "chart.bar.xaxis"
         case .diffsApp: "plus.forwardslash.minus"
-        case .githubIssuesApp: "exclamationmark.circle"
         case .markdownApp: "doc.text"
         case .filetreeApp: "folder"
         case .charts: "chart.xyaxis.line"
@@ -56,7 +53,7 @@ enum DemoKind: String, CaseIterable, Identifiable, Sendable {
 
     var isCrossPlatformAuditApp: Bool {
         switch self {
-        case .usageApp, .diffsApp, .githubIssuesApp, .markdownApp, .filetreeApp: true
+        case .usageApp, .diffsApp, .markdownApp, .filetreeApp: true
         case .charts, .todo, .markdown, .media, .surface, .canvas: false
         }
     }
@@ -214,7 +211,6 @@ final class MiniHost: ObservableObject {
         let siblingApps: [(DemoKind, String, String)] = [
             (.usageApp, "unpeel-app-usage", "unpeel-usage"),
             (.diffsApp, "unpeel-app-diffs", "unpeel-diffs"),
-            (.githubIssuesApp, "unpeel-app-github-issues", "unpeel-github-issues"),
             (.markdownApp, "unpeel-app-markdown", "unpeel-markdown"),
             (.filetreeApp, "unpeel-app-filetree", "unpeel-filetree"),
         ]

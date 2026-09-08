@@ -22,6 +22,11 @@ window_padding_x = 8
 official_url = "https://github.com/badlogic/pi-mono"
 command = "npm install -g @mariozechner/pi-coding-agent"
 
+[updates]
+version_args = ["--version"]
+latest_url = "https://registry.npmjs.org/@mariozechner/pi-coding-agent/latest"
+json_pointer = "/version"
+
 [detection]
 command_aliases = ["pi"]
 process_aliases = ["pi"]

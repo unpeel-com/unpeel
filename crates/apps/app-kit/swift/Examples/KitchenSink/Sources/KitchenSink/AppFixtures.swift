@@ -19,11 +19,6 @@ extension DemoKind {
                 "CLAUDE_CONFIG_DIR": root.appendingPathComponent("home/.claude").path,
                 "GROK_HOME": root.appendingPathComponent("home/.grok").path,
             ]
-        case .githubIssuesApp:
-            return [
-                "PATH": root.appendingPathComponent("bin", isDirectory: true).path
-                    + ":/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-            ]
         case .markdownApp:
             return [
                 "UNPEEL_APP_CONFIG_HOME":
@@ -49,8 +44,6 @@ extension DemoKind {
             try prepareUsageFixture(root: root, workspace: workspace)
         case .diffsApp:
             try prepareDiffsFixture(workspace: workspace)
-        case .githubIssuesApp:
-            try prepareIssuesFixture(root: root, workspace: workspace)
         case .markdownApp:
             try prepareMarkdownFixture(workspace: workspace)
         case .filetreeApp:
@@ -117,49 +110,6 @@ extension DemoKind {
             to: workspace.appendingPathComponent("added.rs"),
             atomically: true,
             encoding: .utf8
-        )
-    }
-
-    private func prepareIssuesFixture(root: URL, workspace: URL) throws {
-        try initializeGitRepository(workspace)
-        try "Kitchen Sink issue fixture.\n".write(
-            to: workspace.appendingPathComponent("README.md"),
-            atomically: true,
-            encoding: .utf8
-        )
-        try runFixtureCommand(["git", "add", "README.md"], in: workspace)
-        try runFixtureCommand(["git", "commit", "-qm", "Initial fixture"], in: workspace)
-        try runFixtureCommand(["git", "checkout", "-qb", "feature/42-native-ui"], in: workspace)
-
-        let bin = root.appendingPathComponent("bin", isDirectory: true)
-        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
-        let gh = bin.appendingPathComponent("gh")
-        try """
-        #!/bin/sh
-        set -eu
-        case "$1:$2" in
-          repo:view)
-            printf '%s\n' '{"nameWithOwner":"unpeel/kitchen-fixture","url":"https://github.com/unpeel/kitchen-fixture"}'
-            ;;
-          issue:list)
-            cat <<'JSON'
-        [{"number":42,"title":"Render every issue screen natively","state":"OPEN","author":{"login":"tommy"},"labels":[{"name":"app-kit","color":"35c2b4"}],"updatedAt":"2026-09-01T08:30:00Z","url":"https://github.com/unpeel/kitchen-fixture/issues/42"},{"number":17,"title":"Keep terminal fallback exact","state":"OPEN","author":{"login":"agent"},"labels":[{"name":"terminal","color":"61afef"}],"updatedAt":"2026-08-31T12:00:00Z","url":"https://github.com/unpeel/kitchen-fixture/issues/17"}]
-        JSON
-            ;;
-          issue:view)
-            cat <<JSON
-        {"number":$3,"title":"Render every issue screen natively","state":"OPEN","author":{"login":"tommy"},"assignees":[{"login":"agent"}],"labels":[{"name":"app-kit","color":"35c2b4"}],"body":"The complete issue body is carried by the read-only Content component.\\n\\n- Native SwiftUI\\n- Accessible web DOM\\n- Standalone Ratatui","createdAt":"2026-08-30T09:00:00Z","updatedAt":"2026-09-01T08:30:00Z","url":"https://github.com/unpeel/kitchen-fixture/issues/$3","comments":[{"author":{"login":"reviewer"},"body":"Verified through the Kitchen Sink mini-host.","createdAt":"2026-09-01T09:00:00Z","url":"https://github.com/unpeel/kitchen-fixture/issues/$3#issuecomment-1"}]}
-        JSON
-            ;;
-          *)
-            echo "unsupported fixture gh command: $*" >&2
-            exit 2
-            ;;
-        esac
-        """.write(to: gh, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o700],
-            ofItemAtPath: gh.path
         )
     }
 

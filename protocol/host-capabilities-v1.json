@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "protocol": {
     "major": 1,
-    "minor": 16,
+    "minor": 19,
     "compatibility": {
       "major": "must-match",
       "minor": "additive",
@@ -10,9 +10,33 @@
     },
     "history": [
       {
+        "minor": 19,
+        "release": "0.6.0",
+        "summary": "Lazy Host-owned agent and App update checks, cached by installation identity. Bootstrap never launches probes or release requests.",
+        "capabilities": [
+          "settings.plugins.updates.read"
+        ]
+      },
+      {
+        "minor": 18,
+        "release": "0.6.0",
+        "summary": "Ordered Agents & Apps with inline launch commands, app command variants, and stable plugin identities on presets.",
+        "capabilities": [
+          "settings.plugins.order"
+        ]
+      },
+      {
+        "minor": 17,
+        "release": "0.6.0",
+        "summary": "Host-owned plugin activation, installed-agent inventory, and automatic default launch commands. Controllers manage plugins through settings.workspace.set after checking settings.plugins.set.",
+        "capabilities": [
+          "settings.plugins.set"
+        ]
+      },
+      {
         "minor": 16,
         "release": "0.6.0",
-        "summary": "session.reload — replace a Session's host in place while keeping its id (Reload Terminal for a live Session, Restart App for an App pane). Additive; a Controller checks the id, never the minor.",
+        "summary": "session.reload \u2014 replace a Session's host in place while keeping its id (Reload Terminal for a live Session, Restart App for an App pane). Additive; a Controller checks the id, never the minor.",
         "capabilities": [
           "session.reload"
         ]
@@ -336,6 +360,27 @@
       "id": "settings.workspace.set",
       "method": "POST",
       "path": "/mobile/workspace-settings",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "settings.plugins.set",
+      "method": "POST",
+      "path": "/mobile/workspace-settings",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "settings.plugins.order",
+      "method": "POST",
+      "path": "/mobile/workspace-settings",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "settings.plugins.updates.read",
+      "method": "GET",
+      "path": "/mobile/plugin-updates",
       "native": true,
       "tui": true
     }

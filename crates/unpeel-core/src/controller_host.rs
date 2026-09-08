@@ -183,6 +183,7 @@ impl ControllerHostRuntime {
                 preset_patch_response(&request.body, &presets)
             }
             ("POST", "/mobile/workspace-settings") => workspace_settings_response(&request.body),
+            ("GET", "/mobile/plugin-updates") => (200, crate::plugin_updates::request()),
             ("POST", "/mobile/openers") => opener_response(&request.body),
             ("POST", "/mobile/apps/install") => app_install_response(&request.body),
             ("POST", "/mobile/apps/open") => app_open_response(&request.body, self.hook_port),
@@ -342,7 +343,16 @@ impl DiskCatalog {
             });
         }
 
-        let (wire_presets, create_presets) = presets(&state);
+        let (mut wire_presets, mut create_presets) = presets(&state);
+        let agents = crate::plugins::agents_wire();
+        let apps = crate::app_installer::catalog_wire();
+        crate::plugins::project_presets(
+            &state,
+            &agents,
+            &apps,
+            &mut wire_presets,
+            &mut create_presets,
+        );
         let activity_log =
             crate::activity_log::ActivityLogStore::load_default().unwrap_or_default();
         let mut sessions = Vec::new();
@@ -402,7 +412,8 @@ impl DiskCatalog {
         for archived in archives.values_mut() {
             sort_wire_sessions(archived, &wire_projects, &session_orders);
         }
-        let workspace_settings = wire_workspace_settings(&state);
+        let mut workspace_settings = wire_workspace_settings(&state);
+        workspace_settings["availableAgents"] = agents;
         let openers = wire_openers(&state);
         let app_presentations = crate::app_presentations::controller_app_presentations_wire()
             .unwrap_or_else(|_| json!({ "version": 1, "instances": [], "presentations": [] }));
@@ -437,7 +448,7 @@ impl DiskCatalog {
                 // can SHOW current values before editing them through
                 // `settings.workspace.set`.
                 "workspaceSettings": workspace_settings,
-                "availableApps": crate::app_installer::catalog_wire(),
+                "availableApps": apps,
                 "installedApps": crate::app_installer::installed_wire(),
                 "openers": openers,
                 "appPresentations": app_presentations,
@@ -903,6 +914,8 @@ pub fn wire_workspace_settings(state: &Value) -> Value {
     };
     json!({
         "autoStopArchiveMinutes": minutes,
+        "pluginActivation": state.get("plugin_activation").cloned().unwrap_or_else(|| json!({})),
+        "pluginOrder": state.get("plugin_order").cloned().unwrap_or_else(|| json!([])),
         "sidebarStoppedLimit": limit,
         "browserDefaultAccess": access("browser_default_access", "on"),
         "mcpNonchildWriteAccess": access("mcp_nonchild_write_access", "ask"),
@@ -1080,6 +1093,14 @@ fn workspace_nested_unit_number(
 /// Controller sees one behavior whichever transport carried the patch.
 pub fn workspace_settings_response(body: &Value) -> (u16, Value) {
     let error = |message: &str| json!({ "error": message });
+    let plugin_order = match crate::plugins::validate_order(body) {
+        Ok(order) => order,
+        Err(message) => return (400, error(&message)),
+    };
+    let plugin_patch = match crate::plugins::validate_patch(body) {
+        Ok(patch) => patch,
+        Err(message) => return (400, error(&message)),
+    };
 
     let minutes = match body.get("autoStopArchiveMinutes") {
         None | Some(Value::Null) => None,
@@ -1266,7 +1287,9 @@ pub fn workspace_settings_response(body: &Value) -> (u16, Value) {
         }
     }
 
-    if minutes.is_none()
+    if plugin_order.is_none()
+        && plugin_patch.is_none()
+        && minutes.is_none()
         && limit.is_none()
         && browser.is_none()
         && mcp_write.is_none()
@@ -1284,6 +1307,12 @@ pub fn workspace_settings_response(body: &Value) -> (u16, Value) {
     }
 
     let outcome = crate::app_state::edit(|object| {
+        if let Some(order) = &plugin_order {
+            crate::plugins::apply_order(object, order);
+        }
+        if let Some((id, active)) = &plugin_patch {
+            crate::plugins::apply_activation(object, id, *active)?;
+        }
         if let Some(minutes) = minutes {
             object.insert("auto_stop_archive_minutes".into(), minutes.into());
         }
@@ -1451,6 +1480,7 @@ pub fn preset_patch_response(body: &Value, wire_presets: &[Value]) -> (u16, Valu
 
     let visible_ids: Vec<String> = wire_presets
         .iter()
+        .filter(|row| string_field(row, &["projectID"]).is_none())
         .filter_map(|preset| preset.get("id").and_then(Value::as_str).map(str::to_owned))
         .collect();
     let effect_unknown = |e: &str| {
@@ -1477,7 +1507,7 @@ pub fn preset_patch_response(body: &Value, wire_presets: &[Value]) -> (u16, Valu
             quick_launch: quick_launch.unwrap_or(false),
             sort_order,
         };
-        if let Err(e) = apply_preset_patch(&apply) {
+        if let Err(e) = apply_preset_patch(&apply, wire_presets) {
             return effect_unknown(&e);
         }
         return (200, json!({ "ok": true, "presetID": id }));
@@ -1490,7 +1520,7 @@ pub fn preset_patch_response(body: &Value, wire_presets: &[Value]) -> (u16, Valu
         if command.is_some() || label.is_some() || quick_launch.is_some() || sort_order.is_some() {
             return (400, error("removed cannot be combined with other fields"));
         }
-        if let Err(e) = apply_preset_patch(&PresetApply::Remove { id: preset_id }) {
+        if let Err(e) = apply_preset_patch(&PresetApply::Remove { id: preset_id }, wire_presets) {
             return effect_unknown(&e);
         }
         return (200, json!({ "ok": true }));
@@ -1515,14 +1545,62 @@ pub fn preset_patch_response(body: &Value, wire_presets: &[Value]) -> (u16, Valu
         quick_launch,
         sort_order,
     };
-    if let Err(e) = apply_preset_patch(&apply) {
+    if let Err(e) = apply_preset_patch(&apply, wire_presets) {
         return effect_unknown(&e);
     }
     (200, json!({ "ok": true }))
 }
 
-fn apply_preset_patch(patch: &PresetApply) -> Result<(), String> {
-    crate::app_state::edit(|object| apply_preset_patch_to(object, patch))
+fn apply_preset_patch(patch: &PresetApply, wire_presets: &[Value]) -> Result<(), String> {
+    crate::app_state::edit(|object| {
+        let reorders = matches!(
+            patch,
+            PresetApply::Create {
+                sort_order: Some(_),
+                ..
+            } | PresetApply::Update {
+                sort_order: Some(_),
+                ..
+            }
+        );
+        if reorders {
+            crate::plugins::preserve_projected_defaults(object, wire_presets, None)?;
+            // sortOrder addresses the advertised list, which can now be
+            // grouped by plugin order. Align editable slots before moving a
+            // command; hidden legacy/project rows keep their file positions.
+            let ranks: HashMap<&str, usize> = wire_presets
+                .iter()
+                .filter(|row| row["projectID"].as_str().is_none())
+                .enumerate()
+                .filter_map(|(index, row)| row["id"].as_str().map(|id| (id, index)))
+                .collect();
+            if let Some(list) = object.get_mut("presets").and_then(Value::as_array_mut) {
+                let slots: Vec<usize> = list
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, row)| {
+                        string_field(row, &["project_id", "projectID"]).is_none()
+                            && row["enabled"] != false
+                    })
+                    .map(|(index, _)| index)
+                    .collect();
+                let mut ordered: Vec<Value> =
+                    slots.iter().map(|index| list[*index].clone()).collect();
+                ordered.sort_by_key(|row| {
+                    ranks
+                        .get(row["id"].as_str().unwrap_or_default())
+                        .copied()
+                        .unwrap_or(usize::MAX)
+                });
+                for (slot, row) in slots.into_iter().zip(ordered) {
+                    list[slot] = row;
+                }
+            }
+        } else if let PresetApply::Create { command, .. } = patch {
+            crate::plugins::preserve_projected_defaults(object, wire_presets, Some(command))?;
+        }
+        apply_preset_patch_to(object, patch)
+    })
 }
 
 /// The pure mutation against the raw app-state object map, split out so
@@ -1531,6 +1609,9 @@ fn apply_preset_patch_to(
     object: &mut serde_json::Map<String, Value>,
     patch: &PresetApply,
 ) -> Result<(), String> {
+    if let PresetApply::Update { id, .. } = patch {
+        crate::plugins::materialize_default(object, id)?;
+    }
     let presets = object
         .entry("presets")
         .or_insert_with(|| Value::Array(Vec::new()));
@@ -1538,6 +1619,7 @@ fn apply_preset_patch_to(
         return Err("presets is not an array".into());
     };
     let row_id = |row: &Value| row.get("id").and_then(Value::as_str).map(str::to_owned);
+    let global = |row: &Value| string_field(row, &["project_id", "projectID"]).is_none();
     match patch {
         PresetApply::Create {
             id,
@@ -1562,7 +1644,7 @@ fn apply_preset_patch_to(
         // Idempotent: a row already gone since bootstrap is a successful
         // delete, not an error.
         PresetApply::Remove { id } => {
-            list.retain(|row| row_id(row).as_deref() != Some(id));
+            list.retain(|row| !global(row) || row_id(row).as_deref() != Some(id));
             Ok(())
         }
         PresetApply::Update {
@@ -1575,7 +1657,7 @@ fn apply_preset_patch_to(
             {
                 let Some(row) = list
                     .iter_mut()
-                    .find(|row| row_id(row).as_deref() == Some(id))
+                    .find(|row| global(row) && row_id(row).as_deref() == Some(id))
                 else {
                     return Err("preset vanished since bootstrap".into());
                 };
@@ -1595,6 +1677,19 @@ fn apply_preset_patch_to(
             if let Some(index) = sort_order {
                 reorder_visible_preset(list, id, *index)?;
             }
+            // Once customized, a generated command is an ordinary saved
+            // preset. Free its reserved id so changing the executable can
+            // still generate a fresh default for the original agent.
+            if id.starts_with(crate::plugins::AGENT_DEFAULT_PREFIX)
+                || id.starts_with(crate::plugins::APP_PRESET_PREFIX)
+            {
+                if let Some(row) = list
+                    .iter_mut()
+                    .find(|row| global(row) && row_id(row).as_deref() == Some(id))
+                {
+                    row["id"] = uuid::Uuid::new_v4().to_string().into();
+                }
+            }
             Ok(())
         }
     }
@@ -1608,7 +1703,9 @@ fn reorder_visible_preset(list: &mut [Value], id: &str, index: usize) -> Result<
     let slots: Vec<usize> = list
         .iter()
         .enumerate()
-        .filter(|(_, row)| enabled(row))
+        .filter(|(_, row)| {
+            enabled(row) && string_field(row, &["project_id", "projectID"]).is_none()
+        })
         .map(|(slot, _)| slot)
         .collect();
     let mut visible: Vec<Value> = slots.iter().map(|&slot| list[slot].clone()).collect();
@@ -1759,6 +1856,7 @@ fn presets(state: &Value) -> (Vec<Value>, Vec<HostCreatePreset>) {
             "id": id,
             "label": label,
             "command": command,
+            "projectID": project_id,
             "enabled": true,
             "quickLaunch": bool_field(value, &["quick_launch", "quickLaunch"])
                 .unwrap_or(false),
@@ -3242,6 +3340,41 @@ mod tests {
     /// Validation and no-op paths only — nothing here may touch shared
     /// files, so the fixture stays safe in a parallel test run. Mutation
     /// semantics are proven against a plain object map below.
+    #[test]
+    fn global_preset_edits_preserve_legacy_project_overrides_with_the_same_id() {
+        let legacy = json!({"id":"shared", "command":"claude --project", "project_id":"p1"});
+        let mut object = json!({"presets":[legacy.clone(),
+            {"id":"shared", "command":"claude", "project_id":null},
+            {"id":"other", "command":"zsh"}
+        ], "future":42})
+        .as_object()
+        .unwrap()
+        .clone();
+        apply_preset_patch_to(
+            &mut object,
+            &PresetApply::Update {
+                id: "shared".into(),
+                command: Some("claude --plan".into()),
+                label: None,
+                quick_launch: None,
+                sort_order: Some(1),
+            },
+        )
+        .unwrap();
+        assert_eq!(object["presets"][0], legacy);
+        assert_eq!(object["presets"][2]["command"], "claude --plan");
+        apply_preset_patch_to(
+            &mut object,
+            &PresetApply::Remove {
+                id: "shared".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(object["presets"][0], legacy);
+        assert_eq!(object["presets"].as_array().unwrap().len(), 2);
+        assert_eq!(object["future"], 42);
+    }
+
     #[test]
     fn preset_patch_validates_before_any_shared_write() {
         let presets = vec![json!({ "id": "p1", "label": "Claude", "command": "claude",

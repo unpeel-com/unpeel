@@ -80,8 +80,8 @@ exercises the complete hosted loop without Unpeel installed:
 swift/Examples/KitchenSink/run-app.sh
 ```
 
-It builds and launches the five sibling Apps—Usage, Diffs, GitHub Issues,
-Markdown, and File Tree—plus the Charts, Todo, component Markdown, Media, and (when
+It builds and launches the four sibling Apps—Usage, Diffs, Markdown, and File
+Tree—plus the Charts, Todo, component Markdown, Media, and (when
 the sibling guest artifact exists) Surface Planets and Canvas + Controls
 examples. Every process runs in a real libghostty PTY rendered through Metal;
 the mini-host creates private per-session Unix
@@ -942,7 +942,6 @@ only the fields relevant to its own behavior:
 | Diffs | Discovers Git from `current_root()` and then follows the adjacent agent across worktrees | Process working directory |
 | Markdown | Uses `current_root()/docs` as the first-run notes-folder suggestion; explicit and remembered vaults still win | Working-directory `docs` folder |
 | Usage | Resolves **Current project** from refreshed `current_root()`; worktree history is folded into the base repository | Process working directory |
-| GitHub Issues | Discovers the repository and branch from `current_root()` | Process working directory |
 
 Workspace and user values are intentionally not copied into every App's own
 reporter payload: the Host already owns that scope, and an App should consume

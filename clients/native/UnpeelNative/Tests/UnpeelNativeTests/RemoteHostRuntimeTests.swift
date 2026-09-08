@@ -6,6 +6,110 @@ import UnpeelShared
 
 @MainActor
 final class RemoteHostRuntimeTests: XCTestCase {
+    func testUpdateReadsRequireCapabilityAndRejectResultsAfterDisconnect() async throws {
+        let backend = ControlledRemoteBackend()
+        let runtime = makeRuntime(backend: backend)
+        runtime.connectSSH(target: "ssh://host", expectedHostID: "host")
+        await waitUntil { await backend.bootstrapCount == 1 }
+        await backend.resolveBootstrap(.success(makeSnapshot(capabilities: [
+            "host.bootstrap", "session.input.write", "session.output.read",
+            RemoteControlProtocol.pluginUpdatesCapability,
+        ])))
+        await waitUntil { runtime.connectionState == .connected(name: "Host") }
+        let read = Task { try await runtime.pluginUpdates() }
+        await waitUntil { await backend.pluginUpdateReads == 1 }
+        runtime.disconnect()
+        let fixture = try JSONDecoder().decode(RemotePluginUpdates.self, from: Data(#"{"checking":false,"items":[{"id":"remote-agent","state":"available","installedVersion":"1.0.0","latestVersion":"1.1.0","updateAvailable":true}]}"#.utf8))
+        await backend.resolvePluginUpdates(fixture)
+        do { _ = try await read.value; XCTFail("A previous Host's update results must be discarded") }
+        catch is CancellationError {}
+    }
+
+    func testOldHostDoesNotReceiveAnUpdateProbe() async {
+        let backend = ControlledRemoteBackend()
+        let runtime = makeRuntime(backend: backend)
+        runtime.connectSSH(target: "ssh://host", expectedHostID: "host")
+        await waitUntil { await backend.bootstrapCount == 1 }
+        await backend.resolveBootstrap(.success(makeSnapshot()))
+        await waitUntil { runtime.connectionState == .connected(name: "Host") }
+        do { _ = try await runtime.pluginUpdates(); XCTFail("Update reads need their own capability") }
+        catch {}
+        let reads = await backend.pluginUpdateReads
+        XCTAssertEqual(reads, 0)
+        runtime.disconnect()
+    }
+
+    func testPluginOrderingUsesSelectedHostAndDedicatedCapability() async throws {
+        let backend = ControlledRemoteBackend()
+        let runtime = makeRuntime(backend: backend)
+        runtime.connectSSH(target: "ssh://host", expectedHostID: "host")
+        await waitUntil { await backend.bootstrapCount == 1 }
+        await backend.resolveBootstrap(.success(makeSnapshot(capabilities: [
+            "host.bootstrap", "session.input.write", "session.output.read",
+            RemoteControlProtocol.pluginsOrderCapability,
+        ])))
+        await waitUntil { runtime.connectionState == .connected(name: "Host") }
+        try await runtime.setPluginOrder(["codex", "unpeel.app.markdown", "claude"])
+        let patches = await backend.workspaceSettingsPatches
+        XCTAssertEqual(patches, [RemoteWorkspaceSettingsPatch(pluginOrder: ["codex", "unpeel.app.markdown", "claude"])])
+        runtime.disconnect()
+    }
+
+    func testActivationCapabilityDoesNotImplyPluginOrdering() async {
+        let backend = ControlledRemoteBackend()
+        let runtime = makeRuntime(backend: backend)
+        runtime.connectSSH(target: "ssh://host", expectedHostID: "host")
+        await waitUntil { await backend.bootstrapCount == 1 }
+        await backend.resolveBootstrap(.success(makeSnapshot(capabilities: [
+            "host.bootstrap", "session.input.write", "session.output.read",
+            RemoteControlProtocol.pluginsSetCapability,
+        ])))
+        await waitUntil { runtime.connectionState == .connected(name: "Host") }
+        do {
+            try await runtime.setPluginOrder(["claude", "codex"])
+            XCTFail("Ordering requires its own advertised capability")
+        } catch {}
+        let patches = await backend.workspaceSettingsPatches
+        XCTAssertTrue(patches.isEmpty)
+        runtime.disconnect()
+    }
+
+    func testPluginActivationUsesSelectedHostAndDedicatedCapability() async throws {
+        let backend = ControlledRemoteBackend()
+        let runtime = makeRuntime(backend: backend)
+        runtime.connectSSH(target: "ssh://host", expectedHostID: "host")
+        await waitUntil { await backend.bootstrapCount == 1 }
+        await backend.resolveBootstrap(.success(makeSnapshot(capabilities: [
+            "host.bootstrap", "session.input.write", "session.output.read",
+            RemoteControlProtocol.pluginsSetCapability,
+        ])))
+        await waitUntil { runtime.connectionState == .connected(name: "Host") }
+        try await runtime.setPluginActive(id: "unpeel.app.markdown", active: false)
+        let patches = await backend.workspaceSettingsPatches
+        XCTAssertEqual(patches, [RemoteWorkspaceSettingsPatch(
+            pluginActivation: .init(id: "unpeel.app.markdown", active: false)
+        )])
+        runtime.disconnect()
+    }
+
+    func testOldHostCannotReceivePluginActivationThroughGenericSettingsCapability() async {
+        let backend = ControlledRemoteBackend()
+        let runtime = makeRuntime(backend: backend)
+        runtime.connectSSH(target: "ssh://host", expectedHostID: "host")
+        await waitUntil { await backend.bootstrapCount == 1 }
+        await backend.resolveBootstrap(.success(makeSnapshot(capabilities: [
+            "host.bootstrap", "session.input.write", "session.output.read",
+            RemoteControlProtocol.workspaceSettingsSetCapability,
+        ])))
+        await waitUntil { runtime.connectionState == .connected(name: "Host") }
+        do {
+            try await runtime.setPluginActive(id: "unpeel.app.markdown", active: false)
+            XCTFail("Activation must require its own advertised capability")
+        } catch {}
+        let patches = await backend.workspaceSettingsPatches
+        XCTAssertTrue(patches.isEmpty)
+        runtime.disconnect()
+    }
     func testDisconnectWakesCancelledRefreshSleepAndReleasesRuntime() async {
         let backend = ControlledRemoteBackend()
         var runtime: RemoteHostRuntime? = makeRuntime(backend: backend)
@@ -1916,6 +2020,55 @@ final class RemoteHostRuntimeTests: XCTestCase {
         runtime.disconnect()
     }
 
+    func testSettingsTerminalSurvivesWorkspacePresentationAndReleasesOnlyItsOwnPane() async {
+        let backend = ControlledRemoteBackend()
+        let runtime = makeRuntime(backend: backend)
+        runtime.connectSSH(target: "ssh://host", expectedHostID: "host")
+        await waitUntil { await backend.bootstrapCount == 1 }
+        await backend.resolveBootstrap(.success(makeSnapshot(sessions: [
+            makeSession(id: "workspace"), makeSession(id: "installer"),
+        ])))
+        await waitUntil { runtime.selectedSessionID == "workspace" }
+        let owner = UUID()
+        runtime.setPresentedTerminalSessions(["workspace"])
+        runtime.setAuxiliaryTerminalSessions(["installer"], owner: owner)
+        XCTAssertNotNil(runtime.terminalPane(for: "installer"))
+        runtime.setPresentedTerminalSessions([])
+        runtime.setPresentedTerminalSessions(["workspace"])
+        XCTAssertEqual(runtime.selectedSessionID, "workspace")
+        runtime.sendTerminalInput(Data("yes\n".utf8), to: "installer")
+        await waitUntil { await backend.effectCalls.contains(.write(
+            sessionID: "installer", data: Data("yes\n".utf8)
+        )) }
+        runtime.setAuxiliaryTerminalSessions([], owner: owner)
+        XCTAssertFalse(runtime.focusTerminalPane("installer"))
+        XCTAssertEqual(runtime.snapshot?.sessions.count, 2)
+        runtime.disconnect()
+    }
+
+    func testLocalSettingsTerminalRemainsPresentedAcrossDirectDataPlaneRefresh() async {
+        let backend = ControlledRemoteBackend()
+        let runtime = makeRuntime(backend: backend, refreshIntervalNanoseconds: 1_000_000)
+        runtime.connectLocalService(home: "/tmp/settings-test", name: "Local", expectedHostID: "host")
+        await waitUntil { await backend.bootstrapCount == 1 }
+        let snapshot = makeSnapshot(sessions: [
+            makeSession(id: "workspace"), makeSession(id: "installer"),
+        ])
+        await backend.resolveBootstrap(.success(snapshot))
+        await waitUntil { runtime.snapshot != nil }
+        runtime.selectDirectDataPlaneSession("workspace")
+        let owner = UUID()
+        runtime.setAuxiliaryTerminalSessions(["installer"], owner: owner)
+        XCTAssertNotNil(runtime.terminalPane(for: "installer"))
+        runtime.requestImmediateRefresh()
+        await waitUntil { await backend.bootstrapCount >= 2 }
+        await backend.resolveBootstrap(.success(snapshot))
+        await waitUntil { await backend.pollSessionIDs.contains("installer") }
+        XCTAssertEqual(runtime.selectedSessionID, "workspace")
+        runtime.disconnect()
+        XCTAssertFalse(runtime.focusTerminalPane("installer"))
+    }
+
     func testPresentedPanesStreamAndRouteEffectsIndependently() async {
         let backend = ControlledRemoteBackend()
         let feedRecorder = FeedRecorder(accept: true)
@@ -2968,6 +3121,22 @@ private final class FeedRecorder {
 }
 
 private actor ControlledRemoteBackend: NativeRemoteBackendProtocol {
+    private(set) var pluginUpdateReads = 0
+    private var pluginUpdateContinuation: CheckedContinuation<RemotePluginUpdates, Error>?
+    func pluginUpdates() async throws -> RemotePluginUpdates {
+        pluginUpdateReads += 1
+        return try await withCheckedThrowingContinuation { pluginUpdateContinuation = $0 }
+    }
+    func resolvePluginUpdates(_ value: RemotePluginUpdates) {
+        pluginUpdateContinuation?.resume(returning: value)
+        pluginUpdateContinuation = nil
+    }
+    private(set) var workspaceSettingsPatches: [RemoteWorkspaceSettingsPatch] = []
+
+    func setWorkspaceSettings(patch: RemoteWorkspaceSettingsPatch) async throws -> NativeRemoteEffectReceipt {
+        workspaceSettingsPatches.append(patch)
+        return NativeRemoteEffectReceipt(requestID: 914)
+    }
     private var bootstrapContinuations: [
         CheckedContinuation<RemoteBootstrapSnapshot, Error>
     ] = []

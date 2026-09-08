@@ -76,6 +76,10 @@ pub mod mcp_host;
 pub mod menu_prompt;
 #[cfg(feature = "native-host")]
 mod pane_context;
+#[cfg(feature = "native-host")]
+pub mod plugins;
+#[cfg(feature = "native-host")]
+pub mod plugin_updates;
 /// Lexical guard that `controller-core` modules never reach into
 /// `native-host` modules ungated (the portable build is otherwise only
 /// exercised by `scripts/ci/check-portable-core.sh`).

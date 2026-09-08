@@ -1776,6 +1776,9 @@ fn handle_with_effects(
                 unpeel_core::controller_host::workspace_settings_response(&body_json(request));
             (status, body.to_string())
         }
+        ("GET", "/mobile/plugin-updates") => {
+            (200, unpeel_core::plugin_updates::request().to_string())
+        }
         ("POST", "/mobile/openers") => {
             let (status, body) = unpeel_core::controller_host::opener_response(&body_json(request));
             (status, body.to_string())

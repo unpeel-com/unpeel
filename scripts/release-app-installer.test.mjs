@@ -146,7 +146,6 @@ test('App registry covers every standalone App with a stable id', () => {
   assert.deepEqual(Object.keys(appRegistry), [
     'diffs',
     'filetree',
-    'github-issues',
     'markdown',
     'usage'
   ])

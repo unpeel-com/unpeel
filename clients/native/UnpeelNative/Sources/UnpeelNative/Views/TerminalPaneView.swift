@@ -1843,7 +1843,7 @@ struct TerminalPaneContainer: View {
             }
             menu.addItem(.separator())
             menu.addItem(controller.item("Manage Agents & Apps…") {
-                store.openSettings(tab: .presets)
+                store.openSettings(tab: .agentsApps)
             })
         }
 

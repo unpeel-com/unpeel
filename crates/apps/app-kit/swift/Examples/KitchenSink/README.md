@@ -16,9 +16,9 @@ Either path lets libghostty, native SwiftUI, and embedded web views own keyboard
 focus instead of the terminal that launched the rig.
 
 The first launch fetches `libghostty-spm` 1.5.0 and builds the sibling Usage,
-Diffs, GitHub Issues, Markdown, and File Tree Apps plus this repository's
+Diffs, Markdown, and File Tree Apps plus this repository's
 Charts, Todo, Markdown, Media, Surface Planets, and Canvas + Controls examples into
-`target/kitchen-sink`. The five sibling repositories must sit beside
+`target/kitchen-sink`. The four sibling repositories must sit beside
 `unpeel-app-kit`; Unpeel itself is not installed or launched. Surface examples
 are added when their sibling guest artifact exists. Their native and web
 presenters are enabled when the sibling
@@ -52,10 +52,10 @@ grants, invoke a semantic action as that agent, inspect presence and final
 acks, and distinguish raw snapshots from server deltas. The participant's
 personalized title/alt text also proves `publish_to` isolation.
 
-Each of the five sibling sessions also has **Walk every screen**. It drives
+Each of the four sibling sessions also has **Walk every screen**. It drives
 deterministic fixture data through the live reducer and records an explicit
-terminal-only inventory. Usage covers catalog/detail/Alerts; Diffs and GitHub
-Issues cover list and complete Content details; Markdown covers first-run
+terminal-only inventory. Usage covers catalog/detail/Alerts; Diffs covers the list and complete Content
+detail; Markdown covers first-run
 chooser, Tree picker, new-note Page, editor, context menu, and slash menu; File
 Tree covers root and nested Trees. Run the reproducible unattended pass with:
 
@@ -66,7 +66,7 @@ UNPEEL_KITCHEN_AUDIT_REPORT=/tmp/app-kit-audit.md \
 swift run --package-path swift/Examples/KitchenSink
 ```
 
-Automatic mode launches only those five audit sessions, prints the report,
+Automatic mode launches only those four audit sessions, prints the report,
 and exits. The committed expected result is **Terminal-only surfaces: none**
 for every App.
 

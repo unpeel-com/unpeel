@@ -198,6 +198,7 @@ protocol NativeRemoteBackendProtocol: Sendable {
     ) async throws -> NativeRemoteEffectReceipt
     func setPreset(patch: RemotePresetPatch) async throws -> NativeRemoteEffectReceipt
     func setWorkspaceSettings(patch: RemoteWorkspaceSettingsPatch) async throws -> NativeRemoteEffectReceipt
+    func pluginUpdates() async throws -> RemotePluginUpdates
     func setOpener(selector: String, opener: String) async throws -> NativeRemoteEffectReceipt
     func installApp(appID: String) async throws -> NativeRemoteEffectReceipt
     func openApp(
@@ -334,6 +335,11 @@ extension NativeRemoteBackendProtocol {
             kind: "notApplied",
             operation: "preset edit"
         )
+    }
+
+    func pluginUpdates() async throws -> RemotePluginUpdates {
+        throw NativeRemoteBackendError(result: Int32(UNPEEL_NATIVE_BRIDGE_ERROR_REMOTE),
+            code: "plugin_updates_unavailable", message: "Update checks are unavailable on this Host.")
     }
 
     func setWorkspaceSettings(
@@ -1789,6 +1795,22 @@ final class NativeRemoteBackend: @unchecked Sendable {
                     message: "The Host returned an invalid transcript response."
                 )
             }
+        }
+    }
+
+    func pluginUpdates() async throws -> RemotePluginUpdates {
+        let handle = try currentIdentityValidatedHandle()
+        return try await Self.runBlocking(priority: .utility) {
+            try Task.checkCancellation()
+            var pointer: UnsafeMutablePointer<UInt8>?
+            var length = 0
+            let result = unpeel_native_bridge_remote_plugin_updates(handle, &pointer, &length)
+            let output = Self.takeOutput(pointer, length: length)
+            guard result == UNPEEL_NATIVE_BRIDGE_OK else {
+                throw Self.bridgeError(result: result, output: output,
+                    fallbackCode: "plugin_updates_failed", fallbackMessage: "Could not check for updates.")
+            }
+            return try JSONDecoder().decode(RemotePluginUpdates.self, from: output)
         }
     }
 

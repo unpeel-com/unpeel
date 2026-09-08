@@ -129,7 +129,7 @@ struct SessionLauncherView: View {
 
     private var managePresetsButton: some View {
         Button {
-            store.openSettings(tab: .presets)
+            store.openSettings(tab: .agentsApps)
         } label: {
             Text("Manage Agents & Apps…")
                 .font(.system(size: 11))

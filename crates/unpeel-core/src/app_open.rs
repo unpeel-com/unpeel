@@ -116,6 +116,12 @@ fn resolve_launch(
     resource: Option<&AppResourceRef>,
     media_type: Option<&str>,
 ) -> Result<(crate::apps_mcp::InstalledApp, String), String> {
+    let state = crate::app_state::load().unwrap_or_default();
+    if !crate::plugins::active(&state, app_id) {
+        return Err(format!(
+            "App '{app_id}' is deactivated. Activate it in Agents & Apps."
+        ));
+    }
     let app = crate::apps_mcp::installed_apps()
         .into_iter()
         .find(|app| app.id.eq_ignore_ascii_case(app_id))

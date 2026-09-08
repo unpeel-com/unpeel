@@ -188,6 +188,9 @@ impl RegisteredRemoteOutputPage for RegisteredCoreOutputPage {
 /// the C-boundary tests exercise ownership and panic containment without
 /// launching a real SSH daemon.
 trait RegisteredRemoteBackend: Send + Sync {
+    fn read_plugin_updates(&self) -> Result<serde_json::Value, NativeRemoteError> {
+        Err(NativeRemoteError::remote("plugin_updates_unavailable", "Update checks are unavailable on this Host"))
+    }
     fn bootstrap_snapshot(&self) -> Result<RemoteBootstrapSnapshot, NativeRemoteError>;
     fn poll_output(
         &self,
@@ -463,6 +466,9 @@ struct RegisteredCoreBackend {
 }
 
 impl RegisteredRemoteBackend for RegisteredCoreBackend {
+    fn read_plugin_updates(&self) -> Result<serde_json::Value, NativeRemoteError> {
+        self.backend.read_plugin_updates().map_err(|error| native_remote_backend_error("plugin updates", error))
+    }
     fn bootstrap_snapshot(&self) -> Result<RemoteBootstrapSnapshot, NativeRemoteError> {
         self.backend
             .bootstrap()
@@ -2025,6 +2031,10 @@ fn set_remote_preset(
 /// fields left unchanged by the Host).
 #[derive(Debug, Deserialize)]
 struct NativeWorkspaceSettingsWire {
+    #[serde(rename = "pluginOrder")]
+    plugin_order: Option<Vec<String>>,
+    #[serde(rename = "pluginActivation")]
+    plugin_activation: Option<unpeel_core::remote_session_backend::RemotePluginActivationPatch>,
     #[serde(rename = "transcriptSettings")]
     transcript_settings: Option<NativeTranscriptSettingsWire>,
     #[serde(rename = "appearanceSettings")]
@@ -2116,6 +2126,8 @@ fn set_remote_workspace_settings(
             ))
         })?;
     let patch = RemoteWorkspaceSettingsPatch {
+        plugin_order: wire.plugin_order,
+        plugin_activation: wire.plugin_activation,
         transcript_settings: wire.transcript_settings.map(|nested| {
             unpeel_core::remote_session_backend::RemoteTranscriptSettingsUpdate {
                 include_user: nested.include_user,
@@ -4752,6 +4764,34 @@ pub unsafe extern "C" fn unpeel_native_bridge_remote_session_metrics(
     }
 }
 
+/// Read cached/pending plugin update availability from the selected Host.
+///
+/// # Safety
+/// Both output pointers must be non-null and writable.
+#[no_mangle]
+pub unsafe extern "C" fn unpeel_native_bridge_remote_plugin_updates(
+    handle: RemoteHandle,
+    out_pointer: *mut *mut u8,
+    out_length: *mut usize,
+) -> i32 {
+    if out_pointer.is_null() || out_length.is_null() { return ERROR_INVALID_INPUT; }
+    *out_pointer = ptr::null_mut();
+    *out_length = 0;
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        let updates = remote_backend(handle)?.read_plugin_updates()?;
+        encode_remote_read("plugin updates", &updates)
+    }));
+    match outcome {
+        Ok(Ok(bytes)) => { return_bytes(bytes, out_pointer, out_length); RESULT_OK }
+        Ok(Err(error)) => {
+            let result = error.result;
+            return_bytes(encode_remote_error(error), out_pointer, out_length);
+            result
+        }
+        Err(_) => { return_bytes(remote_panic_error(), out_pointer, out_length); ERROR_PANIC }
+    }
+}
+
 /// Remove a remote Host handle and disconnect its owned SSH process.
 ///
 /// Success returns `1` with no output. Closing an unknown/already-closed
@@ -4804,6 +4844,16 @@ pub unsafe extern "C" fn unpeel_native_bridge_free(pointer: *mut u8, length: usi
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn plugin_activation_is_not_dropped_at_the_ffi_json_boundary() {
+        let patch: super::NativeWorkspaceSettingsWire = serde_json::from_slice(
+            br#"{"pluginActivation":{"id":"unpeel.app.markdown","active":false}}"#,
+        )
+        .unwrap();
+        let activation = patch.plugin_activation.unwrap();
+        assert_eq!(activation.id, "unpeel.app.markdown");
+        assert!(!activation.active);
+    }
     use super::*;
     use serde_json::json;
     use std::collections::HashMap;

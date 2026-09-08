@@ -10,9 +10,9 @@ mod schema;
 
 pub use schema::{
     RuntimeCapability, RuntimeCatalogError, RuntimeDescriptor, RuntimeDetection, RuntimeDisplay,
-    RuntimeInstall, RuntimeLifecycle, RuntimeLifecycleAuthority, RuntimeLifecycleFallback,
-    RuntimeLifecycleSource, RuntimePlatform, RuntimeScriptPathSignature, RuntimeSuggestedPreset,
-    RUNTIME_DESCRIPTOR_SCHEMA_VERSION,
+    RuntimeInstall, RuntimeKind, RuntimeLifecycle, RuntimeLifecycleAuthority,
+    RuntimeLifecycleFallback, RuntimeLifecycleSource, RuntimePlatform, RuntimeScriptPathSignature,
+    RuntimeSuggestedPreset, RuntimeUpdates, RUNTIME_DESCRIPTOR_SCHEMA_VERSION,
 };
 
 use std::path::Path;

@@ -22,6 +22,11 @@ window_padding_x = 8
 official_url = "https://ampcode.com"
 command = "npm install -g @sourcegraph/amp"
 
+[updates]
+version_args = ["--version"]
+latest_url = "https://registry.npmjs.org/@sourcegraph/amp/latest"
+json_pointer = "/version"
+
 [detection]
 command_aliases = ["amp"]
 process_aliases = ["amp", "amp-local"]

@@ -1158,6 +1158,7 @@ dependencies = [
  "rcgen",
  "ring",
  "rustls",
+ "semver",
  "serde",
  "serde_json",
  "sha1",
