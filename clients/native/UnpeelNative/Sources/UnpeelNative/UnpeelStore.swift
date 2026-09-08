@@ -14337,6 +14337,19 @@ final class UnpeelStore: ObservableObject {
         return hostPrefix + [project.name]
     }
 
+    /// Title-strip segments while a main-pane library (All recent, Archived)
+    /// covers the workspace; nil for the workspace itself.
+    var libraryTitlebarSegments: [String]? {
+        if recentActivityVisible {
+            return ["Recent"]
+        }
+        if let id = archivedProjectID, let project = displayProjectsByID[id] {
+            let count = archivedSessions(projectID: project.id).count
+            return [project.name, "Archived (\(count))"]
+        }
+        return nil
+    }
+
     /// Guards async branch resolution against stale results after a switch.
     private var titlebarBranchPath: String?
     private var titlebarBranchRequestsInFlight: Set<String> = []

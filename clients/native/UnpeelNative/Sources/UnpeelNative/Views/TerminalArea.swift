@@ -22,27 +22,6 @@
 import AppKit
 import SwiftUI
 
-/// Keeps asynchronous git-branch updates inside the title strip. The branch
-/// is ancillary chrome; it must not invalidate ContentArea or the sidebar
-/// after the selected Session has already rendered.
-private struct SelectionTitleBarView: View {
-    let segments: [String]
-    let showsBranch: Bool
-    @ObservedObject var branchState: TitlebarBranchState
-    let height: CGFloat
-    let titleYOffset: CGFloat
-
-    var body: some View {
-        TitleBarView(
-            segments: segments,
-            branch: showsBranch ? branchState.presentation.name : nil,
-            branchIsWorktree: showsBranch && branchState.presentation.isWorktree,
-            height: height,
-            titleYOffset: titleYOffset
-        )
-    }
-}
-
 struct ContentArea: View {
     @ObservedObject var store: UnpeelStore
     @ObservedObject var selection: SessionSelectionState
@@ -84,19 +63,6 @@ struct ContentArea: View {
         // empty states, so rounding here keeps every right-hand view aligned.
         // Trailing radii track the collapsing surface inset.
         .clipShape(Theme.contentPaneShape(inset: Theme.surfaceInset))
-        .overlay {
-            // The same hairline the pane cards draw, for the full-content
-            // screens (settings, libraries, launcher, empty/dead states).
-            // Terminal mounts skip it — their cards already carry the rim,
-            // and doubling it on the shared edge reads twice as strong.
-            // Collapsed sidebar skips it too: those screens render as their
-            // own rounded card below the strip, carrying their own rim.
-            if store.settingsVisible || !showsTerminal, !store.sidebarCollapsed {
-                Theme.contentPaneShape(inset: Theme.surfaceInset)
-                    .strokeBorder(Theme.contentHairline, lineWidth: 1)
-                    .allowsHitTesting(false)
-            }
-        }
         .onAppear {
             refreshConnectingBannerDelay()
             DispatchQueue.main.async {
@@ -263,26 +229,12 @@ struct ContentArea: View {
 
     private var workspacePane: some View {
         VStack(spacing: 0) {
-            // No content titlebar while the sidebar is open: terminal panes
-            // run all the way to the window top and carry their own header
-            // chrome. The strip comes back for the main-pane libraries (their
-            // only title and window-drag surface) and a COLLAPSED sidebar —
-            // the panes slide down and the current project/branch fades in
-            // centered. RootView owns the visible strip; keep only the
-            // matching height here.
-            if coversTerminal {
-                SelectionTitleBarView(
-                    segments: contentTitlebarSegments,
-                    showsBranch: false,
-                    branchState: store.titlebarBranchState,
-                    height: Theme.titlebarHeight,
-                    titleYOffset: 0
-                )
-                .transition(.opacity)
-            } else if store.sidebarCollapsed {
-                Color.clear
-                    .frame(height: Theme.titleStripHeight)
-            }
+            // Every page sits below the window title strip — the panes
+            // and the full-content cards slide down and the page's title
+            // reads centered above them, in both sidebar states. RootView
+            // owns the visible strip; keep only the matching height here.
+            Color.clear
+                .frame(height: Theme.titleStripHeight)
             // Remote connection state (reconnecting / repair / offline)
             // surfaces as a banner in the same slot the local restart /
             // resume banners use.
@@ -342,22 +294,22 @@ struct ContentArea: View {
                     .opacity(workspaceTerminalFadeOpacity * transparency.surfaceOpacity)
                     .allowsHitTesting(false)
             }
-            // Collapsed-sidebar card: the full-content pages get the same
-            // slide-down the terminal panes do — the page becomes a rounded
-            // card below the title strip instead of a full-bleed surface
-            // running to the window top. Parameterized (never structural)
-            // so toggling the sidebar can't remount the warm-pane host.
+            // Full-content card: the pages get the same slide-down the
+            // terminal panes do — the page is a rounded card below the
+            // title strip, never a full-bleed surface running to the window
+            // top. Parameterized (never structural) so a page swap can't
+            // remount the warm-pane host.
             .background {
-                if collapsedSurfaceCard { SurfaceBackdrop() }
+                if surfaceCard { SurfaceBackdrop() }
             }
             .clipShape(
                 RoundedRectangle(
-                    cornerRadius: collapsedSurfaceCard ? Theme.contentCornerRadius : 0,
+                    cornerRadius: surfaceCard ? Theme.contentCornerRadius : 0,
                     style: .continuous
                 )
             )
             .overlay {
-                if collapsedSurfaceCard {
+                if surfaceCard {
                     RoundedRectangle(
                         cornerRadius: Theme.contentCornerRadius,
                         style: .continuous
@@ -367,50 +319,19 @@ struct ContentArea: View {
                 }
             }
         }
-        // Live terminal: solid provider canvas under the whole column so any
-        // residual edge (titlebar join, bottom of Metal surface, rounded
-        // corner bleed) matches the TUI. settingsShellDim is semi-transparent
-        // over vibrancy and reads as the wrong tint in those 1px gaps.
-        // Translucent terminals drop this backstop: the Ghostty surface is
-        // the only canvas paint, so gaps show the frame backdrop instead of
-        // doubling the alpha.
-        .background { columnBackdrop }
-        // The collapsed-sidebar title strip fades in while the panes slide
-        // down under it — same curve as the sidebar collapse itself.
-        .animation(
-            .timingCurve(0.25, 0.1, 0.25, 1, duration: 0.15),
-            value: store.sidebarCollapsed
-        )
+        // No column backdrop: every page is a card carrying its own canvas,
+        // and everything around the cards (the title strip, split gaps,
+        // corner bleed) shows the ONE window-spanning frame backdrop. A
+        // second frame paint here doubled the wash whenever the frame was
+        // translucent, reading as a lighter pane behind the strip.
     }
 
-    /// Backdrop under the content column. Non-terminal pages (archived,
-    /// recent, empty state, dead session) share the ONE Surface backdrop
-    /// with the terminal and settings, so the main screen is a single
-    /// background. Terminals — solo or split — sit on the window-frame
-    /// material: every pane is its own rounded card carrying its own
-    /// canvas, so everything around the cards (split gaps, the collapsed
-    /// -sidebar title strip, corner bleed) shows the same backdrop that
-    /// frames the content pane. Translucent Surfaces paint nothing here:
-    /// the window-spanning frame backdrop already shows through, and a
-    /// second material would double the wash.
-    @ViewBuilder private var columnBackdrop: some View {
-        if showsTerminal || collapsedSurfaceCard {
-            if transparency.surfaceOpacity < 1 {
-                Color.clear
-            } else {
-                FrameBackdrop()
-            }
-        } else {
-            SurfaceBackdrop()
-        }
-    }
-
-    /// Collapsed-sidebar presentation for the full-content pages (libraries,
-    /// launcher, empty/dead states): the page renders as its own rounded
-    /// card below the title strip — the frame material shows through around
-    /// it, matching the terminal panes' slide-down.
-    private var collapsedSurfaceCard: Bool {
-        store.sidebarCollapsed && !showsTerminal
+    /// The full-content pages (libraries, launcher, empty/dead states)
+    /// render as their own rounded card below the title strip — the frame
+    /// material shows through around it, matching the terminal panes'
+    /// slide-down.
+    private var surfaceCard: Bool {
+        !showsTerminal
     }
 
     /// A main-pane library (archived sessions or All recent) is covering the
@@ -447,18 +368,6 @@ struct ContentArea: View {
     private var archivedProject: Project? {
         guard let id = store.archivedProjectID else { return nil }
         return store.displayProjectsByID[id]
-    }
-
-    /// Heading segments for the library pages' in-pane titlebar.
-    private var contentTitlebarSegments: [String] {
-        if store.recentActivityVisible {
-            return ["Recent"]
-        }
-        if let project = archivedProject {
-            let count = store.archivedSessions(projectID: project.id).count
-            return [project.name, "Archived (\(count))"]
-        }
-        return store.titlebarSegments
     }
 
     /// The validated pane group currently shown, if any — drives the
