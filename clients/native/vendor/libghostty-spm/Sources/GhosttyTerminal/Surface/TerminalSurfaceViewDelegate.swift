@@ -114,7 +114,8 @@ public protocol TerminalSurfaceHoverLinkDelegate: TerminalSurfaceViewDelegate {
 /// Cmd-clicked a cell in the grid. Ghostty only natively matches URLs/OSC 8
 /// links, so bare file paths never reach `TerminalSurfaceOpenURLDelegate`.
 /// This hands the host the full text of the clicked row plus the clicked
-/// column (0-based) so it can detect a file path itself. Returning `true`
+/// Character offset (0-based, converted from the clicked grid column using
+/// Ghostty's row text) so it can detect a file path itself. Returning `true`
 /// consumes the click (no text selection / URL handling); `false` lets normal
 /// handling proceed (so URL cmd-clicks still open).
 @MainActor

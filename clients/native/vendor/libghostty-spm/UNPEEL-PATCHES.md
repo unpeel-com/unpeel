@@ -255,3 +255,11 @@ both are small and generally useful).
     cmd-click detection. Unpeel uses it to resolve an App-published,
     session-local path drag map at mouse-down; ordinary terminal mouse input
     remains unchanged when no mapped row is present.
+
+21. **Command-click text offsets** (2026-09-07, macOS) — file detection
+    receives a Swift Character offset from Ghostty's selected row prefix,
+    rather than treating grid columns as string offsets after CJK/emoji.
+    `readViewportRow` accepts an optional final column for this translation.
+    Pointer hit testing also
+    rejects points in the top/left padding before integer conversion.
+    `viewportRowHit` continues to report grid columns for semantic drag maps.

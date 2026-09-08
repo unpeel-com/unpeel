@@ -330,3 +330,17 @@ without that field. Creation is the floor, and an exited manifest's final
 The cleanup clock advances only while the derived status is idle and only when
 that canonical lifecycle timestamp advances. Selection, pins, unread results,
 attention, active work, and plain shells retain their existing exemptions.
+
+### Recent dropdown source
+
+The titlebar and menu-bar dropdown share the sidebar's current Host projection
+for the selected workspace, including its restart and attention overlays. The
+native disk scan is only the startup seed; it must never supply active jobs or
+unread rows after the sidebar switches to Host state. An empty current activity
+slice clears an older cached Busy row.
+
+Other workspaces use the background pool's Host snapshots. This includes the
+app instance's own Local workspace while another workspace is selected; only
+the workspace currently served by the foreground connection is excluded from
+pooling. Rows remain qualified by workspace key, so switching scope cannot
+relabel one workspace's sessions as another's.

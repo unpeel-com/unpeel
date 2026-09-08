@@ -10623,8 +10623,16 @@ final class UnpeelStore: ObservableObject {
         let apps = (snapshot?.availableApps ?? []).filter {
             snapshot?.workspaceSettings?.pluginActivation?[$0.id] != false
         }
-        guard let mediaType = RemoteAppSummary.mediaType(forPath: path, in: apps) else {
+        // Every workspace on this Mac gets the same existence check and
+        // editor fallback, including those rendered by the remote transport.
+        if selectedHostScope.isLocalMachine,
+           ClickablePath.resolveFile(path, workingDirectory: nil) == nil {
             return false
+        }
+        guard let mediaType = RemoteAppSummary.mediaType(forPath: path, in: apps) else {
+            guard selectedHostScope.isLocalMachine else { return false }
+            openClickedFileInEditor(match, path: path)
+            return true
         }
         let selector = "file:\(mediaType)"
         let installed = Set((snapshot?.installedApps ?? []).map(\.id))
@@ -14083,9 +14091,9 @@ final class UnpeelStore: ObservableObject {
                 collect(node.worktrees)
             }
         }
-        collect(nodes)
+        collect(displayNodes)
         for id in restartingSessionIDs.sorted() {
-            if let session = sessionsByID[id] {
+            if let session = displaySessionsByID[id] {
                 append(session)
             }
         }
@@ -14105,7 +14113,7 @@ final class UnpeelStore: ObservableObject {
         if restartingSessionIDs.contains(session.id) {
             return session.isLive ? "Restarting" : "Resuming"
         }
-        switch session.activityStatus(unread: unreadSessionIDs.contains(session.id)) {
+        switch session.activityStatus(unread: sessionIsUnread(session.id)) {
         case .starting: return "Starting"
         case .working: return "Working"
         case .blocked: return "Blocked"
@@ -14115,15 +14123,20 @@ final class UnpeelStore: ObservableObject {
         }
     }
 
+    func activityAlertBody(for session: SessionEntry) -> String? {
+        if displaysHostProjection { return remoteSummary(for: session.id)?.latestAlertBody }
+        return latestAlertActivity(for: session.id)?.message
+    }
+
     /// Display name for a project id, used by the activity dropdowns.
     /// Plain group folders carry the full path — Project › Folder — matching
     /// the titlebar; worktrees keep their own name (the branch identifies
     /// them elsewhere, and the parent prefix would just be noise here).
     func activityProjectName(_ id: String) -> String {
-        guard let project = projectsByID[id] else { return "Unknown project" }
+        guard let project = displayProjectsByID[id] else { return "Unknown project" }
         if project.worktreeBranch == nil,
            let parentID = project.parentProjectID,
-           let parent = projectsByID[parentID] {
+           let parent = displayProjectsByID[parentID] {
             return "\(parent.name) › \(project.name)"
         }
         return project.name
@@ -14139,7 +14152,7 @@ final class UnpeelStore: ObservableObject {
         func collect(_ nodes: [ProjectNode]) {
             for node in nodes {
                 for session in node.sessions
-                where unreadSessionIDs.contains(session.id)
+                where sessionIsUnread(session.id)
                     && !active.contains(session.id)
                     && !seen.contains(session.id) {
                     seen.insert(session.id)
@@ -14148,10 +14161,12 @@ final class UnpeelStore: ObservableObject {
                 collect(node.worktrees)
             }
         }
-        collect(nodes)
+        collect(displayNodes)
         return result.sorted { lhs, rhs in
-            let lhsStamp = sessionRecencyMs(lhs.id)
-            let rhsStamp = sessionRecencyMs(rhs.id)
+            let lhsStamp = displaysHostProjection
+                ? max(lhs.createdAt, lhs.lifecycleAtMs ?? 0) : sessionRecencyMs(lhs.id)
+            let rhsStamp = displaysHostProjection
+                ? max(rhs.createdAt, rhs.lifecycleAtMs ?? 0) : sessionRecencyMs(rhs.id)
             if lhsStamp != rhsStamp { return lhsStamp > rhsStamp }
             return lhs.id < rhs.id
         }
@@ -16103,10 +16118,10 @@ extension UnpeelStore {
         }
     }
 
-    /// Every KNOWN workspace except this instance's own Local scope, as pool
-    /// targets in the shared user order (so the remote concurrency cap
+    /// Every known workspace, including this instance's Local workspace, as
+    /// pool targets in the shared user order (so the remote concurrency cap
     /// prefers the workspaces the user ranked first): local registry
-    /// workspaces (plus the default workspace when this instance is not it)
+    /// workspaces (including the default workspace)
     /// over loopback gateways, paired Hosts over their saved Direct
     /// endpoints, and SSH Hosts over their saved transports. Link is
     /// deliberately NOT a pool transport: background polling never opens the
@@ -16114,11 +16129,9 @@ extension UnpeelStore {
     func workspacePoolTargets() -> [WorkspacePool.Target] {
         guard WorkspaceFeature.pickerEnabled else { return [] }
         var targets: [WorkspacePool.Target] = []
-        let currentHome = Self.currentInstanceNormalizedHome()
 
         func appendLocal(home: String, name: String) {
             let normalized = UnpeelWorkspaceRegistry.normalizePath(home)
-            guard normalized != currentHome else { return }
             let expectedHostID = Self.persistedWorkspaceHostID(home: normalized)
             targets.append(WorkspacePool.Target(
                 key: WorkspaceListOrder.localKey(home: normalized),
@@ -16134,14 +16147,11 @@ extension UnpeelStore {
             ))
         }
 
-        if !UnpeelWorkspaceContext.isDefaultInstance {
-            appendLocal(
-                home: UnpeelWorkspaceRegistry.realUnpeelDir.path,
-                name: UnpeelWorkspaceContext.defaultWorkspaceName ?? "Personal"
-            )
-        }
-        for record in UnpeelWorkspaceRegistry.load() {
-            appendLocal(home: record.home, name: record.name)
+        // Runtime-served workspaces are excluded dynamically. Local must
+        // rejoin the pool when the foreground connection moves elsewhere;
+        // its startup scan no longer receives lifecycle updates.
+        for (home, name) in Self.knownLocalWorkspaceHomesAndNames() {
+            appendLocal(home: home, name: name)
         }
         if RemoteHostFeature.pickerEnabled {
             for host in remoteHostStore.records {

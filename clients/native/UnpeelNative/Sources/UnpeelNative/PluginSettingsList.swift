@@ -11,9 +11,12 @@ struct PluginSettingsItem: Identifiable, Equatable {
     let installCommand: String?
     let websiteURL: String?
     let installedVersion: String?
+    let availableVersion: String?
     let isApp: Bool
     let isCustom: Bool
     var commands: [RemotePresetSummary]
+
+    var displayVersion: String? { installed ? installedVersion : availableVersion }
 }
 
 enum PluginSettingsList {
@@ -22,13 +25,13 @@ enum PluginSettingsList {
         var items = (snapshot.workspaceSettings?.availableAgents ?? []).map {
             PluginSettingsItem(id: $0.id, name: $0.name, command: $0.command, appID: nil,
                                installed: $0.installed, installCommand: $0.installCommand,
-                               websiteURL: $0.websiteURL, installedVersion: nil,
+                               websiteURL: $0.websiteURL, installedVersion: nil, availableVersion: nil,
                                isApp: false, isCustom: false, commands: [])
         }
         items += (snapshot.availableApps ?? []).map {
             PluginSettingsItem(id: $0.id, name: $0.name, command: $0.command, appID: $0.id,
                                installed: $0.installed, installCommand: $0.installCommand,
-                               websiteURL: nil, installedVersion: $0.installedVersion,
+                               websiteURL: nil, installedVersion: $0.installedVersion, availableVersion: $0.version,
                                isApp: true, isCustom: false, commands: [])
         }
         for preset in snapshot.presets where preset.projectID == nil {
@@ -41,7 +44,7 @@ enum PluginSettingsList {
             } else {
                 items.append(PluginSettingsItem(id: id, name: preset.label, command: preset.command,
                                                 appID: nil, installed: true, installCommand: nil,
-                                                websiteURL: nil, installedVersion: nil,
+                                                websiteURL: nil, installedVersion: nil, availableVersion: nil,
                                                 isApp: false, isCustom: true, commands: [preset]))
             }
         }

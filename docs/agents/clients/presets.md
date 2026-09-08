@@ -55,11 +55,14 @@ contains compact agent and App rows under Active and Inactive. Each row aligns
 its icon, commands, and controls in columns with a 5-point gap between rows.
 The app name is available on icon hover and to accessibility. The default
 Overview shows installed agents and all Apps, including Apps available to
-install; the Not Installed filter also exposes uninstalled agents. Commands
+install in an Apps section directly after Active. The Not Installed filter groups missing
+agents and Apps separately, and empty sections are hidden. Commands
 edit inline; the “+” shown on command hover inserts another command below.
 Each agent or App has one cursor-shaped Quick Launch toggle for all its
 commands. New variants inherit that choice. Controls appear in this order:
-Install/Update, Quick Launch, activation. Single-command rows are 36 points
+Install/Update, Quick Launch, activation. Apps show their installed version,
+or the available catalog version when uninstalled, beside the command column.
+Uninstalled rows show only Install at the far right. Single-command rows are 36 points
 tall; additional commands expand only the command column and row height.
 The legacy Presets settings route redirects to Agents & Apps.
 

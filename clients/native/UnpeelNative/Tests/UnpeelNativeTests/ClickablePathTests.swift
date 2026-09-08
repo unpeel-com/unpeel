@@ -38,10 +38,8 @@ final class ClickablePathTests: XCTestCase {
         XCTAssertEqual(match(row, column: 16)?.path, "b/two.ts")
     }
 
-    func testSingleTokenUsedRegardlessOfColumn() {
-        // Column drift from cell rounding shouldn't lose the only path.
-        let m = match("   src/lib/state.swift:9   ", column: 0)
-        XCTAssertEqual(m, .init(path: "src/lib/state.swift", line: 9, column: nil))
+    func testWhitespaceDoesNotActivateTheOnlyPathOnTheRow() {
+        XCTAssertNil(match("   src/lib/state.swift:9   ", column: 0))
     }
 
     func testIgnoresURLs() {

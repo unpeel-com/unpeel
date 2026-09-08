@@ -219,7 +219,7 @@ final class WorkspacePool: ObservableObject {
     // MARK: - Lifecycle
 
     /// Wire the pool to its owner. `targetsProvider` returns EVERY known
-    /// non-current workspace; `excludedKeys` are the workspaces the runtime
+    /// workspace; `excludedKeys` are the workspaces the runtime
     /// currently serves (foreground or warm — the pool must never open a
     /// second live connection to them); `foregroundKey` suppresses attention
     /// notifications for the scoped workspace only (its own per-session

@@ -285,10 +285,12 @@ public final class TerminalSurface {
     /// viewport), or `nil` if the row is out of range / no surface. Used by
     /// cmd-click file detection to scan the clicked line. Trailing cell padding
     /// is included by Ghostty; callers trim as needed.
-    func readViewportRow(_ row: Int) -> String? {
+    func readViewportRow(_ row: Int, throughColumn: Int? = nil) -> String? {
         guard let s = surface else { return nil }
         let metrics = TerminalGridMetrics(ghostty_surface_size(s))
         guard metrics.columns > 0, row >= 0, row < Int(metrics.rows) else { return nil }
+        let lastColumn = throughColumn ?? Int(metrics.columns - 1)
+        guard lastColumn >= 0, lastColumn < Int(metrics.columns) else { return nil }
 
         let y = UInt32(row)
         let topLeft = ghostty_point_s(
@@ -300,7 +302,7 @@ public final class TerminalSurface {
         let bottomRight = ghostty_point_s(
             tag: GHOSTTY_POINT_VIEWPORT,
             coord: GHOSTTY_POINT_COORD_EXACT,
-            x: UInt32(metrics.columns - 1),
+            x: UInt32(lastColumn),
             y: y
         )
         let selection = ghostty_selection_s(

@@ -487,7 +487,7 @@ private struct TerminalPaneTitleChip: View {
                     .foregroundStyle(Theme.foreground)
                     .multilineTextAlignment(.leading)
                     .focused($renameFocused)
-                    .frame(width: renameFieldWidth)
+                    .frame(maxWidth: .infinity)
                     .onSubmit(commitRename)
                     .onExitCommand(perform: cancelRename)
                     .onAppear {
@@ -509,12 +509,14 @@ private struct TerminalPaneTitleChip: View {
                     )
                     .lineLimit(1)
                     .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .simultaneousGesture(
                         TapGesture(count: 2).onEnded { onBeginRename() }
                     )
             }
         }
         .padding(.horizontal, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: 22)
         .background {
             RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -550,10 +552,6 @@ private struct TerminalPaneTitleChip: View {
                 ? "Edit session title"
                 : "Double-click to rename; drag to move"
         )
-    }
-
-    private var renameFieldWidth: CGFloat {
-        min(max(CGFloat(max(renameDraft.count, session.label.count)) * 7 + 18, 96), 220)
     }
 
     private func commitRename() {
@@ -1393,9 +1391,9 @@ struct TerminalPaneContainer: View {
                             window.performDrag(with: event)
                         }
                 )
-            // auto / flex-1: the title chip is left-aligned and the
-            // trailing controls take the remaining width, staying pinned
-            // to the pane's right edge.
+            // flex-1 / auto: the title chip takes the full remaining width
+            // (so its hover, rename, and drag surface span the header) and
+            // the trailing controls hug their content on the right edge.
             HStack(spacing: 0) {
                 if isAuxiliaryRegion, entry != nil {
                     // Panel membership mark: these panes are "pinned to the
@@ -1435,11 +1433,10 @@ struct TerminalPaneContainer: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .padding(.horizontal, 7)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
                 HStack(spacing: 0) {
-                    Spacer(minLength: 0)
-
                     if let entry {
                         TerminalPresenceView(
                             sessionID: entry.id,
@@ -1495,7 +1492,7 @@ struct TerminalPaneContainer: View {
 
                     paneMoreMenu(for: pane, entry: entry)
                 }
-                .frame(maxWidth: .infinity)
+                .fixedSize(horizontal: true, vertical: false)
             }
             .padding(.horizontal, 8)
             .padding(.top, 3.5)

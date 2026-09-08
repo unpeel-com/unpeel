@@ -53,7 +53,7 @@ struct RemoteScopeTerminalMount: View {
         if let pane = runtime.terminalPane(
             for: session.id,
             style: terminalPaneStyle,
-            workingDirectory: session.cwd,
+            workingDirectory: store.paneWorkingDirectory(for: session),
             onCommandClick: { match, path in
                 store.openClickedFile(match, path: path, fromSessionID: session.id)
             }

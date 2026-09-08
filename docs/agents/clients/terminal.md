@@ -68,6 +68,29 @@ The native terminal is a **libghostty** surface (GhosttyKit), Metal-rendered, no
   config so its theme, keybind clearing, and padding stay in control.
 - Agent TUIs that repaint the screen in place can still appear to "crop" or "overwrite" detail while streaming — normal terminal behavior; intermediate full-screen redraw states are not guaranteed to survive as scrollback.
 
+### Terminal links
+
+Both local PTY panes and retained Host-streamed panes handle Ghostty's URL,
+OSC 8 link, hover, and OSC 7 working-directory callbacks. This includes
+additional workspaces on the same Mac, which use the Host-streamed surface.
+`RemoteScopeTerminalMount` seeds paths with `paneWorkingDirectory(for:)`, so
+older Hosts without a Session cwd use the selected scope's project path.
+Subsequent view refreshes must preserve the pane's live OSC 7 directory.
+
+Command-clicking a bare path uses `ClickablePath`. Only the token beneath
+the click qualifies; nearby files must never steal URL or plain-text clicks.
+The wrapper uses Ghostty's selected row prefix to translate the grid column
+to a Swift Character offset, including text after CJK/emoji. Quoted and
+escaped-space paths, Unicode names, dotfiles, `:line:column`, and `#Lline`
+references are supported. Native URL/OSC 8 targets take precedence over
+file-shaped labels, and `file://` targets use the same file opener routing.
+
+All workspaces on this Mac check file existence and fall back to the selected
+editor for file types without an App handler. True remote paths stay on the
+Host: no Controller filesystem lookup or home-directory expansion. Web links
+use one URL sanitizer/opener for both terminal transports; balanced URL
+parentheses and query punctuation survive cleanup.
+
 ### TUI kitty graphics passthrough (removed 2026-09-03)
 
 Before the interactive terminal UI's removal, it composited sessions through

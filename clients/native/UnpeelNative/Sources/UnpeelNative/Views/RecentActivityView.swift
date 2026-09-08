@@ -82,8 +82,8 @@ struct RecentActivityView: View {
         var ids = Set<String>()
         for entry in feedEntries where seenSessions.insert(entry.sessionID).inserted {
             // A blocked session is attention, never Done, even while unread.
-            if store.unreadSessionIDs.contains(entry.sessionID),
-               store.sessionsByID[entry.sessionID]?.status != .attention {
+            if store.sessionIsUnread(entry.sessionID),
+               store.displaySessionsByID[entry.sessionID]?.status != .attention {
                 ids.insert(entry.id)
             }
         }
@@ -106,11 +106,11 @@ struct RecentActivityView: View {
         // Prefer the live title (auto-title/rename overlay applied) while the
         // session still exists; the logged snapshot is the fallback that keeps
         // removed sessions renderable.
-        let session = store.sessionsByID[entry.sessionID]
+        let session = store.displaySessionsByID[entry.sessionID]
         let sessionAlive = session != nil
         return RecentActivityRow(
             title: cardTitle(session?.label ?? entry.title),
-            project: store.projectsByID[entry.projectID] != nil
+            project: store.displayProjectsByID[entry.projectID] != nil
                 ? store.activityProjectName(entry.projectID) : entry.projectName,
             event: Self.kindLabel(
                 entry.kind,

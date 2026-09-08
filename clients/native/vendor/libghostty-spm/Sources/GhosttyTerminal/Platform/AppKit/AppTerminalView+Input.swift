@@ -177,7 +177,14 @@
                let fileDelegate = delegate as? TerminalSurfaceClickableFileDelegate,
                let cell = gridCell(atViewX: x, viewY: y),
                let rowText = surface?.readViewportRow(cell.row),
-               fileDelegate.terminalDidCommandClick(rowText: rowText, column: cell.column)
+               let prefix = surface?.readViewportRow(cell.row, throughColumn: cell.column),
+               !prefix.isEmpty,
+               // Ghostty owns cell width (CJK, emoji, combining marks). Count
+               // its selected prefix instead of treating a cell as a Swift
+               // Character, which points at the wrong token after wide text.
+               // read_text preserves spaces and includes a complete wide
+               // glyph when either of its cells is selected.
+               fileDelegate.terminalDidCommandClick(rowText: rowText, column: prefix.count - 1)
             {
                 commandClickConsumed = true
                 return
@@ -214,6 +221,7 @@
             let originX = gridOrigin?.x ?? max(0, (bounds.width - contentW) / 2)
             let originY = gridOrigin?.y ?? max(0, (bounds.height - contentH) / 2)
 
+            guard x >= originX, y >= originY else { return nil }
             let col = Int((x - originX) / cellW)
             let row = Int((y - originY) / cellH)
             guard col >= 0, col < Int(metrics.columns),

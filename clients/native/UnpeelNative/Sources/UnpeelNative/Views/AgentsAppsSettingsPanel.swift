@@ -85,8 +85,16 @@ struct AgentsAppsSettingsPanel: View {
     }
     private var activeIDs: [String] { visibleItems.filter(isActive).map(\.id) }
     private var entries: [ListEntry] {
-        [.header("Active")] + visibleItems.filter(isActive).map(ListEntry.item)
-            + [.header("Inactive")] + visibleItems.filter { !isActive($0) }.map(ListEntry.item)
+        let visible = visibleItems
+        let sections: [(String, [PluginSettingsItem])] = [
+            ("Active", visible.filter(isActive)),
+            ("Apps", visible.filter { !$0.installed && $0.isApp }),
+            ("Inactive", visible.filter { $0.installed && !isActive($0) }),
+            ("Agents", visible.filter { !$0.installed && !$0.isApp }),
+        ]
+        return sections.filter { !$0.1.isEmpty }.flatMap { title, items in
+            [.header(title)] + items.map(ListEntry.item)
+        }
     }
     private func isActive(_ item: PluginSettingsItem) -> Bool {
         item.installed && (activationOverrides[item.id]
@@ -134,7 +142,7 @@ struct AgentsAppsSettingsPanel: View {
                             switch entry {
                             case .header(let title):
                                 Text(title).font(.system(size: 13)).foregroundStyle(Theme.mutedForeground)
-                                    .padding(.top, title == "Inactive" ? 12 : 0)
+                                    .padding(.top, entry.id == entries.first?.id ? 0 : 12)
                                     .padding(.bottom, 5).padding(.horizontal, 4)
                             case .item(let item):
                                 pluginRow(item)
@@ -247,26 +255,32 @@ struct AgentsAppsSettingsPanel: View {
                 }
             }
             .frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
+            if let version = item.displayVersion {
+                Text(version.hasPrefix("v") ? version : "v\(version)")
+                    .font(.system(size: 11)).monospacedDigit()
+                    .foregroundStyle(Theme.mutedForeground)
+                    .fixedSize().frame(height: 24)
+                    .help(item.installed ? "Installed version" : "Available version")
+            }
             HStack(spacing: 10) {
-                installationControl(item).frame(width: 64, height: 24)
-                Group {
-                    if !item.commands.isEmpty && !item.isCustom { quickButton(item) }
-                    else { Color.clear }
-                }.frame(width: 22, height: 24)
-                Group {
-                    if item.installed {
-                        Toggle("Activate \(item.name)", isOn: Binding(get: { isActive(item) }, set: { value in
-                            withAnimation(motion) { activationOverrides[item.id] = value }
-                            perform(id: item.id) {
-                                do { try await runtime.setPluginActive(id: item.id, active: value) }
-                                catch { withAnimation(motion) { _ = activationOverrides.removeValue(forKey: item.id) }; throw error }
-                            }
-                        }))
-                        .labelsHidden().toggleStyle(.switch).controlSize(.mini)
-                        .disabled(!canActivate || isPending(item.id))
-                        .background(PluginDragExclusion(controller: drag))
-                    } else { Color.clear }
-                }.frame(width: 32, height: 24)
+                installationControl(item).frame(width: 64, height: 24, alignment: .trailing)
+                if item.installed {
+                    Group {
+                        if !item.commands.isEmpty && !item.isCustom { quickButton(item) }
+                        else { Color.clear }
+                    }.frame(width: 22, height: 24)
+                    Toggle("Activate \(item.name)", isOn: Binding(get: { isActive(item) }, set: { value in
+                        withAnimation(motion) { activationOverrides[item.id] = value }
+                        perform(id: item.id) {
+                            do { try await runtime.setPluginActive(id: item.id, active: value) }
+                            catch { withAnimation(motion) { _ = activationOverrides.removeValue(forKey: item.id) }; throw error }
+                        }
+                    }))
+                    .labelsHidden().toggleStyle(.switch).controlSize(.mini)
+                    .disabled(!canActivate || isPending(item.id))
+                    .background(PluginDragExclusion(controller: drag))
+                    .frame(width: 32, height: 24)
+                }
             }
         }
         .padding(.horizontal, 10).padding(.vertical, 6)

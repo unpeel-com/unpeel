@@ -133,6 +133,36 @@ struct GlobalActivityMenuSessions: Equatable {
 
     static let empty = GlobalActivityMenuSessions()
 
+    init() {}
+
+    /// The selected workspace uses the sidebar's current projection, including
+    /// restart and attention overlays. Other workspaces use their Host cache.
+    /// Even an empty foreground slice overrides an older cached Busy row.
+    init(
+        workspaces: [WorkspaceListRowModel],
+        foregroundKey: String?,
+        foreground: WorkspaceActivityMenuSlice,
+        cachedSlice: (String) -> WorkspaceActivityMenuSlice?
+    ) {
+        for workspace in workspaces {
+            let slice = workspace.id == foregroundKey ? foreground : cachedSlice(workspace.id)
+            guard let slice else { continue }
+            func wrap(_ sessions: [WorkspaceActivityMenuSession]) -> [GlobalActivityMenuItem] {
+                sessions.map {
+                    GlobalActivityMenuItem(
+                        workspaceKey: workspace.id,
+                        workspaceName: workspace.name,
+                        workspaceTint: workspace.tint,
+                        session: $0
+                    )
+                }
+            }
+            blockers.append(contentsOf: wrap(slice.blockers))
+            jobs.append(contentsOf: wrap(slice.jobs))
+            finished.append(contentsOf: wrap(slice.finished))
+        }
+    }
+
     var sectionCount: Int {
         [blockers, jobs, finished].reduce(into: 0) { count, sessions in
             if !sessions.isEmpty { count += 1 }
@@ -222,50 +252,29 @@ final class GlobalActivityMenuModel: ObservableObject {
             }
             return false
         }
-        let localActivity = ActivityMenuSessions(
+        let foregroundActivity = ActivityMenuSessions(
             nodes: store.displayNodes,
             allSessions: Array(store.displaySessionsByID.values),
             jobs: store.activeJobSessions,
             finished: store.unreadJobSessions
         )
-        let localSlice = WorkspaceActivityMenuSlice(
-            local: localActivity,
+        let foregroundSlice = WorkspaceActivityMenuSlice(
+            local: foregroundActivity,
             projectName: { store.activityProjectName($0) },
             statusLabel: { store.activityStatusLabel(for: $0) },
-            alertBody: { store.latestAlertActivity(for: $0.id)?.message }
+            alertBody: { store.activityAlertBody(for: $0) }
         )
+        // Before the first Local Host snapshot the sidebar uses its disk
+        // seed. Once connected, its display projection is Host-owned. Neither
+        // may be assigned to another workspace after a scope switch.
         let foregroundKey = store.workspacePoolForegroundKey()
-
-        var result = GlobalActivityMenuSessions.empty
-        for row in rows {
-            let slice: WorkspaceActivityMenuSlice?
-            if row.id == currentLocalRow?.id {
-                slice = localSlice
-            } else if let cached = pool.activitySlice(forKey: row.id) {
-                slice = cached
-            } else if row.id == foregroundKey,
-                      let snapshot = store.remoteHostRuntime.snapshot {
-                // Covers the first two seconds before the deferred pool starts.
-                slice = WorkspaceActivityMenuSlice(snapshot: snapshot)
-            } else {
-                slice = nil
-            }
-            guard let slice else { continue }
-
-            func wrap(_ sessions: [WorkspaceActivityMenuSession]) -> [GlobalActivityMenuItem] {
-                sessions.map {
-                    GlobalActivityMenuItem(
-                        workspaceKey: row.id,
-                        workspaceName: row.name,
-                        workspaceTint: row.tint,
-                        session: $0
-                    )
-                }
-            }
-            result.blockers.append(contentsOf: wrap(slice.blockers))
-            result.jobs.append(contentsOf: wrap(slice.jobs))
-            result.finished.append(contentsOf: wrap(slice.finished))
-        }
+            ?? (store.selectedHostScope == .local ? currentLocalRow?.id : nil)
+        let result = GlobalActivityMenuSessions(
+            workspaces: rows,
+            foregroundKey: foregroundKey,
+            foreground: foregroundSlice,
+            cachedSlice: { pool.activitySlice(forKey: $0) }
+        )
 
         if result != activity { activity = result }
     }

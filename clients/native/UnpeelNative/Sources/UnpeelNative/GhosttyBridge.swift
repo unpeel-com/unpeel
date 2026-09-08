@@ -1638,9 +1638,16 @@ extension GhosttyTerminalPane:
     /// in the user's editor. Returns true only when it resolves to a real file
     /// (so a cmd-click on a URL or plain text falls through to normal handling).
     func terminalDidCommandClick(rowText: String, column: Int) -> Bool {
+        // Explicit OSC 8 targets and native URL matches own their clicks,
+        // even when the displayed label happens to look like a file path.
+        guard hoveredLink == nil else { return false }
         guard let match = ClickablePath.match(inRow: rowText, column: column) else {
             return false
         }
+        return openClickedFile(match)
+    }
+
+    private func openClickedFile(_ match: ClickablePath.Match) -> Bool {
         if let resolved = ClickablePath.absolutePath(
             match.path,
             workingDirectory: currentWorkingDirectory
@@ -1665,6 +1672,14 @@ extension GhosttyTerminalPane:
     }
 
     func terminalDidRequestOpenURL(_ url: String, kind _: TerminalOpenURLKind) {
+        if let match = ClickablePath.fileURLMatch(url) {
+            _ = openClickedFile(match)
+            return
+        }
+        Self.openTerminalURL(url)
+    }
+
+    static func openTerminalURL(_ url: String) {
         guard let parsed = Self.sanitizedURL(from: url) else {
             NSLog("[UnpeelNative] refusing malformed/unsupported url: \(url)")
             return
@@ -1693,19 +1708,31 @@ extension GhosttyTerminalPane:
             ("(", ")"), ("[", "]"), ("{", "}"), ("<", ">"),
             ("\"", "\""), ("'", "'"), ("`", "`"),
         ]
-        for (open, close) in wrappers where s.first == open && s.last == close && s.count >= 2 {
-            s = String(s.dropFirst().dropLast())
-        }
-        while let last = s.last, ".,;:!?\"')]}>".contains(last) {
-            s = String(s.dropLast())
+        while !s.isEmpty {
+            if wrappers.contains(where: {
+                s.first == $0.0 && s.last == $0.1 && s.count >= 2
+            }) {
+                // A URL itself never starts with a wrapping delimiter.
+                s = String(s.dropFirst().dropLast())
+            } else if let last = s.last, ".,;\"'`>".contains(last) {
+                s.removeLast()
+            } else if let last = s.last,
+                      let (open, close) = wrappers.first(where: { $0.1 == last }),
+                      s.filter({ $0 == close }).count > s.filter({ $0 == open }).count {
+                s.removeLast()
+            } else {
+                break
+            }
         }
         guard !s.isEmpty else { return nil }
 
         // Add a scheme for bare hosts so `www.example.com` / `example.com/x`
         // still open in the browser instead of being treated as a file path.
-        if !s.contains("://"), !s.hasPrefix("mailto:"), !s.hasPrefix("tel:") {
+        if !s.contains("://"), !s.lowercased().hasPrefix("mailto:"), !s.lowercased().hasPrefix("tel:") {
             let host = s.split(separator: "/").first.map(String.init) ?? s
-            if host.contains(".") {
+            if host == "localhost" || host.hasPrefix("localhost:") {
+                s = "http://" + s
+            } else if host.contains(".") {
                 s = "https://" + s
             }
         }
@@ -1718,6 +1745,9 @@ extension GhosttyTerminalPane:
 
         let allowed: Set<String> = ["http", "https", "mailto", "tel", "ftp", "ftps"]
         guard allowed.contains(scheme) else { return nil }
+        if ["http", "https", "ftp", "ftps"].contains(scheme) {
+            guard let host = parsed.host, !host.isEmpty else { return nil }
+        }
         return parsed
     }
 }
@@ -1958,7 +1988,8 @@ final class RemoteGhosttyTerminalPane: NSView {
     private var occlusionObserver: NSObjectProtocol?
     private var presentationEnabled = true
     private var needsRefitOnNextPresentation = true
-    private var currentWorkingDirectory: String?
+    private var fileWorkingDirectory = TerminalWorkingDirectory()
+    private var hoveredLink: String?
     private var commandClickHandler: ((ClickablePath.Match, String) -> Bool)?
 
     init(
@@ -2036,7 +2067,7 @@ final class RemoteGhosttyTerminalPane: NSView {
         workingDirectory: String?,
         handler: ((ClickablePath.Match, String) -> Bool)?
     ) {
-        currentWorkingDirectory = workingDirectory
+        fileWorkingDirectory.seed = workingDirectory
         commandClickHandler = handler
     }
 
@@ -2336,6 +2367,9 @@ final class RemoteGhosttyTerminalPane: NSView {
 
 extension RemoteGhosttyTerminalPane:
     TerminalSurfaceLifecycleDelegate,
+    TerminalSurfaceOpenURLDelegate,
+    TerminalSurfaceHoverLinkDelegate,
+    TerminalSurfacePwdDelegate,
     TerminalSurfaceClickableFileDelegate
 {
     func terminalDidAttachSurface(_ surface: TerminalSurface) {
@@ -2356,16 +2390,37 @@ extension RemoteGhosttyTerminalPane:
 
     func terminalDidDetachSurface() {
         surface = nil
+        hoveredLink = nil
+    }
+
+    func terminalDidRequestOpenURL(_ url: String, kind _: TerminalOpenURLKind) {
+        if let match = ClickablePath.fileURLMatch(url, allowRemoteHost: !fileDropsEnabled) {
+            _ = commandClickHandler?(match, match.path)
+            return
+        }
+        GhosttyTerminalPane.openTerminalURL(url)
+    }
+
+    func terminalDidUpdateHoverLink(_ url: String?) {
+        hoveredLink = url
+    }
+
+    func terminalDidChangeWorkingDirectory(_ path: String) {
+        fileWorkingDirectory.reported = path
     }
 
     /// Remote paths are meaningful only on the Host. Returning false keeps
     /// ordinary selection behavior and, crucially, performs no Controller
     /// filesystem lookup or editor launch.
     func terminalDidCommandClick(rowText: String, column: Int) -> Bool {
+        guard hoveredLink == nil else { return false }
         guard let match = ClickablePath.match(inRow: rowText, column: column),
               let path = ClickablePath.absolutePath(
                 match.path,
-                workingDirectory: currentWorkingDirectory
+                workingDirectory: fileWorkingDirectory.current,
+                // Like file drops, home expansion belongs to this Mac only
+                // for a local-machine scope. Never use its home on a Host.
+                homeDirectory: fileDropsEnabled ? NSHomeDirectory() : nil
               )
         else { return false }
         return commandClickHandler?(match, path) == true
