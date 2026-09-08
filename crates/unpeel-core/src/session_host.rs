@@ -4967,6 +4967,23 @@ pub fn request_current_viewport_snapshot(
     scroll_offset_rows: u32,
     viewport_rows: Option<u16>,
 ) -> Result<TerminalViewportSnapshot, String> {
+    request_current_viewport_snapshot_with_timeout(
+        session_id,
+        scroll_offset_rows,
+        viewport_rows,
+        Duration::from_millis(SESSION_SNAPSHOT_TIMEOUT_MS),
+    )
+}
+
+/// Activity checks use a shorter deadline than interactive captures. Keep the
+/// same canonical socket resolver, including the fallback for deep workspaces.
+#[cfg(unix)]
+pub fn request_current_viewport_snapshot_with_timeout(
+    session_id: &str,
+    scroll_offset_rows: u32,
+    viewport_rows: Option<u16>,
+    timeout: Duration,
+) -> Result<TerminalViewportSnapshot, String> {
     let reply = send_command_for_response(
         session_id,
         &SessionHostCommand::ViewportSnapshot {
@@ -4975,7 +4992,7 @@ pub fn request_current_viewport_snapshot(
             scroll_offset_rows,
             viewport_rows,
         },
-        Some(Duration::from_millis(SESSION_SNAPSHOT_TIMEOUT_MS)),
+        Some(timeout),
     )?;
     if !reply.ok {
         return Err(reply

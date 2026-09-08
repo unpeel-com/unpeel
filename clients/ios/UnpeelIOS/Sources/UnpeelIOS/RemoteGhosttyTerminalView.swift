@@ -3552,6 +3552,7 @@ final class RemoteGhosttyRenderer: ObservableObject {
     private static let menuConfirmMarkers = ["enter to confirm", "return to confirm"]
     /// Cancel-key phrases paired with `menuConfirmMarkers`.
     private static let menuCancelMarkers = ["esc to cancel", "escape to cancel"]
+    private static let menuAmendMarkers = ["tab to amend"]
     /// Phrases marking a hint row as a passive status footer, not an
     /// answerable menu — Claude Code's subagent list pins
     /// "↑/↓ to select · Enter to view" for the whole run.
@@ -3603,10 +3604,11 @@ final class RemoteGhosttyRenderer: ObservableObject {
 
     /// True when the viewport text contains a select-menu footer on the same
     /// or adjacent rows (menu footers are one hint line, two when wrapped),
-    /// excluding passive status footers whose Enter action is "view". Two
+    /// excluding passive status footers whose Enter action is "view". The
     /// footer shapes qualify: a nav hint plus a select hint (Claude-style),
     /// or a confirm key named next to a cancel key (Codex-style, which
-    /// prints no nav hint). Marker matching is the twin of Rust
+    /// prints no nav hint), or cancel/amend beside selected numbered choices.
+    /// Marker matching is the twin of Rust
     /// `viewport_has_menu_prompt`; the visible-choice guard is intentionally
     /// phone-only so controls fail closed.
     static func viewportHasMenuPrompt(_ text: String) -> Bool {
@@ -3631,6 +3633,7 @@ final class RemoteGhosttyRenderer: ObservableObject {
             let hasSelect = menuSelectMarkers.contains { window.contains($0) }
             let hasConfirm = menuConfirmMarkers.contains { window.contains($0) }
             let hasCancel = menuCancelMarkers.contains { window.contains($0) }
+            let hasAmend = menuAmendMarkers.contains { window.contains($0) }
             let passiveAction = menuPassiveMarkers.contains { window.contains($0) }
             let passiveSelectorPrefix = menuPassiveSelectorPrefixes.contains {
                 window.contains($0)
@@ -3639,9 +3642,39 @@ final class RemoteGhosttyRenderer: ObservableObject {
                 window.contains($0)
             }
             let passive = passiveAction || (passiveSelectorPrefix && !interactiveQualifier)
-            if ((hasNav && hasSelect) || (hasConfirm && hasCancel)) && !passive { return true }
+            let approval = hasCancel && hasAmend && hasSelectedChoices(lines, before: index)
+            if ((hasNav && hasSelect) || (hasConfirm && hasCancel) || approval) && !passive {
+                return true
+            }
         }
         return false
+    }
+
+    /// Twin of Rust's selected-choice guard for cancel/amend approval menus.
+    /// A distant transcript list or an ordinary interrupt footer is not enough.
+    private static func hasSelectedChoices(_ lines: [String], before footer: Int) -> Bool {
+        var previous: Int?
+        var count = 0
+        var selected = false
+        for rawLine in lines[max(0, footer - 12)..<footer] {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            let cursor = line.first.map { "❯›>".contains($0) } ?? false
+            let choice = line.drop(while: { "❯›>".contains($0) })
+                .drop(while: \.isWhitespace)
+            guard let dot = choice.firstIndex(of: "."),
+                  let number = Int(choice[..<dot]), (1...9).contains(number) else { continue }
+            let label = choice[choice.index(after: dot)...]
+            guard label.first?.isWhitespace == true,
+                  label.contains(where: { !$0.isWhitespace }) else { continue }
+            if previous != number - 1 {
+                count = 0
+                selected = false
+            }
+            previous = number
+            count += 1
+            selected = selected || cursor
+        }
+        return count >= 2 && selected
     }
 
     /// Highest leading "N." option number in the viewport (menu items look

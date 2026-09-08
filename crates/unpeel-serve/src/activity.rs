@@ -477,6 +477,17 @@ impl ActivityEngine {
         entry.foreground_identity_recorded = true;
     }
 
+    /// A changed permission screen must be checked before it can clear the
+    /// hook's attention latch. Failed reads leave this signal unconsumed.
+    pub fn attention_has_new_output(&self, session_id: &str, activity_signal: u64) -> bool {
+        self.entries.get(session_id).is_some_and(|entry| {
+            entry.state == Some(HookState::Attention)
+                && entry
+                    .last_signal
+                    .is_some_and(|previous| previous != activity_signal)
+        })
+    }
+
     /// Per-tick output observation + timeout sweep for hook-owned sessions.
     /// `allow_attention_clear` is false for tools that repaint their ask-user
     /// UI to the terminal (grok), where growth doesn't mean "user answered".
@@ -1202,6 +1213,26 @@ mod tests {
         engine.note_output_and_sweep("g", 100, false, t0 + Duration::from_secs(1));
         engine.note_output_and_sweep("g", 150, false, t0 + Duration::from_secs(2));
         assert_eq!(engine.hook_owned_state("g"), Some(HookState::Attention));
+    }
+
+    #[test]
+    fn permission_redraws_need_viewport_evidence_before_clearing_attention() {
+        let mut engine = ActivityEngine::default();
+        let now = SystemTime::now();
+        engine.apply_hook_event("s", "PermissionRequest", None, now);
+        assert!(!engine.attention_has_new_output("s", 100));
+        engine.note_output_and_sweep("s", 100, true, now);
+        assert!(!engine.attention_has_new_output("s", 100));
+        assert!(engine.attention_has_new_output("s", 150));
+        // A failed viewport read must leave the same change eligible for retry.
+        assert!(engine.attention_has_new_output("s", 150));
+        engine.note_output_and_sweep("s", 150, false, now);
+        assert_eq!(engine.hook_owned_state("s"), Some(HookState::Attention));
+        assert!(!engine.attention_has_new_output("s", 150));
+        assert!(engine.attention_has_new_output("s", 200));
+        engine.note_output_and_sweep("s", 200, true, now);
+        assert_eq!(engine.hook_owned_state("s"), Some(HookState::Busy));
+        assert!(!engine.attention_has_new_output("s", 250));
     }
 
     #[test]

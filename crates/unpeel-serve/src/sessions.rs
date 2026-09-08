@@ -342,11 +342,40 @@ fn derive_status(
             );
         }
         if engine.is_latched(id) {
+            // Permission UIs repaint too. Before interpreting changed text as
+            // an answer, check the live viewport with this worker's detector.
+            // This also repairs sessions retained by an older PTY core whose
+            // menu_prompt_active scanner does not recognize a newer footer.
+            // Only a changed, hook-owned Attention state needs this bounded
+            // local read; steady menus and ordinary working output do not.
+            let mut allow_attention_clear = attention_clears_on_output;
+            if allow_attention_clear && engine.attention_has_new_output(id, activity_signal) {
+                let Ok(viewport) =
+                    unpeel_core::session_host::request_current_viewport_snapshot_with_timeout(
+                        id,
+                        0,
+                        None,
+                        std::time::Duration::from_millis(100),
+                    )
+                else {
+                    // Missing evidence is not an answer. Keep the old output
+                    // baseline so the next scan retries even if output stops.
+                    return Status::Attention;
+                };
+                let screen = viewport
+                    .viewport_rows
+                    .iter()
+                    .map(|row| row.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                allow_attention_clear =
+                    !unpeel_core::menu_prompt::viewport_has_menu_prompt(&screen);
+            }
             // Hook-owned lifecycle: sweep timeouts against output growth,
             // then report the latch. Runtime-specific output semantics are
             // declared beside the runtime's hooks rather than guessed from
             // its command name here.
-            engine.note_output_and_sweep(id, activity_signal, attention_clears_on_output, now);
+            engine.note_output_and_sweep(id, activity_signal, allow_attention_clear, now);
             match engine.hook_owned_state(id) {
                 Some(HookState::Busy) => Status::Busy,
                 Some(HookState::Attention) => Status::Attention,

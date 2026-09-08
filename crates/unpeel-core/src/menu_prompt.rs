@@ -38,6 +38,10 @@ const CONFIRM_MARKERS: &[&str] = &["enter to confirm", "return to confirm"];
 /// Cancel-key phrases paired with `CONFIRM_MARKERS`.
 const CANCEL_MARKERS: &[&str] = &["esc to cancel", "escape to cancel"];
 
+/// Approval editors can advertise amendment instead of navigation/confirm.
+/// This pair only qualifies beside a visibly selected numbered choice list.
+const AMEND_MARKERS: &[&str] = &["tab to amend"];
+
 /// Phrases that mark a hint row as a passive status footer rather than an
 /// answerable menu. Claude Code's subagent list pins
 /// "↑/↓ to select · Enter to view" to the bottom for the whole run — it has
@@ -71,6 +75,7 @@ const INTERACTIVE_QUALIFIERS: &[&str] = &[
 /// an unrelated select phrase elsewhere on screen is not a menu. Two footer
 /// shapes qualify: a nav hint plus a select hint (Claude-style), or a confirm
 /// key named next to a cancel key (Codex-style, which prints no nav hint).
+/// Cancel + amend also qualifies beside a selected numbered choice list.
 pub fn viewport_has_menu_prompt(screen_text: &str) -> bool {
     let lines: Vec<String> = screen_text
         .lines()
@@ -91,6 +96,7 @@ pub fn viewport_has_menu_prompt(screen_text: &str) -> bool {
         let has_select = SELECT_MARKERS.iter().any(|marker| window.contains(marker));
         let has_confirm = CONFIRM_MARKERS.iter().any(|marker| window.contains(marker));
         let has_cancel = CANCEL_MARKERS.iter().any(|marker| window.contains(marker));
+        let has_amend = AMEND_MARKERS.iter().any(|marker| window.contains(marker));
         let passive_action = PASSIVE_MARKERS.iter().any(|marker| window.contains(marker));
         let passive_selector_prefix = PASSIVE_SELECTOR_PREFIXES
             .iter()
@@ -99,16 +105,78 @@ pub fn viewport_has_menu_prompt(screen_text: &str) -> bool {
             .iter()
             .any(|marker| window.contains(marker));
         let passive = passive_action || (passive_selector_prefix && !interactive_qualifier);
-        if ((has_nav && has_select) || (has_confirm && has_cancel)) && !passive {
+        let approval = has_cancel && has_amend && has_selected_choices(&lines, index);
+        if ((has_nav && has_select) || (has_confirm && has_cancel) || approval) && !passive {
             return true;
         }
     }
     false
 }
 
+fn has_selected_choices(lines: &[String], footer: usize) -> bool {
+    let mut previous = None;
+    let mut count = 0;
+    let mut selected = false;
+    // Keep transcript lists elsewhere in the viewport out of the decision.
+    // The window accommodates wrapped options and spacing above the footer.
+    for line in &lines[footer.saturating_sub(12)..footer] {
+        let line = line.trim();
+        let cursor = line.starts_with(['❯', '›', '>']);
+        let line = line.trim_start_matches(['❯', '›', '>']).trim_start();
+        let Some((number, label)) = line.split_once('.') else {
+            continue;
+        };
+        if !label.starts_with(char::is_whitespace) || label.trim().is_empty() {
+            continue;
+        }
+        let Ok(number @ 1..=9) = number.parse::<u8>() else {
+            continue;
+        };
+        if previous != Some(number - 1) {
+            count = 0;
+            selected = false;
+        }
+        previous = Some(number);
+        count += 1;
+        selected |= cursor;
+    }
+    count >= 2 && selected
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const APPROVAL: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../runtimes/claude-code/fixtures/approval-menu.txt"
+    ));
+
+    #[test]
+    fn detects_approval_with_only_cancel_and_amend_keys() {
+        assert!(viewport_has_menu_prompt(APPROVAL));
+        assert!(viewport_has_menu_prompt(
+            &APPROVAL.replace("Tab to amend", "Tab to\n amend")
+        ));
+        assert!(viewport_has_menu_prompt(
+            &APPROVAL.replace("❯ 1.", "  1.").replace("  3.", "❯ 3.")
+        ));
+    }
+
+    #[test]
+    fn cancel_amend_requires_nearby_selected_choices() {
+        assert!(!viewport_has_menu_prompt(
+            "Working… Esc to cancel · Tab to amend"
+        ));
+        assert!(!viewport_has_menu_prompt(&APPROVAL.replace('❯', " ")));
+        assert!(!viewport_has_menu_prompt(
+            &APPROVAL.replace("  2.", "  x.").replace("  3.", "  x.")
+        ));
+        assert!(!viewport_has_menu_prompt(&APPROVAL.replace(
+            "Esc to cancel",
+            &format!("{}Esc to cancel", "output\n".repeat(13))
+        )));
+    }
 
     #[test]
     fn detects_claude_style_menu_footer() {

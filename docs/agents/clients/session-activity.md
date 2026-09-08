@@ -142,6 +142,18 @@ Agent-drawn select menus (attention, host-side):
   selector (`↑/↓ to select · Enter to view`) is passive, including while its
   footer is only partially painted; neither detector may turn that status row
   into attention. Keep the Rust and Swift regression cases aligned.
+- Approval menus may show only `Esc to cancel · Tab to amend`, without an
+  arrow-key or Enter hint. That footer qualifies when a nearby numbered
+  choice list has a selected row; the footer alone and transcript lists
+  elsewhere do not. The Claude fixture lives in
+  `runtimes/claude-code/fixtures/approval-menu.txt`.
+- A `PermissionRequest` latch survives menu redraws. Before allowing changed
+  output to clear hook-owned Attention, the workspace worker checks the live
+  parsed viewport with the current detector. This read happens only on changed
+  permission screens, has a 100ms socket timeout, and preserves the latch and
+  output baseline for retry if the read fails. It also covers sessions retained
+  by an older PTY core whose menu scanner predates the footer. Once the menu
+  disappears, normal hook-owned activity resumes; a Stop remains authoritative.
 
 Unread badges integrate with hook events and activity transitions (settles while unobserved → unread).
 

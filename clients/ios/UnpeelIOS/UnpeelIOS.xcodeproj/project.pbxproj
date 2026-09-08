@@ -40,6 +40,7 @@
 		B35103E7509B4E674B70B030 /* RemoteMacClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F35970DFF94726780F3CAA25 /* RemoteMacClient.swift */; };
 		B3AB5ABDD497E2D81FE16AB5 /* AppLock.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26682F9596E7F66A050E29A6 /* AppLock.swift */; };
 		B811FDB432E51119FB2681FE /* DevSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96A6E0A24C494F55C74A71E5 /* DevSettings.swift */; };
+		BD415AFE9A713EF57B1D3212 /* MenuPromptApprovalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B762F6A62E0D4517AF843EA4 /* MenuPromptApprovalTests.swift */; };
 		C006ABCAF7FE73BAF92E745D /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D50426BA77F15D2EAE5A2F63 /* PairingView.swift */; };
 		C58213F67C52238EB5728B66 /* StreamFrameReconciler.swift in Sources */ = {isa = PBXBuildFile; fileRef = F78C3102A092C65B449508AA /* StreamFrameReconciler.swift */; };
 		C5C068AF8AE0845D5964C1D8 /* PushManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 780E8FFFE71973418DA23BD9 /* PushManagerTests.swift */; };
@@ -102,6 +103,7 @@
 		9D247134AE2D98CF96D1671C /* TerminalTextSelectionSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalTextSelectionSheet.swift; sourceTree = "<group>"; };
 		A91665E27B97F3EC3B1AF962 /* RemoteMouseWheelPreferenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteMouseWheelPreferenceTests.swift; sourceTree = "<group>"; };
 		B4D302616CB80681E0F35D56 /* PairedMacStorageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairedMacStorageTests.swift; sourceTree = "<group>"; };
+		B762F6A62E0D4517AF843EA4 /* MenuPromptApprovalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuPromptApprovalTests.swift; sourceTree = "<group>"; };
 		BA9DD529220DBB00767CEA04 /* RemoteTerminalStreamTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTerminalStreamTransport.swift; sourceTree = "<group>"; };
 		C017C4C2C5B8CDB18106CA1E /* PushManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushManager.swift; sourceTree = "<group>"; };
 		C48BEABFCD725D1237313119 /* RemoteTerminalPredictionEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTerminalPredictionEngineTests.swift; sourceTree = "<group>"; };
@@ -156,6 +158,7 @@
 		992C5D43CF2671BF008E6FE9 /* UnpeelIOSTests */ = {
 			isa = PBXGroup;
 			children = (
+				B762F6A62E0D4517AF843EA4 /* MenuPromptApprovalTests.swift */,
 				B4D302616CB80681E0F35D56 /* PairedMacStorageTests.swift */,
 				780E8FFFE71973418DA23BD9 /* PushManagerTests.swift */,
 				6F2368DFDBAB350B790F5763 /* RemoteDirectTransportTests.swift */,
@@ -330,6 +333,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				BD415AFE9A713EF57B1D3212 /* MenuPromptApprovalTests.swift in Sources */,
 				C8D674440CF58AF963993DB3 /* PairedMacStorageTests.swift in Sources */,
 				C5C068AF8AE0845D5964C1D8 /* PushManagerTests.swift in Sources */,
 				9C6C14805AA0B688B0250FBA /* RemoteDirectTransportTests.swift in Sources */,
