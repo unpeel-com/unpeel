@@ -1,0 +1,13 @@
+<h2>Unpeel 0.6.0</h2>
+<ul>
+  <li><b>Open files and resources with Apps.</b> Cmd-click in a terminal and <code>unpeel open</code> go through one Host-owned opener policy for local, scoped, and remote workspaces: an App, your editor, or the system, per resource kind. A missing official App can be installed on that Host after you confirm, then opens beside the calling Session. Each workspace remembers its own opener choices.</li>
+  <li><b>Agents can open files beside themselves.</b> Through Unpeel MCP an agent opens a file or typed resource in a companion App pane next to its own Session, with no approval prompt. Agents still never install an App or create, restart, remove, or close a Session.</li>
+  <li><b>The first-party Apps ship from the Unpeel repository.</b> Markdown, Files, Diffs, and Usage carry versions: Settings and <code>unpeel apps update</code> offer Update when a newer release is published, and App icons appear in the sidebar. Unpeel Design and GitHub Issues left the catalog.</li>
+  <li><b>Restart App and Reload Terminal keep the Session.</b> A live host is replaced in place under the same Session id, so pins, titles, approvals, and an App's pane binding survive.</li>
+  <li><b>Force Quit no longer takes your terminals down.</b> The Host service starts through launchd instead of as the app's child, so terminating the app leaves every session host running.</li>
+  <li><b>Agents &amp; Apps are managed on the selected Host.</b> One settings pane and launch list cover installed agents and Apps for local and remote workspaces alike, with install and update commands running in an embedded terminal on that Host.</li>
+  <li><b>Hook delivery is reliable under cancellation.</b> A cancelled turn no longer leaves a spinner running, delayed hooks cannot revive it, and missed events are recovered from durable markers.</li>
+  <li><b>Terminal font setting.</b> Settings &#9656; Appearance picks the family and size; Cmd-+ / Cmd-- / Cmd-0 zoom every pane and persist.</li>
+  <li><b>Built-in computer use has been removed.</b> Desktop tools are configured through your agent or VM environment. Browser use and remote Hosts remain available.</li>
+  <li>Settings &#9656; Experimental is now <b>Features</b>; only Browser use is still marked experimental. Sessions are titled after the working tree and branch or the folder being browsed. Scoped workspaces show MCP approval prompts and the full project menu. A Host advertises its workspace name, never the DNS hostname.</li>
+</ul>
