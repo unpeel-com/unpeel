@@ -103,7 +103,7 @@ function run(command, commandArgs, options = {}) {
 // ---- Build the macos-universal tarball ------------------------------------
 
 const tarballs = {} // target -> local tar.gz path
-for (const target of ['linux-x86_64', 'linux-aarch64']) {
+for (const target of ['macos-universal', 'linux-x86_64', 'linux-aarch64']) {
   if (args[target]) tarballs[target] = resolve(process.cwd(), String(args[target]))
 }
 if (!args['skip-build'] && process.platform === 'darwin') {

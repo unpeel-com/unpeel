@@ -54,11 +54,12 @@ test('batch publishing can defer the registry until every artifact is uploaded',
     writeFileSync(archive, 'local dry-run artifact')
     const script = fileURLToPath(new URL('./release-app.mjs', import.meta.url))
     const version = JSON.parse(readFileSync(new URL('../protocol/app-registry.json', import.meta.url))).diffs.version
-    const args = [script, '--app', 'diffs', '--version', version, '--channel', 'stable', '--dry-run', '--skip-build', '--linux-x86_64', archive]
+    const args = [script, '--app', 'diffs', '--version', version, '--channel', 'stable', '--dry-run', '--skip-build', '--linux-x86_64', archive, '--macos-universal', archive]
     for (const deferred of [false, true]) {
       const result = spawnSync(process.execPath, deferred ? [...args, '--skip-registry'] : args, { encoding: 'utf8' })
       assert.equal(result.status, 0, result.stderr)
       assert.match(result.stdout, /unpeel-diffs-latest-linux-x86_64.tar.gz/)
+      assert.match(result.stdout, /unpeel-diffs-latest-macos-universal.tar.gz/)
       assert.equal(result.stdout.includes('stable/protocol/app-registry.json'), !deferred)
     }
   } finally {
