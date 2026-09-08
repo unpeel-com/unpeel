@@ -1,0 +1,4 @@
+<h2>Unpeel 0.6.1</h2>
+<ul>
+  <li><b>Mac-to-Mac Direct connections work again.</b> Since 0.5.3 a Host refuses device tokens over plaintext <code>/mobile</code>, and the Mac app's own Direct client was still connecting in the clear, so a paired Mac showed "Offline · 426: use https" on 0.6.0. The Mac Controller now dials Direct over TLS pinned to the Host certificate it already trusts, the same way the phone has since 0.5.3. Re-pairing is not needed.</li>
+</ul>
