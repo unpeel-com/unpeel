@@ -10,7 +10,7 @@ use crossterm::event::{
 };
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthChar;
@@ -217,8 +217,7 @@ impl ExplorerTheme {
         Self::for_palette(KitTheme::for_scheme(scheme))
     }
 
-    /// Builds Explorer styling from a complete kit palette, preserving a
-    /// Host-provided project/workspace accent from [`KitTheme::detected`].
+    /// Builds neutral Explorer styling from the shared kit palette.
     #[must_use]
     pub const fn for_theme(theme: KitTheme) -> Self {
         Self::for_palette(theme)
@@ -236,10 +235,10 @@ impl ExplorerTheme {
             filter_focused: Style::new().fg(palette.text).add_modifier(Modifier::BOLD),
             filter_placeholder: Style::new().fg(palette.subtle),
             path: Style::new().add_modifier(Modifier::BOLD),
-            item: Style::new().fg(palette.text),
-            directory: Style::new().fg(palette.accent),
-            symlink: Style::new().fg(Color::Cyan),
-            parent: Style::new().fg(palette.accent),
+            item: Style::new().fg(palette.muted),
+            directory: Style::new().fg(palette.text),
+            symlink: Style::new(),
+            parent: Style::new().fg(palette.text),
             selected: palette.selected_row,
             hovered: palette.hovered_row,
             empty: Style::new().fg(palette.subtle),
@@ -319,7 +318,7 @@ impl Explorer {
             .with_prompt("/ ")
             .with_theme(input_theme(&theme));
         let mut navigation = RowNavigationState::new((!entries.is_empty()).then_some(selected));
-        navigation.set_boundary_behavior(RowBoundaryBehavior::Wrap);
+        navigation.set_boundary_behavior(RowBoundaryBehavior::Clamp);
         navigation.set_navigation(theme.scroll_padding, 0, ListPageBehavior::Selection);
         navigation.prepare(Rect::new(0, 0, 0, 12), entries.len());
         Ok(Self {
@@ -1525,14 +1524,17 @@ impl Explorer {
     fn entry_style(&self, entry: &ExplorerEntry) -> Style {
         let kind = if entry.parent {
             self.theme.parent
-        } else if entry.symlink {
-            self.theme.symlink
         } else if entry.directory {
             self.theme.directory
         } else {
             self.theme.item
         };
-        self.theme.style.patch(kind)
+        let style = self.theme.style.patch(kind);
+        if entry.symlink {
+            style.patch(self.theme.symlink)
+        } else {
+            style
+        }
     }
 
     fn entry_label(&self, entry: &ExplorerEntry, selected: bool, width: u16) -> String {
@@ -1780,6 +1782,7 @@ fn display_width(text: &str) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use ratatui::style::Color;
     use ratatui::widgets::Widget as _;
 
     use super::*;
@@ -2072,7 +2075,7 @@ mod tests {
     }
 
     #[test]
-    fn selection_wraps_and_pages_by_the_rendered_viewport() {
+    fn selection_stops_at_boundaries_and_pages_by_the_rendered_viewport() {
         let temp = tempfile::tempdir().unwrap();
         for index in 0..10 {
             fs::write(temp.path().join(format!("{index}.txt")), "x").unwrap();
@@ -2086,11 +2089,47 @@ mod tests {
 
         assert_eq!(explorer.selected_index(), 0);
         explorer.handle(ExplorerInput::Up).unwrap();
-        assert_eq!(explorer.selected_index(), explorer.entries().len() - 1);
-        explorer.handle(ExplorerInput::Down).unwrap();
         assert_eq!(explorer.selected_index(), 0);
         explorer.handle(ExplorerInput::PageDown).unwrap();
         assert_eq!(explorer.selected_index(), 3);
+
+        explorer.handle(ExplorerInput::Last).unwrap();
+        let last = explorer.entries().len() - 1;
+        assert_eq!(
+            explorer.handle(ExplorerInput::Down).unwrap(),
+            ExplorerEvent::None
+        );
+        assert_eq!(explorer.selected_index(), last);
+
+        let mut clicks = crate::DoubleClickTracker::new();
+        let mut wheel = MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: explorer.list_area().x,
+            row: explorer.list_area().y,
+            modifiers: KeyModifiers::NONE,
+        };
+        for _ in 0..100 {
+            explorer.handle_mouse(&wheel, &mut clicks).unwrap();
+        }
+        assert_eq!(explorer.selected_index(), last);
+        wheel.kind = MouseEventKind::ScrollUp;
+        explorer.handle_mouse(&wheel, &mut clicks).unwrap();
+        assert_eq!(
+            explorer.selected_index(),
+            last - 1,
+            "reversal responds immediately"
+        );
+        for _ in 0..100 {
+            explorer.handle_mouse(&wheel, &mut clicks).unwrap();
+        }
+        assert_eq!(explorer.selected_index(), 0);
+        wheel.kind = MouseEventKind::ScrollDown;
+        explorer.handle_mouse(&wheel, &mut clicks).unwrap();
+        assert_eq!(
+            explorer.selected_index(),
+            1,
+            "reversal responds immediately"
+        );
     }
 
     #[test]

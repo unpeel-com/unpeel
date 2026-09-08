@@ -38,6 +38,7 @@ import {
   uiNodeCapabilities,
   verifyMediaBlobBytes,
   type UiAttached,
+  type MarkdownEditorNode,
   type UiDelta,
   type UiPresence,
   type UiSnapshot,
@@ -52,7 +53,7 @@ describe("shared protocol", () => {
     const fixture = Bun.file(new URL("../../protocol/unpeel-ui-v1.ndjson", import.meta.url));
     const lines = (await fixture.text()).trim().split("\n");
     const messages = lines.map(decodeUiMessage);
-    expect(messages).toHaveLength(53);
+    expect(messages).toHaveLength(56);
     expect(messages[0]?.type).toBe("attach");
     if (messages[0]?.type === "attach") {
       expect(messages[0].minProtocolVersion).toBe(1);
@@ -1240,3 +1241,35 @@ function surfaceSnapshotFrame(): UiSnapshot {
     },
   };
 }
+
+
+test("Page tabs are capability gated and validate authoritative selection", async () => {
+  const lines = (await Bun.file(new URL("../../protocol/unpeel-ui-v1.ndjson", import.meta.url)).text()).trimEnd().split("\n");
+  const message = decodeUiMessage(lines[53]!) as UiSnapshot;
+  expect(isPageNode(message.root)).toBe(true);
+  expect(uiNodeCapabilities(message.root)).toContain("pageTabs");
+  expect(uiNodeCapabilities(message.root)).toContain("pageToolbar");
+  const raw = JSON.parse(lines[53]!);
+  raw.root.tabs[1].selected = true;
+  expect(() => decodeUiMessage(JSON.stringify(raw))).toThrow("exactly one selected");
+  raw.root.tabs[1].selected = false;
+  raw.root.tabs[1].id = "git-files";
+  expect(() => decodeUiMessage(JSON.stringify(raw))).toThrow("duplicates");
+});
+
+test("Page toolbar validates shared action IDs and menus", async () => {
+  const lines = (await Bun.file(new URL("../../protocol/unpeel-ui-v1.ndjson", import.meta.url)).text()).trimEnd().split("\n");
+  const raw = JSON.parse(lines[53]!);
+  raw.root.toolbar.menu.items[0].id = raw.root.toolbar.primary.id;
+  expect(() => decodeUiMessage(JSON.stringify(raw))).toThrow("duplicates");
+});
+
+test("Footer status is capability gated and survives an action delta", async () => {
+  const lines = (await Bun.file(new URL("../../protocol/unpeel-ui-v1.ndjson", import.meta.url)).text()).trim().split("\n");
+  const snapshot = decodeUiMessage(lines[54]!) as UiSnapshot;
+  const delta = decodeUiMessage(lines[55]!) as UiDelta;
+  expect(uiNodeCapabilities(snapshot.root)).toContain("footerStatus");
+  const next = applyUiDelta(snapshot, delta);
+  expect((next.root as MarkdownEditorNode).footer?.status).toBe("3:4");
+  expect((next.root as MarkdownEditorNode).footer?.actions).toEqual((snapshot.root as MarkdownEditorNode).footer?.actions);
+});

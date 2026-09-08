@@ -26,7 +26,7 @@ cargo run --example charts --no-default-features
 ```
 
 On macOS, the independent Kitchen Sink package exercises those binaries,
-the Charts and other component examples, and the four sibling Apps (Usage, Diffs,
+the Charts and other component examples, and the four sibling Apps (Usage, Git,
 Markdown, and File Tree) through real libghostty PTYs, the native
 SwiftUI renderer, and the actual TypeScript DOM renderers inside `WKWebView`,
 without Unpeel installed:
@@ -530,7 +530,9 @@ web, and agent participants:
   static status-symbol, `Badge`, and read-only-data trailing `Sparkline` or
   bounded-ratio `Gauge` values; and
 - `Page` exposes one closed body slot: List, Content, Sparkline, BarChart,
-  LineChart, or Gauge; it never accepts arbitrary children.
+  LineChart, or Gauge; it never accepts arbitrary children. When its title is
+  empty and it has no Back action or toolbar, all renderers omit the title
+  row and its spacing.
 
 The current master/detail extension stays inside those named semantics:
 `ListItem.detail` is secondary copy, `ListItem.value` is a trailing read-only
@@ -657,6 +659,16 @@ optional disabled state. The same named slot is available on `Tree` and
 `MarkdownEditor`, because those closed root components can themselves own a
 screen; it is never an arbitrary child container.
 
+The slot also accepts optional single-line `status` text. It is read-only,
+muted, and aligned to the trailing edge, sharing the bottom row with actions.
+Ratatui reserves its width before painting or hit-testing action hints, so
+clicking status never activates a clipped command. Markdown uses it for the
+cursor position and transient save state, leaving the document at the top.
+This optional field requires `footerStatus` in addition to `footerActions`;
+older renderers keep the terminal view. `footerSetActions` replaces both the
+ordered actions and optional status atomically. Shared snapshot/delta fixtures
+verify the field in Rust, Swift, and web.
+
 The accelerator grammar is deliberately small: one printable ASCII key,
 `ctrl+` plus one alphanumeric key, or `escape`, `enter`, and `space`. Rust owns
 matching and disabled-state behavior. An activation always emits
@@ -678,7 +690,7 @@ The three interpretations are peers:
   accelerator grammar without stealing printable keys from an active editor.
 
 Usage publishes Alerts and Refresh here instead of adding command-shaped List
-rows. Diffs publishes Refresh on both list and detail Pages; Filetree publishes
+rows. Git publishes Refresh on both list and detail Pages; Filetree publishes
 Refresh and Show/Hide Hidden on its Tree; Markdown publishes picker and editor
 commands on their respective Tree/MarkdownEditor roots. Consequently the
 Kitchen Sink component inspector, native toolbar, web footer, terminal hint
@@ -733,7 +745,7 @@ compatible. Terminal thumbnails for `media.spec` are a follow-up.
 Filetree and Markdown's note picker are not flat Lists. Their standalone TUIs
 keep the existing `Explorer` outward contract unchanged, including its
 current-folder navigation, filter focus, synthetic parent row, directory/file
-distinction, selection wrapping, page behavior, path hit testing, and drag
+distinction, bounded selection, page behavior, path hit testing, and drag
 registration. They must not be migrated by serializing the visible rows as
 `ListItem`s: doing so would erase hierarchy and make parent navigation look
 like file activation.
@@ -743,7 +755,10 @@ The complete semantic slice now ships as `Tree`: a standalone Ratatui
 `TreeView`, DOM `TreeRenderer`, validation, capability negotiation, shared
 fixtures, and compact deltas. Markdown's vault picker and unpeel-app-filetree
 publish it from their existing Explorer state. Their TUI behavior and painter
-remain unchanged.
+remain shared. Explorer rows use neutral theme text for folders and parent
+navigation, with muted text for files. Symbolic links keep the color of their
+target kind. Selection uses the standard contrasting text. An empty location
+omits its heading and spacer, so the rows sit directly below the filter.
 
 ### Shared primitives and wire component
 
@@ -754,10 +769,9 @@ Its filter-aware key adapter delegates the common Enter/Space/movement/back
 decision to `ListKeymap`; App-specific create, quit, and menu commands stay in
 the owning App.
 
-The common navigation engine must expose an explicit boundary policy rather
-than forcing Explorer into List's clamp policy. Flat Lists stay clamped;
-Explorer preserves its current page/wrap contract exactly (single-row moves
-wrap, while page moves retain the existing viewport and boundary behavior).
+The common navigation engine exposes an explicit boundary policy. Both Lists
+and Explorer clamp selection at the first and last rows. Wheel input uses the
+same bounds, so excess scrolling never wraps and reversing responds immediately.
 Explorer's filter-aware key adapter also keeps printable `j`, `k`, and `q` as
 filter input instead of inheriting List aliases. Shared implementation means
 shared mechanics, not identical public bindings in incompatible focus modes.
@@ -797,10 +811,9 @@ it never masquerades as a directory or emits the ordinary file `open` action.
 Breadcrumbs or ancestor labels are presentation metadata, not additional
 selectable rows.
 
-Explorer keeps its existing interaction contract rather than inheriting
-`ListKeymap`'s clamped behavior:
+Explorer keeps its filter-aware interaction contract:
 
-- with the tree focused, Up/Down wrap one row, Home/End select boundaries,
+- with the tree focused, Up/Down move one row and stop at boundaries, Home/End select boundaries,
   PageUp/PageDown move by the rendered viewport and clamp, Right/Enter opens,
   and Left/Backspace/Escape navigates to the parent;
 - Tab, `/`, Ctrl-F, or typing any unmodified printable character focuses the
@@ -1042,6 +1055,10 @@ text engine. Its complete snapshot contains the Markdown document, selection,
 presentation (`source`, `preview`, or `split`), dirty/read-only state, title,
 document placeholder, optional command hint, and declared actions.
 
+When both title and back action are absent, every renderer omits the top
+toolbar. Screen commands and read-only status can live in the shared footer;
+the Markdown App uses this arrangement for Open, Save, auto-save, and position.
+
 `placeholder` is whole-document empty-state text. `commandHint` is a separate
 closed value containing text plus the
 `cursorOnEmptyLineOutsideCodeFence` visibility rule. The rule resolves from
@@ -1173,13 +1190,13 @@ Unsupported renderers still receive the complete TUI.
 
 ### Four-App cross-platform audit
 
-Kitchen Sink now builds and spawns the Charts showcase plus Usage, Diffs,
+Kitchen Sink now builds and spawns the Charts showcase plus Usage, Git,
 Markdown, and File Tree against isolated deterministic fixtures. Its screen walker drives
 the live App reducers over `ui.sock`; it does not substitute fixture snapshots
 for the Apps. The current verified inventory is:
 
 - Usage: provider catalog, provider detail, and Alerts;
-- Diffs: changed-file list and complete styled Content detail;
+- Git: changed-file list and complete styled Content detail;
 - Markdown: workspace chooser, Tree picker, new-note form, editor, context
   menu, and slash insert menu; and
 - File Tree: root and nested Tree screens, including filter and context menu.
@@ -1508,3 +1525,31 @@ Menu, and the chart family exercise the required pane-level
 terminal fallback for renderers that do not advertise or recognize a kind;
 every later component inherits that rule. This keeps App Kit opinionated and
 prevents its public API from becoming an unbounded remote widget toolkit.
+
+### Page navigation tabs
+
+`Page::tabs([PageTab::new(id, label, action).selected(true), ...])` adds a
+persistent tab row above the title. Nonempty tabs require exactly one selected
+destination and at most 12 unique IDs. Ratatui, SwiftUI, and web render the same
+slot; each tab emits an `activate` action with its ID and no value. The runner
+maps it to `AppAction::Activate`. The `pageTabs` capability keeps older
+renderers on the terminal fallback. Changing tabs replaces the Page root;
+ordinary list and content selection still use compact deltas.
+
+The Git App (stable CLI `unpeel-diffs`) uses Changes and History tabs, including
+on commit and patch detail pages.
+
+### Page toolbar
+
+`Page::toolbar(PageToolbar::new(primary).menu(menu))` places one primary action
+and an optional dropdown at the title's right edge. It reuses `FooterAction`
+and `SemanticMenu`, including disabled/busy states, semantic IDs, and action
+roles. The `pageToolbar` capability gates it; older renderers fall back to
+the terminal. Toolbar changes replace the root so button state stays atomic.
+
+Ratatui, SwiftUI, and web implement the slot. `PageToolbar::areas` shares
+clipped title/button hit geometry, and `PageToolbarState` owns terminal menu
+interaction (click or F10, arrows, Enter, Escape). The runner handles this
+state and maps primary/menu activations to `AppAction::Command`. Apps with
+legacy event loops use that same state beside their Page widget. The Git App
+uses it for Fetch, Pull, and Push. Routine navigation stays in the footer.

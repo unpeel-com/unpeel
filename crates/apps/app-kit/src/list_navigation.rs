@@ -22,8 +22,8 @@ pub enum ListPageBehavior {
 
 /// How single-row movement behaves at the first and last item.
 ///
-/// Flat Lists clamp. Explorer retains its established wrap behavior while
-/// using the exact same focus/viewport engine.
+/// Lists and Explorers clamp. Components that need cyclic navigation can
+/// explicitly opt into wrapping using the same focus/viewport engine.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RowBoundaryBehavior {
     #[default]
@@ -1000,7 +1000,7 @@ mod tests {
     }
 
     #[test]
-    fn explorer_boundary_policy_wraps_steps_but_clamps_pages() {
+    fn opt_in_wrapping_policy_wraps_steps_but_clamps_pages() {
         let mut state = RowNavigationState::new(Some(0));
         state.set_boundary_behavior(RowBoundaryBehavior::Wrap);
         state.set_navigation(0, 0, ListPageBehavior::Selection);

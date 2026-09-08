@@ -44,7 +44,7 @@ for (let i = 2; i < argv.length; i += 1) {
   const arg = argv[i]
   if (!arg.startsWith('--')) throw new Error(`Unexpected argument: ${arg}`)
   const key = arg.slice(2)
-  if (key === 'dry-run' || key === 'skip-build' || key === 'allow-dirty') {
+  if (key === 'dry-run' || key === 'skip-build' || key === 'allow-dirty' || key === 'skip-registry') {
     args[key] = true
   } else {
     args[key] = argv[++i]
@@ -182,11 +182,15 @@ for (const [target, file] of Object.entries(tarballs)) {
 
 // Publishing an App also republishes the registry the Worker serves the
 // /install/<app>/install.sh route from (release:cli does the same).
-wranglerPut(
-  resolve(repoRoot, 'protocol/app-registry.json'),
-  `${channel}/protocol/app-registry.json`,
-  downloadCache
-)
+// A batch publishes every App artifact before advertising the new versions.
+// Its coordinator uploads the registry once all targets are verified.
+if (!args['skip-registry']) {
+  wranglerPut(
+    resolve(repoRoot, 'protocol/app-registry.json'),
+    `${channel}/protocol/app-registry.json`,
+    downloadCache
+  )
+}
 
 console.log(
   `${dryRun ? '[dry-run] ' : ''}published ${bin} ${version} to ${channel}/${app}/`

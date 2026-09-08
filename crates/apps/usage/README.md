@@ -41,7 +41,12 @@ account metadata: `5-hour` is Claude's rolling five-hour allowance, `7-day` is
 the overall weekly allowance, and `Fable 7-day` is that model's weekly
 allowance. Every percentage is the amount used. Email addresses and reset
 dates/times stay in the detail view instead of crowding the list.
-Unpeel's Session title owns the App name, so there is no repeated in-App title.
+Unpeel's automatic Session title shows `Usage (N%)`, where N is the average
+weekly percentage used across accounts with available weekly quotas. It updates
+on each scan, excludes overlapping session/model limits and dollar totals, and
+falls back to `Usage` when no weekly percentage is available. A manually renamed
+Session keeps its name. The provider list starts immediately, without a repeated
+in-App heading.
 The only footer copy is the compact `a alert  r refresh` action row; Refresh
 becomes a disabled `r refreshing…` action while a scan is active.
 

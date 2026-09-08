@@ -38,13 +38,12 @@ const UI_CONTEXT_SEND: &str = "send-reference-to-agent";
 const UI_CONTEXT_COPY: &str = "copy-reference";
 const UI_CONTEXT_SEND_ID: &str = "context-send-agent";
 const UI_CONTEXT_COPY_ID: &str = "context-copy-reference";
-const UI_FOOTER_NEW_ID: &str = "new-note";
-const UI_FOOTER_NEW_ACTION: &str = "new-note";
+const UI_FOOTER_OPEN_ID: &str = "open-notes";
+const UI_FOOTER_OPEN_ACTION: &str = "open-notes";
 const UI_FOOTER_SAVE_ID: &str = "save-note";
 const UI_FOOTER_SAVE_ACTION: &str = "save-note";
 const UI_FOOTER_AUTOSAVE_ID: &str = "toggle-autosave";
 const UI_FOOTER_AUTOSAVE_ACTION: &str = "toggle-autosave";
-const UI_BACK_ACTION: &str = "back-to-notes";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -117,9 +116,6 @@ pub struct App<'a> {
     context_menu: Option<ContextMenu>,
     agent: AgentBridge,
     autosave: bool,
-    /// Opened from the note list: the title carries a back chevron.
-    back_to_list: bool,
-    status_area: Rect,
     footer_area: Rect,
     dirty: bool,
     last_edit_at: Option<Instant>,
@@ -134,13 +130,6 @@ impl App<'_> {
     #[cfg(test)]
     pub fn open(path: PathBuf, theme: Theme) -> io::Result<Self> {
         Self::open_with_autosave(path, theme, true)
-    }
-
-    /// Shows a back chevron in the title that returns to the note list.
-    #[must_use]
-    pub fn with_back_to_list(mut self, enabled: bool) -> Self {
-        self.back_to_list = enabled;
-        self
     }
 
     pub fn open_with_autosave(path: PathBuf, theme: Theme, autosave: bool) -> io::Result<Self> {
@@ -167,8 +156,6 @@ impl App<'_> {
             context_menu: None,
             agent,
             autosave,
-            back_to_list: false,
-            status_area: Rect::default(),
             footer_area: Rect::default(),
             dirty: false,
             last_edit_at: None,
@@ -225,12 +212,7 @@ impl App<'_> {
     }
 
     fn editor_config(&self) -> MarkdownEditorConfig {
-        let mut config = MarkdownEditorConfig::new(UI_EDITOR_ID);
-        if self.back_to_list {
-            config = config.back_action(UI_BACK_ACTION);
-        }
-        config
-            .title(self.semantic_title())
+        MarkdownEditorConfig::new(UI_EDITOR_ID)
             .dirty(self.dirty)
             .presentation(self.presentation)
             .open_menu_action(MarkdownEditorActions::OPEN_MENU)
@@ -238,8 +220,8 @@ impl App<'_> {
             .insert_menu(self.semantic_insert_menu())
             .context_menu(self.semantic_context_menu())
             .footer_actions([
-                FooterAction::new(UI_FOOTER_NEW_ID, "new", UI_FOOTER_NEW_ACTION)
-                    .accelerator("ctrl+n"),
+                FooterAction::new(UI_FOOTER_OPEN_ID, "open", UI_FOOTER_OPEN_ACTION)
+                    .accelerator("ctrl+o"),
                 FooterAction::new(UI_FOOTER_SAVE_ID, "save", UI_FOOTER_SAVE_ACTION)
                     .accelerator("ctrl+s"),
                 FooterAction::new(
@@ -252,20 +234,21 @@ impl App<'_> {
                     UI_FOOTER_AUTOSAVE_ACTION,
                 ),
             ])
+            .footer_status(self.footer_status())
     }
 
-    fn semantic_title(&self) -> String {
+    fn footer_status(&self) -> String {
         let (row, col) = self.textarea.cursor();
-        let save_state = if self.dirty { "Unsaved" } else { "Saved" };
+        let position = format!("{}:{}", row + 1, col + 1);
         let message = self
             .status
             .as_ref()
             .filter(|(_, at)| at.elapsed() < Duration::from_secs(3))
             .map(|(text, _)| text.as_str());
-        // The session title carries the file name; this row is state only.
         match message {
-            Some(message) => format!("{save_state} · {}:{} · {message}", row + 1, col + 1),
-            None => format!("{save_state} · {}:{}", row + 1, col + 1),
+            Some(message) => format!("{position} · {message}"),
+            None if self.dirty => format!("{position} · unsaved"),
+            None => position,
         }
     }
 
@@ -320,8 +303,8 @@ impl App<'_> {
         let action = event.action.action.as_str();
         if event.action.kind == UiEventKind::Activate && event.action.value == UiEventValue::None {
             match (node, action) {
-                (UI_FOOTER_NEW_ID, UI_FOOTER_NEW_ACTION) => {
-                    self.new_file();
+                (UI_FOOTER_OPEN_ID, UI_FOOTER_OPEN_ACTION) => {
+                    self.open_files();
                     return Ok(true);
                 }
                 (UI_FOOTER_SAVE_ID, UI_FOOTER_SAVE_ACTION) => {
@@ -521,7 +504,6 @@ impl App<'_> {
             .render_component(frame, frame.area(), show_cursor, spec);
         self.drop_target.register(layout.body);
         self.footer_area = layout.footer;
-        self.status_area = layout.status;
 
         if self.mode == Mode::Menu {
             self.draw_menu(frame, layout.body, spec);
@@ -658,11 +640,6 @@ impl App<'_> {
             MouseEventKind::Down(MouseButton::Right) => self.open_context_menu(point),
             MouseEventKind::Down(MouseButton::Left) if self.context_menu.is_some() => {
                 self.click_context_menu(point)
-            }
-            MouseEventKind::Down(MouseButton::Left)
-                if self.back_to_list && self.status_area.contains(point) =>
-            {
-                self.exit = true;
             }
             MouseEventKind::Down(MouseButton::Left) if self.footer_area.contains(point) => {
                 let action = self
@@ -1104,28 +1081,24 @@ impl App<'_> {
 
     fn activate_footer_action(&mut self, action: &FooterAction) {
         match (action.id.as_str(), action.action.as_str()) {
-            (UI_FOOTER_NEW_ID, UI_FOOTER_NEW_ACTION) => self.new_file(),
+            (UI_FOOTER_OPEN_ID, UI_FOOTER_OPEN_ACTION) => self.open_files(),
             (UI_FOOTER_SAVE_ID, UI_FOOTER_SAVE_ACTION) => self.save(),
             (UI_FOOTER_AUTOSAVE_ID, UI_FOOTER_AUTOSAVE_ACTION) => self.toggle_autosave(),
             _ => self.flash("unknown footer action"),
         }
     }
 
-    fn new_file(&mut self) {
+    fn open_files(&mut self) {
         if self.dirty {
-            self.flash("save first (⌘S), then ⌘N");
-            return;
+            if !self.autosave {
+                self.flash("Save changes before opening files (Ctrl+S)");
+                return;
+            }
+            if !self.write_document(false) {
+                return;
+            }
         }
-        self.path = PathBuf::from("untitled.md");
-        self.textarea = MarkdownTextArea::new([""], markdown_text_area_style(self.theme));
-        highlight::refresh(&mut self.textarea, self.theme);
-        self.dirty = false;
-        self.last_edit_at = None;
-        self.flash(if self.autosave {
-            "new file — auto-save on"
-        } else {
-            "new file — auto-save off"
-        });
+        self.exit = true;
     }
 
     fn toggle_autosave(&mut self) {
@@ -1761,7 +1734,7 @@ fn input_from_key(key: KeyEvent) -> Input {
 
 fn markdown_text_area_style(theme: Theme) -> MarkdownTextAreaStyle {
     MarkdownTextAreaStyle {
-        status: Style::new().fg(theme.text),
+        status: Style::new().fg(theme.muted),
         cursor_line: Style::new().bg(theme.cursor_line),
         cursor: Style::new().bg(theme.cursor).fg(theme.cursor_text),
         selection: theme.kit.selected_row,
@@ -1771,13 +1744,6 @@ fn markdown_text_area_style(theme: Theme) -> MarkdownTextAreaStyle {
         scrollbar_track: theme.kit.scrollbar_track,
         scrollbar_thumb: theme.kit.scrollbar_thumb,
     }
-}
-
-fn file_name(path: &Path) -> String {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("untitled")
-        .to_string()
 }
 
 #[cfg(test)]
@@ -1803,54 +1769,89 @@ mod tests {
     }
 
     #[test]
-    fn terminal_status_and_actions_are_both_published_editor_slots() {
-        let width = 140;
-        let buffer = render_app(Theme::dark(), width, 8);
-        let status = row_text(&buffer, 0);
-        let padding = row_text(&buffer, 1);
-        let body = row_text(&buffer, 2);
+    fn editor_starts_with_document_and_keeps_status_in_the_muted_footer() {
+        let buffer = render_app(Theme::dark(), 140, 8);
+        let body = row_text(&buffer, 0);
         let footer = row_text(&buffer, 7);
-
         assert!(
-            status.starts_with("  Saved · 1:1"),
-            "state row sits on top, without the file name: {status}"
+            body.contains("#"),
+            "document begins on the first row: {body}"
         );
-        assert!(!status.contains("Auto-save"), "the footer owns auto-save");
-        assert!(padding.trim().is_empty(), "one empty row under the title");
-        assert!(!body.contains("demo.md"));
-        assert!(footer.starts_with("  ^N new  ^S save  auto-save on"));
+        assert!(!body.contains("Saved") && !body.contains('‹'));
+        assert!(footer.starts_with("  ^O open  ^S save  auto-save on"));
+        assert!(footer.trim_end().ends_with("1:1"));
+        let save = footer.find("save").unwrap() as u16;
+        assert_eq!(buffer[(save, 7)].fg, Theme::dark().kit.muted);
     }
 
     #[test]
-    fn semantic_editor_title_carries_the_terminal_footer_state() {
+    fn semantic_editor_publishes_open_and_cursor_status_without_a_header() {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("demo.md");
         let mut app = App::open_with_autosave(path, Theme::dark(), false).unwrap();
         app.flash("saved manually");
         let node = app.ui_node();
+        assert!(node.required_capabilities().contains(&"footerStatus"));
         let UiComponent::MarkdownEditor(editor) = node.element else {
             panic!("Markdown App must publish MarkdownEditor");
         };
-        let title = editor.title.unwrap();
-        assert!(title.starts_with("Saved · 1:1"));
-        assert!(
-            !title.contains("demo.md"),
-            "the session title carries the file name"
+        assert!(editor.title.is_none() && editor.back.is_none());
+        assert_eq!(
+            editor.footer.status.as_deref(),
+            Some("1:1 · saved manually")
         );
-        assert!(!title.contains("Auto-save"));
-        assert!(title.contains("saved manually"));
         assert!(
-            editor.back.is_none(),
-            "single-file mode has no list to go back to"
+            editor
+                .footer
+                .actions
+                .iter()
+                .any(|action| action.accelerator.as_deref() == Some("ctrl+o"))
         );
+        assert!(
+            !editor
+                .footer
+                .actions
+                .iter()
+                .any(|action| action.accelerator.as_deref() == Some("ctrl+n"))
+        );
+    }
 
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("demo.md");
-        let app = App::open_with_autosave(path, Theme::dark(), false)
-            .unwrap()
-            .with_back_to_list(true);
-        let UiComponent::MarkdownEditor(editor) = app.ui_node().element else {
-            panic!("Markdown App must publish MarkdownEditor");
-        };
-        assert_eq!(editor.back.as_deref(), Some(UI_BACK_ACTION));
+    #[test]
+    fn open_shortcut_preserves_unsaved_edits_and_returns_after_saving() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("note.md");
+        std::fs::write(&path, "Original\n").unwrap();
+        let mut app = App::open_with_autosave(path.clone(), Theme::dark(), false).unwrap();
+        app.textarea.insert_str("Edited ");
+        app.after_edit();
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+        assert!(!app.exit && app.dirty);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "Original\n");
+        assert!(app.footer_status().contains("Save changes"));
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+        assert!(app.exit && !app.dirty);
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "Edited Original\n");
+    }
+
+    #[test]
+    fn open_shortcut_saves_pending_auto_save_and_stays_when_writing_fails() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("note.md");
+        std::fs::write(&path, "Original\n").unwrap();
+        let mut app = App::open_with_autosave(path.clone(), Theme::dark(), true).unwrap();
+        app.textarea.insert_str("Edited ");
+        app.after_edit();
+        // Replacing the file with a directory makes the write fail on every
+        // platform, without depending on permissions or the test user's UID.
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+        assert!(!app.exit && app.dirty);
+        assert!(app.footer_status().contains("save failed"));
+        std::fs::remove_dir(&path).unwrap();
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+        assert!(app.exit && !app.dirty);
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "Edited Original\n");
     }
 
     #[test]
@@ -1880,8 +1881,8 @@ mod tests {
 
         let mut terminal = Terminal::new(TestBackend::new(60, 6)).unwrap();
         terminal.draw(|frame| app.draw(frame)).unwrap();
-        // Rows 0 and 1 are the title and its padding; the body starts at 2.
-        assert!(row_text(terminal.backend().buffer(), 3).contains("Type '/' for commands"));
+        // The document begins immediately; the hint is on its blank second line.
+        assert!(row_text(terminal.backend().buffer(), 1).contains("Type '/' for commands"));
     }
 
     #[test]
@@ -1925,7 +1926,7 @@ mod tests {
     fn light_and_dark_renders_use_their_contrast_palettes() {
         for theme in [Theme::light(), Theme::dark()] {
             let buffer = render_app(theme, 120, 24);
-            assert_eq!(buffer[(1, 23)].fg, theme.strong, "document title color");
+            assert_eq!(buffer[(1, 23)].fg, theme.kit.muted, "footer color");
             let heading = (0..buffer.area.height - 1)
                 .find_map(|y| {
                     (0..buffer.area.width)
@@ -1933,7 +1934,7 @@ mod tests {
                         .map(|x| (x, y))
                 })
                 .expect("visible editor rows contain a heading");
-            assert_eq!(buffer[heading].fg, theme.kit.accent, "heading color");
+            assert_eq!(buffer[heading].fg, theme.kit.text, "neutral heading color");
             let body = (0..buffer.area.height - 1)
                 .find_map(|y| {
                     (0..buffer.area.width)
@@ -1941,7 +1942,7 @@ mod tests {
                         .map(|x| (x, y))
                 })
                 .expect("visible editor rows contain body copy");
-            assert_eq!(buffer[body].fg, theme.text, "body color");
+            assert_eq!(buffer[body].fg, theme.kit.muted, "muted body color");
         }
     }
 
@@ -1962,9 +1963,9 @@ mod tests {
             let mut terminal = Terminal::new(TestBackend::new(60, 5)).unwrap();
             terminal.draw(|frame| app.draw(frame)).unwrap();
             let buffer = terminal.backend().buffer();
-            // Rows 0 and 1 are the title and its padding; the document starts at 2.
+            // Selection belongs to the first document row, with no header above it.
             let start = (0..buffer.area.width)
-                .find(|column| buffer[(*column, 2)].symbol() == "#")
+                .find(|column| buffer[(*column, 0)].symbol() == "#")
                 .expect("selected line is visible");
             let selected_background = theme
                 .kit
@@ -1978,12 +1979,12 @@ mod tests {
                 .expect("App Kit selection has a foreground");
             for column in start..start + text.len() as u16 {
                 assert_eq!(
-                    buffer[(column, 2)].bg,
+                    buffer[(column, 0)].bg,
                     selected_background,
                     "selection background at column {column}"
                 );
                 assert_eq!(
-                    buffer[(column, 2)].fg,
+                    buffer[(column, 0)].fg,
                     selected_foreground,
                     "selection foreground at column {column}"
                 );

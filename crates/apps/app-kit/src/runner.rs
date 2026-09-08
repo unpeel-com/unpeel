@@ -157,6 +157,8 @@ pub struct Session<A: App> {
     input_focused: bool,
     theme: PageTheme,
     area: Rect,
+    toolbar: crate::PageToolbarState,
+    menu_theme: crate::MenuTheme,
     #[cfg(feature = "ui-bridge")]
     bridge: Option<crate::UiBridge>,
     #[cfg(feature = "ui-bridge")]
@@ -202,6 +204,8 @@ impl<A: App> Session<A> {
             input_focused,
             theme: PageTheme::for_theme(theme),
             area: Rect::default(),
+            toolbar: crate::PageToolbarState::default(),
+            menu_theme: crate::MenuTheme::for_color_scheme(theme.scheme),
             #[cfg(feature = "ui-bridge")]
             bridge: None,
             #[cfg(feature = "ui-bridge")]
@@ -300,6 +304,7 @@ impl<A: App> Session<A> {
                 .theme(theme),
             self.area,
         );
+        self.toolbar.render(frame, self.page.toolbar.as_ref());
         if self.input_focused
             && let Some(position) = self.input.cursor_position()
         {
@@ -315,6 +320,17 @@ impl<A: App> Session<A> {
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
         if control && key.code == KeyCode::Char('c') {
             return Ok(Flow::Quit);
+        }
+        if let Some(action) = self.toolbar.handle(
+            &Event::Key(key),
+            self.page.toolbar.as_ref(),
+            self.page.layout(self.area).title,
+            self.menu_theme,
+        ) {
+            return match action {
+                Some((_, action)) => self.apply(AppAction::Command { action }),
+                None => Ok(Flow::Continue),
+            };
         }
         if let Some(action) = self.page.footer.action_for_key(&key)
             && !action.disabled
@@ -505,6 +521,18 @@ impl<A: App> Session<A> {
 
     /// Converts one mouse event into an action and applies it.
     pub fn handle_mouse(&mut self, mouse: MouseEvent) -> io::Result<Flow> {
+        if let Some(action) = self.toolbar.handle(
+            &Event::Mouse(mouse),
+            self.page.toolbar.as_ref(),
+            self.page.layout(self.area).title,
+            self.menu_theme,
+        ) {
+            return match action {
+                Some((_, action)) => self.apply(AppAction::Command { action }),
+                None => Ok(Flow::Continue),
+            };
+        }
+
         let Some(action) = self.mouse_action(mouse) else {
             return Ok(Flow::Continue);
         };
@@ -790,6 +818,29 @@ impl<A: App> Session<A> {
             .any(|footer| footer.id == node && footer.action == id)
         {
             return AppAction::Command {
+                action: id.to_owned(),
+            };
+        }
+        if page
+            .toolbar
+            .as_ref()
+            .is_some_and(|toolbar| toolbar.action(node, id))
+            && action.kind == UiEventKind::Activate
+            && action.value == UiEventValue::None
+        {
+            return AppAction::Command {
+                action: id.to_owned(),
+            };
+        }
+        if page
+            .tabs
+            .iter()
+            .any(|tab| tab.id == node && tab.action == id)
+            && action.kind == UiEventKind::Activate
+            && action.value == UiEventValue::None
+        {
+            return AppAction::Activate {
+                item: node.to_owned(),
                 action: id.to_owned(),
             };
         }

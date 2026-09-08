@@ -85,9 +85,12 @@ fn main() -> color_eyre::Result<()> {
                 status.set_title(&display_name(&file));
                 status.set_status(&editing_status(&file));
                 status.flush();
-                App::open_with_autosave(file, theme, start::read_autosave(install::APP_ID))?
-                    .with_back_to_list(true)
-                    .run(terminal, &mut status, &mut ui_bridge, &mut ui_revision)?;
+                App::open_with_autosave(file, theme, start::read_autosave(install::APP_ID))?.run(
+                    terminal,
+                    &mut status,
+                    &mut ui_bridge,
+                    &mut ui_revision,
+                )?;
                 status.set_title(&vault_title);
                 status.set_status("browsing notes");
                 status.set_context(&browsing_context(&path));
@@ -121,9 +124,12 @@ fn main() -> color_eyre::Result<()> {
                 status.set_title(&display_name(&file));
                 status.set_status(&editing_status(&file));
                 status.flush();
-                App::open_with_autosave(file, theme, start::read_autosave(install::APP_ID))?
-                    .with_back_to_list(true)
-                    .run(terminal, &mut status, &mut ui_bridge, &mut ui_revision)?;
+                App::open_with_autosave(file, theme, start::read_autosave(install::APP_ID))?.run(
+                    terminal,
+                    &mut status,
+                    &mut ui_bridge,
+                    &mut ui_revision,
+                )?;
                 status.set_title(&vault_title);
                 status.set_status("browsing notes");
                 status.set_context(&browsing_context(&vault));

@@ -18,7 +18,7 @@ fn shared_v1_stream_decodes_and_validates_every_frame() {
         messages.push(message);
     }
 
-    assert_eq!(messages.len(), 53);
+    assert_eq!(messages.len(), 56);
     let UiMessage::Attach(attach) = &messages[0] else {
         panic!("first fixture must attach an authenticated participant");
     };
@@ -684,4 +684,39 @@ fn shared_v1_stream_decodes_and_validates_every_frame() {
     };
     assert_eq!(editor.text, "# ");
     assert!(editor.insert_menu.is_none());
+}
+
+#[test]
+fn footer_status_round_trips_and_uses_a_capability_gated_delta() {
+    let mut reader = BufReader::new(Cursor::new(STREAM.as_bytes()));
+    let mut messages = Vec::new();
+    while let Some(message) = read_ui_message(&mut reader).unwrap() {
+        messages.push(message);
+    }
+    let UiMessage::Snapshot(snapshot) = &messages[54] else {
+        panic!("footer snapshot");
+    };
+    let UiMessage::Delta(delta) = &messages[55] else {
+        panic!("footer delta");
+    };
+    assert!(
+        snapshot
+            .root
+            .required_capabilities()
+            .contains(&"footerStatus")
+    );
+    assert_eq!(
+        snapshot.root.footer().unwrap().status.as_deref(),
+        Some("2:3")
+    );
+    let next = snapshot.applying(delta).unwrap();
+    assert_eq!(next.root.footer().unwrap().status.as_deref(), Some("3:4"));
+    assert_eq!(
+        next.root.footer().unwrap().actions,
+        snapshot.root.footer().unwrap().actions
+    );
+    let operations = unpeel_app_kit::markdown_delta_operations(&snapshot.root, &next.root);
+    assert!(
+        matches!(operations.as_slice(), [unpeel_app_kit::UiDeltaOperation::FooterSetActions { status: Some(status), .. }] if status == "3:4")
+    );
 }

@@ -408,11 +408,12 @@ impl App {
         }
     }
 
-    /// Fold a fresh scan in: update the sidebar status line and emit a
-    /// first-class informational alert when an opted-in edge fires.
-    /// Every call is a silent no-op outside Unpeel.
+    /// Fold a fresh scan in: update the automatic title and sidebar status,
+    /// then emit an informational alert when an opted-in edge fires.
+    /// Standalone terminals receive the same title through OSC 2.
     fn apply(&mut self, snapshot: Snapshot) {
         self.scanning = false;
+        self.status.set_title(&snapshot.session_title());
         self.status.set_status(&snapshot.status_line());
         if self.hosted {
             let update = self.alert_tracker.update(&snapshot, self.config.alerts);
@@ -608,6 +609,7 @@ fn run_tui(config: Config) -> io::Result<()> {
 
     let status = AppReporter::detect(install::APP_ID);
     let hosted = status.is_hosted();
+    status.set_title("Usage");
     status.idle();
     let mut app = App {
         config,

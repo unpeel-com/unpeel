@@ -60,44 +60,80 @@ private struct PageContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                if let back = page.back {
-                    // The chevron alone carries the gray focus/hover fill,
-                    // matching the terminal's back row.
-                    Button {
-                        onAction(UIAction(
-                            nodeID: nodeID,
-                            action: back,
-                            kind: .cancel
-                        ))
-                    } label: {
-                        Image(systemName: "chevron.left")
-                            .font(.body.weight(.semibold))
-                            .frame(width: 24, height: 22)
-                            .background(
-                                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                    .fill(Color.primary.opacity(
-                                        backFocused || backHovered ? 0.14 : 0
-                                    ))
-                            )
-                            .contentShape(Rectangle())
+            if !page.tabs.isEmpty {
+                HStack(spacing: 2) {
+                    ForEach(page.tabs) { tab in
+                        Button {
+                            onAction(UIAction(nodeID: tab.id, action: tab.action, kind: .activate))
+                        } label: {
+                            Text(tab.label)
+                                .font(.body.weight(tab.selected ? .semibold : .regular))
+                                .foregroundStyle(tab.selected ? .primary : .secondary)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 7)
+                                .background {
+                                    if tab.selected {
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .fill(Color.primary.opacity(0.12))
+                                    }
+                                }
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityAddTraits(tab.selected ? .isSelected : [])
                     }
-                    .buttonStyle(.plain)
-                    .focusable()
-                    .focused($backFocused)
-                    .onHover { backHovered = $0 }
-                    .onKeyPress(.downArrow) {
-                        backFocused = false
-                        listFocused = true
-                        return .handled
-                    }
-                    .accessibilityLabel("Back")
                 }
-                Text(page.title)
-                    .font(.title2.weight(.semibold))
+                .padding(.horizontal)
+                .padding(.top, 8)
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("Tabs")
             }
+            if !page.title.isEmpty || page.back != nil || page.toolbar != nil {
+                HStack(spacing: 8) {
+                    if let back = page.back {
+                        // The chevron alone carries the gray focus/hover fill,
+                        // matching the terminal's back row.
+                        Button {
+                            onAction(UIAction(
+                                nodeID: nodeID,
+                                action: back,
+                                kind: .cancel
+                            ))
+                        } label: {
+                            Image(systemName: "chevron.left")
+                                .font(.body.weight(.semibold))
+                                .frame(width: 24, height: 22)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                        .fill(Color.primary.opacity(
+                                            backFocused || backHovered ? 0.14 : 0
+                                        ))
+                                )
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .focusable()
+                        .focused($backFocused)
+                        .onHover { backHovered = $0 }
+                        .onKeyPress(.downArrow) {
+                            backFocused = false
+                            listFocused = true
+                            return .handled
+                        }
+                        .accessibilityLabel("Back")
+                    }
+                    Text(page.title)
+                        .help(page.title)
+                        .font(.title2.weight(.semibold))
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    if let toolbar = page.toolbar {
+                        PageToolbarView(toolbar: toolbar, onAction: onAction)
+                    }
+                }
                 .padding(.horizontal)
                 .padding(.top)
+            }
             if case let .input(input) = page.header {
                 inputRow(input)
                     .padding()
@@ -718,7 +754,7 @@ private struct PageContent: View {
             .modifier(ToggleRoleStyle(role: toggle.role))
         case let .status(status):
             Text(status.symbol)
-                .foregroundStyle(color(for: status.tone))
+                .foregroundStyle(selectedID == itemID && !status.preserveToneWhenSelected ? Color.primary : color(for: status.tone))
                 .fontWeight(status.emphasis == .strong ? .semibold : .regular)
                 .accessibilityLabel(status.label)
         case let .badge(badge):
@@ -1158,5 +1194,38 @@ private struct StableInputField: NSViewRepresentable {
             field.stringValue = parent.text
             return true
         }
+    }
+}
+
+/// The same split action presented by the terminal Page toolbar.
+@MainActor
+private struct PageToolbarView: View {
+    let toolbar: UIPageToolbar
+    let onAction: (UIAction) -> Void
+
+    var body: some View {
+        HStack(spacing: 0) {
+            FooterActionButton(action: toolbar.primary, onAction: onAction)
+                .disabled(toolbar.primary.busy)
+            if let menu = toolbar.menu {
+                Menu {
+                    ForEach(menu.items) { item in
+                        Button(role: item.role == .danger ? .destructive : nil) {
+                            onAction(UIAction(nodeID: item.id, action: item.action, kind: .activate))
+                        } label: {
+                            Text(item.label)
+                        }
+                        .disabled(item.disabled)
+                    }
+                } label: {
+                    Image(systemName: "chevron.down")
+                }
+                .menuIndicator(.hidden)
+                .accessibilityLabel(menu.label)
+                .disabled(menu.items.allSatisfy(\.disabled))
+            }
+        }
+        .controlSize(.small)
+        .fixedSize()
     }
 }

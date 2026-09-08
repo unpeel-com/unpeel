@@ -6,9 +6,18 @@ Live block styling, a headings picker, slash commands on empty lines
 to-do, full mouse support (click, drag-select, double/triple-click), and a
 searchable Markdown Explorer when you open a folder.
 
-Edits auto-save after a short typing pause. A status row shows the current
-document state, while the semantic action footer exposes **New**, **Save**,
-and the current auto-save state. Click the auto-save action to toggle it, or
+Headings and document titles use the shared normal text color (white in dark
+mode), with muted body text. Heading emphasis stays neutral, including inline
+code and italics; selection retains App Kit's contrasting text and background.
+
+The document starts at the top, without a back button or status header. The
+muted footer exposes **Open** (`Ctrl+O`), **Save** (`Ctrl+S`), and the current
+auto-save state, with the cursor's line and column at the bottom right.
+Unsaved state and brief save messages appear beside that position. **Open**
+returns to the file picker, where **New note** (`Ctrl+N`) creates a document.
+With auto-save off, save pending edits before opening another file.
+
+Edits auto-save after a short typing pause. Click the auto-save action to toggle it, or
 choose **Toggle auto-save** from the `\\` command palette. The preference
 persists across launches, and `Ctrl+S` always saves manually.
 
@@ -70,8 +79,8 @@ entry ids, filter/parent/open actions, selection, and compact deltas; Ratatui
 uses App Kit's Tree/Explorer interpretation, native uses SwiftUI Tree/List
 controls, and web uses an ARIA tree. Creating a note transitions to one
 App-owned Page + Input and then one MarkdownEditor. The first-run chooser,
-picker, new-note form, editor, slash menu, context menu, command hint, status
-row, action footer, and task edits are all represented in the shared component structure;
+picker, new-note form, editor, slash menu, context menu, command hint, footer
+status, action footer, and task edits are all represented in the shared component structure;
 the Kitchen Sink screen audit reports no terminal-only Markdown surface.
 
 Status integration remains the documented plain-file plus local HTTP contract,

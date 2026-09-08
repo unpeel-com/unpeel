@@ -359,8 +359,8 @@ fn semantic_node(explorer: &mut Explorer, can_send: bool, status: Option<&Status
             )
             .accelerator("ctrl+h"),
         ]);
-    // The session title carries the browsed path; the line under the filter
-    // shows only a transient status (refresh, errors), or nothing.
+    // The session title carries the browsed path. Only transient status
+    // text needs a location row; otherwise files start below the filter.
     tree.location = match status {
         Some(status) => format!(
             "{}{}",
@@ -1024,38 +1024,21 @@ mod tests {
         assert_eq!(drags.regions().len(), 2);
         assert!(drags.regions()[0].path.ends_with("folder"));
         assert_eq!(terminal.backend().buffer()[(49, 0)].bg, Color::Reset);
-        // Filter, location title, padding row, then the selected first row.
-        assert_eq!(terminal.backend().buffer()[(49, 2)].bg, Color::Reset);
+        // With no location text, the selected folder follows the filter.
         assert_eq!(
-            terminal.backend().buffer()[(49, 3)].bg,
+            terminal.backend().buffer()[(49, 1)].bg,
             theme.selected_row.bg.unwrap()
         );
+        assert_eq!(state.rows_area().y, 1);
+        assert_eq!(drags.regions()[0].area.y, 1);
         assert_eq!(terminal.backend().buffer()[(49, 9)].bg, Color::Reset);
-        let location = (0..50)
-            .map(|x| terminal.backend().buffer()[(x, 1)].symbol())
-            .collect::<String>();
-        let root_name = directory
-            .path()
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
-        let _ = root_name;
-        assert_eq!(
-            location.trim_end(),
-            "",
-            "the session title carries the path; the row under the filter stays empty"
-        );
-        assert!(
-            !location.contains(directory.path().to_string_lossy().as_ref()),
-            "Tree location must not expose the absolute project path\n{location}"
-        );
         let filter_row = (0..50)
             .map(|x| terminal.backend().buffer()[(x, 0)].symbol())
             .collect::<String>();
         let first_item_row = (0..50)
-            .map(|x| terminal.backend().buffer()[(x, 2)].symbol())
+            .map(|x| terminal.backend().buffer()[(x, 1)].symbol())
             .collect::<String>();
+        assert!(first_item_row.contains("folder/"));
         assert!(
             !filter_row.contains(directory.path().to_string_lossy().as_ref())
                 && !first_item_row.contains(directory.path().to_string_lossy().as_ref()),

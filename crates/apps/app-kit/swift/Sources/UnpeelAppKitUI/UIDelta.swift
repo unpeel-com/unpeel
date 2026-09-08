@@ -22,7 +22,7 @@ public enum UIDeltaOperation: Equatable, Sendable {
     case barChartSetData(UIBarChartSpec)
     case lineChartSetData(UILineChartSpec)
     case gaugeSetData(UIGaugeSpec)
-    case footerSetActions(nodeID: String, actions: [UIFooterActionSpec])
+    case footerSetActions(nodeID: String, actions: [UIFooterActionSpec], status: String? = nil)
     case inputSetValue(nodeID: String, value: String)
     case listInsertItem(listID: String, index: Int, item: UIListItemSpec)
     case listSetSelection(listID: String, selectedID: String?)
@@ -62,6 +62,7 @@ extension UIDeltaOperation: Codable {
         case placeholder
         case commandHint
         case actions
+        case status
         case insertMenu
         case contextMenu
         case source
@@ -285,7 +286,8 @@ extension UIDeltaOperation: Codable {
             self = .gaugeSetData(gauge)
         case .footerSetActions:
             let actions = try container.decode([UIFooterActionSpec].self, forKey: .actions)
-            guard UIFooterActionsSpec(actions: actions).isValid else {
+            let status = try container.decodeIfPresent(String.self, forKey: .status)
+            guard UIFooterActionsSpec(actions: actions, status: status).isValid else {
                 throw DecodingError.dataCorruptedError(
                     forKey: .actions,
                     in: container,
@@ -294,7 +296,8 @@ extension UIDeltaOperation: Codable {
             }
             self = .footerSetActions(
                 nodeID: try container.decode(String.self, forKey: .nodeID),
-                actions: actions
+                actions: actions,
+                status: status
             )
         case .inputSetValue:
             self = .inputSetValue(
@@ -482,8 +485,9 @@ extension UIDeltaOperation: Codable {
             try container.encodeIfPresent(gauge.caption, forKey: .caption)
             if gauge.caption == nil { try container.encodeNil(forKey: .caption) }
             try container.encode(gauge.accessibilityText, forKey: .accessibilityText)
-        case let .footerSetActions(nodeID, actions):
+        case let .footerSetActions(nodeID, actions, status):
             try container.encode(Operation.footerSetActions, forKey: .op)
+            try container.encodeIfPresent(status, forKey: .status)
             try container.encode(nodeID, forKey: .nodeID)
             try container.encode(actions, forKey: .actions)
         case let .inputSetValue(nodeID, value):
@@ -913,11 +917,11 @@ private extension UINode {
             }
             page.body = .list(list)
             return UINode(id: id, component: .page(page))
-        case let .footerSetActions(nodeID, actions):
+        case let .footerSetActions(nodeID, actions, status):
             guard id == nodeID else {
                 throw UIDeltaApplicationError("Delta targets an unavailable footer root")
             }
-            let footer = UIFooterActionsSpec(actions: actions)
+            let footer = UIFooterActionsSpec(actions: actions, status: status)
             guard footer.isValid else {
                 throw UIDeltaApplicationError("Delta carries invalid FooterActions")
             }

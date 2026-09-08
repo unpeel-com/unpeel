@@ -12,24 +12,40 @@ public struct FooterActionsView: View {
     }
 
     public var body: some View {
-        if !footer.actions.isEmpty {
+        if !footer.isEmpty {
             VStack(spacing: 0) {
                 Divider()
                 HStack(spacing: 8) {
                     ForEach(footer.actions) { action in
-                        footerButton(action)
+                        FooterActionButton(action: action, onAction: onAction)
                     }
                     Spacer(minLength: 0)
+                    if let status = footer.status {
+                        Text(status)
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .layoutPriority(1)
+                    }
                 }
                 .padding(.horizontal, 10)
+                .foregroundStyle(.secondary)
                 .frame(minHeight: 38)
                 .background(.bar)
             }
         }
     }
 
+}
+
+/// One semantic action reused by the footer and the Page toolbar.
+@MainActor
+struct FooterActionButton: View {
+    let action: UIFooterActionSpec
+    let onAction: (UIAction) -> Void
+
     @ViewBuilder
-    private func footerButton(_ action: UIFooterActionSpec) -> some View {
+    var body: some View {
         let button = Button(
             role: action.role == .danger ? .destructive : nil,
             action: {

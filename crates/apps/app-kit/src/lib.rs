@@ -15,6 +15,8 @@ mod app_metadata;
 mod bar_chart;
 mod click;
 mod components;
+mod page_toolbar;
+pub use page_toolbar::PageToolbarState;
 mod content;
 mod context;
 mod drag;
@@ -74,16 +76,16 @@ pub use bar_chart::{
 pub use click::{DEFAULT_DOUBLE_CLICK_INTERVAL, DoubleClickTracker};
 pub use components::{
     BADGE_COMPONENT_CAPABILITY, BUTTON_COMPONENT_CAPABILITY, Badge, Button, ButtonRole, Checkmark,
-    ComponentValidationError, FOOTER_ACTIONS_CAPABILITY, FooterAction, FooterActionRole,
-    FooterActions, FooterActionsWidget, INPUT_COMPONENT_CAPABILITY, Input,
+    ComponentValidationError, FOOTER_ACTIONS_CAPABILITY, FOOTER_STATUS_CAPABILITY, FooterAction,
+    FooterActionRole, FooterActions, FooterActionsWidget, INPUT_COMPONENT_CAPABILITY, Input,
     LIST_COMPONENT_CAPABILITY, LIST_ITEM_ACTIVATE_CAPABILITY, LIST_ITEM_COMPONENT_CAPABILITY,
     LIST_ITEM_METADATA_CAPABILITY, LIST_ITEM_PRESENTATION_CAPABILITY, LIST_ITEM_ROLE_CAPABILITY,
     LIST_ITEM_STYLED_TEXT_CAPABILITY, LIST_SELECTION_CAPABILITY, List, ListItem,
     ListItemActionRole, ListItemBand, ListItemEmphasis, ListItemMedia, ListItemMediaSide,
     ListItemSlot, ListItemTextRun, ListItemTone, ListRowLayout, ListWidget, PAGE_BACK_CAPABILITY,
-    PAGE_COMPONENT_CAPABILITY, Page, PageBodySlot, PageHeaderSlot, PageLayout, PagePointerDecision,
-    PageTheme, PageWidget, STATUS_SYMBOL_COMPONENT_CAPABILITY, StatusSymbol,
-    TOGGLE_COMPONENT_CAPABILITY, Toggle,
+    PAGE_COMPONENT_CAPABILITY, PAGE_TABS_CAPABILITY, PAGE_TOOLBAR_CAPABILITY, Page, PageBodySlot,
+    PageHeaderSlot, PageLayout, PagePointerDecision, PageTab, PageTheme, PageToolbar, PageWidget,
+    STATUS_SYMBOL_COMPONENT_CAPABILITY, StatusSymbol, TOGGLE_COMPONENT_CAPABILITY, Toggle,
 };
 pub use content::{
     CONTENT_COMPONENT_CAPABILITY, CONTENT_SELECTION_CAPABILITY, Content, ContentEmphasis,

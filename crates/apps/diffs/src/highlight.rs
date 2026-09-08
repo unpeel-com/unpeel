@@ -1,116 +1,204 @@
-//! Syntect-based syntax colors for diff content lines.
-//!
-//! Only the code after the `+`/`-`/space prefix is highlighted; headers,
-//! hunk markers, and unknown file types keep the viewer's plain styling.
-//! Colors are foreground-only so the diff row tints and selection highlight
-//! stay in charge of backgrounds.
+//! Language-aware diff tokens expressed in App Kit's shared foreground tones.
+//! Old and new sides have independent parser state; row backgrounds stay
+//! entirely under ContentLineTone/selection control.
 
-use ratatui::style::Color;
-use syntect::easy::HighlightLines;
-use syntect::highlighting::{Theme, ThemeSet};
-use syntect::parsing::{SyntaxReference, SyntaxSet};
-use unpeel_app_kit::ColorScheme;
+use std::sync::OnceLock;
+use syntect::easy::ScopeRegionIterator;
+use syntect::parsing::{ParseState, Scope, ScopeStack, SyntaxReference, SyntaxSet};
+use unpeel_app_kit::{ContentRun, ContentTone};
 
 use crate::git::DiffDocument;
 
-/// Documents beyond this size render un-highlighted rather than stalling the
-/// UI thread on a single parse pass.
 const MAX_HIGHLIGHT_LINES: usize = 4000;
+const MAX_HIGHLIGHT_BYTES: usize = 1024 * 1024;
+const MAX_LINE_BYTES: usize = 16 * 1024;
 
-/// One foreground-colored fragment of a line's code (prefix excluded).
-pub type ColoredSpan = (Color, String);
+/// Code runs exclude the one-character diff prefix. None denotes metadata.
+pub type DocumentSyntax = Vec<Option<Vec<ContentRun>>>;
 
-/// Per-document colors: one entry per diff line, `None` for rows that keep
-/// the viewer's plain styling (headers, meta, `\ No newline` markers).
-pub type DocumentColors = Vec<Option<Vec<ColoredSpan>>>;
+pub fn document_runs(document: &DiffDocument) -> Option<DocumentSyntax> {
+    static HIGHLIGHTER: OnceLock<Highlighter> = OnceLock::new();
+    HIGHLIGHTER
+        .get_or_init(Highlighter::new)
+        .document_runs(document)
+}
 
 pub struct Highlighter {
     syntaxes: SyntaxSet,
-    themes: ThemeSet,
+    rules: Vec<(Scope, ContentTone)>,
 }
 
 impl Highlighter {
-    #[must_use]
     pub fn new() -> Self {
+        let rules = [
+            ("comment", ContentTone::Muted),
+            ("string", ContentTone::Success),
+            ("constant", ContentTone::Warning),
+            ("keyword", ContentTone::Accent),
+            ("storage", ContentTone::Accent),
+            ("entity.name", ContentTone::Info),
+            ("support", ContentTone::Info),
+            ("variable.function", ContentTone::Info),
+            ("entity.other.attribute-name", ContentTone::Warning),
+            ("invalid", ContentTone::Danger),
+        ]
+        .into_iter()
+        .map(|(scope, tone)| (Scope::new(scope).unwrap(), tone))
+        .collect();
         Self {
-            syntaxes: SyntaxSet::load_defaults_newlines(),
-            themes: ThemeSet::load_defaults(),
+            syntaxes: two_face::syntax::extra_newlines(),
+            rules,
         }
     }
 
-    /// Colors for every line of the document, or `None` when the file type
-    /// is unknown or the document is too large to highlight responsively.
-    #[must_use]
-    pub fn document_colors(
-        &self,
-        document: &DiffDocument,
-        scheme: ColorScheme,
-    ) -> Option<DocumentColors> {
-        if document.lines.len() > MAX_HIGHLIGHT_LINES {
+    pub fn document_runs(&self, document: &DiffDocument) -> Option<DocumentSyntax> {
+        if document.lines.len() > MAX_HIGHLIGHT_LINES
+            || document
+                .lines
+                .iter()
+                .any(|line| line.len() > MAX_LINE_BYTES)
+            || document.lines.iter().map(String::len).sum::<usize>() > MAX_HIGHLIGHT_BYTES
+        {
             return None;
         }
         let syntax = self.syntax_for(document)?;
-        let mut lines = HighlightLines::new(syntax, self.theme(scheme));
-        Some(
-            document
-                .lines
-                .iter()
-                .map(|line| {
-                    if !is_content_line(line) {
-                        return None;
+        let mut old = LineParser::new(syntax);
+        let mut new = LineParser::new(syntax);
+        let mut in_hunk = false;
+        let mut result = Vec::with_capacity(document.lines.len());
+        for line in &document.lines {
+            if line.starts_with("@@") {
+                // Gaps between hunks omit source: do not leak a stale string
+                // or comment context from the preceding hunk across the gap.
+                old = LineParser::new(syntax);
+                new = LineParser::new(syntax);
+                in_hunk = true;
+                result.push(None);
+                continue;
+            }
+            if line.starts_with("diff ") {
+                in_hunk = false;
+            }
+            let runs = if in_hunk {
+                match line.as_bytes().first() {
+                    Some(b'-') => old.runs(&line[1..], self),
+                    Some(b'+') => new.runs(&line[1..], self),
+                    Some(b' ') => {
+                        // Context belongs to both versions; only one set of
+                        // foregrounds is needed for the visible context row.
+                        old.runs(&line[1..], self);
+                        new.runs(&line[1..], self)
                     }
-                    let code = format!("{}\n", &line[1..]);
-                    let regions = lines.highlight_line(&code, &self.syntaxes).ok()?;
-                    Some(
-                        regions
-                            .into_iter()
-                            .map(|(style, text)| {
-                                let fg = style.foreground;
-                                (
-                                    Color::Rgb(fg.r, fg.g, fg.b),
-                                    text.trim_end_matches('\n').to_owned(),
-                                )
-                            })
-                            .filter(|(_, text)| !text.is_empty())
-                            .collect(),
-                    )
-                })
-                .collect(),
-        )
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            result.push(runs);
+        }
+        Some(result)
     }
 
-    fn theme(&self, scheme: ColorScheme) -> &Theme {
-        let name = match scheme {
-            ColorScheme::Dark => "base16-eighties.dark",
-            ColorScheme::Light => "InspiredGitHub",
-        };
-        &self.themes.themes[name]
+    fn tone(&self, stack: &ScopeStack) -> ContentTone {
+        stack
+            .scopes
+            .iter()
+            .rev()
+            .find_map(|scope| {
+                self.rules
+                    .iter()
+                    .find_map(|(prefix, tone)| prefix.is_prefix_of(*scope).then_some(*tone))
+            })
+            .unwrap_or_default()
     }
 
     fn syntax_for(&self, document: &DiffDocument) -> Option<&SyntaxReference> {
         let path = document.file.path();
-        let extension = path.extension().and_then(|extension| extension.to_str());
-        let file_name = path.file_name().and_then(|name| name.to_str());
+        let extension = path.extension().and_then(|value| value.to_str());
+        let file_name = path.file_name().and_then(|value| value.to_str());
         extension
             .and_then(|extension| self.syntaxes.find_syntax_by_extension(extension))
             .or_else(|| file_name.and_then(|name| self.syntaxes.find_syntax_by_extension(name)))
     }
 }
 
-impl Default for Highlighter {
-    fn default() -> Self {
-        Self::new()
+struct LineParser {
+    parse: ParseState,
+    scopes: ScopeStack,
+}
+
+impl LineParser {
+    fn new(syntax: &SyntaxReference) -> Self {
+        Self {
+            parse: ParseState::new(syntax),
+            scopes: ScopeStack::new(),
+        }
+    }
+
+    fn runs(&mut self, text: &str, highlighter: &Highlighter) -> Option<Vec<ContentRun>> {
+        let source = format!("{text}\n");
+        let operations = self.parse.parse_line(&source, &highlighter.syntaxes).ok()?;
+        let mut runs: Vec<ContentRun> = Vec::new();
+        for (text, operation) in ScopeRegionIterator::new(&operations, &source) {
+            self.scopes.apply(operation).ok()?;
+            let text = text.trim_end_matches('\n');
+            if text.is_empty() {
+                continue;
+            }
+            let tone = highlighter.tone(&self.scopes);
+            if let Some(previous) = runs.last_mut().filter(|run| run.tone == tone) {
+                previous.text.push_str(text);
+            } else {
+                runs.push(ContentRun::new(text).tone(tone));
+            }
+        }
+        Some(runs)
     }
 }
 
-/// A patch body line whose text after the one-character prefix is real file
-/// content. Headers ("+++", "---", "@@", "diff --git", "index ") and the
-/// `\ No newline` marker are not.
-fn is_content_line(line: &str) -> bool {
-    if line.starts_with("+++") || line.starts_with("---") || line.starts_with("@@") {
-        return false;
+// Adapter for the older standalone renderer's regression fixtures. The
+// shipping renderer consumes the semantic ContentRun values directly.
+#[cfg(test)]
+use ratatui::style::Color;
+#[cfg(test)]
+use unpeel_app_kit::{ColorScheme, KitTheme};
+#[cfg(test)]
+pub type DocumentColors = Vec<Option<Vec<(Color, String)>>>;
+#[cfg(test)]
+impl Highlighter {
+    pub fn document_colors(
+        &self,
+        document: &DiffDocument,
+        scheme: ColorScheme,
+    ) -> Option<DocumentColors> {
+        let theme = match scheme {
+            ColorScheme::Dark => KitTheme::dark(),
+            ColorScheme::Light => KitTheme::light(),
+        };
+        self.document_runs(document).map(|lines| {
+            lines
+                .into_iter()
+                .map(|runs| {
+                    runs.map(|runs| {
+                        runs.into_iter()
+                            .map(|run| {
+                                let color = match run.tone {
+                                    ContentTone::Default => theme.text,
+                                    ContentTone::Muted => theme.muted,
+                                    ContentTone::Accent => theme.accent,
+                                    ContentTone::Info => Color::LightBlue,
+                                    ContentTone::Success => Color::LightGreen,
+                                    ContentTone::Warning => Color::LightYellow,
+                                    ContentTone::Danger => theme.danger,
+                                };
+                                (color, run.text)
+                            })
+                            .collect()
+                    })
+                })
+                .collect()
+        })
     }
-    matches!(line.as_bytes().first(), Some(b'+' | b'-' | b' '))
 }
 
 #[cfg(test)]
@@ -152,6 +240,83 @@ mod tests {
         assert!(
             added.len() > 1,
             "the keyword should color differently from the identifier"
+        );
+    }
+
+    #[test]
+    fn swift_typescript_and_rust_preserve_text_and_distinguish_tokens() {
+        let highlighter = Highlighter::new();
+        for (path, code) in [
+            ("Model.swift", "let title: String = \"Hello\" // comment"),
+            ("model.ts", "const title: string = \"Hello\"; // comment"),
+            ("model.rs", "let title: &str = \"Hello\"; // comment"),
+        ] {
+            let mut document = rust_document();
+            document.file = ChangedFile::fixture(path, ' ', 'M');
+            document.lines = vec!["@@ -1 +1 @@".into(), format!("+{code}")];
+            let syntax = highlighter.document_runs(&document).expect(path);
+            let runs = syntax[1].as_ref().unwrap();
+            assert_eq!(
+                runs.iter().map(|run| run.text.as_str()).collect::<String>(),
+                code
+            );
+            for tone in [
+                ContentTone::Accent,
+                ContentTone::Success,
+                ContentTone::Muted,
+            ] {
+                assert!(
+                    runs.iter().any(|run| run.tone == tone),
+                    "{path}: missing {tone:?} in {runs:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn old_and_new_sides_keep_independent_multiline_context_and_reset_at_hunks() {
+        let highlighter = Highlighter::new();
+        let mut document = rust_document();
+        document.lines = [
+            "@@ -1,2 +1,2 @@",
+            "-/* old comment",
+            "+let title = 2;",
+            "-end */",
+            "+// new comment",
+            "@@ -50 +50 @@",
+            "+let next = 3;",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        let syntax = highlighter.document_runs(&document).unwrap();
+        assert!(
+            syntax[1]
+                .as_ref()
+                .unwrap()
+                .iter()
+                .all(|run| run.tone == ContentTone::Muted)
+        );
+        assert!(
+            syntax[2]
+                .as_ref()
+                .unwrap()
+                .iter()
+                .any(|run| run.tone == ContentTone::Accent)
+        );
+        assert!(
+            syntax[3]
+                .as_ref()
+                .unwrap()
+                .iter()
+                .all(|run| run.tone == ContentTone::Muted)
+        );
+        assert!(
+            syntax[6]
+                .as_ref()
+                .unwrap()
+                .iter()
+                .any(|run| run.tone == ContentTone::Accent)
         );
     }
 

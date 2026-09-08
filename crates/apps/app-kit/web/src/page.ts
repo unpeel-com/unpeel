@@ -14,6 +14,7 @@ import {
   type ListItemTextRun,
   type ListSpec,
   type PageNode,
+  type PageToolbarSpec,
   type SparklineSpec,
   type StatusSymbolSpec,
   type ToggleSpec,
@@ -97,9 +98,37 @@ export class PageRenderer {
       : "";
     this.disconnectResizeObservers();
     this.element.replaceChildren();
-    this.footer = page.footer;
+    this.footer = { actions: [...(page.footer?.actions ?? []), ...(page.toolbar ? [page.toolbar.primary] : [])] };
+    if (page.tabs?.length) {
+      const tabs = document.createElement("div");
+      tabs.className = "unpeel-page__tabs";
+      tabs.setAttribute("role", "tablist");
+      tabs.setAttribute("aria-label", "Tabs");
+      for (const [index, tab] of page.tabs.entries()) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.id = `unpeel-tab-${tab.id}`;
+        button.textContent = tab.label;
+        button.setAttribute("role", "tab");
+        button.setAttribute("aria-selected", String(tab.selected === true));
+        button.tabIndex = tab.selected ? 0 : -1;
+        button.addEventListener("click", () => this.onAction(uiAction(tab.id, tab.action, "activate")));
+        button.addEventListener("keydown", (event) => {
+          const delta = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+          if (!delta) return;
+          event.preventDefault();
+          const next = page.tabs![(index + delta + page.tabs!.length) % page.tabs!.length]!;
+          this.onAction(uiAction(next.id, next.action, "activate"));
+          (tabs.children[(index + delta + page.tabs!.length) % page.tabs!.length] as HTMLElement).focus();
+        });
+        tabs.append(button);
+      }
+      this.element.append(tabs);
+    }
     const pageHeader = document.createElement("header");
     pageHeader.className = "unpeel-page__header";
+    if (page.toolbar) this.element.classList.add("unpeel-page--toolbar");
+    else this.element.classList.remove("unpeel-page--toolbar");
     if (page.back !== undefined) {
       const back = document.createElement("button");
       back.type = "button";
@@ -112,8 +141,12 @@ export class PageRenderer {
     }
     const heading = document.createElement("h1");
     heading.textContent = page.title;
+    heading.title = page.title;
     pageHeader.append(heading);
-    this.element.append(pageHeader);
+    if (page.toolbar) pageHeader.append(this.toolbar(page.toolbar));
+    if (page.title.length > 0 || page.back !== undefined || page.toolbar !== undefined) {
+      this.element.append(pageHeader);
+    }
 
     if (page.header !== undefined) this.element.append(this.input(page.header));
 
@@ -168,6 +201,51 @@ export class PageRenderer {
     this.element.append(list);
     this.configureValueVisibility(list, body);
     this.finishRender(page, focusedID);
+  }
+
+  private toolbar(spec: PageToolbarSpec): HTMLElement {
+    const toolbar = document.createElement("div");
+    toolbar.className = "unpeel-page__toolbar";
+    const primary = document.createElement("div");
+    renderFooterActions(primary, { actions: [spec.primary] }, this.onAction);
+    toolbar.append(primary);
+    if (spec.menu) {
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "unpeel-page__toolbar-menu";
+      toggle.textContent = "▾";
+      toggle.setAttribute("aria-label", spec.menu.label);
+      toggle.setAttribute("aria-haspopup", "menu");
+      toggle.setAttribute("aria-expanded", "false");
+      toggle.disabled = spec.menu.items.every((item) => item.disabled);
+      const popup = document.createElement("div");
+      popup.className = "unpeel-page__toolbar-popup";
+      popup.hidden = true;
+      const close = (): void => {
+        popup.hidden = true;
+        toggle.setAttribute("aria-expanded", "false");
+      };
+      const open = (): void => {
+        renderSemanticMenu(popup, spec.menu!, spec.primary.id, (action) => {
+          close(); toggle.focus(); this.onAction(action);
+        });
+        popup.hidden = false;
+        toggle.setAttribute("aria-expanded", "true");
+        popup.focus();
+      };
+      toggle.addEventListener("click", () => popup.hidden ? open() : close());
+      toggle.addEventListener("keydown", (event) => {
+        if (event.key === "ArrowDown") { event.preventDefault(); open(); }
+      });
+      popup.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") { event.stopPropagation(); close(); toggle.focus(); }
+      });
+      toolbar.addEventListener("focusout", (event) => {
+        if (!(event.relatedTarget instanceof Node) || !toolbar.contains(event.relatedTarget)) close();
+      });
+      toolbar.append(toggle, popup);
+    }
+    return toolbar;
   }
 
   private finishRender(page: PageNode, focusedID: string): void {
@@ -848,6 +926,7 @@ export class PageRenderer {
     element.textContent = status.symbol;
     element.dataset.tone = status.tone ?? "default";
     element.dataset.emphasis = status.emphasis ?? "regular";
+    element.dataset.preserveTone = String(status.preserveToneWhenSelected === true);
     element.setAttribute("aria-label", status.label);
     return element;
   }

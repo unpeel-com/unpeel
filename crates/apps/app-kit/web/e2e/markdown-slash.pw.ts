@@ -17,7 +17,7 @@ const repository = resolve(here, "../..");
 const fixture = readFileSync(resolve(repository, "protocol/unpeel-ui-v1.ndjson"), "utf8")
   .trimEnd()
   .split("\n")
-  .slice(-5)
+  .slice(48, 53)
   .map(decodeUiMessage);
 
 test("slash keystroke presents the authoritative Menu and returns its action", async ({ page }) => {

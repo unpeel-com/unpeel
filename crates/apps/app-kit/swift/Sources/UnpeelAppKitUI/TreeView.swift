@@ -80,14 +80,16 @@ private struct TreeContent: View {
                 }
             }
 
-            HStack(spacing: 6) {
-                Image(systemName: "folder")
-                Text(tree.location)
-                    .font(.headline)
-                    .lineLimit(1)
+            if !tree.location.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "folder")
+                    Text(tree.location)
+                        .font(.headline)
+                        .lineLimit(1)
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 10)
             }
-            .padding(.horizontal)
-            .padding(.vertical, 10)
 
             if let action = tree.primaryAction {
                 Button(
@@ -159,7 +161,6 @@ private struct TreeContent: View {
                 .buttonStyle(.plain)
             }
             Image(systemName: icon(row.item))
-                .foregroundStyle(row.item.symlink ? .cyan : .secondary)
             Text(row.item.kind == .parent ? ".." : row.item.label)
                 .lineLimit(1)
             if let detail = row.item.detail, row.item.kind != .parent {
@@ -174,6 +175,7 @@ private struct TreeContent: View {
                 ProgressView().controlSize(.small)
             }
         }
+        .foregroundStyle(row.item.kind == .file && selectedID != row.id ? .secondary : .primary)
         .contentShape(Rectangle())
         .gesture(
             TapGesture(count: 2)
@@ -277,13 +279,13 @@ private struct TreeContent: View {
             ?? 0
         let target: Int?
         switch press.key {
-        case .downArrow: target = (current + 1) % rows.count
+        case .downArrow: target = min(current + 1, rows.count - 1)
         case .upArrow:
             if current == 0, tree.filter != nil {
                 filterFocused = true
                 return .handled
             }
-            target = (current - 1 + rows.count) % rows.count
+            target = max(current - 1, 0)
         case .home: target = 0
         case .end: target = rows.count - 1
         case .pageDown: target = min(current + 10, rows.count - 1)

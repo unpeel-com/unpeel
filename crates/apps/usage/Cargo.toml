@@ -1,6 +1,6 @@
 [package]
 name = "unpeel-usage"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Local AI usage & credits at a glance — a standalone terminal dashboard that lights up as an Unpeel App"
 license = "MIT"

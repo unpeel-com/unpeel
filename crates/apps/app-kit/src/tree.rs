@@ -381,6 +381,9 @@ impl Tree {
         if !self.footer.is_empty() {
             capabilities.push(FOOTER_ACTIONS_CAPABILITY);
         }
+        if self.footer.status.is_some() {
+            capabilities.push(crate::FOOTER_STATUS_CAPABILITY);
+        }
         capabilities
     }
 
@@ -692,10 +695,10 @@ impl TreeTheme {
             style: Style::new(),
             location: Style::new().fg(theme.text).bold(),
             filter: Style::new().fg(theme.muted),
-            item: Style::new().fg(theme.text),
-            directory: Style::new().fg(theme.accent),
-            parent: Style::new().fg(theme.accent),
-            symlink: Style::new().fg(Color::Cyan),
+            item: Style::new().fg(theme.muted),
+            directory: Style::new().fg(theme.text),
+            parent: Style::new().fg(theme.text),
+            symlink: Style::new(),
             selected: theme.selected_row,
             hovered: theme.hovered_row,
             empty: Style::new().fg(theme.subtle),
@@ -712,7 +715,7 @@ impl TreeTheme {
         InputFieldTheme {
             style: self.style,
             text: self.filter,
-            focused: self.item.bold(),
+            focused: self.directory.bold(),
             placeholder: self.empty,
             prompt: self.filter,
             selection: self.selected,
@@ -740,7 +743,7 @@ pub struct TreeState {
 impl Default for TreeState {
     fn default() -> Self {
         let mut navigation = RowNavigationState::default();
-        navigation.set_boundary_behavior(RowBoundaryBehavior::Wrap);
+        navigation.set_boundary_behavior(RowBoundaryBehavior::Clamp);
         navigation.set_navigation(1, 0, ListPageBehavior::Selection);
         Self {
             navigation,
@@ -956,12 +959,12 @@ impl Widget for TreeWidget<'_> {
                 .render(row, buffer);
             }
         }
-        // The location row is the screen title; keep one padding row under
-        // it whenever there is room.
-        let location_height = match area.height.saturating_sub(filter_height) {
-            0 => 0,
-            1 => 1,
-            _ => 2,
+        // A visible location title gets its padding row. An empty location
+        // occupies no space, so rows begin directly beneath the filter.
+        let location_height = if self.tree.location.is_empty() {
+            0
+        } else {
+            area.height.saturating_sub(filter_height).min(2)
         };
         let location_area = Rect::new(
             area.x,
@@ -1112,7 +1115,7 @@ impl Widget for TreeWidget<'_> {
                 TreeItemKind::File => self.theme.item,
             };
             if item.symlink {
-                inactive = self.theme.symlink;
+                inactive = inactive.patch(self.theme.symlink);
             }
             let active = inactive.patch(match pointer_phase {
                 TerminalPointerPhase::Idle | TerminalPointerPhase::Hovered if selected => {
