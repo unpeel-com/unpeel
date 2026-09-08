@@ -485,8 +485,14 @@ fn publish_status(
 pub fn run_service(mut report: impl FnMut(ServiceEvent)) -> Result<(), String> {
     SHUTDOWN_REQUESTED.store(false, Ordering::Release);
     unsafe {
-        libc::signal(libc::SIGINT, request_shutdown as libc::sighandler_t);
-        libc::signal(libc::SIGTERM, request_shutdown as libc::sighandler_t);
+        libc::signal(
+            libc::SIGINT,
+            request_shutdown as *const () as libc::sighandler_t,
+        );
+        libc::signal(
+            libc::SIGTERM,
+            request_shutdown as *const () as libc::sighandler_t,
+        );
     }
     let real_home = unpeel_core::app_paths::real_unpeel_home();
     let lease = ServiceLease::acquire(&real_home)?;

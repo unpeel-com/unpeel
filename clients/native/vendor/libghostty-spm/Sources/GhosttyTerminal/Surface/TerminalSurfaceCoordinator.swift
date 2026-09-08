@@ -7,7 +7,6 @@
 
 import Foundation
 import GhosttyKit
-import MSDisplayLink
 
 /// Shared terminal state and logic used by both UIKit and AppKit views.
 ///
@@ -40,6 +39,7 @@ final class TerminalSurfaceCoordinator {
     // MARK: - Platform Hooks
 
     var isAttached: () -> Bool = { false }
+    var isPresented: () -> Bool = { true }
     var scaleFactor: () -> Double = { 2.0 }
     var viewSize: () -> (width: Double, height: Double) = { (0, 0) }
     /// CGDirectDisplayID of the display hosting the view, for binding the
@@ -49,7 +49,7 @@ final class TerminalSurfaceCoordinator {
     var onMetricsUpdate: (() -> Void)?
     var onCellSizeDidChange: (() -> Void)?
 
-    /// Called after every display-link render (`tick`).
+    /// Called after every requested render.
     ///
     /// When `synchronizeMetrics` sends a new pixel size to ghostty via
     /// `setSize`, the underlying IOSurface is not rebuilt synchronously.
@@ -72,9 +72,9 @@ final class TerminalSurfaceCoordinator {
     private var isDisplayVisible = true
     private var isApplicationActive = true
     private var isSurfaceFocused = false
-    private var pendingImmediateTick = true
-    private var lastTickTimestamp: TimeInterval = 0
-    private var tickScheduled = false
+    private lazy var renderScheduler = TerminalRenderScheduler { [weak self] in
+        self?.renderImmediately()
+    }
 
     init() {
         bridge.onCellSizeChange = { [weak self] width, height in
@@ -83,46 +83,20 @@ final class TerminalSurfaceCoordinator {
         bridge.onRenderRequest = { [weak self] in
             self?.requestImmediateTick()
         }
-        activityLink.delegatingObject(activityRelay)
     }
 
     func requestImmediateTick() {
-        pendingImmediateTick = true
-        noteRenderActivity()
-        scheduleTickIfNeeded()
+        guard canRenderFrame else { return }
+        renderScheduler.request()
     }
 
-    // MARK: - Activity-window render pump
+    // MARK: - Event-driven refresh
 
-    /// Ghostty's embedded core coalesces wakeup callbacks and render
-    /// actions under IO load (aggressively so since the tip VT-throughput
-    /// work), so a purely push-driven embedder can sit on a stale frame:
-    /// TUI repaints (Claude's virtual scroll, jump-to-bottom redraws)
-    /// arrived but nothing told us to draw — the screen looked blank or
-    /// frozen until a resize forced a frame. While the activity window is
-    /// open, the display link nudges the core renderer thread every frame
-    /// (`ghostty_surface_refresh`), pulling whatever the core queued
-    /// instead of waiting to be pushed. The window re-arms on every render
-    /// request and on user scroll input, and the relay gate keeps
-    /// closed-window frames to one lock acquisition.
-    ///
-    /// The nudge runs directly on the display-link thread — never the main
-    /// thread. `refresh` is a renderer-mailbox push + async wakeup (the
-    /// same call termio makes cross-thread on PTY output), so frame
-    /// production stays at display rate even when the main thread is busy
-    /// with AppKit/SwiftUI work. App ticks (`ghostty_app_tick`) are not
-    /// part of the per-frame path; they stay wakeup-driven via
-    /// `scheduleTickIfNeeded`.
-    private let activityLink = DisplayLink()
-    private let activityRelay = TerminalActivityLinkRelay()
-    private nonisolated static let activityWindowDuration: TimeInterval = 1.0
-
-    /// Opens (or extends) the activity window. Also called by platform
-    /// views on scroll input so a mouse-captured TUI's repaints present at
-    /// display rate from the first wheel event.
+    /// Scroll input needs an explicit refresh even when the core coalesces
+    /// its render action. Later TUI output is rendered by the core; host-fed
+    /// output also requests a refresh after each completed write.
     func noteRenderActivity() {
-        guard canRenderFrame else { return }
-        activityRelay.arm(for: Self.activityWindowDuration)
+        requestImmediateTick()
     }
 
     /// Presents the current frame without blocking the main thread.
@@ -148,13 +122,15 @@ final class TerminalSurfaceCoordinator {
         onPostRender?()
     }
 
-    func startDisplayLink() {
-        scheduleTickIfNeeded()
+    func refreshPresentationVisibility() {
+        surface?.setOcclusion(effectiveSurfaceVisible)
+        renderScheduler.setEnabled(canRenderFrame)
+        requestImmediateTick()
     }
 
-    func stopDisplayLink() {
-        tickScheduled = false
-        activityRelay.disarm()
+    func stopRendering() {
+        surface?.setOcclusion(false)
+        renderScheduler.setEnabled(false)
     }
 
     // MARK: - Surface Lifecycle
@@ -205,27 +181,19 @@ final class TerminalSurfaceCoordinator {
 
         bridge.rawSurface = newSurface.rawValue
         surface = newSurface
-        activityRelay.setSurfaceHandle(newSurface.rawValue)
         newSurface.setOcclusion(effectiveSurfaceVisible)
         if let displayID = currentDisplayID() {
             newSurface.setDisplayID(displayID)
         }
-        controller.shouldProcessWakeup = { [weak self] in
-            self?.canRenderFrame == true
-        }
         controller.onWakeup = { [weak self] in
             self?.requestImmediateTick()
         }
-        // Host-fed (in-memory) surfaces have no PTY IO driving core render
-        // wakeups, and the core coalesces them aggressively under load —
-        // freshly written bytes could sit unparsed-on-screen (blank/stale
-        // regions) until a resize forced a frame. Arm the render pump on
-        // every host write so remote output presents at display rate. The
-        // relay is thread-safe, so the transport thread arms it directly —
-        // no main-thread hop between host bytes and the next frame.
-        let relay = activityRelay
+        // Writes finish parsing before this notification. Coalesce transport
+        // threads onto main without retaining or touching a raw surface.
+        renderScheduler.setEnabled(canRenderFrame)
+        let scheduler = renderScheduler
         configuration.inMemorySession?.onHostBytes = {
-            relay.arm(for: Self.activityWindowDuration)
+            scheduler.request()
         }
         TerminalDebugLog.log(.lifecycle, "surface rebuild succeeded")
         (delegate as? any TerminalSurfaceLifecycleDelegate)?
@@ -385,19 +353,8 @@ final class TerminalSurfaceCoordinator {
     }
 
     func setDisplayVisible(_ visible: Bool) {
-        guard isDisplayVisible != visible else {
-            surface?.setOcclusion(effectiveSurfaceVisible)
-            return
-        }
-
         isDisplayVisible = visible
-        surface?.setOcclusion(effectiveSurfaceVisible)
-
-        if canRenderFrame {
-            requestImmediateTick()
-        } else {
-            stopDisplayLink()
-        }
+        refreshPresentationVisibility()
     }
 
     func setApplicationActive(_ active: Bool) {
@@ -405,33 +362,21 @@ final class TerminalSurfaceCoordinator {
             if active {
                 renderImmediately()
             } else {
-                stopDisplayLink()
+                stopRendering()
             }
             return
         }
 
         isApplicationActive = active
         surface?.setOcclusion(effectiveSurfaceVisible)
+        renderScheduler.setEnabled(canRenderFrame)
 
         if active {
             synchronizeMetrics()
             renderImmediately()
         } else {
-            stopDisplayLink()
+            stopRendering()
         }
-    }
-
-    // MARK: - Frame Rendering
-
-    func tick(context: DisplayLinkCallbackContext) {
-        guard shouldRenderFrame(at: context.timestamp) else {
-            return
-        }
-        pendingImmediateTick = false
-        lastTickTimestamp = context.timestamp
-        TerminalDebugLog.log(.render, "tick")
-        controller?.tick()
-        presentFrame()
     }
 
     // MARK: - Focus
@@ -468,17 +413,12 @@ final class TerminalSurfaceCoordinator {
         asynchronously: Bool = false
     ) {
         TerminalDebugLog.log(.lifecycle, "tear down surface")
-        tickScheduled = false
-        // Blocks until any in-flight display-link refresh returns, and keeps
-        // later frames off this surface — must precede the free below.
-        activityRelay.setSurfaceHandle(nil)
-        activityRelay.disarm()
+        renderScheduler.setEnabled(false)
         if let session = configuration.inMemorySession {
             session.onHostBytes = nil
             session.clearSurface(ifMatches: surface?.rawValue)
         }
         controller?.onWakeup = nil
-        controller?.shouldProcessWakeup = nil
         bridge.rawSurface = nil
         let hadSurface = surface != nil
         surface?.setFocus(false)
@@ -492,8 +432,6 @@ final class TerminalSurfaceCoordinator {
         lastSentPixelSize = nil
         lastSentScale = nil
         pendingSynchronousDraw = false
-        pendingImmediateTick = true
-        lastTickTimestamp = 0
         controller?.remove(bridge)
         if hadSurface {
             (delegate as? any TerminalSurfaceLifecycleDelegate)?
@@ -511,47 +449,12 @@ final class TerminalSurfaceCoordinator {
         onCellSizeDidChange?()
     }
 
-    private func shouldRenderFrame(at _: TimeInterval) -> Bool {
-        guard canRenderFrame else {
-            return false
-        }
-        return pendingImmediateTick || lastTickTimestamp == 0
-    }
-
-    private func scheduleTickIfNeeded() {
-        guard canRenderFrame else {
-            tickScheduled = false
-            return
-        }
-        guard !tickScheduled else {
-            return
-        }
-        tickScheduled = true
-        TerminalDebugLog.log(.lifecycle, "tick scheduled")
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            tickScheduled = false
-            let timestamp = Self.monotonicTimestamp()
-            tick(
-                context: .init(
-                    duration: 0,
-                    timestamp: timestamp,
-                    targetTimestamp: timestamp
-                )
-            )
-        }
-    }
-
-    private static func monotonicTimestamp() -> TimeInterval {
-        ProcessInfo.processInfo.systemUptime
-    }
-
     private var effectiveSurfaceVisible: Bool {
-        isDisplayVisible && isApplicationActive
+        isDisplayVisible && isApplicationActive && isAttached() && isPresented()
     }
 
     private var canRenderFrame: Bool {
-        effectiveSurfaceVisible && isAttached()
+        effectiveSurfaceVisible
     }
 
     private var hasValidViewSize: Bool {
@@ -560,21 +463,9 @@ final class TerminalSurfaceCoordinator {
     }
 
     func renderImmediately() {
-        guard canRenderFrame else {
-            tickScheduled = false
-            return
-        }
-
-        pendingImmediateTick = true
-        tickScheduled = false
-        let timestamp = Self.monotonicTimestamp()
-        tick(
-            context: .init(
-                duration: 0,
-                timestamp: timestamp,
-                targetTimestamp: timestamp
-            )
-        )
+        renderScheduler.cancel()
+        guard canRenderFrame else { return }
+        presentFrame()
     }
 
     /// `renderImmediately`, but the frame draws synchronously even when the
@@ -589,54 +480,5 @@ final class TerminalSurfaceCoordinator {
             pendingSynchronousDraw = true
         }
         renderImmediately()
-    }
-}
-
-/// Nudges the core renderer thread at display cadence while the
-/// coordinator's activity window is open. `synchronization` fires on the
-/// display-link thread every frame for the lifetime of the link; the
-/// lock-guarded gate keeps closed-window frames to a single lock
-/// acquisition with no main-thread work.
-///
-/// The refresh call deliberately happens under the lock: the coordinator
-/// clears `surfaceHandle` (also under the lock) before the raw surface is
-/// freed, so an in-flight frame can never race the free — the clear blocks
-/// until the refresh returns, and refresh itself is a sub-microsecond
-/// mailbox push.
-final class TerminalActivityLinkRelay: DisplayLinkDelegate, @unchecked Sendable {
-    private let lock = NSLock()
-    private var deadline: TimeInterval = 0
-    private var surfaceHandle: ghostty_surface_t?
-
-    /// Opens (or extends) the activity window. Safe from any thread —
-    /// in-memory host feeds call this straight off their transport thread.
-    func arm(for duration: TimeInterval) {
-        let newDeadline = ProcessInfo.processInfo.systemUptime + duration
-        lock.lock()
-        deadline = max(deadline, newDeadline)
-        lock.unlock()
-    }
-
-    func disarm() {
-        lock.lock()
-        deadline = 0
-        lock.unlock()
-    }
-
-    /// Swap the raw surface the relay may refresh. Must be called with nil
-    /// before the previous surface is freed.
-    func setSurfaceHandle(_ handle: ghostty_surface_t?) {
-        lock.lock()
-        surfaceHandle = handle
-        lock.unlock()
-    }
-
-    func synchronization(context _: DisplayLinkCallbackContext) {
-        lock.lock()
-        defer { lock.unlock() }
-        guard let handle = surfaceHandle,
-              ProcessInfo.processInfo.systemUptime <= deadline
-        else { return }
-        ghostty_surface_refresh(handle)
     }
 }

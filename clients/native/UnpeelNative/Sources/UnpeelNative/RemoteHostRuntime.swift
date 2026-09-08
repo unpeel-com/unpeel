@@ -2523,6 +2523,14 @@ final class RemoteHostRuntime: ObservableObject {
             guard outputPumpIsCurrent(identity, connection: connection) else {
                 return
             }
+            // Older Hosts may return immediately with an incomplete UTF-8 or
+            // control-string suffix and an unchanged cursor. Commit the page
+            // normally, then bound retries instead of spinning on success.
+            if page.bytes.isEmpty,
+               page.metadata.requestedOffset == page.metadata.nextOffset,
+               !(await sleepOutputIdle()) {
+                return
+            }
         }
     }
 

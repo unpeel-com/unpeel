@@ -44,11 +44,10 @@ path dependency because these changes are not upstream yet:
    `Sources/GhosttyTerminal/Surface/TerminalSurface.swift` (was internal)
    so the host can run `scroll_to_bottom`.
 
-3. **Synchronous render exposed** — `AppTerminalView.renderImmediately()`
+3. **Synchronous render exposed.** `AppTerminalView.renderImmediately()`
    (new `open func`) calling `TerminalSurfaceCoordinator.renderImmediately()`
-   (was `private`, now internal). The default wakeup path defers the first
-   draw after a view re-attaches to the next runloop turn via
-   `DispatchQueue.main.async`, so swapping a retained terminal view into
+    (was `private`, now internal). The default wakeup path coalesces the first
+    refresh after a view re-attaches on the main queue, so swapping a retained terminal view into
    the hierarchy presents the stale pre-detach drawable for a frame or
    two. Unpeel calls this right after adopting + focusing a pane on
    session switch so the swap transaction already contains a fresh,
@@ -78,13 +77,10 @@ both are small and generally useful).
    explicitly select this queued path; live controller/config rebuilds stay
    synchronous because they immediately reuse the coordinator.
 
-6. **Immediate macOS scrollback repaint** — `AppTerminalView.scrollWheel`
-   opens the render pump (`noteRenderActivity()`) after forwarding a scroll
-   event, so repaints present at display cadence from the first wheel tick.
-   *(Reworked 2026-08-20 with patch 9's off-main pump: the previous
-   per-wheel-event `renderImmediately()` ran a full main-thread tick per
-   event; now both scrollback and mouse-captured TUIs ride the off-main
-   pump.)*
+6. **Coalesced macOS scrollback repaint.** `AppTerminalView.scrollWheel`
+   requests a refresh (`noteRenderActivity()`) after forwarding scroll input.
+   Wheel-event bursts share one queued refresh on main. Later PTY output
+   drives the core renderer, and host-fed writes explicitly request refreshes.
 
 7. *(cherry-pick, 2026-07-09)* **Upstream "Fix AppKit selection copy leak"
    (Lakr233/libghostty-spm#23, commit `65051461`)** applied — landed upstream
@@ -102,28 +98,33 @@ both are small and generally useful).
    button to fake ctrl+End — sending raw `ESC [1;5F` via `sendText` was
    mangled into literal text for kitty-protocol TUIs like Claude Code.
 
-9. **Activity-window render pump** (2026-07-09, added for the ghostty-tip
-   core; moved off the main thread 2026-08-20) — `TerminalSurfaceCoordinator`
-   runs a real display link (`MSDisplayLink`) for ~1s after every render
-   request, wakeup, or scroll input. The tip core coalesces wakeups/render
-   actions under IO load, so the old purely push-driven embedder sat on
-   stale frames: Claude's virtual-scroll repaints showed a long delay before
-   scrolling started, and jump-to-bottom redraws left a blank screen until a
-   window resize forced a frame. The pump *pulls* whatever the core queued
-   instead of waiting to be pushed.
-   Since 2026-08-20 the per-frame path never touches the main thread:
-   `TerminalActivityLinkRelay` holds the raw surface handle and calls
-   `ghostty_surface_refresh` directly on the display-link thread (a
-   renderer-mailbox push + async wakeup — the same call termio makes
-   cross-thread), so frame production stays at display rate even when the
-   main thread is busy with AppKit/SwiftUI work — matching the Ghostty
-   app's renderer-thread-driven frames. The refresh runs under the relay
-   lock and the coordinator clears the handle under the same lock before
-   freeing the surface, so a late frame can never race the free.
-   `ghostty_app_tick` is no longer pumped per frame; app ticks stay
-   wakeup-driven on main. In-memory host feeds arm the relay directly from
-   their transport thread (no main hop between host bytes and the next
-   frame). The lock gate keeps closed-window frames to one acquisition.
+9. **Event-driven refresh and hidden-pane occlusion** (2026-09-08).
+   `TerminalRenderScheduler` replaces the one-second display-rate pump.
+   Render actions, wakeups, scroll input, and completed host writes request
+   one refresh on the next main-queue turn. Requests before that delivery
+   share the pending refresh, without adding a timer delay. No refresh
+   tail or wrapper display-link subscription remains while idle.
+   The old claim of off-main delivery was incorrect: pinned MSDisplayLink
+   2.1.0 delivered the relay callbacks on main. This scheduler also delivers
+   on main; the core still owns asynchronous rendering and vsync.
+
+   Hidden ancestors, detached views, and window occlusion stop rendering,
+   cancel queued refreshes, and call `ghostty_surface_set_occlusion(false)`.
+   `ghostty_app_tick` stays wakeup-driven for every live app regardless of
+   visibility, so replay, title, exit, and other mailbox callbacks keep
+   progressing. Host bytes still parse while hidden; the scheduler ignores
+   their refresh requests until presentation resumes. No raw surface handle
+   crosses threads in this scheduler. Teardown cancels pending work before
+   freeing the surface. AppKit hide/unhide, reparent, and window-occlusion
+   callbacks update presentation independently of explicit host visibility.
+
+   Synchronous resize and adoption draws remain available. Adoption requests
+   a new refresh even without new output, and its synchronous draw cancels
+   any redundant queued refresh. Host-write/attach notification ordering,
+   scheduler coalescing/cancellation, and hidden callback delivery have unit
+   coverage. Live Metal replay must still verify scroll, cache adoption,
+   synchronized output, and remote replay freshness; unit tests do not
+   establish presentation quality or GPU savings.
 
 10. **Callback userdata lifetime hardened** — app wakeup callbacks now use a
    retained `TerminalControllerCallbackContext` that weakly references the
