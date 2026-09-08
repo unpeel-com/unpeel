@@ -66,7 +66,7 @@ pub fn semantic_page(snapshot: Option<&Snapshot>, view: &View) -> Page {
     }
     let Some(snapshot) = snapshot else {
         return Page::new(
-            "Usage",
+            "",
             List::new("usage-providers", Vec::new()).empty_message("Scanning local usage…"),
         )
         .footer_actions(usage_footer_actions(view.scanning, view.hosted));
@@ -103,7 +103,7 @@ pub fn semantic_page(snapshot: Option<&Snapshot>, view: &View) -> Page {
     if snapshot.providers.get(view.selected).is_some() {
         list = list.selected(provider_node_id(view.selected), SELECT_PROVIDER_ACTION);
     }
-    Page::new("Usage", list).footer_actions(usage_footer_actions(view.scanning, view.hosted))
+    Page::new("", list).footer_actions(usage_footer_actions(view.scanning, view.hosted))
 }
 
 fn provider_list_item(provider: &Provider, index: usize, row_width: u16) -> ListItem {
@@ -1695,7 +1695,7 @@ mod tests {
         assert!(screen
             .lines()
             .next()
-            .is_some_and(|line| line.contains("Usage")));
+            .is_some_and(|line| line.contains("Codex Pro")));
         assert!(screen.contains("Codex Pro"), "provider and badge\n{screen}");
         assert!(
             !screen.contains("tommy@uxthemes.com") && !screen.contains("work@uxthemes.com"),
@@ -1910,13 +1910,13 @@ mod tests {
             let expected = selected_row_style(&palette);
             let expected_background = expected.bg.expect("kit selection background");
             assert!(
-                (0..width).all(|x| buffer[(x, 2)].bg == expected_background),
+                (0..width).all(|x| buffer[(x, 0)].bg == expected_background),
                 "selection should paint the complete row"
             );
-            assert_eq!(buffer[(0, 3)].bg, Color::Reset, "unselected row");
-            assert_eq!(buffer[(0, 2)].symbol(), " ");
-            assert_eq!(buffer[(1, 2)].symbol(), " ");
-            assert_eq!(buffer[(2, 2)].symbol(), "C", "two-cell label inset");
+            assert_eq!(buffer[(0, 1)].bg, Color::Reset, "unselected row");
+            assert_eq!(buffer[(0, 0)].symbol(), " ");
+            assert_eq!(buffer[(1, 0)].symbol(), " ");
+            assert_eq!(buffer[(2, 0)].symbol(), "C", "two-cell label inset");
         }
     }
 
@@ -2057,14 +2057,14 @@ mod tests {
 
     #[test]
     fn short_viewport_scrolls_selected_row_into_view() {
-        let (screen, hits) = render_with(72, 4, 2, false);
+        let (screen, hits) = render_with(72, 2, 2, false);
         assert_eq!(hits.first().map(|hit| hit.index), Some(2));
         assert_eq!(hits.last().map(|hit| hit.index), Some(2));
         assert!(screen.contains("Claude · work"), "selected row\n{screen}");
         assert!(screen.contains('┃'), "scrollbar thumb\n{screen}");
         for hit in &hits {
             assert!(
-                hit.bottom < 4,
+                hit.bottom < 2,
                 "hit leaves the viewport: {}..{}",
                 hit.top,
                 hit.bottom
@@ -2074,7 +2074,7 @@ mod tests {
 
     #[test]
     fn scrollbar_reaches_the_exact_top_and_bottom_rows() {
-        let (top_screen, top, _) = render_state(72, 4, 0, false, 0, false);
+        let (top_screen, top, _) = render_state(72, 3, 0, false, 0, false);
         let area = top.scrollbar_area.expect("top scrollbar");
         let top_rows: Vec<&str> = top_screen.lines().collect();
         assert_eq!(
@@ -2083,7 +2083,7 @@ mod tests {
             "thumb should start at the first track row\n{top_screen}"
         );
 
-        let (bottom_screen, bottom, _) = render_state(72, 4, 2, false, u16::MAX, false);
+        let (bottom_screen, bottom, _) = render_state(72, 3, 2, false, u16::MAX, false);
         let area = bottom.scrollbar_area.expect("bottom scrollbar");
         let bottom_rows: Vec<&str> = bottom_screen.lines().collect();
         assert_eq!(bottom.scroll_offset, bottom.max_scroll);
@@ -2098,15 +2098,16 @@ mod tests {
 
     #[test]
     fn row_scrolling_keeps_the_last_item_flush_with_the_viewport() {
-        let (screen, rendered, _) = render_state(72, 4, 2, false, u16::MAX, false);
+        let (screen, rendered, _) = render_state(72, 3, 2, false, u16::MAX, false);
         let rows: Vec<&str> = screen.lines().collect();
+        assert!(rendered.max_scroll > 0);
         assert_eq!(rendered.scroll_offset, rendered.max_scroll);
         assert_eq!(rendered.hits.last().map(|hit| hit.index), Some(2));
         assert!(
-            rows[2].contains("Claude · work"),
+            rows[1].contains("Claude · work"),
             "last row should touch the bottom of the list viewport\n{screen}"
         );
-        assert!(rows[3].contains("r refresh"), "semantic footer\n{screen}");
+        assert!(rows[2].contains("r refresh"), "semantic footer\n{screen}");
     }
 
     #[test]

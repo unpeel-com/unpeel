@@ -144,7 +144,7 @@ func sharedProtocolFixturesDecode() throws {
         .split(separator: "\n")
         .map { try JSONDecoder().decode(UIMessage.self, from: Data($0.utf8)) }
 
-    #expect(messages.count == 53)
+    #expect(messages.count == 56)
     guard case let .attach(attach) = messages[0] else {
         Issue.record("first fixture must attach an authenticated participant")
         return
@@ -771,4 +771,57 @@ func mediaRejectsNoncanonicalInlineBytesAndActions() {
     #expect(throws: DecodingError.self) {
         try JSONDecoder().decode(MediaSpec.self, from: invalidAction)
     }
+}
+
+@Test
+func pageTabsNegotiateAndRoundTripWithoutChangingLegacyPages() throws {
+    let page = PageSpec(title: "main", tabs: [
+        UIPageTab(id: "changes", label: "Changes", action: "changes", selected: true),
+        UIPageTab(id: "history", label: "History", action: "history"),
+    ], body: .list(UIListSpec(id: "files", items: [])))
+    #expect(page.requiredCapabilities?.contains(UnpeelUIProtocol.pageTabsCapability) == true)
+    #expect(UnpeelUIProtocol.supportedComponentCapabilities.contains("pageTabs"))
+    let decoded = try JSONDecoder().decode(PageSpec.self, from: JSONEncoder().encode(page))
+    #expect(decoded == page)
+    let legacy = try JSONDecoder().decode(PageSpec.self, from: Data(#"{"title":"Changes","body":{"type":"list","id":"files","items":[]}}"#.utf8))
+    #expect(legacy.tabs.isEmpty)
+    #expect(legacy.requiredCapabilities?.contains("pageTabs") == false)
+    let invalid = PageSpec(title: "main", tabs: [UIPageTab(id: "changes", label: "Changes", action: "changes")], body: page.body)
+    #expect(invalid.requiredCapabilities == nil)
+}
+
+@Test
+func pageToolbarRoundTripsBusyActionsAndRequiresItsCapability() throws {
+    let toolbar = UIPageToolbar(primary: UIFooterActionSpec(
+        id: "fetch", label: "Fetch…", action: "fetch", disabled: true, busy: true
+    ), menu: UIMenuSpec(label: "Remote actions", items: [
+        UIMenuItemSpec(id: "pull", label: "Pull", action: "pull", disabled: true),
+    ]))
+    let page = PageSpec(title: "main", toolbar: toolbar, body: .list(UIListSpec(id: "files", items: [])))
+    #expect(page.requiredCapabilities?.contains("pageToolbar") == true)
+    #expect(UnpeelUIProtocol.supportedComponentCapabilities.contains("pageToolbar"))
+    #expect(try JSONDecoder().decode(PageSpec.self, from: JSONEncoder().encode(page)) == page)
+    let legacy = PageSpec(title: "main", body: page.body)
+    #expect(legacy.toolbar == nil)
+    #expect(legacy.requiredCapabilities?.contains("pageToolbar") == false)
+}
+
+@Test
+func footerStatusRoundTripsInSnapshotsAndDeltas() throws {
+    let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        .appendingPathComponent("../../../protocol/unpeel-ui-v1.ndjson").standardizedFileURL
+    let lines = try String(contentsOf: fixture, encoding: .utf8).split(separator: "\n")
+    guard case let .snapshot(snapshot) = try JSONDecoder().decode(UIMessage.self, from: Data(lines[54].utf8)),
+          case let .delta(delta) = try JSONDecoder().decode(UIMessage.self, from: Data(lines[55].utf8)),
+          case let .markdownEditor(editor) = snapshot.root.component
+    else { Issue.record("footer fixtures"); return }
+    #expect(snapshot.root.component.requiredCapabilities?.contains(UnpeelUIProtocol.footerStatusCapability) == true)
+    #expect(editor.title == nil && editor.back == nil)
+    #expect(editor.footer.status == "2:3")
+    let next = try snapshot.applying(delta)
+    guard case let .markdownEditor(updated) = next.root.component else { Issue.record("Markdown root"); return }
+    #expect(updated.footer.status == "3:4")
+    #expect(updated.footer.actions == editor.footer.actions)
+    let encoded = try JSONEncoder().encode(delta)
+    #expect(try JSONDecoder().decode(UIDelta.self, from: encoded) == delta)
 }

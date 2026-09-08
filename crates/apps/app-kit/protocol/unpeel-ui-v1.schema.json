@@ -231,7 +231,8 @@
           "type": "array",
           "maxItems": 100000,
           "items": { "$ref": "#/$defs/footerAction" }
-        }
+        },
+        "status": { "type": "string", "maxLength": 4096, "pattern": "^[^\\r\\n]*$" }
       }
     },
     "menuItem": {
@@ -1050,6 +1051,27 @@
         "id": { "$ref": "#/$defs/identifier" },
         "type": { "const": "page" },
         "title": { "type": "string", "maxLength": 4096 },
+        "toolbar": {
+          "type": "object", "additionalProperties": true,
+          "required": ["primary"],
+          "properties": {
+            "primary": { "$ref": "#/$defs/footerAction" },
+            "menu": { "$ref": "#/$defs/semanticMenu" }
+          }
+        },
+        "tabs": {
+          "type": "array", "maxItems": 12,
+          "items": {
+            "type": "object", "additionalProperties": true,
+            "required": ["id", "label", "action"],
+            "properties": {
+              "id": { "$ref": "#/$defs/identifier" },
+              "label": { "type": "string", "maxLength": 4096 },
+              "action": { "$ref": "#/$defs/identifier" },
+              "selected": { "type": "boolean" }
+            }
+          }
+        },
         "back": { "$ref": "#/$defs/identifier" },
         "header": {
           "oneOf": [
@@ -1481,7 +1503,8 @@
               "type": "array",
               "maxItems": 100000,
               "items": { "$ref": "#/$defs/footerAction" }
-            }
+            },
+            "status": { "type": "string", "maxLength": 4096, "pattern": "^[^\\r\\n]*$" }
           }
         },
         {

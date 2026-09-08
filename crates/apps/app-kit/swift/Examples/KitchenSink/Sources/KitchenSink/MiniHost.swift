@@ -20,7 +20,7 @@ enum DemoKind: String, CaseIterable, Identifiable, Sendable {
     var title: String {
         switch self {
         case .usageApp: "Usage App"
-        case .diffsApp: "Diffs App"
+        case .diffsApp: "Git App"
         case .markdownApp: "Markdown App"
         case .filetreeApp: "File Tree App"
         case .charts: "Charts"

@@ -897,6 +897,9 @@ impl UiComponent {
                 if !editor.footer.is_empty() {
                     capabilities.push(crate::FOOTER_ACTIONS_CAPABILITY);
                 }
+                if editor.footer.status.is_some() {
+                    capabilities.push(crate::FOOTER_STATUS_CAPABILITY);
+                }
                 capabilities
             }
             Self::Media(_) => vec![crate::MEDIA_COMPONENT_CAPABILITY],
@@ -1157,6 +1160,7 @@ pub fn markdown_delta_operations(previous: &UiNode, next: &UiNode) -> Vec<UiDelt
         operations.push(UiDeltaOperation::FooterSetActions {
             node_id: next.id.clone(),
             actions: next_editor.footer.actions.clone(),
+            status: next_editor.footer.status.clone(),
         });
     }
     operations
@@ -1251,6 +1255,7 @@ pub fn tree_delta_operations(previous: &UiNode, next: &UiNode) -> Vec<UiDeltaOpe
         operations.push(UiDeltaOperation::FooterSetActions {
             node_id: next.id.clone(),
             actions: next_tree.footer.actions.clone(),
+            status: next_tree.footer.status.clone(),
         });
     }
     operations
@@ -1276,6 +1281,8 @@ pub fn page_delta_operations(previous: &UiNode, next: &UiNode) -> Vec<UiDeltaOpe
     };
     if previous.id != next.id
         || previous_page.title != next_page.title
+        || previous_page.tabs != next_page.tabs
+        || previous_page.toolbar != next_page.toolbar
         || previous_page.back != next_page.back
         || previous_page.header != next_page.header
     {
@@ -1382,6 +1389,7 @@ pub fn page_delta_operations(previous: &UiNode, next: &UiNode) -> Vec<UiDeltaOpe
         operations.push(UiDeltaOperation::FooterSetActions {
             node_id: next.id.clone(),
             actions: next_page.footer.actions.clone(),
+            status: next_page.footer.status.clone(),
         });
     }
     operations
@@ -1760,6 +1768,8 @@ pub enum UiDeltaOperation {
     FooterSetActions {
         node_id: NodeId,
         actions: Vec<crate::FooterAction>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
     },
     InputSetValue {
         node_id: String,
@@ -1927,6 +1937,7 @@ impl UiDeltaOperation {
         Self::FooterSetActions {
             node_id: node_id.into(),
             actions: actions.into_iter().collect(),
+            status: None,
         }
     }
 
@@ -2109,17 +2120,21 @@ impl UiDeltaOperation {
             .map_err(|error| {
                 UiProtocolError::InvalidView(UiValidationError::new(error.path, error.message))
             }),
-            Self::FooterSetActions { node_id, actions } => {
+            Self::FooterSetActions {
+                node_id,
+                actions,
+                status,
+            } => {
                 validate_identifier(node_id.as_str(), &format!("{path}.nodeId"))
                     .map_err(UiProtocolError::InvalidView)?;
-                crate::FooterActions::new(actions.clone())
-                    .validate(path)
-                    .map_err(|error| {
-                        UiProtocolError::InvalidView(UiValidationError::new(
-                            error.path,
-                            error.message,
-                        ))
-                    })
+                crate::FooterActions {
+                    actions: actions.clone(),
+                    status: status.clone(),
+                }
+                .validate(path)
+                .map_err(|error| {
+                    UiProtocolError::InvalidView(UiValidationError::new(error.path, error.message))
+                })
             }
             Self::ListInsertItem {
                 list_id,
@@ -2438,8 +2453,12 @@ impl UiNode {
                         })
                         .map_err(|error| component_delta_error(index, error))?;
                 }
-                UiDeltaOperation::FooterSetActions { node_id, actions } => {
-                    self.set_footer_actions(node_id, actions.clone(), index)?;
+                UiDeltaOperation::FooterSetActions {
+                    node_id,
+                    actions,
+                    status,
+                } => {
+                    self.set_footer_actions(node_id, actions.clone(), status.clone(), index)?;
                 }
                 UiDeltaOperation::InputSetValue { node_id, value } => {
                     self.page_mut(index)?
@@ -2601,6 +2620,7 @@ impl UiNode {
         &mut self,
         expected_id: &NodeId,
         actions: Vec<crate::FooterAction>,
+        status: Option<String>,
         operation_index: usize,
     ) -> Result<(), UiValidationError> {
         if &self.id != expected_id {
@@ -2609,7 +2629,7 @@ impl UiNode {
                 format!("node {expected_id:?} is not present"),
             ));
         }
-        let footer = crate::FooterActions::new(actions);
+        let footer = crate::FooterActions { actions, status };
         match &mut self.element {
             UiComponent::MarkdownEditor(editor) => editor.footer = footer,
             UiComponent::Page(page) => page.footer = footer,

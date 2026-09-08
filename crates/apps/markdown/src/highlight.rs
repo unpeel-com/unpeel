@@ -167,7 +167,13 @@ fn collect(lines: &[String], theme: Theme) -> Vec<(Range, Style, u8)> {
             _ => {}
         }
 
+        let inline_start = out.len();
         highlight_inlines(row, line, &mut out, theme);
+        if matches!(parsed.kind, BlockKind::Heading(_)) {
+            for (_, style, _) in &mut out[inline_start..] {
+                *style = style.fg(theme.strong).add_modifier(Modifier::BOLD);
+            }
+        }
     }
 
     out
@@ -232,7 +238,7 @@ fn push_span(
 
 fn heading_style(theme: Theme) -> Style {
     Style::default()
-        .fg(theme.accent)
+        .fg(theme.strong)
         .add_modifier(Modifier::BOLD)
 }
 
@@ -287,7 +293,7 @@ mod tests {
         assert!(marks.iter().any(|(range, style, _)| {
             *range == ((0, 0), (0, 7)) && *style == heading_style(theme)
         }));
-        assert_eq!(heading_style(theme).fg, Some(theme.kit.accent));
+        assert_eq!(heading_style(theme).fg, Some(theme.kit.text));
         assert!(
             marks
                 .iter()

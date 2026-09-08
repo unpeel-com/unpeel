@@ -26,8 +26,11 @@ export const UI_GAUGE_CAPABILITY = "gauge" as const;
 export const UI_TOGGLE_CAPABILITY = "toggle" as const;
 export const UI_INPUT_CAPABILITY = "input" as const;
 export const UI_BUTTON_CAPABILITY = "button" as const;
+export const UI_PAGE_TABS_CAPABILITY = "pageTabs" as const;
+export const UI_PAGE_TOOLBAR_CAPABILITY = "pageToolbar" as const;
 export const UI_PAGE_BACK_CAPABILITY = "pageBack" as const;
 export const UI_FOOTER_ACTIONS_CAPABILITY = "footerActions" as const;
+export const UI_FOOTER_STATUS_CAPABILITY = "footerStatus" as const;
 export const UI_CONTENT_CAPABILITY = "content" as const;
 export const UI_CONTENT_SELECTION_CAPABILITY = "contentSelection" as const;
 export const UI_SURFACE_CAPABILITY = "surface" as const;
@@ -62,8 +65,11 @@ export const UI_COMPONENT_CAPABILITIES = [
   UI_TOGGLE_CAPABILITY,
   UI_INPUT_CAPABILITY,
   UI_BUTTON_CAPABILITY,
+  UI_PAGE_TABS_CAPABILITY,
+  UI_PAGE_TOOLBAR_CAPABILITY,
   UI_PAGE_BACK_CAPABILITY,
   UI_FOOTER_ACTIONS_CAPABILITY,
+  UI_FOOTER_STATUS_CAPABILITY,
   UI_CONTENT_CAPABILITY,
   UI_CONTENT_SELECTION_CAPABILITY,
   UI_TREE_CAPABILITY,
@@ -234,6 +240,7 @@ export interface FooterActionSpec {
 
 export interface FooterActionsSpec {
   actions: FooterActionSpec[];
+  status?: string;
 }
 
 export type MediaFit = "contain" | "cover" | "fill";
@@ -632,10 +639,24 @@ export interface InputSpec {
 export type PageBodySpec = ListSpec | ContentSpec | SparklineSpec | BarChartSpec | LineChartSpec
   | GaugeSpec | UnsupportedComponentSlot;
 
+export interface PageTabSpec {
+  id: string;
+  label: string;
+  action: string;
+  selected?: boolean;
+}
+
+export interface PageToolbarSpec {
+  primary: FooterActionSpec;
+  menu?: MenuSpec;
+}
+
 export interface PageNode {
   id: string;
   type: "page";
   title: string;
+  tabs?: PageTabSpec[];
+  toolbar?: PageToolbarSpec;
   back?: string;
   header?: InputSpec | UnsupportedComponentSlot;
   body: PageBodySpec;
@@ -995,7 +1016,8 @@ export function uiNodeCapabilities(node: UiNode): readonly string[] | undefined 
     if (node.insertMenu !== undefined || node.contextMenu !== undefined) {
       capabilities.push(UI_MENU_CAPABILITY, UI_MENU_ANCHOR_CAPABILITY);
     }
-    if ((node.footer?.actions.length ?? 0) > 0) {
+    if (node.footer?.status !== undefined) capabilities.push(UI_FOOTER_STATUS_CAPABILITY);
+    if ((node.footer?.actions.length ?? 0) > 0 || !!node.footer?.status) {
       capabilities.push(UI_FOOTER_ACTIONS_CAPABILITY);
     }
     return capabilities;
@@ -1021,7 +1043,8 @@ export function uiNodeCapabilities(node: UiNode): readonly string[] | undefined 
     if (node.contextMenu !== undefined) {
       capabilities.push(UI_MENU_CAPABILITY, UI_MENU_ANCHOR_CAPABILITY);
     }
-    if ((node.footer?.actions.length ?? 0) > 0) {
+    if (node.footer?.status !== undefined) capabilities.push(UI_FOOTER_STATUS_CAPABILITY);
+    if ((node.footer?.actions.length ?? 0) > 0 || !!node.footer?.status) {
       capabilities.push(UI_FOOTER_ACTIONS_CAPABILITY);
     }
     return capabilities;
@@ -1035,7 +1058,13 @@ export function uiNodeCapabilities(node: UiNode): readonly string[] | undefined 
           ? UI_LINE_CHART_CAPABILITY
           : UI_GAUGE_CAPABILITY;
     const capabilities: string[] = [UI_PAGE_CAPABILITY];
-    if ((node.footer?.actions.length ?? 0) > 0) {
+    if ((node.tabs?.length ?? 0) > 0) capabilities.push(UI_PAGE_TABS_CAPABILITY);
+    if (node.toolbar !== undefined) {
+      capabilities.push(UI_PAGE_TOOLBAR_CAPABILITY);
+      if (node.toolbar.menu !== undefined) capabilities.push(UI_MENU_CAPABILITY, UI_MENU_ANCHOR_CAPABILITY);
+    }
+    if (node.footer?.status !== undefined) capabilities.push(UI_FOOTER_STATUS_CAPABILITY);
+    if ((node.footer?.actions.length ?? 0) > 0 || !!node.footer?.status) {
       capabilities.push(UI_FOOTER_ACTIONS_CAPABILITY);
     }
     capabilities.push(capability);
@@ -1045,7 +1074,13 @@ export function uiNodeCapabilities(node: UiNode): readonly string[] | undefined 
   }
   if (!isRenderablePageNode(node) && !isRenderableContentPageNode(node)) return undefined;
   const capabilities: string[] = [UI_PAGE_CAPABILITY];
-  if ((node.footer?.actions.length ?? 0) > 0) {
+  if ((node.tabs?.length ?? 0) > 0) capabilities.push(UI_PAGE_TABS_CAPABILITY);
+  if (node.toolbar !== undefined) {
+    capabilities.push(UI_PAGE_TOOLBAR_CAPABILITY);
+    if (node.toolbar.menu !== undefined) capabilities.push(UI_MENU_CAPABILITY, UI_MENU_ANCHOR_CAPABILITY);
+  }
+  if (node.footer?.status !== undefined) capabilities.push(UI_FOOTER_STATUS_CAPABILITY);
+  if ((node.footer?.actions.length ?? 0) > 0 || !!node.footer?.status) {
     capabilities.push(UI_FOOTER_ACTIONS_CAPABILITY);
   }
   if (isRenderableContentPageNode(node)) {
@@ -1135,6 +1170,7 @@ function isValidContent(content: ContentSpec): boolean {
 export function isValidFooterActions(footer: FooterActionsSpec | undefined): boolean {
   if (footer === undefined) return true;
   if (!Array.isArray(footer.actions) || footer.actions.length > 100_000) return false;
+  if (footer.status !== undefined && (typeof footer.status !== "string" || new TextEncoder().encode(footer.status).length > 4096 || /[\r\n]/u.test(footer.status))) return false;
   const ids = new Set<string>();
   const accelerators = new Set<string>();
   for (const action of footer.actions) {
@@ -1288,7 +1324,7 @@ export type UiDeltaOperation =
     caption?: string | null;
     accessibilityText: string;
   }
-  | { op: "footerSetActions"; nodeId: string; actions: FooterActionSpec[] }
+  | { op: "footerSetActions"; nodeId: string; actions: FooterActionSpec[]; status?: string }
   | { op: "inputSetValue"; nodeId: string; value: string }
   | { op: "listInsertItem"; listId: string; index: number; item: ListItemSpec }
   | { op: "listSetSelection"; listId: string; selectedId: string | null }
@@ -1786,13 +1822,15 @@ function applyDeltaOperation(root: UiNode, operation: UiDeltaOperation): UiNode 
     };
   }
   if (operation.op === "footerSetActions") {
-    if (root.id !== operation.nodeId || !isValidFooterActions({ actions: operation.actions })) {
+    const footer: FooterActionsSpec = { actions: structuredClone(operation.actions) };
+    if (operation.status !== undefined) footer.status = operation.status;
+    if (root.id !== operation.nodeId || !isValidFooterActions(footer)) {
       throw new Error("Delta targets an unavailable or invalid FooterActions root");
     }
     if (!isPageNode(root) && !isTreeNode(root) && !isMarkdownEditorNode(root)) {
       throw new Error("Delta root has no FooterActions slot");
     }
-    return { ...root, footer: { actions: operation.actions } };
+    return { ...root, footer };
   }
   if (operation.op === "inputSetValue") {
     const page = requireRenderablePage(root);
@@ -2214,6 +2252,9 @@ function validateFooterActions(
   register: (value: unknown, valuePath: string) => void = requireIdentifier,
 ): void {
   const footer = record(value, path);
+  if (footer.status !== undefined) {
+    if (typeof footer.status !== "string" || new TextEncoder().encode(footer.status).length > 4096 || /[\r\n]/u.test(footer.status)) throw new Error(`${path}.status must be bounded single-line text`);
+  }
   if (!Array.isArray(footer.actions) || footer.actions.length > 100_000) {
     throw new Error(`${path}.actions must contain at most 100000 entries`);
   }
@@ -2243,6 +2284,9 @@ function validateFooterActions(
     }
     if (action.role !== undefined && !["default", "danger"].includes(String(action.role))) {
       throw new Error(`${actionPath}.role is unsupported`);
+    }
+    if (action.busy !== undefined && typeof action.busy !== "boolean") {
+      throw new Error(`${actionPath}.busy must be boolean`);
     }
     if (action.disabled !== undefined && typeof action.disabled !== "boolean") {
       throw new Error(`${actionPath}.disabled must be boolean`);
@@ -2444,6 +2488,29 @@ function validatePageNode(root: Record<string, unknown>, path: string): void {
     if (ids.has(value as string)) throw new Error(`${valuePath} duplicates a component id`);
     ids.add(value as string);
   };
+  if (root.toolbar !== undefined) {
+    const toolbar = record(root.toolbar, `${path}.toolbar`);
+    validateFooterActions({ actions: [toolbar.primary] }, `${path}.toolbar`, register);
+    if (toolbar.menu !== undefined) {
+      validateMenuSpec(toolbar.menu, `${path}.toolbar.menu`);
+      const menu = toolbar.menu as MenuSpec;
+      for (const item of menu.items) register(item.id, `${path}.toolbar.menu.items.id`);
+    }
+  }
+  if (root.tabs !== undefined) {
+    if (!Array.isArray(root.tabs) || root.tabs.length > 12) throw new Error(`${path}.tabs must have at most 12 tabs`);
+    let selected = 0;
+    for (const [index, value] of root.tabs.entries()) {
+      const tabPath = `${path}.tabs[${index}]`;
+      const tab = record(value, tabPath);
+      register(tab.id, `${tabPath}.id`);
+      requireIdentifier(tab.action, `${tabPath}.action`);
+      requireString(tab.label, `${tabPath}.label`, true);
+      if (tab.selected !== undefined && typeof tab.selected !== "boolean") throw new Error(`${tabPath}.selected must be a boolean`);
+      if (tab.selected === true) selected += 1;
+    }
+    if (root.tabs.length > 0 && selected !== 1) throw new Error(`${path}.tabs requires exactly one selected tab`);
+  }
   if (root.footer !== undefined) {
     validateFooterActions(root.footer, `${path}.footer`, register);
   }
@@ -3282,7 +3349,7 @@ function validateDeltaOperation(value: unknown, path: string): void {
       return;
     case "footerSetActions":
       requireIdentifier(operation.nodeId, `${path}.nodeId`);
-      validateFooterActions({ actions: operation.actions }, path);
+      validateFooterActions({ actions: operation.actions, status: operation.status }, path);
       return;
     case "inputSetValue":
       requireIdentifier(operation.nodeId, `${path}.nodeId`);

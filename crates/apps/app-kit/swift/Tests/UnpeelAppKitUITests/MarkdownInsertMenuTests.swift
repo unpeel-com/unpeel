@@ -135,7 +135,8 @@ private func markdownSlashRoundTripMessages() throws -> [UIMessage] {
     let stream = try String(contentsOf: fixture, encoding: .utf8)
     return try stream
         .split(separator: "\n")
-        .suffix(5)
+        .dropFirst(48)
+        .prefix(5)
         .map { try JSONDecoder().decode(UIMessage.self, from: Data($0.utf8)) }
 }
 

@@ -170,6 +170,11 @@ curl -fsSL https://unpeel.com/install.sh | sh
   checkout `~/Dev/unpeel-app-<app>`), lipos/ad-hoc signs/tars it, and uploads
   versioned + `-latest` tarballs and sha256 sidecars under
   `<channel>/<app>/`. Linux tarballs attach with `--linux-*` like the CLI.
+  For a multi-App release, pass `--skip-registry` for every App, verify all
+  uploaded archives/checksums, then upload the registry once. This prevents
+  advertising new versions while another App's artifacts are still missing.
+  `--skip-build --macos-universal <archive>` uploads an already verified Mac
+  archive alongside the Linux archives without rebuilding or repackaging it.
   Hosts may install the same assets directly with
   `unpeel apps install <unpeel.app.id>`; those managed copies live in
   `~/.unpeel/apps/bin`, which precedes ordinary PATH discovery. **Versions:**

@@ -1,8 +1,8 @@
 [package]
 name = "unpeel-diffs"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
-description = "Standalone borderless Git diff viewer for Unpeel terminals"
+description = "Git sidebar with Changes and History for Unpeel terminals"
 license = "MIT"
 
 [dependencies]
@@ -10,6 +10,7 @@ crossterm = "0.29"
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
 serde_json = "1"
 syntect = { version = "5.2", default-features = false, features = ["default-fancy"] }
+two-face = { version = "0.5.2", default-features = false, features = ["syntect-fancy"] }
 unicode-width = "0.2"
 unpeel-app-kit = { path = "../app-kit" }
 

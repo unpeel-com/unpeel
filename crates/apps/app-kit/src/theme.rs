@@ -373,12 +373,26 @@ mod tests {
     }
 
     #[test]
-    fn explorer_palette_can_preserve_the_detected_accent() {
-        let mut palette = KitTheme::dark();
-        palette.accent = Color::Rgb(177, 102, 232);
-        let explorer = crate::ExplorerTheme::for_theme(palette);
-        assert_eq!(explorer.directory.fg, Some(palette.accent));
-        assert_eq!(explorer.parent.fg, Some(palette.accent));
+    fn explorers_use_neutral_folders_and_muted_files_with_a_hosted_accent() {
+        for mut palette in [KitTheme::dark(), KitTheme::light()] {
+            palette.accent = Color::Rgb(177, 102, 232);
+            let explorer = crate::ExplorerTheme::for_theme(palette);
+            let tree = crate::TreeTheme::for_theme(palette);
+            for (directory, parent, file, symlink) in [
+                (
+                    explorer.directory,
+                    explorer.parent,
+                    explorer.item,
+                    explorer.symlink,
+                ),
+                (tree.directory, tree.parent, tree.item, tree.symlink),
+            ] {
+                assert_eq!(directory.fg, Some(palette.text));
+                assert_eq!(parent.fg, Some(palette.text));
+                assert_eq!(file.fg, Some(palette.muted));
+                assert_eq!(symlink.fg, None, "links inherit their target kind's color");
+            }
+        }
     }
 
     #[test]

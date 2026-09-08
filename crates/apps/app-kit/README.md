@@ -80,7 +80,7 @@ exercises the complete hosted loop without Unpeel installed:
 swift/Examples/KitchenSink/run-app.sh
 ```
 
-It builds and launches the four sibling Apps—Usage, Diffs, Markdown, and File
+It builds and launches the four sibling Apps—Usage, Git, Markdown, and File
 Tree—plus the Charts, Todo, component Markdown, Media, and (when
 the sibling guest artifact exists) Surface Planets and Canvas + Controls
 examples. Every process runs in a real libghostty PTY rendered through Metal;
@@ -227,7 +227,7 @@ The standalone component layer currently provides:
 | `InputField` | Borderless single-line editing with a native cursor, keyboard/mouse selection, word movement, and horizontal scrolling |
 | `TextBox` | Rounded bordered full-width multi-line editing that grows between configurable row bounds, with word wrap, optional prompt glyph, border titles, busy status row, and key-hint footer |
 | `Page` | Top-level standalone Ratatui presentation with a constrained Input header, a closed List, Content, Sparkline, BarChart, LineChart, or Gauge body, one optional back action, and an ordered FooterActions slot |
-| `FooterActions` / `FooterActionsWidget` | Ordered App-owned screen commands with optional one-key accelerators, danger/disabled intent, and the classic compact Ratatui bottom hint bar |
+| `FooterActions` / `FooterActionsWidget` | Ordered App-owned screen commands with optional one-key accelerators, danger/disabled intent, optional trailing read-only status, and the classic compact Ratatui bottom hint bar |
 | `Content` / `ContentWidget` | Read-only scrollable styled lines for issue, diff, and document detail screens; keyed range selection and bounded context actions without editor semantics |
 | `List` / `ListItem` | Borderless rows built from `SelectableRow`/`VerticalScrollbar`, with stable selection, status/badge/busy presentation, collapsible trailing values, closed slots including compact Sparkline/Gauge metrics, and optional multi-row layouts: `ListRowLayout` stacking, full-width top/bottom `ListItemBand`s, and a `ListItemMedia` column |
 | `ListState` / `ListKeymap` | Clamped non-wrapping selection, scroll-to-reveal/paging, hit testing, and the shared arrow/j/k/Home/g/End/G/Page/Enter/Escape/q vocabulary |
@@ -284,7 +284,7 @@ vocabulary with platform-specific renderers—not a second required runtime.
 | BarChart semantic projection | Labeled numeric bars rendered through Ratatui BarChart, Swift Charts, or dependency-free inline SVG; emphasis and captions remain spec-owned |
 | LineChart semantic projection | Named x/y series and authoritative axis bounds/labels rendered through Ratatui Chart, Swift Charts, or dependency-free inline SVG |
 | Gauge semantic projection | A shared ratio/label/App-caption contract rendered through Ratatui Gauge, SwiftUI Gauge/ProgressView, or SVG/native web progress; accepted as a constrained trailing ListItem metric |
-| Tree semantic projection | Closed Explorer/Tree hierarchy preserving filter focus, wrap/page navigation, the synthetic parent action, opaque path-free ids, compact keyed deltas, and SwiftUI/ARIA-tree wrappers |
+| Tree semantic projection | Closed Explorer/Tree hierarchy preserving filter focus, bounded row/page navigation, the synthetic parent action, opaque path-free ids, compact keyed deltas, and SwiftUI/ARIA-tree wrappers |
 | Menu semantic projection | Root or Markdown-nested action menus with disabled/danger roles, renderer-local anchors, keyboard navigation, native `NSMenu`/popover and web menu interpretations |
 | Surface semantic projection | Opaque session/stream reference, sizing, background, and input policy only; Swift/web wrappers inject existing USRF local-GPU presenters and never consume frames |
 | CanvasPage semantic projection | Closed Surface slot plus Button actions; scene/input stays on USRF while toolbar interaction stays on `unpeel.ui` |
@@ -600,8 +600,8 @@ or mandatory background, so Apps can compose it without inherited chrome.
 
 Hosted Explorer rows are never flattened into semantic `ListItem`s.
 `Explorer::semantic_tree` publishes a distinct Tree component retaining
-directory hierarchy, the filter/tree focus loop, single-step selection
-wrapping, and the synthetic parent action. Entry ids are opaque process keys;
+directory hierarchy, the filter/tree focus loop, bounded row navigation,
+and the synthetic parent action. Entry ids are opaque process keys;
 absolute paths remain inside the App for local open/drag behavior. SwiftUI
 uses `TreeView`, web uses an ARIA tree, and unrecognized Tree capabilities use
 the complete terminal pane without failing attachment. Filetree and
@@ -939,7 +939,7 @@ only the fields relevant to its own behavior:
 | App | Hosted behavior | Standalone fallback |
 | --- | --- | --- |
 | Filetree | Starts at `current_root()` and then follows the adjacent agent across worktrees | Process working directory |
-| Diffs | Discovers Git from `current_root()` and then follows the adjacent agent across worktrees | Process working directory |
+| Git | Discovers Git from `current_root()` and then follows the adjacent agent across worktrees | Process working directory |
 | Markdown | Uses `current_root()/docs` as the first-run notes-folder suggestion; explicit and remembered vaults still win | Working-directory `docs` folder |
 | Usage | Resolves **Current project** from refreshed `current_root()`; worktree history is folded into the base repository | Process working directory |
 

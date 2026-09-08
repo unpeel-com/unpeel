@@ -36,16 +36,17 @@ use unpeel_app_kit::{
     ContentFont, ContentLine, ContentLineTone, ContentRun, ContentSelection, ContentState,
     ContentTheme, ContentTone, DragSurface, EditorBridge, FooterAction, InputField,
     KeyboardEnhancementGuard, KitTheme, List, ListItem, ListItemSlot, ListItemTone, ListKeymap,
-    ListNavigationAction, ListState, MenuTheme, Page, PageTheme, PopupMenu, SemanticMenu,
-    SemanticMenuAnchor, SemanticMenuItem, SemanticMenuPresentation, StatusSymbol, ThemeMonitor,
-    UiAction, UiBridge, UiBridgeEvent, UiComponent, UiEventKind, UiEventOutcome, UiEventValue,
-    UiNode, clipboard_sequence, page_delta_operations,
+    ListNavigationAction, ListRowLayout, ListState, MenuTheme, Page, PageTab, PageTheme,
+    PageToolbar, PageToolbarState, PopupMenu, SemanticMenu, SemanticMenuAnchor, SemanticMenuItem,
+    SemanticMenuPresentation, StatusSymbol, ThemeMonitor, UiAction, UiBridge, UiBridgeEvent,
+    UiComponent, UiEventKind, UiEventOutcome, UiEventValue, UiNode, clipboard_sequence,
+    page_delta_operations,
 };
 #[cfg(test)]
 use unpeel_app_kit::{SELECTABLE_LEFT_PADDING, VerticalScrollbar};
 
-use crate::app::{App, Screen};
-use crate::git::{ChangedFile, DiffDocument};
+use crate::app::{App, Screen, Tab};
+use crate::git::{ChangedFile, DiffDocument, RemoteAction};
 #[cfg(test)]
 use crate::highlight::{DocumentColors, Highlighter};
 
@@ -84,12 +85,8 @@ pub fn run(
     let _keyboard = KeyboardEnhancementGuard::enter()?;
     let mut reporter = AppReporter::detect(crate::install::APP_ID);
     let mut bridge = UiBridge::detect(
-        AppMetadata::new(
-            crate::install::APP_ID,
-            "Unpeel Diffs",
-            env!("CARGO_PKG_VERSION"),
-        )
-        .description("One Diffs component tree interpreted by Ratatui, native, and web renderers"),
+        AppMetadata::new(crate::install::APP_ID, "Git", env!("CARGO_PKG_VERSION"))
+            .description("Git changes and commit history"),
     )
     .map_err(ui_bridge_error)?;
     let agent = AgentBridge::new();
@@ -107,10 +104,17 @@ pub fn run(
     let mut rendered = RenderResult::default();
     let mut menu: Option<ContextMenu> = None;
     let mut selecting = false;
+    let mut toolbar_state = PageToolbarState::default();
     let mut needs_draw = true;
     let mut last_sync = Instant::now();
+    let mut needs_publish = false;
+    let mut pending_event = None;
+    let mut can_send = agent.label().is_some();
 
     loop {
+        let operation_completed = app.poll_remote_action();
+        needs_publish |= operation_completed;
+        needs_draw |= operation_completed || app.remote_busy.is_some();
         if drain_bridge(
             &mut app,
             &agent,
@@ -119,23 +123,32 @@ pub fn run(
             &mut published,
         )? {
             needs_draw = true;
+            needs_publish = true;
         }
-        publish_semantic_projection(
-            &app,
-            agent.label().is_some(),
-            &mut bridge,
-            &mut ui_revision,
-            &mut published,
-        )?;
+        let next_can_send = agent.label().is_some();
+        needs_publish |= next_can_send != can_send;
+        can_send = next_can_send;
+        if needs_publish {
+            publish_semantic_projection(
+                &app,
+                can_send,
+                &mut bridge,
+                &mut ui_revision,
+                &mut published,
+            )?;
+            needs_publish = false;
+        }
         if needs_draw {
-            let title = session_title_for(&app.repository);
+            let title = session_title_for(&app.repository, app.branch.as_deref());
             if title != session_title {
                 reporter.set_title(&title);
                 session_title = title;
             }
             reporter.set_context(&serde_json::json!({
                 "root": app.root(),
-                "view": if app.is_detail() { "diff" } else { "files" },
+                "view": match app.screen { Screen::Files => "files", Screen::History => "history", Screen::CommitFiles => "commit", Screen::Diff(_) => "diff" },
+                "tab": if app.tab == Tab::History { "history" } else { "changes" },
+                "commit": app.commit.as_ref().map(|commit| &commit.id),
                 "changed_files": app.files.len(),
                 "selected_path": app.selected_absolute_path(),
                 "selected_status": app.selected_file().map(|file| file.state_label()),
@@ -144,7 +157,14 @@ pub fn run(
                     .map(|(start, end)| [start + 1, end + 1]),
             }));
             if bridge.should_render_terminal() {
-                rendered = terminal.draw(&published, &app, &mut drags, menu.as_mut(), theme)?;
+                rendered = terminal.draw(
+                    &published,
+                    &app,
+                    &mut drags,
+                    menu.as_mut(),
+                    &mut toolbar_state,
+                    theme,
+                )?;
                 app.apply_render_metrics(
                     rendered.scroll_offset,
                     rendered.max_scroll,
@@ -155,13 +175,14 @@ pub fn run(
             needs_draw = false;
         }
 
-        if !event::poll(Duration::from_millis(250))? {
+        if pending_event.is_none() && !event::poll(Duration::from_millis(250))? {
             drags.heartbeat()?;
             if theme_monitor.refresh() {
                 theme = theme_monitor.theme();
                 needs_draw = true;
             }
             if follow_agent_context
+                && app.remote_busy.is_none()
                 && (agent.context_changed()
                     || last_agent_context_refresh.elapsed() >= AGENT_CONTEXT_REFRESH_INTERVAL)
             {
@@ -178,24 +199,80 @@ pub fn run(
                     });
                 if let Some(root) = next_root.filter(|root| root.is_dir()) {
                     match app.follow_path(&root) {
-                        Ok(true) => needs_draw = true,
+                        Ok(true) => {
+                            needs_draw = true;
+                            needs_publish = true;
+                        }
                         Ok(false) => {}
-                        Err(error) => app.fail(error),
+                        Err(error) => {
+                            app.fail(error);
+                            needs_draw = true;
+                            needs_publish = true;
+                        }
                     }
                 }
                 agent.refresh();
             }
             // Quietly follow the working tree while the user is not
             // mid-interaction; transient Git errors are retried next tick.
-            if menu.is_none() && !selecting && last_sync.elapsed() >= AUTO_SYNC_INTERVAL {
+            if menu.is_none()
+                && !toolbar_state.is_open()
+                && !selecting
+                && last_sync.elapsed() >= AUTO_SYNC_INTERVAL
+            {
                 last_sync = Instant::now();
                 if app.sync().unwrap_or(false) {
                     needs_draw = true;
+                    needs_publish = true;
                 }
             }
             continue;
         }
-        match event::read()? {
+        let event = match pending_event.take() {
+            Some(event) => event,
+            None => event::read()?,
+        };
+        if menu.is_none() && !toolbar_state.is_open() && wheel_delta(&event).is_some() {
+            // Offsets are renderer-local: use the already-published Page, and
+            // drain a burst before drawing. Clamp every tick in order so excess
+            // motion at an edge cannot cancel a subsequent direction reversal.
+            needs_publish |= app.notice.is_some();
+            let batch = scroll_batch(&mut app, event, || {
+                if event::poll(Duration::ZERO)? {
+                    event::read().map(Some)
+                } else {
+                    Ok(None)
+                }
+            })?;
+            needs_draw |= batch.changed;
+            pending_event = batch.pending;
+            continue;
+        }
+        // Commands/selection can change the semantic tree. Pointer motion,
+        // release, and resize only affect the terminal's local presentation.
+        needs_publish |= !matches!(event, Event::Mouse(mouse)
+            if matches!(mouse.kind, MouseEventKind::Moved | MouseEventKind::Up(_)))
+            && !matches!(event, Event::Resize(_, _));
+        if !matches!(event, Event::Key(key) if is_force_quit(key))
+            && menu.is_none()
+            && let UiComponent::Page(page) = &published.element
+            && let Some(action) = toolbar_state.handle(
+                &event,
+                page.toolbar.as_ref(),
+                rendered.title_area,
+                MenuTheme::for_color_scheme(theme.scheme),
+            )
+        {
+            if let Some((id, action)) = action
+                && let Err(error) =
+                    apply_semantic_action(&mut app, &agent, &UiAction::activate(id, action))
+            {
+                app.fail(error);
+            }
+            needs_draw = true;
+            continue;
+        }
+        match event {
             Event::Key(key) if key.kind != KeyEventKind::Release => {
                 if is_force_quit(key) {
                     break;
@@ -228,6 +305,11 @@ pub fn run(
                     needs_draw = true;
                     continue;
                 }
+                if key.code == KeyCode::Esc && app.can_go_back() && !app.is_detail() {
+                    app.back();
+                    needs_draw = true;
+                    continue;
+                }
                 let Some(action) =
                     action_for_key(key, app.is_detail(), app.selection_range().is_some())
                 else {
@@ -252,6 +334,25 @@ pub fn run(
                             if open_menu.action_index_for_mouse(&mouse).is_some() {
                                 activate_menu(open_menu, &mut app, &agent);
                             }
+                            needs_draw = true;
+                        } else if let Some(tab) = rendered.tabs_area.and_then(|area| {
+                            let UiComponent::Page(page) = &published.element else {
+                                return None;
+                            };
+                            page.tab_at(position, area)
+                        }) {
+                            selecting = false;
+                            let action = UiAction::activate(tab.id.as_str(), tab.action.as_str());
+                            if let Err(error) = apply_semantic_action(&mut app, &agent, &action) {
+                                app.fail(error);
+                            }
+                            needs_draw = true;
+                        } else if rendered
+                            .back_button
+                            .is_some_and(|hit| hit.contains(position))
+                        {
+                            selecting = false;
+                            app.back();
                             needs_draw = true;
                         } else if let Some(action) = rendered
                             .footer_area
@@ -389,39 +490,176 @@ pub fn run(
     Ok(())
 }
 
+/// Terminal wheel reports already represent lines (including precise trackpad
+/// movement converted by the terminal). Do not multiply their distance again.
+fn wheel_delta(event: &Event) -> Option<isize> {
+    match event {
+        Event::Mouse(mouse) => match mouse.kind {
+            MouseEventKind::ScrollUp => Some(-1),
+            MouseEventKind::ScrollDown => Some(1),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+struct ScrollBatch {
+    changed: bool,
+    pending: Option<Event>,
+}
+
+fn scroll_batch(
+    app: &mut App,
+    first: Event,
+    mut next: impl FnMut() -> io::Result<Option<Event>>,
+) -> io::Result<ScrollBatch> {
+    let mut result = ScrollBatch {
+        changed: false,
+        pending: None,
+    };
+    let mut event = first;
+    // Bounded work keeps remote actions and redraws responsive during a long
+    // gesture. Never discard a following click, key, resize, or direction change.
+    for index in 0..256 {
+        let Some(delta) = wheel_delta(&event) else {
+            result.pending = Some(event);
+            break;
+        };
+        if let Event::Mouse(mouse) = &event {
+            result.changed |= app.pointer.track(mouse);
+        }
+        result.changed |= app.scroll_vertical(delta);
+        if index == 255 {
+            break;
+        }
+        let Some(queued) = next()? else {
+            break;
+        };
+        event = queued;
+    }
+    Ok(result)
+}
+
 fn semantic_node(app: &App, can_send: bool) -> UiNode {
     UiNode::page(SEMANTIC_ROOT_ID, semantic_page(app, can_send))
 }
 
 fn semantic_page(app: &App, can_send: bool) -> Page {
-    match &app.screen {
-        Screen::Files => {
+    let page = match &app.screen {
+        Screen::Files | Screen::CommitFiles => {
+            let historical = app.tab == Tab::History;
+            let files = app.active_files();
             let mut list = List::new(
                 FILE_LIST_ID,
-                app.files
+                files
                     .iter()
                     .enumerate()
-                    .map(|(index, file)| file_list_item(file, index))
+                    .map(|(index, file)| file_list_item(file, index, historical))
                     .collect(),
             )
-            .empty_message("working tree clean");
-            if !app.files.is_empty() {
+            .empty_message(if historical {
+                "No files changed in this commit"
+            } else {
+                "Working tree clean"
+            });
+            if !files.is_empty() {
                 list = list.selected(
-                    file_node_id(app.selected.min(app.files.len() - 1)),
+                    file_node_id(app.selected.min(files.len() - 1)),
                     SELECT_FILE_ACTION,
                 );
             }
-            list = list.context_menu(semantic_file_menu(can_send));
-            Page::new(semantic_page_title(app, "Changes"), list).footer_actions([
-                FooterAction::new("refresh-diffs", "refresh", REFRESH_ACTION).accelerator("r"),
-            ])
+            if !historical {
+                list = list.context_menu(semantic_file_menu(can_send));
+            }
+            let title = app
+                .commit
+                .as_ref()
+                .map(|commit| {
+                    format!(
+                        "{} · {} · {} · {}",
+                        commit.short_id, commit.subject, commit.author, commit.date
+                    )
+                })
+                .unwrap_or_else(|| {
+                    format!(
+                        "{} · {} changed",
+                        app.branch.as_deref().unwrap_or("HEAD"),
+                        files.len()
+                    )
+                });
+            let page = Page::new(semantic_page_title(app, &title), list);
+            if historical {
+                page.back_action(CLOSE_DIFF_ACTION)
+            } else {
+                page
+            }
+        }
+        Screen::History => {
+            let mut list = List::new(
+                "git-history",
+                app.history
+                    .iter()
+                    .map(|commit| {
+                        ListItem::new(
+                            format!("commit-{}", commit.id),
+                            control_safe(&commit.subject),
+                        )
+                        .detail(control_safe(&format!(
+                            "{} · {}",
+                            commit.author, commit.date
+                        )))
+                        .value(&commit.short_id)
+                        .activate_action("open-commit")
+                    })
+                    .collect(),
+            )
+            .row_layout(ListRowLayout::Stacked)
+            .empty_message("No commits yet");
+            if let Some(commit) = app.history.get(app.selected) {
+                list = list.selected(format!("commit-{}", commit.id), "select-commit");
+            }
+            Page::new(
+                semantic_page_title(
+                    app,
+                    &format!(
+                        "{} · {} commits{}",
+                        app.branch.as_deref().unwrap_or("HEAD"),
+                        app.history.len(),
+                        if app.has_more_history { "+" } else { "" }
+                    ),
+                ),
+                list,
+            )
         }
         Screen::Diff(document) => {
             let lines = document
                 .lines
                 .iter()
                 .enumerate()
-                .map(|(index, line)| semantic_diff_line(index, line))
+                .map(|(index, line)| {
+                    let mut result = semantic_diff_line(index, line);
+                    if let Some(runs) = app
+                        .syntax
+                        .as_ref()
+                        .and_then(|lines| lines.get(index))
+                        .and_then(Option::as_ref)
+                    {
+                        // Keep the +/- marker in the change color; code uses
+                        // the shared run tones and the row keeps its tint.
+                        result.runs[0].text = line[..1].to_owned();
+                        let mut column = 1;
+                        result.runs.extend(runs.iter().cloned().map(|mut run| {
+                            run.text = semantic_diff_text_at(&run.text, &mut column);
+                            run
+                        }));
+                        result.tone = match line.as_bytes()[0] {
+                            b'+' => ContentLineTone::Added,
+                            b'-' => ContentLineTone::Removed,
+                            _ => ContentLineTone::Default,
+                        };
+                    }
+                    result
+                })
                 .collect::<Vec<_>>();
             let mut content = Content::new(
                 "diff-content",
@@ -443,17 +681,100 @@ fn semantic_page(app: &App, can_send: bool) -> Page {
                 ));
             }
             let title = format!(
-                "{} · +{} −{}",
-                document.file.list_name(),
+                "{}{} · +{} −{}",
+                app.commit
+                    .as_ref()
+                    .map(|commit| format!("{} · ", commit.short_id))
+                    .unwrap_or_default(),
+                document.file.path().display(),
                 document.additions,
                 document.deletions
             );
             Page::with_content(semantic_page_title(app, &title), content)
                 .back_action(CLOSE_DIFF_ACTION)
-                .footer_actions([
-                    FooterAction::new("refresh-diffs", "refresh", REFRESH_ACTION).accelerator("r"),
-                ])
         }
+    };
+    let mut actions =
+        vec![FooterAction::new("refresh-diffs", "refresh", REFRESH_ACTION).accelerator("r")];
+    if matches!(app.screen, Screen::History) && app.has_more_history {
+        actions.push(
+            FooterAction::new("older-commits", "load older", "load-history").accelerator("n"),
+        );
+    }
+    page.toolbar(git_toolbar(app))
+        .tabs([
+            PageTab::new("changes-tab", "Changes", "show-changes")
+                .selected(app.tab == Tab::Changes),
+            PageTab::new("history-tab", "History", "show-history")
+                .selected(app.tab == Tab::History),
+        ])
+        .footer_actions(actions)
+}
+
+fn change_label(status: char) -> &'static str {
+    match status {
+        'A' | '?' => "added",
+        'U' => "conflicted",
+        'D' => "deleted",
+        'R' => "renamed",
+        'C' => "copied",
+        'T' => "type changed",
+        _ => "modified",
+    }
+}
+
+fn git_toolbar(app: &App) -> PageToolbar {
+    let busy = app.remote_busy.is_some();
+    let primary = app.remote_busy.unwrap_or_else(|| app.remote.primary());
+    let label = if busy {
+        format!("{}…", primary.name())
+    } else if app.remote.remote.is_none() {
+        "No remote".to_owned()
+    } else {
+        match primary {
+            RemoteAction::Pull => format!("Pull ↓{}", app.remote.behind),
+            RemoteAction::Push => format!("Push ↑{}", app.remote.ahead),
+            RemoteAction::Fetch => "Fetch".to_owned(),
+        }
+    };
+    PageToolbar::new(
+        FooterAction::new("git-remote-primary", label, remote_action_id(primary))
+            .disabled(busy || !app.remote.allows(primary))
+            .busy(busy),
+    )
+    .menu(SemanticMenu::new(
+        "Remote actions",
+        [RemoteAction::Fetch, RemoteAction::Pull, RemoteAction::Push].map(|action| {
+            let label = match action {
+                RemoteAction::Fetch => app
+                    .remote
+                    .remote
+                    .as_ref()
+                    .map(|r| format!("Fetch {r}"))
+                    .unwrap_or("Fetch — no remote".into()),
+                RemoteAction::Pull if app.remote.ahead > 0 && app.remote.behind > 0 => {
+                    "Pull — branches diverged".into()
+                }
+                RemoteAction::Pull if app.remote.upstream.is_none() => "Pull — no upstream".into(),
+                RemoteAction::Push if app.remote.upstream.is_none() => "Push — no upstream".into(),
+                RemoteAction::Pull => format!("Pull (fast-forward) ↓{}", app.remote.behind),
+                RemoteAction::Push => format!("Push ↑{}", app.remote.ahead),
+            };
+            SemanticMenuItem::new(
+                format!("{}-menu", remote_action_id(action)),
+                label,
+                remote_action_id(action),
+            )
+            .disabled(busy || !app.remote.allows(action))
+        }),
+    ))
+}
+
+fn remote_action_id(action: RemoteAction) -> &'static str {
+    match action {
+        RemoteAction::Fetch => "git-fetch",
+        RemoteAction::Pull => "git-pull",
+        RemoteAction::Push => "git-push",
     }
 }
 
@@ -461,20 +782,30 @@ fn semantic_page_title(app: &App, base: &str) -> String {
     app.notice.as_ref().map_or_else(
         || base.to_owned(),
         |notice| {
-            format!(
-                "{base} · {}{}",
-                if notice.error { "Error: " } else { "" },
-                notice.text
-            )
+            if notice.error {
+                format!("Error: {} · {base}", notice.text)
+            } else {
+                format!("{base} · {}", notice.text)
+            }
         },
     )
 }
 
 fn semantic_diff_text(line: &str) -> String {
-    let expanded = expand_tabs(line);
-    let mut label = String::with_capacity(expanded.len());
-    for character in expanded.chars().filter(|character| !character.is_control()) {
-        label.push(character);
+    semantic_diff_text_at(line, &mut 0)
+}
+
+fn semantic_diff_text_at(line: &str, column: &mut usize) -> String {
+    let mut label = String::with_capacity(line.len());
+    for character in line.chars() {
+        if character == '\t' {
+            let spaces = 4 - (*column % 4);
+            label.extend(std::iter::repeat_n(' ', spaces));
+            *column += spaces;
+        } else if !character.is_control() {
+            label.push(character);
+            *column += character.width().unwrap_or(0);
+        }
     }
     label
 }
@@ -589,7 +920,7 @@ fn publish_semantic_projection(
     }
     let next_revision = revision
         .checked_add(1)
-        .ok_or_else(|| io::Error::other("Diffs UI revision space is exhausted"))?;
+        .ok_or_else(|| io::Error::other("Git UI revision space is exhausted"))?;
     let operations = page_delta_operations(published, &next);
     bridge
         .publish_delta(UI_VIEW_ID, *revision, next_revision, operations)
@@ -612,7 +943,7 @@ fn drain_bridge(
             UiBridgeEvent::Action { event, .. } => {
                 let result = if event.base_revision != *revision {
                     Err(format!(
-                        "Diffs changed from revision {} to {}; retry the action",
+                        "Git changed from revision {} to {}; retry the action",
                         event.base_revision, revision
                     ))
                 } else {
@@ -649,36 +980,74 @@ fn apply_semantic_action(
     agent: &AgentBridge,
     action: &unpeel_app_kit::UiAction,
 ) -> Result<(), String> {
+    if action.kind == UiEventKind::Activate
+        && action.value == UiEventValue::None
+        && let Some(remote_action) = [RemoteAction::Fetch, RemoteAction::Pull, RemoteAction::Push]
+            .into_iter()
+            .find(|operation| remote_action_id(*operation) == action.action.as_str())
+    {
+        if !git_toolbar(app).action(action.node_id.as_str(), action.action.as_str()) {
+            return Err("This Git action is unavailable".into());
+        }
+        return app
+            .start_remote_action(remote_action)
+            .map_err(|e| e.to_string());
+    }
     match (
         action.node_id.as_str(),
         action.action.as_str(),
         action.kind,
         &action.value,
     ) {
+        ("changes-tab", "show-changes", UiEventKind::Activate, UiEventValue::None) => {
+            app.switch_tab(Tab::Changes).map_err(|e| e.to_string())
+        }
+        ("history-tab", "show-history", UiEventKind::Activate, UiEventValue::None) => {
+            app.switch_tab(Tab::History).map_err(|e| e.to_string())
+        }
+        ("older-commits", "load-history", UiEventKind::Activate, UiEventValue::None)
+            if matches!(app.screen, Screen::History) && app.has_more_history =>
+        {
+            app.load_more_history().map_err(|e| e.to_string())
+        }
+        ("git-history", "select-commit", UiEventKind::Change, UiEventValue::Text(id))
+            if matches!(app.screen, Screen::History) =>
+        {
+            let index = commit_index(app, id)?;
+            app.select(index);
+            Ok(())
+        }
+        (id, "open-commit", UiEventKind::Activate, UiEventValue::None)
+            if matches!(app.screen, Screen::History) =>
+        {
+            let index = commit_index(app, id)?;
+            app.select(index);
+            app.open_selected().map_err(|e| e.to_string())
+        }
         (FILE_LIST_ID, SELECT_FILE_ACTION, UiEventKind::Change, UiEventValue::Text(item_id))
-            if !app.is_detail() =>
+            if matches!(app.screen, Screen::Files | Screen::CommitFiles) =>
         {
             let index = file_index_from_node_id(item_id)
                 .ok_or_else(|| "Selected file has an invalid target".to_owned())?;
-            if index >= app.files.len() {
+            if index >= app.active_files().len() {
                 return Err("Selected file no longer exists".to_owned());
             }
             app.select(index);
             Ok(())
         }
         (node_id, OPEN_FILE_ACTION, UiEventKind::Activate, UiEventValue::None)
-            if !app.is_detail() =>
+            if matches!(app.screen, Screen::Files | Screen::CommitFiles) =>
         {
             let index = file_index_from_node_id(node_id)
                 .ok_or_else(|| "File action has an invalid target".to_owned())?;
-            if index >= app.files.len() {
+            if index >= app.active_files().len() {
                 return Err("File no longer exists".to_owned());
             }
             app.select(index);
             app.open_selected().map_err(|error| error.to_string())
         }
         (SEMANTIC_ROOT_ID, CLOSE_DIFF_ACTION, UiEventKind::Cancel, UiEventValue::None)
-            if app.is_detail() =>
+            if app.can_go_back() =>
         {
             app.back();
             Ok(())
@@ -748,7 +1117,7 @@ fn apply_semantic_action(
             });
             Ok(())
         }
-        _ => Err("Action is not declared by the current Diffs Page".to_owned()),
+        _ => Err("Action is not declared by the current Git Page".to_owned()),
     }
 }
 
@@ -766,7 +1135,10 @@ fn apply_footer_action(app: &mut App, agent: &AgentBridge, action: &FooterAction
 
 fn select_semantic_target(app: &mut App, target: &str) -> Result<(), String> {
     if let Some(index) = file_index_from_node_id(target) {
-        if index >= app.files.len() {
+        if !matches!(app.screen, Screen::Files | Screen::CommitFiles) {
+            return Err("File list is not open".into());
+        }
+        if index >= app.active_files().len() {
             return Err("File no longer exists".to_owned());
         }
         app.select(index);
@@ -785,6 +1157,16 @@ fn ensure_semantic_diff_selection(app: &mut App, target: &str) -> Result<(), Str
         app.begin_selection(index);
     }
     Ok(())
+}
+
+fn commit_index(app: &App, node_id: &str) -> Result<usize, String> {
+    let id = node_id
+        .strip_prefix("commit-")
+        .ok_or("Invalid commit target")?;
+    app.history
+        .iter()
+        .position(|commit| commit.id == id)
+        .ok_or_else(|| "Commit no longer exists in this history".into())
 }
 
 fn file_index_from_node_id(node_id: &str) -> Option<usize> {
@@ -836,6 +1218,9 @@ enum InputAction {
     PanRight,
     SendToAgent,
     ClearSelection,
+    ChangesTab,
+    HistoryTab,
+    NextTab,
 }
 
 fn is_force_quit(key: KeyEvent) -> bool {
@@ -851,6 +1236,9 @@ fn action_for_key(key: KeyEvent, detail: bool, has_selection: bool) -> Option<In
         return None;
     }
     let contextual = match key.code {
+        KeyCode::Char('1') if !control => Some(InputAction::ChangesTab),
+        KeyCode::Char('2') if !control => Some(InputAction::HistoryTab),
+        KeyCode::Tab | KeyCode::BackTab => Some(InputAction::NextTab),
         KeyCode::Char('q') if !control => Some(InputAction::Quit),
         KeyCode::Enter if detail && has_selection => Some(InputAction::SendToAgent),
         KeyCode::Char('s') if detail && has_selection => Some(InputAction::SendToAgent),
@@ -885,15 +1273,35 @@ const fn list_navigation_input_action(action: ListNavigationAction) -> InputActi
 fn handle_action(app: &mut App, action: InputAction) -> bool {
     match action {
         InputAction::Quit => return true,
+        InputAction::ChangesTab | InputAction::HistoryTab | InputAction::NextTab => {
+            let tab = match action {
+                InputAction::ChangesTab => Tab::Changes,
+                InputAction::HistoryTab => Tab::History,
+                _ => {
+                    if app.tab == Tab::Changes {
+                        Tab::History
+                    } else {
+                        Tab::Changes
+                    }
+                }
+            };
+            if let Err(error) = app.switch_tab(tab) {
+                app.fail(error);
+            }
+        }
         InputAction::Activate => {
             if let Err(error) = app.open_selected() {
                 app.fail(error);
             }
         }
         InputAction::Back => app.back(),
-        InputAction::Down if app.is_detail() => app.scroll_vertical(1),
+        InputAction::Down if app.is_detail() => {
+            app.scroll_vertical(1);
+        }
         InputAction::Down => app.move_selection(1),
-        InputAction::Up if app.is_detail() => app.scroll_vertical(-1),
+        InputAction::Up if app.is_detail() => {
+            app.scroll_vertical(-1);
+        }
         InputAction::Up => app.move_selection(-1),
         InputAction::First => app.scroll_to_start(),
         InputAction::Last => app.scroll_to_end(),
@@ -1040,7 +1448,13 @@ fn activate_menu(menu: ContextMenu, app: &mut App, agent: &AgentBridge) {
 /// nearby agent's input, so the user writes their comment in the agent chat.
 fn send_selection(app: &mut App, agent: &AgentBridge) {
     let reference = match (&app.screen, app.selection_range()) {
-        (Screen::Diff(document), Some(range)) => Some(selection_reference(document, range)),
+        (Screen::Diff(document), Some(range)) => Some({
+            let reference = selection_reference(document, range);
+            app.commit
+                .as_ref()
+                .map(|commit| format!("{}:{reference}", commit.id))
+                .unwrap_or(reference)
+        }),
         _ => None,
     };
     let Some(reference) = reference else {
@@ -1160,12 +1574,19 @@ impl TerminalGuard {
         app: &App,
         drags: &mut DragSurface,
         menu: Option<&mut ContextMenu>,
+        toolbar: &mut PageToolbarState,
         theme: KitTheme,
     ) -> io::Result<RenderResult> {
         let mut result = RenderResult::default();
         drags.begin_frame();
         self.terminal.draw(|frame| {
             result = render_component_frame(frame, node, app, drags, menu, theme);
+            if let UiComponent::Page(page) = &node.element {
+                toolbar.render(frame, page.toolbar.as_ref());
+                if toolbar.is_open() {
+                    drags.begin_frame();
+                }
+            }
         })?;
         drags.commit()?;
         Ok(result)
@@ -1217,6 +1638,8 @@ struct RenderResult {
     diff_hits: Vec<RowHit>,
     back_button: Option<RectHit>,
     footer_area: Option<Rect>,
+    tabs_area: Option<Rect>,
+    title_area: Rect,
     scroll_offset: usize,
     max_scroll: usize,
     viewport_rows: usize,
@@ -1266,6 +1689,13 @@ fn render_component_frame(
     };
     let mut content_state = ContentState::new();
     list_state.set_pointer(app.pointer);
+    list_state.set_spinner_frame(
+        (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+            / 100) as usize,
+    );
     content_state.set_offsets(
         u16::try_from(app.detail_scroll).unwrap_or(u16::MAX),
         u16::try_from(app.horizontal_scroll).unwrap_or(u16::MAX),
@@ -1278,32 +1708,26 @@ fn render_component_frame(
     );
 
     let mut result = match (&app.screen, &page.body) {
-        (Screen::Files, unpeel_app_kit::PageBodySlot::List(list)) => {
-            let rows_area = list_state.rows_area();
-            let hits = (0..usize::from(rows_area.height))
-                .filter_map(|row| {
-                    let index = list_state.offset().saturating_add(row);
-                    let file = app.files.get(index)?;
-                    let row_area = Rect::new(
-                        rows_area.x,
-                        rows_area
-                            .y
-                            .saturating_add(u16::try_from(row).unwrap_or(u16::MAX)),
-                        rows_area.width,
-                        1,
-                    );
-                    drags.register(row_area, app.root().join(file.path()));
-                    Some(RowHit {
+        (_, unpeel_app_kit::PageBodySlot::List(list)) => {
+            let hits = (list_state.offset()..list.items.len())
+                .map_while(|index| list_state.item_area(index).map(|area| (index, area)))
+                .map(|(index, row_area)| {
+                    if app.tab == Tab::Changes
+                        && let Some(file) = app.active_files().get(index)
+                    {
+                        drags.register(row_area, app.root().join(file.path()));
+                    }
+                    RowHit {
                         index,
                         area: row_area,
-                    })
+                    }
                 })
                 .collect();
             RenderResult {
                 hits,
                 scroll_offset: list_state.offset(),
                 max_scroll: list_state.max_offset(list.items.len()),
-                viewport_rows: list_state.viewport_rows(),
+                viewport_rows: list_state.visible_item_count(list.items.len()),
                 ..RenderResult::default()
             }
         }
@@ -1361,6 +1785,12 @@ fn render_component_frame(
     }
     // The component widget owns all pixels; the result only carries terminal
     // geometry back to the App's renderer-local interaction state.
+    result.back_button = page
+        .back
+        .as_ref()
+        .and_then(|_| RectHit::from_rect(layout.title));
+    result.tabs_area = layout.tabs;
+    result.title_area = layout.title;
     result.footer_area = layout.footer;
     result
 }
@@ -1402,7 +1832,7 @@ fn render_file_list(
         view.files
             .iter()
             .enumerate()
-            .map(|(index, file)| file_list_item(file, index))
+            .map(|(index, file)| file_list_item(file, index, false))
             .collect(),
     )
     .selected(file_node_id(selected), SELECT_FILE_ACTION);
@@ -1445,17 +1875,24 @@ fn file_node_id(index: usize) -> String {
     format!("file-{index}")
 }
 
-fn file_list_item(file: &ChangedFile, index: usize) -> ListItem {
-    let state = file.state_label();
-    let state_width = u16::try_from(UnicodeWidthStr::width(state)).unwrap_or(u16::MAX);
+fn file_list_item(file: &ChangedFile, index: usize, historical: bool) -> ListItem {
+    let status = file.status_symbol();
+    let symbol = match status {
+        'A' | '?' | 'C' => "⊞",
+        'D' => "⊟",
+        'R' => "→",
+        'U' => "!",
+        _ => "⊡",
+    };
+    let label = if historical {
+        change_label(status).to_owned()
+    } else {
+        format!("{}, {}", change_label(status), file.state_label())
+    };
     ListItem::new(file_node_id(index), file.list_name())
-        .leading(ListItemSlot::status(
-            StatusSymbol::new(file.status_symbol().to_string(), state)
-                .tone(status_tone(file.status_symbol()))
-                .preserve_tone_when_selected(true),
+        .trailing(ListItemSlot::status(
+            StatusSymbol::new(symbol, label).tone(status_tone(status)),
         ))
-        .value(state)
-        .value_min_width(state_width.saturating_add(17))
         .activate_action(OPEN_FILE_ACTION)
 }
 
@@ -1479,145 +1916,6 @@ fn file_list_theme(theme: KitTheme) -> PageTheme {
     page.scrollbar_track = theme.scrollbar_track;
     page.scrollbar_thumb = theme.scrollbar_thumb;
     page
-}
-
-#[cfg(test)]
-fn render_file_list_legacy(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    view: FileListView<'_>,
-    theme: KitTheme,
-    drags: &mut DragSurface,
-) -> RenderResult {
-    if area.is_empty() {
-        return RenderResult::default();
-    }
-    if view.files.is_empty() {
-        let row = Rect::new(
-            area.x,
-            area.y.saturating_add(area.height.saturating_sub(1) / 2),
-            area.width,
-            1,
-        );
-        frame.render_widget(
-            Paragraph::new("working tree clean")
-                .style(Style::new().fg(theme.muted))
-                .alignment(Alignment::Center),
-            row,
-        );
-        return RenderResult {
-            viewport_rows: usize::from(area.height),
-            ..RenderResult::default()
-        };
-    }
-    let total_rows = view.files.len();
-    let show_scrollbar = total_rows > usize::from(area.height) && area.width > 1;
-    let rows_area = if show_scrollbar {
-        Rect::new(area.x, area.y, area.width - 1, area.height)
-    } else {
-        area
-    };
-    let viewport_rows = usize::from(rows_area.height);
-    let max_scroll = total_rows.saturating_sub(viewport_rows);
-    let selected = view.selected.min(view.files.len() - 1);
-    let requested_scroll = view.requested_scroll.min(max_scroll);
-    let scroll_offset = if view.reveal_selected {
-        reveal_selected_row(selected, viewport_rows, requested_scroll, max_scroll)
-    } else {
-        requested_scroll
-    };
-    let mut hits = Vec::new();
-    for row in 0..rows_area.height {
-        let index = scroll_offset.saturating_add(usize::from(row));
-        let Some(file) = view.files.get(index) else {
-            break;
-        };
-        let row_area = Rect::new(rows_area.x, rows_area.y + row, rows_area.width, 1);
-        render_file_row_legacy(frame.buffer_mut(), row_area, file, index == selected, theme);
-        drags.register(row_area, view.root.join(file.path()));
-        hits.push(RowHit {
-            index,
-            area: row_area,
-        });
-    }
-    if show_scrollbar {
-        frame.render_widget(
-            VerticalScrollbar::new(total_rows, viewport_rows, scroll_offset)
-                .track_style(theme.scrollbar_track)
-                .thumb_style(theme.scrollbar_thumb),
-            Rect::new(area.right().saturating_sub(1), area.y, 1, area.height),
-        );
-    }
-    RenderResult {
-        hits,
-        scroll_offset,
-        max_scroll,
-        viewport_rows,
-        ..RenderResult::default()
-    }
-}
-
-#[cfg(test)]
-fn render_file_row_legacy(
-    buffer: &mut Buffer,
-    area: Rect,
-    file: &ChangedFile,
-    selected: bool,
-    theme: KitTheme,
-) {
-    if area.is_empty() {
-        return;
-    }
-    let row_style = if selected {
-        theme.selected_row
-    } else {
-        Style::new().fg(theme.text)
-    };
-    buffer.set_style(area, row_style);
-    let padding = SELECTABLE_LEFT_PADDING.min(area.width);
-    let content = Rect::new(
-        area.x.saturating_add(padding),
-        area.y,
-        area.width.saturating_sub(padding).saturating_sub(1),
-        1,
-    );
-    if content.is_empty() {
-        return;
-    }
-
-    let state = file.state_label();
-    let state_width = u16::try_from(UnicodeWidthStr::width(state)).unwrap_or(u16::MAX);
-    let show_state = content.width >= state_width.saturating_add(14);
-    let [label_area, state_area] = Layout::horizontal([
-        Constraint::Min(0),
-        Constraint::Length(if show_state {
-            state_width.saturating_add(1)
-        } else {
-            0
-        }),
-    ])
-    .areas(content);
-    let status_style = Style::new().fg(status_color(file.status_symbol(), theme.scheme));
-    frame_line(
-        buffer,
-        label_area,
-        Line::from(vec![
-            Span::styled(file.status_symbol().to_string(), status_style),
-            Span::raw("  "),
-            Span::styled(file.list_name(), row_style),
-        ]),
-    );
-    if show_state {
-        let summary_color = if selected {
-            theme.selected_row.fg.unwrap_or(theme.text)
-        } else {
-            theme.muted
-        };
-        Paragraph::new(state)
-            .style(Style::new().fg(summary_color))
-            .alignment(Alignment::Right)
-            .render(state_area, buffer);
-    }
 }
 
 #[cfg(test)]
@@ -1944,6 +2242,7 @@ fn diff_line_style(line: &str, theme: KitTheme) -> Style {
     }
 }
 
+#[cfg(test)]
 fn expand_tabs(line: &str) -> String {
     let mut expanded = String::with_capacity(line.len());
     let mut column = 0usize;
@@ -2036,14 +2335,14 @@ fn visible_cells(line: &str, offset: usize, width: u16) -> String {
 
 /// Sidebar title for a working tree: `<folder> · <branch>` (short commit id
 /// when detached), or just the folder when Git has no answer.
-fn session_title_for(repository: &crate::git::Repository) -> String {
+fn session_title_for(repository: &crate::git::Repository, branch: Option<&str>) -> String {
     let folder = repository
         .root()
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| repository.root().display().to_string());
-    match repository.branch() {
+    match branch {
         Some(branch) => format!("{folder} · {branch}"),
         None => folder,
     }
@@ -2099,6 +2398,240 @@ mod tests {
         let app = App::new(repository).unwrap();
         assert_eq!(app.files.len(), 5);
         (directory, app)
+    }
+
+    fn wheel(kind: MouseEventKind) -> Event {
+        Event::Mouse(crossterm::event::MouseEvent {
+            kind,
+            column: 10,
+            row: 8,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
+    #[test]
+    fn scroll_bursts_clamp_each_tick_and_reverse_immediately_at_both_edges() {
+        let (_directory, mut app) = file_app();
+        app.apply_render_metrics(3, 3, 2, 0);
+        let down = wheel(MouseEventKind::ScrollDown);
+        let up = wheel(MouseEventKind::ScrollUp);
+        let mut events = std::iter::repeat_n(down.clone(), 200).chain([up.clone()]);
+        let result = scroll_batch(&mut app, down.clone(), || Ok(events.next())).unwrap();
+        assert!(result.changed);
+        assert!(result.pending.is_none());
+        assert_eq!(
+            app.list_scroll, 2,
+            "one upward tick must move immediately after overscrolling"
+        );
+        assert!(!app.reveal_selected);
+
+        app.apply_render_metrics(0, 3, 2, 0);
+        let mut events = std::iter::repeat_n(up.clone(), 200).chain([down.clone()]);
+        scroll_batch(&mut app, up, || Ok(events.next())).unwrap();
+        assert_eq!(
+            app.list_scroll, 1,
+            "one downward tick must move immediately at the top"
+        );
+
+        app.screen = Screen::Diff(document());
+        app.apply_render_metrics(3, 3, 1, 0);
+        let mut events =
+            std::iter::repeat_n(down.clone(), 200).chain([wheel(MouseEventKind::ScrollUp)]);
+        scroll_batch(&mut app, down, || Ok(events.next())).unwrap();
+        assert_eq!(app.detail_scroll, 2);
+    }
+
+    #[test]
+    fn scroll_batches_preserve_following_input_and_bound_work_without_losing_ticks() {
+        let (_directory, mut app) = file_app();
+        app.apply_render_metrics(0, 1000, 2, 0);
+        let down = wheel(MouseEventKind::ScrollDown);
+        let enter = Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let mut queued = std::iter::repeat_n(down.clone(), 300).chain([enter.clone()]);
+        let first = scroll_batch(&mut app, down, || Ok(queued.next())).unwrap();
+        assert!(first.pending.is_none());
+        assert_eq!(app.list_scroll, 256);
+        let next = queued.next().unwrap();
+        let second = scroll_batch(&mut app, next, || Ok(queued.next())).unwrap();
+        assert_eq!(app.list_scroll, 301);
+        assert_eq!(second.pending, Some(enter));
+        assert!(queued.next().is_none());
+    }
+
+    #[test]
+    fn live_diff_projection_keeps_syntax_tints_tabs_and_cached_tokens() {
+        let (directory, mut app) = file_app();
+        let source = "fn greet() {\n\tlet name = \"Hello\"; // comment\n}\n";
+        std::fs::write(directory.path().join("a.rs"), source).unwrap();
+        app.open_selected().unwrap();
+        let cached = app.syntax.as_ref().unwrap().as_ptr();
+        let node = semantic_node(&app, false);
+        let UiComponent::Page(page) = &node.element else {
+            unreachable!()
+        };
+        let content = page.content().unwrap();
+        let line = content
+            .lines
+            .iter()
+            .find(|line| line.text().contains("let name"))
+            .unwrap();
+        assert_eq!(line.text(), "+   let name = \"Hello\"; // comment");
+        assert!(line.runs.iter().any(|run| run.tone == ContentTone::Success));
+        assert!(line.runs.iter().any(|run| run.tone == ContentTone::Accent));
+        assert!(line.runs.iter().any(|run| run.tone == ContentTone::Muted));
+        for theme in [KitTheme::dark(), KitTheme::light()] {
+            let mut terminal = Terminal::new(TestBackend::new(70, 20)).unwrap();
+            let mut drags = DragSurface::disabled();
+            terminal
+                .draw(|frame| {
+                    render_component_frame(frame, &node, &app, &mut drags, None, theme);
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let row = (0..20)
+                .find(|row| buffer_line(buffer, *row).contains("let name"))
+                .unwrap();
+            let text = buffer_line(buffer, row);
+            let keyword = text.find("let").unwrap() as u16;
+            let identifier = text.find("name").unwrap() as u16;
+            assert_ne!(buffer[(keyword, row)].fg, buffer[(identifier, row)].fg);
+            assert!(
+                (0..70).all(|x| buffer[(x, row)].bg
+                    == ContentTheme::for_theme(theme).added_line.bg.unwrap())
+            );
+        }
+        app.detail_scroll = 1;
+        assert!(!app.sync().unwrap());
+        assert_eq!(cached, app.syntax.as_ref().unwrap().as_ptr());
+        std::fs::write(directory.path().join("a.rs"), "fn updated() {}\n").unwrap();
+        assert!(app.sync().unwrap());
+        assert!(
+            semantic_page(&app, false)
+                .content()
+                .unwrap()
+                .lines
+                .iter()
+                .any(|line| line.text().contains("updated"))
+        );
+    }
+
+    #[test]
+    fn scrolling_without_a_model_change_reuses_the_semantic_page() {
+        let (_directory, mut app) = file_app();
+        app.apply_render_metrics(0, 3, 2, 0);
+        let before = semantic_node(&app, false);
+        assert!(app.scroll_vertical(1));
+        assert_eq!(semantic_node(&app, false), before);
+        app.apply_render_metrics(3, 3, 2, 0);
+        assert!(
+            !app.scroll_vertical(1),
+            "scrolling beyond the edge must not request another frame"
+        );
+        assert!(app.scroll_vertical(-1));
+        assert_eq!(app.list_scroll, 2);
+    }
+
+    #[test]
+    fn tabs_render_and_route_history_through_the_same_component_actions() {
+        let (directory, mut app) = file_app();
+        for args in [vec!["add", "."], vec!["commit", "-m", "Initial files"]] {
+            assert!(
+                Command::new("git")
+                    .arg("-C")
+                    .arg(directory.path())
+                    .args(args)
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            );
+        }
+        let agent = AgentBridge::new();
+        apply_semantic_action(
+            &mut app,
+            &agent,
+            &UiAction::activate("history-tab", "show-history"),
+        )
+        .unwrap();
+        let node = semantic_node(&app, false);
+        node.validate().unwrap();
+        let UiComponent::Page(page) = &node.element else {
+            unreachable!()
+        };
+        assert!(page.tabs[1].selected);
+        assert!(page.required_capabilities().contains(&"pageTabs"));
+        let action = page.list().items[0].primary_ui_action().unwrap();
+        for (width, height) in [(1, 1), (16, 4), (32, 10), (80, 20)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            let mut drags = DragSurface::disabled();
+            let mut rendered = RenderResult::default();
+            terminal
+                .draw(|frame| {
+                    rendered = render_component_frame(
+                        frame,
+                        &node,
+                        &app,
+                        &mut drags,
+                        None,
+                        KitTheme::dark(),
+                    )
+                })
+                .unwrap();
+            assert_eq!(
+                rendered.title_area,
+                page.layout(Rect::new(0, 0, width, height)).title
+            );
+            if width >= 32 {
+                assert!(buffer_line(terminal.backend().buffer(), 0).contains("Changes"));
+                assert!(buffer_line(terminal.backend().buffer(), 0).contains("History"));
+                let tabs = rendered.tabs_area.unwrap();
+                assert_eq!(
+                    page.tab_at(Position::new(width - 1, 0), tabs)
+                        .unwrap()
+                        .action,
+                    "show-history"
+                );
+                assert_eq!(rendered.hits.len(), 1);
+            }
+            assert!(drags.regions().is_empty());
+        }
+        apply_semantic_action(&mut app, &agent, &action).unwrap();
+        assert!(matches!(app.screen, Screen::CommitFiles));
+        let files = semantic_page(&app, false);
+        assert!(
+            matches!(&files.list().items[0].trailing, Some(ListItemSlot::Status(status)) if status.label == "added")
+        );
+        apply_semantic_action(
+            &mut app,
+            &agent,
+            &files.list().items[0].primary_ui_action().unwrap(),
+        )
+        .unwrap();
+        assert!(app.is_detail());
+        apply_semantic_action(
+            &mut app,
+            &agent,
+            &UiAction::new(
+                SEMANTIC_ROOT_ID,
+                CLOSE_DIFF_ACTION,
+                UiEventKind::Cancel,
+                UiEventValue::None,
+            ),
+        )
+        .unwrap();
+        assert!(matches!(app.screen, Screen::CommitFiles));
+        apply_semantic_action(
+            &mut app,
+            &agent,
+            &UiAction::new(
+                SEMANTIC_ROOT_ID,
+                CLOSE_DIFF_ACTION,
+                UiEventKind::Cancel,
+                UiEventValue::None,
+            ),
+        )
+        .unwrap();
+        assert!(matches!(app.screen, Screen::History));
     }
 
     #[test]
@@ -2167,7 +2700,7 @@ mod tests {
         assert_eq!(page.footer.actions[0].id, "refresh-diffs");
         assert_eq!(page.footer.actions[0].accelerator.as_deref(), Some("r"));
         assert!(matches!(
-            page.list().items[0].leading,
+            page.list().items[0].trailing,
             Some(ListItemSlot::Status(_))
         ));
 
@@ -2268,76 +2801,14 @@ mod tests {
             .unwrap();
 
         let buffer = terminal.backend().buffer();
-        assert!(buffer_line(buffer, 0).starts_with("  M  ui.rs"));
+        assert!(buffer_line(buffer, 0).starts_with("  ui.rs"));
+        assert!(buffer_line(buffer, 0).ends_with("⊡ "));
         assert!(!buffer_line(buffer, 0).contains("src/ui.rs"));
         assert_eq!(buffer[(47, 0)].bg, theme.selected_row.bg.unwrap());
         assert_eq!(list_result.hits[0].area.width, 48);
         assert_eq!(drags.regions().len(), 1);
         assert_eq!(drags.regions()[0].area, Rect::new(0, 0, 48, 1));
         assert_eq!(drags.regions()[0].path, Path::new("/repo/src/ui.rs"));
-    }
-
-    #[test]
-    fn app_kit_file_list_matches_the_frozen_renderer_buffer_for_buffer() {
-        let files = vec![
-            ChangedFile::fixture("src/modified.rs", ' ', 'M'),
-            ChangedFile::fixture("src/added.rs", 'A', ' '),
-            ChangedFile::fixture("src/untracked.rs", '?', '?'),
-            ChangedFile::fixture("src/deleted.rs", 'D', ' '),
-        ];
-        let cases = [
-            (18, 1, 0, 0, true),
-            (26, 2, 2, 0, true),
-            (40, 2, 1, 1, false),
-            (72, 8, 3, 0, true),
-        ];
-        for theme in [KitTheme::light(), KitTheme::dark()] {
-            for (width, height, selected, requested_scroll, reveal_selected) in cases {
-                let view = FileListView {
-                    root: Path::new("/repo"),
-                    files: &files,
-                    selected,
-                    requested_scroll,
-                    reveal_selected,
-                };
-                let mut current = Terminal::new(TestBackend::new(width, height)).unwrap();
-                let mut legacy = Terminal::new(TestBackend::new(width, height)).unwrap();
-                let mut current_result = RenderResult::default();
-                let mut legacy_result = RenderResult::default();
-                let mut current_drags = DragSurface::disabled();
-                let mut legacy_drags = DragSurface::disabled();
-                current_drags.begin_frame();
-                legacy_drags.begin_frame();
-                current
-                    .draw(|frame| {
-                        current_result =
-                            render_file_list(frame, frame.area(), view, theme, &mut current_drags);
-                    })
-                    .unwrap();
-                legacy
-                    .draw(|frame| {
-                        legacy_result = render_file_list_legacy(
-                            frame,
-                            frame.area(),
-                            view,
-                            theme,
-                            &mut legacy_drags,
-                        );
-                    })
-                    .unwrap();
-                assert_eq!(
-                    current.backend().buffer(),
-                    legacy.backend().buffer(),
-                    "{width}x{height}, selected {selected}, {:?}",
-                    theme.scheme
-                );
-                assert_eq!(current_result.hits, legacy_result.hits);
-                assert_eq!(current_result.scroll_offset, legacy_result.scroll_offset);
-                assert_eq!(current_result.max_scroll, legacy_result.max_scroll);
-                assert_eq!(current_result.viewport_rows, legacy_result.viewport_rows);
-                assert_eq!(current_drags.regions(), legacy_drags.regions());
-            }
-        }
     }
 
     #[test]
@@ -2596,10 +3067,9 @@ mod tests {
         assert_eq!(buffer[(2, 7)].symbol(), "+");
         let code_cell = &buffer[(3, 7)];
         assert_eq!(code_cell.bg, added);
-        assert!(
-            matches!(code_cell.fg, Color::Rgb(..)),
-            "code should use syntect RGB foregrounds, got {:?}",
-            code_cell.fg
+        assert_eq!(
+            code_cell.fg, theme.text,
+            "plain identifiers keep the shared text color"
         );
     }
 

@@ -148,6 +148,42 @@ impl Snapshot {
         Self { providers }
     }
 
+    /// An unweighted average of the available weekly account quotas. Other
+    /// windows and model-specific sublimits overlap these pools and are not
+    /// additional capacity. PercentDisplay affects meters, never this used value.
+    pub fn session_title(&self) -> String {
+        let weekly = self
+            .providers
+            .iter()
+            .filter(|provider| {
+                provider.present
+                    && !matches!(
+                        provider.kind,
+                        ProviderKind::CurrentProject | ProviderKind::Total
+                    )
+            })
+            .filter_map(|provider| {
+                provider.metrics.iter().find_map(|metric| {
+                    if !matches!(
+                        metric.label.to_ascii_lowercase().as_str(),
+                        "week" | "weekly" | "7-day" | "7-day limit"
+                    ) {
+                        return None;
+                    }
+                    metric
+                        .percent
+                        .filter(|used| used.is_finite())
+                        .map(|used| used.clamp(0.0, 100.0))
+                })
+            });
+        let (sum, count) = weekly.fold((0.0, 0usize), |(sum, count), used| (sum + used, count + 1));
+        if count == 0 {
+            "Usage".into()
+        } else {
+            format!("Usage ({:.0}%)", sum / count as f64)
+        }
+    }
+
     /// Compact per-provider sidebar status. Notification event copy is
     /// transient and is written separately when an enabled alert edge fires.
     pub fn status_line(&self) -> String {
@@ -649,6 +685,77 @@ mod tests {
         assert_eq!(current.badge, "host-owned-project");
         assert_eq!(current.monthly_tokens[0].tokens, 345);
         assert_eq!(current.detail[0].1, project.display().to_string());
+    }
+
+    #[test]
+    fn session_title_averages_weekly_accounts_without_counting_overlapping_limits() {
+        let provider = |kind, metrics| Provider {
+            kind,
+            name: "test".into(),
+            badge: String::new(),
+            present: true,
+            metrics,
+            detail: Vec::new(),
+            as_of: None,
+            alert: None,
+            status_fragment: None,
+            day_usd: None,
+            monthly_tokens: Vec::new(),
+            project_usage: Vec::new(),
+        };
+        let quota = |label, used| Metric::used_percent(label, used, String::new(), Level::Ok);
+        let mut codex = Metric::new("7-day limit", "20%".into(), Level::Ok);
+        codex.percent = Some(20.0); // Rendered as remaining, stored as used.
+        let snapshot = Snapshot {
+            providers: vec![
+                provider(
+                    ProviderKind::Claude,
+                    vec![
+                        quota("Session", 100.0),
+                        quota("Weekly", 10.0),
+                        quota("Fable", 90.0),
+                    ],
+                ),
+                provider(ProviderKind::Claude, vec![quota("Weekly", 30.0)]),
+                provider(ProviderKind::Codex, vec![codex]),
+                provider(
+                    ProviderKind::Grok,
+                    vec![Metric::new("Weekly", "No data".into(), Level::Ok)],
+                ),
+                provider(
+                    ProviderKind::Muse,
+                    vec![Metric::new("Last 30 Days", "$4.42".into(), Level::Ok)],
+                ),
+                provider(ProviderKind::Total, vec![quota("Weekly", 100.0)]),
+            ],
+        };
+        assert_eq!(snapshot.session_title(), "Usage (20%)");
+        assert_eq!(Snapshot::default().session_title(), "Usage");
+        let mut unavailable = snapshot.providers[0].clone();
+        unavailable.present = false;
+        assert_eq!(
+            Snapshot {
+                providers: vec![unavailable]
+            }
+            .session_title(),
+            "Usage"
+        );
+        let invalid = provider(ProviderKind::Grok, vec![quota("Weekly", f64::NAN)]);
+        assert_eq!(
+            Snapshot {
+                providers: vec![invalid]
+            }
+            .session_title(),
+            "Usage"
+        );
+        let zero = provider(ProviderKind::Grok, vec![quota("Weekly", 0.0)]);
+        assert_eq!(
+            Snapshot {
+                providers: vec![zero]
+            }
+            .session_title(),
+            "Usage (0%)"
+        );
     }
 
     #[test]

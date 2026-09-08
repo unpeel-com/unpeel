@@ -1,121 +1,95 @@
-# unpeel-diffs
+# Git
 
-A small, standalone Ratatui App for reviewing the current Git working tree.
-The default screen is a compact list of changed files; select one and press
-Enter to open its unified diff.
+A standalone Git sidebar App with **Changes** and **History** tabs at the top.
+The terminal and native renderers use the same App Kit Page, tabs, lists, and
+patch content. The display name is Git; `unpeel-diffs`, the `diffs` install
+slug, and `unpeel.app.diffs` remain stable for existing installs and presets.
 
-It remains a complete plain-terminal app with no Unpeel process present. When
-the Host injects an App Kit UI socket, the same binary additionally publishes
-its `Page`/`List` tree so SwiftUI, web, and scoped agent participants share the
-terminal-owned selection and can open or close diffs. Renderer-only selection
-changes travel as compact list deltas; the Ratatui view remains the fallback.
+**Changes** shows staged, unstaged, conflicted, and untracked files. Open a
+file to review its unified diff. Tracked changes compare the working tree to
+`HEAD`; untracked files appear as additions. The list and open patch quietly
+refresh about once a second. File names have compact trailing status symbols:
+green `⊞` for new files, red `⊟` for deletions, yellow `⊡` for modifications,
+an arrow for renames, and `!` for conflicts. Status labels preserve staging
+information for accessible renderers.
 
-```text
-  M  ui.rs                                               unstaged
-  A  git.rs                                                 staged
-  ?  notes.txt                                           untracked
-```
+Patch code uses language-aware syntax highlighting, including Swift, Rust,
+JavaScript, TypeScript/TSX, Python, JSON, and shell. Keywords, names, strings,
+numbers, and comments use App Kit's shared foreground tones while additions
+and deletions retain full-width row tints. The parsed runs are cached until
+the patch changes, so scrolling and selection do not reparse code. The old
+and new sides keep separate multiline parser state, reset between hunks.
+Unknown file types and patches exceeding 4,000 lines, 1 MiB, or a 16 KiB line
+retain plain diff colors. Syntax definitions come from
+[two-face](https://docs.rs/two-face/); `unpeel-diffs --syntax-licenses` prints
+the bundled collection and grammar acknowledgements.
 
-The UI follows the shared `../unpeel-app-kit` design conventions used by the
-Explorer and Usage Apps:
+**History** shows the current checkout's commits, newest first, with subject,
+author, date, and short commit ID. Open a commit to browse its changed files,
+then open a file to review that commit's patch. Root commits compare to the
+empty tree; merges compare to their first parent. The first 100 commits load
+initially; **load older** fetches another 100. Historical patches remain pinned
+to their commit while the working tree and history change.
 
-- borderless, transparent ordinary surfaces
-- two-cell row-label and muted project-relative footer inset
-- full-width gray selected rows, with dark/light defaults
-- the shared capless proportional scrollbar
-- a pinned transparent Back action with a full-width click target in detail views
-- transparent diff surface with green/red row tints behind added and removed lines
-- syntect syntax colors on diff code lines (by file type; dark/light themes),
-  falling back to plain text for unknown types or very large diffs
-- changed-file rows are native path drag sources, matching the Explorer App
-- right-click context menus with preferred-editor opening and adjacent-agent handoff
+The branch (or detached commit ID), change count, and history count provide
+repository context. Empty repositories show **No commits yet**; clean trees
+show **Working tree clean**. Both tabs are available on detail pages.
 
-Unpeel's Session title owns the App name, so the content has no repeated
-in-App title. The bottom row contains only the selected or open file's muted
-repository-relative path (`.` when no file is selected); it has no shortcut
-help.
+The top-right control shows **Fetch**, **Pull ↓N** when behind, or **Push ↑N**
+when ahead. Its dropdown always lists the three operations. Git uses the
+branch's configured upstream; without one, only Fetch is available. With no
+remote the control is disabled. Fetch runs on demand; periodic UI refreshes
+only read local Git state.
 
-The default list shows only each basename to stay scannable in narrow panes.
-Opening a diff reveals its full repository-relative path.
+Remote operations run in the background with a busy indicator. Pull fetches
+then fast-forwards without autostashing; diverged branches need resolving
+outside this App. Push sends the captured commit to the exact upstream ref,
+without force. Checkout changes during an operation are detected before a
+pull updates the working tree. Existing Git credential helpers are used;
+terminal password prompts are disabled. Failures appear in the title.
 
-This repository is intentionally separate from the core Unpeel client. It is
-a standalone terminal App, not built-in diff or source-editor chrome.
+## Build and run
 
-## Install
-
-The hosted binary route is ready for the App release channel but its artifact
-has not been published yet. For now, install from source with App Kit checked
-out beside this repository:
-
-```sh
-mkdir -p ~/Dev && cd ~/Dev
-git clone https://github.com/unpeel-com/unpeel-app-kit.git
-git clone https://github.com/unpeel-com/unpeel-app-diffs.git
-cargo install --locked --path unpeel-app-diffs
-```
-
-Once the release artifact is published, the checksum-verified binary installer
-will be:
+From this repository:
 
 ```sh
-curl -fsSL https://unpeel.com/install/diffs/install.sh | sh
+cargo build --release --manifest-path crates/apps/Cargo.toml -p unpeel-diffs
+crates/apps/target/release/unpeel-diffs ~/Dev/my-repository
 ```
 
-Unpeel detects the installed `unpeel-diffs` CLI directly from `PATH`; no
-registration command or `~/.unpeel/apps` write is needed.
+For local Unpeel development, `bun run apps:link diffs` builds and links the
+managed App slot. Use the pane menu's **Restart App** after a rebuild; running
+processes keep their loaded binary. The App is released independently with
+the `diffs` slug; linking a development build does not publish it to R2.
 
-## Run
+Without a path, hosted panes use App Kit's `AppContext::current_root()` and
+follow the adjacent agent between checkouts and worktrees. Standalone runs
+use the process working directory. An explicit path pins the repository.
+
+## Navigation
+
+- Click **Changes** or **History**, or use `1` / `2` or `Tab` / `Shift-Tab`.
+- `↑` / `↓` or `j` / `k` select files or commits, or scroll a patch.
+- `Enter` opens the selected row; in a patch without a selection it goes back.
+- `Esc` clears a patch selection, then goes back one level. It keeps root lists open.
+- `Home` / `End`, `g` / `G`, and `Page Up` / `Page Down` navigate lists or patches.
+- `←` / `→` or `h` / `l` pan wide patch lines.
+- `F10` opens the remote-action dropdown; arrows, Enter, and Esc operate it.
+- `r` refreshes; `n` loads older commits when available in History.
+- `q` or `Ctrl-C` quits.
+
+Working-tree file rows support path dragging and context actions to open in
+an editor, send a path to the adjacent agent, or copy a path. Historical files
+open their committed patches; they are not drag sources for checkout files.
+
+Inside a patch, click and drag or Shift-click to select lines. The context
+menu offers **Copy lines** and **Send to agent**; `s` or `Enter` sends a
+selection's file reference without submitting the agent's prompt. History
+references include the full commit ID (`commit:path:line`), so they identify
+that revision. If no agent is available, the reference is copied instead.
+
+## Verification
 
 ```sh
-unpeel-diffs ~/Dev/my-repository
+cargo test --manifest-path crates/apps/Cargo.toml -p unpeel-diffs
 ```
-
-With no path, a hosted pane first discovers Git from App Kit's Host-owned
-`AppContext::current_root()` and then follows the neighboring/main agent's
-actual checkout: it switches into that agent's worktree and back to the main
-checkout automatically. A standalone run discovers from its process working
-directory. Passing a path always wins and keeps Diffs pinned to that
-repository.
-The viewer combines staged and unstaged tracked changes against `HEAD` and
-shows untracked files as additions. While idle it quietly follows the
-working tree (about once a second), so the list and the open diff update as
-the project changes; `r` still forces an immediate reload.
-
-Keyboard controls:
-
-- `↑` / `↓` or `j` / `k`: select a changed file or scroll its diff
-- `Enter`: open the selected diff; in detail, activate Back
-- `Esc`: return from a diff; it does not exit the file list
-- `Home` / `End` or `g` / `G`: first/last file or top/bottom of a diff
-- `Page Up` / `Page Down`: move one viewport
-- `←` / `→` or `h` / `l`: pan wide diff lines
-- `r`: reload Git status and the open diff
-- `q` or `Ctrl-C`: quit
-
-One mouse click selects a full row; double-clicking that same row opens its
-diff. Dragging a changed-file row into an agent terminal drops a concise path
-(project-relative first, then `~/…`, then absolute) using the same App Kit
-primitive as Filetree. The Back action
-activates with one click, and the wheel scrolls the current list or diff.
-
-## Selecting diff lines and sending them to an agent
-
-Inside a diff, click a line to select it and drag (or Shift-click) to grow
-the range; selected lines use the shared full-width gray highlight.
-Right-clicking offers **Send to agent** (when an agent pane is nearby —
-same-group peers are preferred, and the Host asks for approval before a
-cross-group write) plus **Copy lines**; `Enter` or `s` on a selection sends
-directly. Sending pastes only the filename and line numbers — the
-repo-relative path with the file lines the hunks map the selection to, such
-as `src/ui.rs:120-134` — into the agent's input without submitting, so the
-comment and the final prompt are written in the agent chat. Without an
-agent, the reference is copied to the clipboard instead.
-In the file list, right-clicking a row offers **Open in editor**, **Send to
-agent** (bare repo-relative path), and **Copy path**. The diff-line menu also
-offers **Open in editor** for the current file. The shared editor action uses
-Unpeel's configured editor when hosted and the platform opener when standalone.
-
-Set `UNPEEL_TUI_THEME=light` or `UNPEEL_TUI_THEME=dark` to override theme
-detection. When launched inside Unpeel, the Host detects the CLI from `PATH`
-and App Kit's shared `AppReporter` publishes the selected file as
-agent-readable context; all Git inspection remains local and read-only.

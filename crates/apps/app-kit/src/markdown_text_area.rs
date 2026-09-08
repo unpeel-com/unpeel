@@ -168,6 +168,12 @@ impl MarkdownEditorConfig {
         self
     }
 
+    #[must_use]
+    pub fn footer_status(mut self, status: impl Into<String>) -> Self {
+        self.footer.status = Some(status.into());
+        self
+    }
+
     /// Declares the App-owned action behind the title's back chevron.
     #[must_use]
     pub fn back_action(mut self, action: impl Into<String>) -> Self {

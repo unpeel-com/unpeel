@@ -1,6 +1,6 @@
 [package]
 name = "unpeel-filetree"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Development file explorer TUI for testing path drag-and-drop in Unpeel"
 license = "MIT"

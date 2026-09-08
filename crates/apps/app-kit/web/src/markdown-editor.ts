@@ -527,6 +527,7 @@ export class MarkdownEditorRenderer {
 
   private renderToolbar(editor: MarkdownEditorNode): void {
     this.toolbar.replaceChildren();
+    this.toolbar.hidden = editor.title === undefined && editor.back === undefined;
     const title = document.createElement("strong");
     title.textContent = `${editor.title ?? "Markdown"}${editor.dirty ? " •" : ""}`;
     this.toolbar.append(title);

@@ -603,6 +603,24 @@ impl Widget for ContentWidget<'_> {
                 })
                 .collect()
         };
+        // Paragraph applies each Line's style only to its text cells. Paint
+        // the visible row backgrounds first so diff/selection tints also
+        // cover empty space, including lines scrolled past their last glyph.
+        if !self.content.wrap {
+            for (row, line) in lines
+                .iter()
+                .skip(usize::from(self.state.vertical_offset))
+                .take(usize::from(text_area.height))
+                .enumerate()
+            {
+                if let Some(background) = line.style.bg {
+                    buffer.set_style(
+                        Rect::new(text_area.x, text_area.y + row as u16, text_area.width, 1),
+                        Style::new().bg(background),
+                    );
+                }
+            }
+        }
         let mut paragraph = Paragraph::new(Text::from(lines)).scroll((
             self.state.vertical_offset,
             if self.content.wrap {
@@ -656,5 +674,28 @@ mod tests {
         assert_eq!(buffer[(0, 0)].symbol(), "@");
         assert_ne!(buffer[(0, 1)].bg, Color::Reset);
         assert_ne!(buffer[(19, 0)].symbol(), " ");
+
+        let theme = ContentTheme::default();
+        for selection in [None, content.selection.clone()] {
+            let mut content = content.clone();
+            content.selection = selection;
+            for horizontal_offset in [0, 30] {
+                state.set_offsets(1, horizontal_offset);
+                let mut buffer = Buffer::empty(Rect::new(3, 4, 20, 2));
+                content.widget(&mut state).render(buffer.area, &mut buffer);
+                for (row, tint) in [(4, theme.added_line), (5, theme.removed_line)] {
+                    let background = if content.selection.is_some() {
+                        theme.selected_line.bg
+                    } else {
+                        tint.bg
+                    }
+                    .unwrap();
+                    assert!(
+                        (3..22).all(|x| buffer[(x, row)].bg == background),
+                        "diff and selection backgrounds must reach the scrollbar, even after horizontal scrolling"
+                    );
+                }
+            }
+        }
     }
 }

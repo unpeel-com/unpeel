@@ -56,8 +56,11 @@ pub const INPUT_COMPONENT_CAPABILITY: &str = "input";
 pub const BUTTON_COMPONENT_CAPABILITY: &str = "button";
 /// Renderer capability for Page-level back navigation.
 pub const PAGE_BACK_CAPABILITY: &str = "pageBack";
+/// Renderer capability for persistent Page navigation tabs.
+pub const PAGE_TABS_CAPABILITY: &str = "pageTabs";
 /// Renderer capability for an ordered screen-level action footer.
 pub const FOOTER_ACTIONS_CAPABILITY: &str = "footerActions";
+pub const FOOTER_STATUS_CAPABILITY: &str = "footerStatus";
 
 const MAX_ITEMS: usize = 100_000;
 pub(crate) const MAX_SHORT_TEXT_BYTES: usize = 4 * 1024;
@@ -277,6 +280,9 @@ fn valid_footer_accelerator(accelerator: &str) -> bool {
 pub struct FooterActions {
     #[serde(default)]
     pub actions: Vec<FooterAction>,
+    /// Read-only trailing status, outside the action hit targets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
 }
 
 impl FooterActions {
@@ -284,12 +290,39 @@ impl FooterActions {
     pub fn new(actions: impl IntoIterator<Item = FooterAction>) -> Self {
         Self {
             actions: actions.into_iter().collect(),
+            status: None,
         }
     }
 
     #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.actions.is_empty()
+    pub fn is_empty(&self) -> bool {
+        self.actions.is_empty() && self.status.as_deref().is_none_or(str::is_empty)
+    }
+
+    #[must_use]
+    pub fn status(mut self, status: impl Into<String>) -> Self {
+        self.status = Some(status.into());
+        self
+    }
+
+    /// Shared action/status geometry keeps the trailing text noninteractive.
+    fn areas(&self, area: Rect) -> (Rect, Rect) {
+        let width = self
+            .status
+            .as_deref()
+            .map_or(0, UnicodeWidthStr::width)
+            .min(usize::from(area.width.saturating_sub(2))) as u16;
+        if width == 0 {
+            return (area, Rect::default());
+        }
+        let status = Rect::new(area.right() - width - 2, area.y, width, area.height.min(1));
+        let actions = Rect::new(
+            area.x,
+            area.y,
+            status.x.saturating_sub(area.x.saturating_add(2)),
+            area.height,
+        );
+        (actions, status)
     }
 
     #[must_use]
@@ -325,6 +358,7 @@ impl FooterActions {
         position: ratatui::layout::Position,
         area: Rect,
     ) -> Option<&FooterAction> {
+        let (area, _) = self.areas(area);
         if !area.contains(position) {
             return None;
         }
@@ -348,6 +382,10 @@ impl FooterActions {
     }
 
     pub(crate) fn validate(&self, path: &str) -> Result<(), ComponentValidationError> {
+        if let Some(status) = &self.status {
+            validate_text(status, MAX_SHORT_TEXT_BYTES, &format!("{path}.status"))?;
+            validate_single_line(status, &format!("{path}.status"))?;
+        }
         if self.actions.len() > MAX_ITEMS {
             return Err(ComponentValidationError::new(
                 path,
@@ -456,6 +494,10 @@ impl Widget for FooterActionsWidget<'_> {
             return;
         }
         buffer.set_style(area, self.style);
+        let (area, status_area) = self.footer.areas(area);
+        if let Some(status) = &self.footer.status {
+            Line::styled(status.as_str(), self.label_style).render(status_area, buffer);
+        }
         let mut spans = vec![Span::raw("  ")];
         let mut x = area.x.saturating_add(2);
         for (index, action) in self.footer.actions.iter().enumerate() {
@@ -2341,11 +2383,103 @@ impl PageBodySlot {
     }
 }
 
+/// A persistent navigation destination above the Page title.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageTab {
+    pub id: String,
+    pub label: String,
+    pub action: String,
+    #[serde(default)]
+    pub selected: bool,
+}
+
+impl PageTab {
+    #[must_use]
+    pub fn new(id: impl Into<String>, label: impl Into<String>, action: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            action: action.into(),
+            selected: false,
+        }
+    }
+
+    #[must_use]
+    pub const fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
+        self
+    }
+}
+
+pub const PAGE_TOOLBAR_CAPABILITY: &str = "pageToolbar";
+
+/// A compact top-right action with an optional menu of related commands.
+/// Uses the same action and menu vocabulary as the footer and context menus.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageToolbar {
+    pub primary: FooterAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub menu: Option<crate::SemanticMenu>,
+}
+
+impl PageToolbar {
+    pub fn new(primary: FooterAction) -> Self {
+        Self {
+            primary,
+            menu: None,
+        }
+    }
+    pub fn menu(mut self, menu: crate::SemanticMenu) -> Self {
+        self.menu = Some(menu);
+        self
+    }
+
+    /// Shared paint/hit rectangles, clipping the title before the control.
+    pub fn areas(&self, title: Rect) -> (Rect, Rect) {
+        let menu_width = if self.menu.is_some() { 3 } else { 0 };
+        let width = (UnicodeWidthStr::width(self.primary.label.as_str())
+            + usize::from(self.primary.busy) * 2
+            + 2
+            + menu_width)
+            .min(u16::MAX as usize) as u16;
+        let width = width.min(title.width.saturating_sub(5));
+        let menu_width = (menu_width as u16).min(width);
+        let x = title.right().saturating_sub(width);
+        (
+            Rect::new(x, title.y, width - menu_width, title.height.min(1)),
+            Rect::new(
+                title.right() - menu_width,
+                title.y,
+                menu_width,
+                title.height.min(1),
+            ),
+        )
+    }
+
+    pub fn action(&self, id: &str, action: &str) -> bool {
+        (!self.primary.disabled
+            && !self.primary.busy
+            && self.primary.id == id
+            && self.primary.action == action)
+            || self.menu.as_ref().is_some_and(|menu| {
+                menu.items
+                    .iter()
+                    .any(|item| !item.disabled && item.id == id && item.action == action)
+            })
+    }
+}
+
 /// Top-level data/document container with named, constrained regions.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Page {
     pub title: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tabs: Vec<PageTab>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toolbar: Option<PageToolbar>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub back: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2356,10 +2490,53 @@ pub struct Page {
 }
 
 impl Page {
+    pub fn toolbar(mut self, toolbar: PageToolbar) -> Self {
+        self.toolbar = Some(toolbar);
+        self
+    }
+
+    #[must_use]
+    pub fn tabs(mut self, tabs: impl IntoIterator<Item = PageTab>) -> Self {
+        self.tabs = tabs.into_iter().collect();
+        self
+    }
+
+    /// Shared drawing and hit-test geometry, including narrow terminal panes.
+    #[must_use]
+    pub fn tab_at(&self, position: ratatui::layout::Position, area: Rect) -> Option<&PageTab> {
+        self.tab_areas(area)
+            .into_iter()
+            .find(|(_, rect)| rect.contains(position))
+            .map(|(tab, _)| tab)
+    }
+
+    fn tab_areas(&self, area: Rect) -> Vec<(&PageTab, Rect)> {
+        let count = self.tabs.len().max(1) as u16;
+        self.tabs
+            .iter()
+            .enumerate()
+            .map(|(index, tab)| {
+                let start = u32::from(area.width) * index as u32 / u32::from(count);
+                let end = u32::from(area.width) * (index + 1) as u32 / u32::from(count);
+                (
+                    tab,
+                    Rect::new(
+                        area.x + start as u16,
+                        area.y,
+                        (end - start) as u16,
+                        area.height.min(1),
+                    ),
+                )
+            })
+            .collect()
+    }
+
     #[must_use]
     pub fn new(title: impl Into<String>, list: List) -> Self {
         Self {
             title: title.into(),
+            tabs: Vec::new(),
+            toolbar: None,
             back: None,
             header: None,
             body: PageBodySlot::List(list),
@@ -2372,6 +2549,8 @@ impl Page {
     pub fn with_content(title: impl Into<String>, content: Content) -> Self {
         Self {
             title: title.into(),
+            tabs: Vec::new(),
+            toolbar: None,
             back: None,
             header: None,
             body: PageBodySlot::Content(content),
@@ -2383,6 +2562,8 @@ impl Page {
     pub fn with_sparkline(title: impl Into<String>, sparkline: Sparkline) -> Self {
         Self {
             title: title.into(),
+            tabs: Vec::new(),
+            toolbar: None,
             back: None,
             header: None,
             body: PageBodySlot::Sparkline(sparkline),
@@ -2394,6 +2575,8 @@ impl Page {
     pub fn with_bar_chart(title: impl Into<String>, chart: BarChart) -> Self {
         Self {
             title: title.into(),
+            tabs: Vec::new(),
+            toolbar: None,
             back: None,
             header: None,
             body: PageBodySlot::BarChart(chart),
@@ -2405,6 +2588,8 @@ impl Page {
     pub fn with_line_chart(title: impl Into<String>, chart: LineChart) -> Self {
         Self {
             title: title.into(),
+            tabs: Vec::new(),
+            toolbar: None,
             back: None,
             header: None,
             body: PageBodySlot::LineChart(chart),
@@ -2416,6 +2601,8 @@ impl Page {
     pub fn with_gauge(title: impl Into<String>, gauge: Gauge) -> Self {
         Self {
             title: title.into(),
+            tabs: Vec::new(),
+            toolbar: None,
             back: None,
             header: None,
             body: PageBodySlot::Gauge(gauge),
@@ -2473,8 +2660,23 @@ impl Page {
     #[must_use]
     pub fn required_capabilities(&self) -> Vec<&'static str> {
         let mut capabilities = vec![PAGE_COMPONENT_CAPABILITY];
+        if let Some(toolbar) = &self.toolbar {
+            capabilities.push(PAGE_TOOLBAR_CAPABILITY);
+            if toolbar.menu.is_some() {
+                capabilities.extend([
+                    crate::MENU_COMPONENT_CAPABILITY,
+                    crate::MENU_ANCHOR_CAPABILITY,
+                ]);
+            }
+        }
+        if !self.tabs.is_empty() {
+            capabilities.push(PAGE_TABS_CAPABILITY);
+        }
         if !self.footer.is_empty() {
             capabilities.push(FOOTER_ACTIONS_CAPABILITY);
+        }
+        if self.footer.status.is_some() {
+            capabilities.push(FOOTER_STATUS_CAPABILITY);
         }
         let chart_capability = match &self.body {
             PageBodySlot::Sparkline(_) => Some(crate::SPARKLINE_COMPONENT_CAPABILITY),
@@ -2618,6 +2820,33 @@ impl Page {
         self.footer.validate("page.footer")?;
 
         let mut ids = HashSet::new();
+        if let Some(toolbar) = &self.toolbar {
+            toolbar.primary.validate("page.toolbar.primary")?;
+            register_unique(&mut ids, &toolbar.primary.id, "page.toolbar.primary.id")?;
+            if let Some(menu) = &toolbar.menu {
+                menu.validate().map_err(|e| {
+                    ComponentValidationError::new("page.toolbar.menu", e.to_string())
+                })?;
+                for item in &menu.items {
+                    register_unique(&mut ids, &item.id, "page.toolbar.menu.items.id")?;
+                }
+            }
+        }
+
+        if !self.tabs.is_empty() {
+            if self.tabs.len() > 12 || self.tabs.iter().filter(|tab| tab.selected).count() != 1 {
+                return Err(ComponentValidationError::new(
+                    "page.tabs",
+                    "Tabs require 1–12 destinations and exactly one selected tab",
+                ));
+            }
+            for tab in &self.tabs {
+                validate_identifier(&tab.id, "page.tabs.id")?;
+                validate_identifier(&tab.action, "page.tabs.action")?;
+                validate_text(&tab.label, MAX_SHORT_TEXT_BYTES, "page.tabs.label")?;
+                register_unique(&mut ids, &tab.id, "page.tabs.id")?;
+            }
+        }
         if let Some(input) = self.input_spec() {
             register_unique(&mut ids, &input.id, "page.header.id")?;
         }
@@ -2781,6 +3010,18 @@ impl Page {
     /// row to one ListItem in v1.
     #[must_use]
     pub fn layout(&self, area: Rect) -> PageLayout {
+        let tabs_height = if self.tabs.is_empty() {
+            0
+        } else {
+            area.height.min(2)
+        };
+        let tabs = (tabs_height > 0).then(|| Rect::new(area.x, area.y, area.width, 1));
+        let area = Rect::new(
+            area.x,
+            area.y.saturating_add(tabs_height),
+            area.width,
+            area.height.saturating_sub(tabs_height),
+        );
         let footer_height = u16::from(!self.footer.is_empty() && area.height > 0);
         let content_area = Rect::new(
             area.x,
@@ -2796,15 +3037,21 @@ impl Page {
                 footer_height,
             )
         });
+        let title_height = if self.title.is_empty() && self.back.is_none() && self.toolbar.is_none()
+        {
+            0
+        } else {
+            2
+        };
         let constraints = if self.input_spec().is_some() {
             vec![
-                Constraint::Length(2),
+                Constraint::Length(title_height),
                 Constraint::Length(1),
                 Constraint::Length(1),
                 Constraint::Min(0),
             ]
         } else {
-            vec![Constraint::Length(2), Constraint::Min(0)]
+            vec![Constraint::Length(title_height), Constraint::Min(0)]
         };
         let slots = Layout::default()
             .direction(Direction::Vertical)
@@ -2812,6 +3059,7 @@ impl Page {
             .split(content_area);
         if self.input_spec().is_some() {
             PageLayout {
+                tabs,
                 title: slots[0],
                 input: Some(slots[1]),
                 list: slots[3],
@@ -2819,6 +3067,7 @@ impl Page {
             }
         } else {
             PageLayout {
+                tabs,
                 title: slots[0],
                 input: None,
                 list: slots[1],
@@ -2838,10 +3087,27 @@ impl Page {
         list_state.track_mouse(event);
         let position = TerminalPointerState::click_position(event)?;
         let layout = self.layout(area);
+        if let Some(tabs) = layout.tabs
+            && let Some(tab) = self.tab_at(position, tabs)
+        {
+            return Some(PagePointerDecision::Activate {
+                node_id: &tab.id,
+                action: &tab.action,
+            });
+        }
         if let Some(footer) = layout.footer
             && let Some(action) = self.footer.action_for_mouse(event, footer)
         {
             return Some(PagePointerDecision::Footer(action));
+        }
+        if let Some(toolbar) = &self.toolbar {
+            let (primary, menu) = toolbar.areas(layout.title);
+            if primary.contains(position) || menu.contains(position) {
+                return (primary.contains(position)
+                    && !toolbar.primary.disabled
+                    && !toolbar.primary.busy)
+                    .then_some(PagePointerDecision::Footer(&toolbar.primary));
+            }
         }
         if layout.title.contains(position)
             && let Some(back) = &self.back
@@ -3252,6 +3518,7 @@ pub struct PageTheme {
 /// Terminal hit-test geometry for a rendered [`Page`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PageLayout {
+    pub tabs: Option<Rect>,
     pub title: Rect,
     pub input: Option<Rect>,
     pub list: Rect,
@@ -4228,10 +4495,72 @@ impl Widget for PageWidget<'_> {
         }
         buffer.set_style(area, self.theme.style);
         let layout = self.page.layout(area);
+        if let Some(tabs) = layout.tabs {
+            for (tab, rect) in self.page.tab_areas(tabs) {
+                let style = if tab.selected {
+                    self.theme.selected.patch(self.theme.title)
+                } else if self.list_state.pointer().phase(rect) != TerminalPointerPhase::Idle {
+                    self.theme.hovered.patch(self.theme.item)
+                } else {
+                    self.theme.detail
+                };
+                Paragraph::new(tab.label.as_str())
+                    .alignment(Alignment::Center)
+                    .style(style)
+                    .render(rect, buffer);
+            }
+        }
+        let mut title_area = layout.title;
+        if let Some(toolbar) = &self.page.toolbar {
+            let (primary, menu) = toolbar.areas(layout.title);
+            title_area.width = primary.x.saturating_sub(title_area.x);
+            for (area, label, disabled) in [
+                (
+                    primary,
+                    format!(
+                        " {}{} ",
+                        if toolbar.primary.busy {
+                            format!(
+                                "{} ",
+                                crate::Spinner::glyph_for(self.list_state.spinner_frame())
+                            )
+                        } else {
+                            String::new()
+                        },
+                        toolbar.primary.label
+                    ),
+                    toolbar.primary.disabled || toolbar.primary.busy,
+                ),
+                (
+                    menu,
+                    " ▾ ".to_owned(),
+                    toolbar
+                        .menu
+                        .as_ref()
+                        .is_none_or(|menu| menu.items.iter().all(|item| item.disabled)),
+                ),
+            ] {
+                let base = if area == primary && toolbar.primary.role == FooterActionRole::Danger {
+                    self.theme.danger
+                } else {
+                    self.theme.item
+                };
+                let style = if disabled {
+                    self.theme.empty
+                } else {
+                    match self.list_state.pointer().phase(area) {
+                        TerminalPointerPhase::Idle => base,
+                        TerminalPointerPhase::Hovered => base.patch(self.theme.hovered),
+                        TerminalPointerPhase::Pressed => base.patch(self.theme.selected),
+                    }
+                };
+                Paragraph::new(label).style(style).render(area, buffer);
+            }
+        }
         // Only the chevron takes the gray treatment: keyboard focus, hover,
         // and press paint the cells around "‹" while the title stays plain.
         let back_phase = if self.page.back.is_some() {
-            self.list_state.pointer().phase(layout.title)
+            self.list_state.pointer().phase(title_area)
         } else {
             TerminalPointerPhase::Idle
         };
@@ -4248,7 +4577,7 @@ impl Widget for PageWidget<'_> {
             self.page.title
         ))
         .style(self.theme.title)
-        .render(layout.title, buffer);
+        .render(title_area, buffer);
         if back_active {
             let active_style = match back_phase {
                 TerminalPointerPhase::Idle => self.theme.selected,
@@ -5197,6 +5526,39 @@ mod tests {
     }
 
     #[test]
+    fn footer_status_stays_visible_and_cannot_activate_a_clipped_action() {
+        let footer =
+            FooterActions::new([FooterAction::new("open", "open", "open").accelerator("ctrl+o")])
+                .status("11:3");
+        for width in [0, 1, 5, 8, 20, 80] {
+            let area = Rect::new(0, 0, width, 1);
+            let mut buffer = Buffer::empty(area);
+            footer.widget().render(area, &mut buffer);
+            let (_, status) = footer.areas(area);
+            for x in status.x..status.right() {
+                assert!(
+                    footer
+                        .action_at(ratatui::layout::Position::new(x, 0), area)
+                        .is_none()
+                );
+            }
+            if width >= 6 {
+                let text: String = (status.x..status.right())
+                    .map(|x| buffer[(x, 0)].symbol())
+                    .collect();
+                assert_eq!(text, "11:3");
+            }
+        }
+        assert!(!FooterActions::default().status("1:1").is_empty());
+        assert!(
+            FooterActions::default()
+                .status("bad\nstatus")
+                .validate("footer")
+                .is_err()
+        );
+    }
+
+    #[test]
     #[cfg(feature = "ui-bridge")]
     fn terminal_list_click_and_keyboard_primary_emit_the_same_action() {
         let list = List::new(
@@ -5731,5 +6093,49 @@ mod tests {
             panic!("todo fixture has a Toggle")
         };
         assert!(!toggle.value);
+    }
+
+    #[test]
+    fn page_tabs_validate_and_share_terminal_hit_geometry() {
+        let page = Page::new("main", List::new("files", vec![])).tabs([
+            PageTab::new("changes", "Changes", "show-changes").selected(true),
+            PageTab::new("history", "History", "show-history"),
+        ]);
+        page.validate().unwrap();
+        assert!(page.required_capabilities().contains(&PAGE_TABS_CAPABILITY));
+        let mut state = ListState::default();
+        let area = Rect::new(3, 2, 31, 10);
+        let layout = page.layout(area);
+        assert_eq!(layout.tabs, Some(Rect::new(3, 2, 31, 1)));
+        assert_eq!(layout.title.y, 4);
+        let event = MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: 33,
+            row: 2,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert_eq!(
+            page.pointer_decision(&mut state, &event, area),
+            Some(PagePointerDecision::Activate {
+                node_id: "history",
+                action: "show-history"
+            })
+        );
+        let mut invalid = page.clone();
+        invalid.tabs[1].selected = true;
+        assert!(invalid.validate().is_err());
+        invalid.tabs[1].selected = false;
+        invalid.tabs[1].id = "files".into();
+        assert!(invalid.validate().is_err());
+        let legacy: Page = serde_json::from_str(
+            r#"{"title":"Legacy","body":{"type":"list","id":"files","items":[]}}"#,
+        )
+        .unwrap();
+        assert!(legacy.tabs.is_empty());
+        assert!(
+            !legacy
+                .required_capabilities()
+                .contains(&PAGE_TABS_CAPABILITY)
+        );
     }
 }

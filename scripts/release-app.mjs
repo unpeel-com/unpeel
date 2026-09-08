@@ -44,7 +44,7 @@ for (let i = 2; i < argv.length; i += 1) {
   const arg = argv[i]
   if (!arg.startsWith('--')) throw new Error(`Unexpected argument: ${arg}`)
   const key = arg.slice(2)
-  if (key === 'dry-run' || key === 'skip-build' || key === 'allow-dirty') {
+  if (key === 'dry-run' || key === 'skip-build' || key === 'allow-dirty' || key === 'skip-registry') {
     args[key] = true
   } else {
     args[key] = argv[++i]
@@ -103,7 +103,7 @@ function run(command, commandArgs, options = {}) {
 // ---- Build the macos-universal tarball ------------------------------------
 
 const tarballs = {} // target -> local tar.gz path
-for (const target of ['linux-x86_64', 'linux-aarch64']) {
+for (const target of ['macos-universal', 'linux-x86_64', 'linux-aarch64']) {
   if (args[target]) tarballs[target] = resolve(process.cwd(), String(args[target]))
 }
 if (!args['skip-build'] && process.platform === 'darwin') {
@@ -129,7 +129,9 @@ if (!args['skip-build'] && process.platform === 'darwin') {
   // lipo drops the arm64 slice's linker-generated signature; re-sign ad hoc.
   run('codesign', ['--force', '--sign', '-', out])
   const archive = resolve(stage, `${bin}-${version}-macos-universal.tar.gz`)
-  run('tar', ['-czf', archive, '-C', stage, bin])
+  run('tar', ['-czf', archive, '-C', stage, bin], {
+    env: { ...process.env, COPYFILE_DISABLE: '1' }
+  })
   tarballs['macos-universal'] = archive
 }
 
@@ -182,11 +184,15 @@ for (const [target, file] of Object.entries(tarballs)) {
 
 // Publishing an App also republishes the registry the Worker serves the
 // /install/<app>/install.sh route from (release:cli does the same).
-wranglerPut(
-  resolve(repoRoot, 'protocol/app-registry.json'),
-  `${channel}/protocol/app-registry.json`,
-  downloadCache
-)
+// A batch publishes every App artifact before advertising the new versions.
+// Its coordinator uploads the registry once all targets are verified.
+if (!args['skip-registry']) {
+  wranglerPut(
+    resolve(repoRoot, 'protocol/app-registry.json'),
+    `${channel}/protocol/app-registry.json`,
+    downloadCache
+  )
+}
 
 console.log(
   `${dryRun ? '[dry-run] ' : ''}published ${bin} ${version} to ${channel}/${app}/`

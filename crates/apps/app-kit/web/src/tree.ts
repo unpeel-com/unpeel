@@ -82,10 +82,12 @@ export class TreeRenderer {
       this.element.append(label);
     }
 
-    const location = document.createElement("div");
-    location.className = "unpeel-tree__location";
-    location.textContent = tree.location;
-    this.element.append(location);
+    if (tree.location.length > 0) {
+      const location = document.createElement("div");
+      location.className = "unpeel-tree__location";
+      location.textContent = tree.location;
+      this.element.append(location);
+    }
 
     if (tree.primaryAction !== undefined) {
       const action = document.createElement("button");
@@ -275,14 +277,14 @@ export class TreeRenderer {
     const current = Math.max(0, rows.findIndex((row) => row.item.id === this.selectedId));
     let target: number | undefined;
     switch (event.key) {
-      case "ArrowDown": target = (current + 1) % rows.length; break;
+      case "ArrowDown": target = Math.min(current + 1, rows.length - 1); break;
       case "ArrowUp":
         if (current === 0 && filter !== undefined) {
           filter.focus();
           event.preventDefault();
           return;
         }
-        target = (current - 1 + rows.length) % rows.length;
+        target = Math.max(current - 1, 0);
         break;
       case "Home": target = 0; break;
       case "End": target = rows.length - 1; break;

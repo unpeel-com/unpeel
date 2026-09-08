@@ -19,7 +19,7 @@ swift run --package-path swift/Examples/KitchenSink
 | App | Screens observed from the live semantic channel | Terminal-only surfaces |
 | --- | --- | --- |
 | Usage | Provider catalog; provider detail with bounded Gauge meters and Sparkline history; Alerts | None |
-| Diffs | Changed-file list; complete styled diff Content detail | None |
+| Git | Changes/History tabs, commit lists, trailing status symbols, styled patches, Fetch/Pull/Push toolbar | None |
 | Markdown | Workspace chooser; note Tree picker; new-note form; Markdown editor; editor context menu; slash insert menu | None |
 | File Tree | Root Tree; nested Tree | None |
 
@@ -35,7 +35,7 @@ chart widgets, custom meter glyphs, progress states, and percentage displays in
 all four Apps. Usage was the sole remaining gap: every bounded provider metric
 now publishes a trailing semantic Gauge with the App-owned ratio, direction,
 caption, accessibility copy, and tone; time-series history was already a
-Sparkline. Diffs, Markdown, and File Tree contain no terminal-only
+Sparkline. Git, Markdown, and File Tree contain no terminal-only
 meter, progress bar, percentage visualization, or numeric series. Plain counts
 and textual metadata remain text in the one shared tree—they are not degraded
 visual meters.

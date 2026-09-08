@@ -12,14 +12,21 @@ export function renderFooterActions(
   onAction: (action: UiAction) => void,
 ): void {
   container.replaceChildren();
-  container.hidden = (footer?.actions.length ?? 0) === 0;
+  container.hidden = (footer?.actions.length ?? 0) === 0 && !footer?.status;
   if (footer === undefined) return;
   for (const action of footer.actions) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "unpeel-footer-actions__button";
     button.dataset.role = action.role ?? "default";
-    button.disabled = action.disabled === true;
+    button.disabled = action.disabled === true || action.busy === true;
+    if (action.busy) {
+      const spinner = document.createElement("span");
+      spinner.className = "unpeel-action-spinner";
+      spinner.setAttribute("aria-label", "In progress");
+      button.append(spinner);
+      button.setAttribute("aria-busy", "true");
+    }
     if (action.accelerator !== undefined) {
       const accelerator = document.createElement("kbd");
       accelerator.textContent = acceleratorLabel(action.accelerator);
@@ -31,6 +38,12 @@ export function renderFooterActions(
     button.addEventListener("click", () => dispatchFooterAction(action, onAction));
     container.append(button);
   }
+  if (footer.status !== undefined) {
+    const status = document.createElement("span");
+    status.className = "unpeel-footer-actions__status";
+    status.textContent = footer.status;
+    container.append(status);
+  }
 }
 
 /** Resolves the same closed accelerator grammar used by the Ratatui view. */
@@ -41,7 +54,7 @@ export function handleFooterAccelerator(
 ): boolean {
   if (event.defaultPrevented || footer === undefined || event.repeat) return false;
   const action = footer.actions.find((candidate) => (
-    candidate.disabled !== true
+    candidate.disabled !== true && candidate.busy !== true
       && candidate.accelerator !== undefined
       && matchesAccelerator(event, candidate.accelerator)
   ));

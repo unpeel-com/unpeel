@@ -29,8 +29,11 @@ public enum UnpeelUIProtocol {
     public static let toggleCapability = "toggle"
     public static let inputCapability = "input"
     public static let buttonCapability = "button"
+    public static let pageTabsCapability = "pageTabs"
+    public static let pageToolbarCapability = "pageToolbar"
     public static let pageBackCapability = "pageBack"
     public static let footerActionsCapability = "footerActions"
+    public static let footerStatusCapability = "footerStatus"
     public static let contentCapability = "content"
     public static let contentSelectionCapability = "contentSelection"
     public static let surfaceCapability = "surface"
@@ -68,8 +71,11 @@ public enum UnpeelUIProtocol {
         toggleCapability,
         inputCapability,
         buttonCapability,
+        pageTabsCapability,
+        pageToolbarCapability,
         pageBackCapability,
         footerActionsCapability,
+        footerStatusCapability,
         contentCapability,
         contentSelectionCapability,
         treeCapability,
@@ -1296,13 +1302,20 @@ public struct UIFooterActionSpec: Codable, Equatable, Hashable, Identifiable, Se
 /// Ordered action slot consumed identically by all screen-root renderers.
 public struct UIFooterActionsSpec: Codable, Equatable, Hashable, Sendable {
     public var actions: [UIFooterActionSpec]
+    public var status: String?
 
-    public init(actions: [UIFooterActionSpec] = []) {
+    public init(actions: [UIFooterActionSpec] = [], status: String? = nil) {
         self.actions = actions
+        self.status = status
     }
+
+    public var isEmpty: Bool { actions.isEmpty && (status?.isEmpty ?? true) }
 
     public var isValid: Bool {
         guard actions.count <= 100_000 else { return false }
+        if let status {
+            guard status.utf8.count <= 4 * 1024, !status.contains("\n"), !status.contains("\r") else { return false }
+        }
         var ids = Set<String>()
         var accelerators = Set<String>()
         for action in actions {
@@ -2913,8 +2926,49 @@ extension UIPageBodySlot: Codable {
     }
 }
 
+public struct UIPageTab: Codable, Equatable, Hashable, Sendable, Identifiable {
+    public let id: String
+    public let label: String
+    public let action: String
+    public let selected: Bool
+
+    public init(id: String, label: String, action: String, selected: Bool = false) {
+        self.id = id
+        self.label = label
+        self.action = action
+        self.selected = selected
+    }
+
+    enum CodingKeys: String, CodingKey { case id, label, action, selected }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        label = try container.decode(String.self, forKey: .label)
+        action = try container.decode(String.self, forKey: .action)
+        selected = try container.decodeIfPresent(Bool.self, forKey: .selected) ?? false
+    }
+}
+
+public struct UIPageToolbar: Codable, Equatable, Hashable, Sendable {
+    public let primary: UIFooterActionSpec
+    public let menu: UIMenuSpec?
+
+    public init(primary: UIFooterActionSpec, menu: UIMenuSpec? = nil) {
+        self.primary = primary
+        self.menu = menu
+    }
+
+    public var isValid: Bool {
+        UIFooterActionsSpec(actions: [primary]).isValid && (menu == nil || menu?.requiredCapabilities != nil)
+            && !(menu?.items.contains { $0.id == primary.id } ?? false)
+    }
+}
+
 public struct PageSpec: Codable, Equatable, Hashable, Sendable {
     public let title: String
+    public let tabs: [UIPageTab]
+    public let toolbar: UIPageToolbar?
     public let back: String?
     public var header: UIPageHeaderSlot?
     public var body: UIPageBodySlot
@@ -2922,23 +2976,29 @@ public struct PageSpec: Codable, Equatable, Hashable, Sendable {
 
     public init(
         title: String,
+        tabs: [UIPageTab] = [],
+        toolbar: UIPageToolbar? = nil,
         back: String? = nil,
         header: UIPageHeaderSlot? = nil,
         body: UIPageBodySlot,
         footer: UIFooterActionsSpec = .init()
     ) {
         self.title = title
+        self.tabs = tabs
+        self.toolbar = toolbar
         self.back = back
         self.header = header
         self.body = body
         self.footer = footer
     }
 
-    enum CodingKeys: String, CodingKey { case title, back, header, body, footer }
+    enum CodingKeys: String, CodingKey { case title, tabs, toolbar, back, header, body, footer }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         title = try container.decode(String.self, forKey: .title)
+        tabs = try container.decodeIfPresent([UIPageTab].self, forKey: .tabs) ?? []
+        toolbar = try container.decodeIfPresent(UIPageToolbar.self, forKey: .toolbar)
         back = try container.decodeIfPresent(String.self, forKey: .back)
         header = try container.decodeIfPresent(UIPageHeaderSlot.self, forKey: .header)
         body = try container.decode(UIPageBodySlot.self, forKey: .body)
@@ -2948,7 +3008,21 @@ public struct PageSpec: Codable, Equatable, Hashable, Sendable {
     public var requiredCapabilities: [String]? {
         guard footer.isValid else { return nil }
         var capabilities = [UnpeelUIProtocol.pageCapability]
-        if !footer.actions.isEmpty {
+        if let toolbar {
+            guard toolbar.isValid else { return nil }
+            capabilities.append(UnpeelUIProtocol.pageToolbarCapability)
+            if toolbar.menu != nil {
+                capabilities += [UnpeelUIProtocol.menuCapability, UnpeelUIProtocol.menuAnchorCapability]
+            }
+        }
+        if !tabs.isEmpty {
+            guard tabs.count <= 12, tabs.filter(\.selected).count == 1,
+                  Set(tabs.map(\.id)).count == tabs.count,
+                  tabs.allSatisfy({ !$0.id.isEmpty && !$0.action.isEmpty }) else { return nil }
+            capabilities.append(UnpeelUIProtocol.pageTabsCapability)
+        }
+        if footer.status != nil { capabilities.append(UnpeelUIProtocol.footerStatusCapability) }
+        if !footer.isEmpty {
             capabilities.append(UnpeelUIProtocol.footerActionsCapability)
         }
         let chartCapability: String? = switch body {
@@ -3272,7 +3346,8 @@ public struct UITreeSpec: Codable, Equatable, Hashable, Sendable {
                 UnpeelUIProtocol.menuAnchorCapability,
             ]
         }
-        if !footer.actions.isEmpty {
+        if footer.status != nil { capabilities.append(UnpeelUIProtocol.footerStatusCapability) }
+        if !footer.isEmpty {
             capabilities.append(UnpeelUIProtocol.footerActionsCapability)
         }
         return capabilities
@@ -3538,7 +3613,8 @@ public enum UIComponent: Equatable, Sendable {
                     UnpeelUIProtocol.menuAnchorCapability,
                 ]
             }
-            if !editor.footer.actions.isEmpty {
+            if editor.footer.status != nil { capabilities.append(UnpeelUIProtocol.footerStatusCapability) }
+            if !editor.footer.isEmpty {
                 capabilities.append(UnpeelUIProtocol.footerActionsCapability)
             }
             return capabilities

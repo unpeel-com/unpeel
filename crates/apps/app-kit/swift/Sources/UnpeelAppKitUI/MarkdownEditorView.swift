@@ -47,8 +47,10 @@ public struct MarkdownEditorView: View {
         switch snapshot.root.component {
         case .markdownEditor(let editor):
             VStack(spacing: 0) {
-                toolbar(editor)
-                Divider()
+                if editor.title != nil || editor.back != nil {
+                    toolbar(editor)
+                    Divider()
+                }
                 editorContent(editor)
                 FooterActionsView(footer: editor.footer, onAction: onAction)
             }

@@ -16,7 +16,7 @@ Either path lets libghostty, native SwiftUI, and embedded web views own keyboard
 focus instead of the terminal that launched the rig.
 
 The first launch fetches `libghostty-spm` 1.5.0 and builds the sibling Usage,
-Diffs, Markdown, and File Tree Apps plus this repository's
+Git, Markdown, and File Tree Apps plus this repository's
 Charts, Todo, Markdown, Media, Surface Planets, and Canvas + Controls examples into
 `target/kitchen-sink`. The four sibling repositories must sit beside
 `unpeel-app-kit`; Unpeel itself is not installed or launched. Surface examples
@@ -54,8 +54,7 @@ personalized title/alt text also proves `publish_to` isolation.
 
 Each of the four sibling sessions also has **Walk every screen**. It drives
 deterministic fixture data through the live reducer and records an explicit
-terminal-only inventory. Usage covers catalog/detail/Alerts; Diffs covers the list and complete Content
-detail; Markdown covers first-run
+terminal-only inventory. Usage covers catalog/detail/Alerts; Git covers the list and complete Content detail; Markdown covers first-run
 chooser, Tree picker, new-note Page, editor, context menu, and slash menu; File
 Tree covers root and nested Trees. Run the reproducible unattended pass with:
 

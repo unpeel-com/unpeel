@@ -1,15 +1,33 @@
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 
 use unpeel_app_kit::TerminalPointerState;
 
-use crate::git::{ChangedFile, DiffDocument, Repository};
+use crate::git::{ChangedFile, Commit, DiffDocument, RemoteAction, RemoteState, Repository};
 
 #[derive(Clone, Debug)]
 pub enum Screen {
     Files,
+    History,
+    CommitFiles,
     Diff(DiffDocument),
 }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Tab {
+    #[default]
+    Changes,
+    History,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct ListPosition {
+    selected: usize,
+    scroll: usize,
+}
+
+const HISTORY_PAGE_SIZE: usize = 100;
 
 #[derive(Clone, Debug)]
 pub struct Notice {
@@ -20,8 +38,23 @@ pub struct Notice {
 pub struct App {
     pub repository: Repository,
     pub files: Vec<ChangedFile>,
+    pub branch: Option<String>,
+    pub remote: RemoteState,
+    pub remote_busy: Option<RemoteAction>,
+    remote_job: Option<Receiver<io::Result<()>>>,
+    pub tab: Tab,
+    pub history: Vec<Commit>,
+    pub has_more_history: bool,
+    pub commit: Option<Commit>,
+    pub commit_files: Vec<ChangedFile>,
+    history_limit: usize,
+    changes_position: ListPosition,
+    history_position: ListPosition,
+    commit_position: ListPosition,
     pub selected: usize,
     pub screen: Screen,
+    /// Parsed only when the patch changes, shared by every renderer.
+    pub syntax: Option<crate::highlight::DocumentSyntax>,
     pub list_scroll: usize,
     pub detail_scroll: usize,
     pub horizontal_scroll: usize,
@@ -39,11 +72,27 @@ pub struct App {
 impl App {
     pub fn new(repository: Repository) -> io::Result<Self> {
         let files = repository.changed_files()?;
+        let branch = repository.branch();
+        let remote = repository.remote_state()?;
         Ok(Self {
+            branch,
+            remote,
+            remote_busy: None,
+            remote_job: None,
+            tab: Tab::Changes,
+            history: Vec::new(),
+            has_more_history: false,
+            commit: None,
+            commit_files: Vec::new(),
+            history_limit: HISTORY_PAGE_SIZE,
+            changes_position: ListPosition::default(),
+            history_position: ListPosition::default(),
+            commit_position: ListPosition::default(),
             repository,
             files,
             selected: 0,
             screen: Screen::Files,
+            syntax: None,
             list_scroll: 0,
             detail_scroll: 0,
             horizontal_scroll: 0,
@@ -57,26 +106,64 @@ impl App {
         })
     }
 
+    pub fn start_remote_action(&mut self, action: RemoteAction) -> io::Result<()> {
+        if self.remote_busy.is_some() {
+            return Err(io::Error::other("A Git operation is already running"));
+        }
+        if !self.remote.allows(action) {
+            return Err(io::Error::other(
+                "This Git operation is unavailable for the current branch",
+            ));
+        }
+        let repository = self.repository.clone();
+        let expected = self.remote.clone();
+        let (sender, receiver) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("git-remote".into())
+            .spawn(move || {
+                let _ = sender.send(repository.remote_action(action, &expected));
+            })?;
+        self.remote_job = Some(receiver);
+        self.remote_busy = Some(action);
+        self.notice = None;
+        Ok(())
+    }
+
+    pub fn poll_remote_action(&mut self) -> bool {
+        let Some(receiver) = &self.remote_job else {
+            return false;
+        };
+        let result = match receiver.try_recv() {
+            Ok(result) => result,
+            Err(TryRecvError::Empty) => return false,
+            Err(TryRecvError::Disconnected) => {
+                Err(io::Error::other("Git operation stopped unexpectedly"))
+            }
+        };
+        let action = self.remote_busy.take().expect("running operation");
+        self.remote_job = None;
+        let sync = self.sync();
+        match result.and(sync.map(|_| ())) {
+            Ok(()) => self.notify(format!("{} complete", action.name())),
+            Err(error) => self.fail(error),
+        }
+        true
+    }
+
     /// Follow a neighboring/main agent into another checkout (including a
     /// worktree), or back to the main checkout. Explicit-path launches leave
     /// this unused and remain pinned to their requested repository.
     pub fn follow_path(&mut self, path: impl AsRef<Path>) -> io::Result<bool> {
+        if self.remote_busy.is_some() {
+            return Ok(false);
+        }
         let repository = Repository::discover(path)?;
         if repository.root() == self.repository.root() {
             return Ok(false);
         }
-        self.files = repository.changed_files()?;
-        self.repository = repository;
-        self.selected = 0;
-        self.screen = Screen::Files;
-        self.list_scroll = 0;
-        self.detail_scroll = 0;
-        self.horizontal_scroll = 0;
-        self.reveal_selected = true;
-        self.max_scroll = 0;
-        self.max_horizontal_scroll = 0;
-        self.notice = None;
-        self.selection = None;
+        let mut next = Self::new(repository)?;
+        next.switch_tab(self.tab)?;
+        *self = next;
         Ok(true)
     }
 
@@ -85,23 +172,134 @@ impl App {
         matches!(self.screen, Screen::Diff(_))
     }
 
+    pub fn can_go_back(&self) -> bool {
+        matches!(self.screen, Screen::Diff(_) | Screen::CommitFiles)
+    }
+
+    pub fn active_files(&self) -> &[ChangedFile] {
+        if self.tab == Tab::History {
+            &self.commit_files
+        } else {
+            &self.files
+        }
+    }
+
+    pub fn list_len(&self) -> usize {
+        if matches!(self.screen, Screen::History) {
+            self.history.len()
+        } else {
+            self.active_files().len()
+        }
+    }
+
     #[must_use]
     pub fn selected_file(&self) -> Option<&ChangedFile> {
-        self.files.get(self.selected)
+        match &self.screen {
+            Screen::History => None,
+            Screen::Diff(document) => Some(&document.file),
+            _ => self.active_files().get(self.selected),
+        }
     }
 
     #[must_use]
     pub fn selected_absolute_path(&self) -> Option<PathBuf> {
+        // Historical paths and line numbers need not exist in this checkout.
+        if self.tab == Tab::History {
+            return None;
+        }
         self.selected_file()
             .map(|file| self.repository.root().join(file.path()))
     }
 
-    pub fn select(&mut self, index: usize) {
-        if self.files.is_empty() {
-            self.selected = 0;
-            return;
+    fn remember_position(&mut self) {
+        let position = ListPosition {
+            selected: self.selected,
+            scroll: self.list_scroll,
+        };
+        match self.screen {
+            Screen::Files => self.changes_position = position,
+            Screen::History => self.history_position = position,
+            Screen::CommitFiles => self.commit_position = position,
+            Screen::Diff(_) => {}
         }
-        self.selected = index.min(self.files.len() - 1);
+    }
+
+    fn restore_position(&mut self, position: ListPosition) {
+        self.selected = position.selected.min(self.list_len().saturating_sub(1));
+        self.list_scroll = position.scroll;
+        self.reset_detail();
+        self.reveal_selected = true;
+    }
+
+    fn reset_detail(&mut self) {
+        self.detail_scroll = 0;
+        self.horizontal_scroll = 0;
+        self.max_scroll = 0;
+        self.max_horizontal_scroll = 0;
+        self.selection = None;
+        self.notice = None;
+    }
+
+    pub fn switch_tab(&mut self, tab: Tab) -> io::Result<()> {
+        if tab == self.tab {
+            return Ok(());
+        }
+        if tab == Tab::History {
+            self.reload_history()?;
+        }
+        self.remember_position();
+        self.tab = tab;
+        self.commit = None;
+        self.commit_files.clear();
+        self.screen = if tab == Tab::History {
+            Screen::History
+        } else {
+            Screen::Files
+        };
+        let position = if tab == Tab::History {
+            self.history_position
+        } else {
+            self.changes_position
+        };
+        self.restore_position(position);
+        Ok(())
+    }
+
+    fn reload_history(&mut self) -> io::Result<bool> {
+        let mut history = self.repository.history(self.history_limit + 1)?;
+        let has_more = history.len() > self.history_limit;
+        history.truncate(self.history_limit);
+        let changed = history != self.history || has_more != self.has_more_history;
+        let position = if matches!(self.screen, Screen::History) {
+            self.selected
+        } else {
+            self.history_position.selected
+        };
+        let selected_id = self.history.get(position).map(|commit| &commit.id);
+        let selected = selected_id
+            .and_then(|id| history.iter().position(|commit| &commit.id == id))
+            .unwrap_or(0);
+        self.history = history;
+        self.has_more_history = has_more;
+        self.history_position.selected = selected;
+        if matches!(self.screen, Screen::History) {
+            self.selected = selected;
+        }
+        Ok(changed)
+    }
+
+    pub fn load_more_history(&mut self) -> io::Result<()> {
+        let previous_limit = self.history_limit;
+        self.history_limit = self.history_limit.saturating_add(HISTORY_PAGE_SIZE);
+        if let Err(error) = self.reload_history() {
+            self.history_limit = previous_limit;
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    pub fn select(&mut self, index: usize) {
+        self.selected = index.min(self.list_len().saturating_sub(1));
         self.reveal_selected = true;
         self.notice = None;
     }
@@ -121,54 +319,55 @@ impl App {
     }
 
     pub fn open_selected(&mut self) -> io::Result<()> {
+        if matches!(self.screen, Screen::History) {
+            let Some(commit) = self.history.get(self.selected).cloned() else {
+                return Ok(());
+            };
+            let files = self.repository.commit_files(&commit)?;
+            self.remember_position();
+            self.commit = Some(commit);
+            self.commit_files = files;
+            self.screen = Screen::CommitFiles;
+            self.restore_position(ListPosition::default());
+            return Ok(());
+        }
         let Some(file) = self.selected_file().cloned() else {
             return Ok(());
         };
-        let document = self.repository.diff(&file)?;
+        let document = match &self.commit {
+            Some(commit) => self.repository.commit_diff(commit, &file)?,
+            None => self.repository.diff(&file)?,
+        };
+        self.remember_position();
+        self.syntax = crate::highlight::document_runs(&document);
         self.screen = Screen::Diff(document);
-        self.detail_scroll = 0;
-        self.horizontal_scroll = 0;
-        self.max_scroll = 0;
-        self.max_horizontal_scroll = 0;
-        self.notice = None;
-        self.selection = None;
+        self.reset_detail();
         Ok(())
     }
 
     pub fn back(&mut self) {
-        self.screen = Screen::Files;
-        self.detail_scroll = 0;
-        self.horizontal_scroll = 0;
-        self.reveal_selected = true;
-        self.notice = None;
-        self.selection = None;
+        if self.is_detail() && self.tab == Tab::History {
+            self.screen = Screen::CommitFiles;
+            self.restore_position(self.commit_position);
+        } else if self.tab == Tab::History {
+            self.commit = None;
+            self.commit_files.clear();
+            self.screen = Screen::History;
+            self.restore_position(self.history_position);
+        } else {
+            self.screen = Screen::Files;
+            self.restore_position(self.changes_position);
+        }
     }
 
     pub fn refresh(&mut self) -> io::Result<()> {
-        let selected_path = self.selected_file().map(|file| file.path().to_path_buf());
-        let detail_path = match &self.screen {
-            Screen::Files => None,
-            Screen::Diff(document) => Some(document.file.path().to_path_buf()),
-        };
-        self.files = self.repository.changed_files()?;
-        self.selected = selected_path
-            .as_deref()
-            .and_then(|path| self.files.iter().position(|file| file.path() == path))
-            .unwrap_or(0)
-            .min(self.files.len().saturating_sub(1));
-
-        if let Some(path) = detail_path {
-            if let Some(file) = self.files.iter().find(|file| file.path() == path) {
-                self.screen = Screen::Diff(self.repository.diff(file)?);
-            } else {
-                self.back();
-            }
-        }
+        self.sync()?;
         self.reveal_selected = true;
         self.selection = None;
-        self.notice = Some(Notice {
-            text: format!("Refreshed · {} changed", self.files.len()),
-            error: false,
+        self.notify(if self.tab == Tab::History {
+            format!("Refreshed · {} commits", self.history.len())
+        } else {
+            format!("Refreshed · {} changed", self.files.len())
         });
         Ok(())
     }
@@ -178,20 +377,34 @@ impl App {
     /// Returns whether anything visible changed.
     pub fn sync(&mut self) -> io::Result<bool> {
         let files = self.repository.changed_files()?;
-        let mut changed = false;
+        let branch = self.repository.branch();
+        let remote = self.repository.remote_state()?;
+        let mut changed = branch != self.branch || remote != self.remote;
+        self.remote = remote;
+        self.branch = branch;
         if files != self.files {
-            let selected_path = self.selected_file().map(|file| file.path().to_path_buf());
+            let position = if self.tab == Tab::Changes {
+                self.selected
+            } else {
+                self.changes_position.selected
+            };
+            let selected_path = self.files.get(position).map(|file| file.path());
+            let selected = selected_path
+                .and_then(|path| files.iter().position(|file| file.path() == path))
+                .unwrap_or(0);
             self.files = files;
-            self.selected = selected_path
-                .as_deref()
-                .and_then(|path| self.files.iter().position(|file| file.path() == path))
-                .unwrap_or(0)
-                .min(self.files.len().saturating_sub(1));
+            self.changes_position.selected = selected;
+            if self.tab == Tab::Changes {
+                self.selected = selected;
+            }
             changed = true;
+        }
+        if self.tab == Tab::History {
+            return Ok(self.reload_history()? || changed);
         }
 
         let detail_path = match &self.screen {
-            Screen::Files => None,
+            Screen::Files | Screen::History | Screen::CommitFiles => None,
             Screen::Diff(document) => Some(document.file.path().to_path_buf()),
         };
         if let Some(path) = detail_path {
@@ -204,6 +417,7 @@ impl App {
                             self.detail_scroll.min(next.lines.len().saturating_sub(1));
                         // Line indexes are stale against the new document.
                         self.selection = None;
+                        self.syntax = crate::highlight::document_runs(&next);
                         self.screen = Screen::Diff(next);
                         changed = true;
                     }
@@ -219,7 +433,12 @@ impl App {
 
     pub fn fail(&mut self, error: impl std::fmt::Display) {
         self.notice = Some(Notice {
-            text: error.to_string(),
+            text: error
+                .to_string()
+                .chars()
+                .map(|c| if c.is_control() { ' ' } else { c })
+                .take(500)
+                .collect(),
             error: true,
         });
     }
@@ -280,7 +499,7 @@ impl App {
         Some(line.min(document.lines.len() - 1))
     }
 
-    pub fn scroll_vertical(&mut self, delta: isize) {
+    pub fn scroll_vertical(&mut self, delta: isize) -> bool {
         let current = if self.is_detail() {
             self.detail_scroll
         } else {
@@ -298,7 +517,8 @@ impl App {
             self.list_scroll = next;
             self.reveal_selected = false;
         }
-        self.notice = None;
+        let notice_changed = self.notice.take().is_some();
+        next != current || notice_changed
     }
 
     pub fn scroll_horizontal(&mut self, delta: isize) {
@@ -323,7 +543,7 @@ impl App {
         if self.is_detail() {
             self.detail_scroll = self.max_scroll;
         } else {
-            self.select(self.files.len().saturating_sub(1));
+            self.select(self.list_len().saturating_sub(1));
         }
     }
 
@@ -381,11 +601,49 @@ mod tests {
     }
 
     #[test]
+    fn remote_worker_blocks_duplicate_actions_and_reports_completion() {
+        let (directory, mut app) = diff_app();
+        let remote = tempfile::tempdir().unwrap();
+        for (root, arguments) in [
+            (remote.path(), vec!["init", "--bare"]),
+            (
+                directory.path(),
+                vec!["remote", "add", "origin", remote.path().to_str().unwrap()],
+            ),
+        ] {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(root)
+                .args(arguments)
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+        }
+        app.sync().unwrap();
+        app.start_remote_action(RemoteAction::Fetch).unwrap();
+        assert_eq!(app.remote_busy, Some(RemoteAction::Fetch));
+        assert!(app.start_remote_action(RemoteAction::Fetch).is_err());
+        assert!(!app.follow_path(remote.path()).unwrap());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !app.poll_remote_action() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Git worker did not finish"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(app.remote_busy.is_none());
+        let notice = app.notice.as_ref().unwrap();
+        assert!(!notice.error, "{}", notice.text);
+        assert_eq!(notice.text, "Fetch complete");
+    }
+
+    #[test]
     fn selections_order_their_range_and_clamp_to_the_document() {
         let (_directory, mut app) = diff_app();
         let last = match &app.screen {
             Screen::Diff(document) => document.lines.len() - 1,
-            Screen::Files => unreachable!(),
+            _ => unreachable!(),
         };
 
         app.begin_selection(3);
@@ -425,12 +683,92 @@ mod tests {
             Screen::Diff(document) => {
                 assert!(document.lines.iter().any(|line| line == "+CHANGED"));
             }
-            Screen::Files => panic!("diff should stay open"),
+            _ => panic!("diff should stay open"),
         }
 
         std::fs::remove_file(directory.path().join("new.txt")).unwrap();
         assert!(app.sync().unwrap());
         assert!(!app.is_detail());
         assert!(app.files.is_empty());
+    }
+
+    fn commit(root: &Path, subject: &str) {
+        for arguments in [
+            vec!["add", "."],
+            vec!["commit", "--allow-empty", "-m", subject],
+        ] {
+            assert!(
+                Command::new("git")
+                    .arg("-C")
+                    .arg(root)
+                    .args(arguments)
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            );
+        }
+    }
+
+    #[test]
+    fn history_drills_into_commits_and_back_without_losing_changes_selection() {
+        let (directory, mut app) = diff_app();
+        app.back();
+        commit(directory.path(), "First");
+        std::fs::write(directory.path().join("new.txt"), "second\n").unwrap();
+        commit(directory.path(), "Second");
+        std::fs::write(directory.path().join("a.txt"), "dirty\n").unwrap();
+        std::fs::write(directory.path().join("z.txt"), "dirty\n").unwrap();
+        app.sync().unwrap();
+        app.select(1);
+        app.switch_tab(Tab::History).unwrap();
+        assert_eq!(app.history.len(), 2);
+        app.select(1);
+        app.open_selected().unwrap();
+        assert!(matches!(app.screen, Screen::CommitFiles));
+        assert_eq!(app.commit.as_ref().unwrap().subject, "First");
+        assert!(app.selected_absolute_path().is_none());
+        app.open_selected().unwrap();
+        let Screen::Diff(document) = &app.screen else {
+            panic!("expected patch")
+        };
+        assert!(document.lines.iter().any(|line| line == "+one"));
+        let original = document.clone();
+        std::fs::write(directory.path().join("new.txt"), "third\n").unwrap();
+        commit(directory.path(), "Third");
+        app.sync().unwrap();
+        let Screen::Diff(document) = &app.screen else {
+            panic!("expected pinned patch")
+        };
+        assert_eq!(document, &original);
+        app.back();
+        assert!(matches!(app.screen, Screen::CommitFiles));
+        app.back();
+        assert!(matches!(app.screen, Screen::History));
+        assert_eq!(app.history[app.selected].subject, "First");
+        app.switch_tab(Tab::Changes).unwrap();
+        assert!(matches!(app.screen, Screen::Files));
+        assert!(app.files.is_empty());
+        assert!(app.commit.is_none());
+    }
+
+    #[test]
+    fn history_pagination_preserves_commit_selection() {
+        let (directory, mut app) = diff_app();
+        app.back();
+        for subject in ["First", "Second", "Third"] {
+            commit(directory.path(), subject);
+        }
+        app.history_limit = 2;
+        app.switch_tab(Tab::History).unwrap();
+        assert_eq!(app.history.len(), 2);
+        assert!(app.has_more_history);
+        app.select(1);
+        let selected = app.history[1].id.clone();
+        app.load_more_history().unwrap();
+        assert_eq!(app.history.len(), 3);
+        assert!(!app.has_more_history);
+        assert_eq!(app.history[app.selected].id, selected);
+        assert!(app.notice.is_none());
     }
 }
