@@ -1201,7 +1201,13 @@ mod tests {
     fn shipped_release_registry_is_valid_cli_catalog_data() {
         let entries =
             serde_json::from_str::<BTreeMap<String, RawCatalogApp>>(APP_CLI_REGISTRY).unwrap();
-        assert!(entries.len() >= 5);
+        // The shipped catalog: Diffs, Files, Markdown, Usage (Design and
+        // GitHub Issues left it in 0.6.0). Pin the set so a dropped or
+        // misnamed entry fails here, not on a Host.
+        assert_eq!(
+            entries.keys().cloned().collect::<Vec<_>>(),
+            ["diffs", "filetree", "markdown", "usage"]
+        );
         assert_eq!(entries["markdown"].binary, "unpeel-markdown");
         assert_eq!(entries["usage"].id, "unpeel.app.usage");
 
