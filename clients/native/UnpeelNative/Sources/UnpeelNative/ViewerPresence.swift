@@ -3,7 +3,8 @@
 //  UnpeelNative
 //
 //  Tracks which other devices are currently viewing a session's terminal, so
-//  the title bar can show small presence avatars (ViewerAvatarsView).
+//  pane headers can show presence chips (ViewerAvatarsView). Presence is
+//  device-level observation, not human membership or a terminal control lease.
 //
 //  Two feeds converge here:
 //
@@ -24,13 +25,6 @@ import Foundation
 
 /// One device currently viewing a session's terminal.
 struct ViewerInfo: Identifiable, Equatable {
-    enum Kind: Equatable {
-        /// A paired phone on the worker's Direct/Link output lease.
-        case mobile
-        /// A client of the crate remote server (ws or poll).
-        case remote
-    }
-
     let id: String
     /// Stable paired-device id when this viewer is an authenticated
     /// Controller. Keeping it separate from the display label lets push
@@ -38,13 +32,14 @@ struct ViewerInfo: Identifiable, Equatable {
     /// of silencing every paired phone (or a remote Mac) at once.
     let deviceID: String?
     let displayName: String
-    let kind: Kind
     let lastSeen: Date
 }
 
 @MainActor
 final class ViewerPresenceStore: ObservableObject {
-    static let shared = ViewerPresenceStore()
+    static let shared = ViewerPresenceStore(onConnection: { name in
+        ToastCenter.shared.show("\(name) connected", systemImage: "person.crop.circle.badge.checkmark")
+    })
 
     /// Session id → current viewers, already de-staled and sorted.
     @Published private(set) var viewers: [String: [ViewerInfo]] = [:]
@@ -52,7 +47,8 @@ final class ViewerPresenceStore: ObservableObject {
     /// File-feed staleness cutoff. The remote server prunes poll viewers after
     /// 15s; anything older than this on disk is a leftover from a dead server.
     private static let fileEntryTTL: TimeInterval = 20
-    /// In-app mobile feed TTL — matches the remote server's poll-viewer TTL.
+    /// Host Direct/Link output lease TTL. The legacy filename is mobile,
+    /// but this feed also carries paired Mac Controllers.
     private static let mobileEntryTTL: TimeInterval = 15
     private static let pollInterval: TimeInterval = 5
 
@@ -64,36 +60,39 @@ final class ViewerPresenceStore: ObservableObject {
     private var fileViewers: [String: [ViewerInfo]] = [:]
     private var mobileFileViewers: [String: [ViewerInfo]] = [:]
 
-    private var directoryWatcher: DispatchSourceFileSystemObject?
-    private var pollTimer: Timer?
+    private let observation = PresenceObservation()
+    private let automaticallyUpdates: Bool
+    private let onConnection: ((String) -> Void)?
 
     init(presenceURL: URL = LaunchConfig.unpeelDir
         .appendingPathComponent("remote")
-        .appendingPathComponent("presence.json")
+        .appendingPathComponent("presence.json"),
+        automaticallyUpdates: Bool = true,
+        onConnection: ((String) -> Void)? = nil
     ) {
         self.presenceURL = presenceURL
+        self.automaticallyUpdates = automaticallyUpdates
+        self.onConnection = onConnection
         mobilePresenceURL = presenceURL.deletingLastPathComponent()
             .appendingPathComponent("mobile-presence.json")
         reloadPresenceFile()
+        guard automaticallyUpdates else { return }
         startDirectoryWatcher()
         // Low-frequency fallback: re-reads the file (covers a missed fs event
         // or a remote/ dir created after launch) and prunes expired entries.
-        let timer = Timer(timeInterval: Self.pollInterval, repeats: true) { _ in
-            Task { @MainActor in
-                ViewerPresenceStore.shared.refresh()
+        let timer = Timer(timeInterval: Self.pollInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.refresh()
             }
         }
         timer.tolerance = 1
         RunLoop.main.add(timer, forMode: .common)
-        pollTimer = timer
+        observation.timer = timer
     }
 
-    /// True when a paired phone is actively viewing this session — via either
-    /// transport (the in-app `/mobile/output` feed OR the WS `__remote__`
-    /// server's `presence.json`). The activity engine uses it to avoid
-    /// re-marking a remotely-watched session unread the moment it settles.
-    /// Reads the merged, TTL-pruned `viewers` so both feeds are covered.
-    func hasLiveMobileViewer(sessionID: String) -> Bool {
+    /// Both output feeds count as presence, including mobile viewers that
+    /// may resize the shared PTY. Observation alone does not prove who sized it.
+    func hasViewers(sessionID: String) -> Bool {
         !(viewers[sessionID]?.isEmpty ?? true)
     }
 
@@ -114,50 +113,43 @@ final class ViewerPresenceStore: ObservableObject {
     /// keeping ordinary never-remote-viewed switches free of refit churn.
     private var gridReassertCandidates: Set<String> = []
 
-    /// One-shot: true if `sessionID` had a remote viewer since the last
-    /// consume (or app launch). Callers force a full grid re-assert on true.
-    func consumeGridReassertCandidate(_ sessionID: String) -> Bool {
-        gridReassertCandidates.remove(sessionID) != nil
+    /// Preserve the repair until all viewers have left and the Host's
+    /// explicit fit has cleared. A present device must never lose its grid
+    /// merely because another viewer disconnected.
+    func consumeGridReassertCandidate(_ sessionID: String, hasActiveFit: Bool) -> Bool {
+        guard !hasActiveFit, !hasViewers(sessionID: sessionID) else { return false }
+        return gridReassertCandidates.remove(sessionID) != nil
     }
 
     // MARK: - Refresh / prune
 
-    private func refresh() {
-        if directoryWatcher == nil {
+    func refresh(now: Date = Date()) {
+        if automaticallyUpdates && observation.directoryWatcher == nil {
             startDirectoryWatcher()
         }
-        reloadPresenceFile()
+        reloadPresenceFile(now: now)
     }
 
     private func rebuild(now: Date = Date()) {
-        var merged: [String: [ViewerInfo]] = [:]
-        for (sessionID, entries) in fileViewers {
-            let live = entries.filter {
-                now.timeIntervalSince($0.lastSeen) <= Self.fileEntryTTL
+        var bySession: [String: [String: ViewerInfo]] = [:]
+        // Expire each source before merging: a stale lease in one transport
+        // must not hide the same device's live lease in the other.
+        for (feed, ttl) in [
+            (fileViewers, Self.fileEntryTTL),
+            (mobileFileViewers, Self.mobileEntryTTL)
+        ] {
+            for (sessionID, entries) in feed {
+                for entry in entries where now.timeIntervalSince(entry.lastSeen) <= ttl {
+                    if let previous = bySession[sessionID]?[entry.id],
+                       previous.lastSeen >= entry.lastSeen { continue }
+                    bySession[sessionID, default: [:]][entry.id] = entry
+                }
             }
-            guard !live.isEmpty else { continue }
-            var combined = merged[sessionID] ?? []
-            for entry in live where !combined.contains(where: { $0.id == entry.id }) {
-                combined.append(entry)
-            }
-            merged[sessionID] = combined
         }
-        for (sessionID, entries) in mobileFileViewers {
-            let live = entries.filter {
-                now.timeIntervalSince($0.lastSeen) <= Self.mobileEntryTTL
-            }
-            guard !live.isEmpty else { continue }
-            var combined = merged[sessionID] ?? []
-            for entry in live where !combined.contains(where: { $0.id == entry.id }) {
-                combined.append(entry)
-            }
-            merged[sessionID] = combined
-        }
-        for (sessionID, list) in merged {
-            merged[sessionID] = list.sorted { lhs, rhs in
-                lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName)
-                    == .orderedAscending
-                    || (lhs.displayName == rhs.displayName && lhs.id < rhs.id)
+        let merged = bySession.mapValues { entries in
+            entries.values.sorted { lhs, rhs in
+                let order = lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName)
+                return order == .orderedSame ? lhs.id < rhs.id : order == .orderedAscending
             }
         }
         // Latch before publishing: whoever is viewing now may resize the
@@ -170,7 +162,7 @@ final class ViewerPresenceStore: ObservableObject {
         announceConnectionChanges(in: merged)
     }
 
-    /// Device ids currently present, so a phone appearing (across any session,
+    /// Device ids currently present, so a viewer appearing (across any session,
     /// either transport) fires a one-shot "connected" toast rather than the
     /// only cue being the small title-bar avatar chips. Reconnect after the
     /// device drops re-announces.
@@ -191,9 +183,8 @@ final class ViewerPresenceStore: ObservableObject {
             didSeedAnnouncedDevices = true
             return
         }
-        for id in liveIDs.subtracting(announcedDeviceIDs) {
-            let name = live[id] ?? "A device"
-            ToastCenter.shared.show("\(name) connected", systemImage: "iphone.radiowaves.left.and.right")
+        for id in liveIDs.subtracting(announcedDeviceIDs).sorted() {
+            onConnection?(live[id] ?? "A device")
         }
         announcedDeviceIDs = liveIDs
     }
@@ -202,36 +193,35 @@ final class ViewerPresenceStore: ObservableObject {
 
     // MARK: - File feed (presence.json)
 
-    private func reloadPresenceFile() {
+    private func reloadPresenceFile(now: Date = Date()) {
         if let data = try? Data(contentsOf: presenceURL) {
-            fileViewers = Self.parsePresence(data: data, kind: .remote)
+            fileViewers = Self.parsePresence(data: data, source: "terminal")
         } else if !fileViewers.isEmpty {
             // Missing/unreadable file simply means "no remote viewers".
             fileViewers = [:]
         }
         if let data = try? Data(contentsOf: mobilePresenceURL) {
-            mobileFileViewers = Self.parsePresence(data: data, kind: .mobile)
+            mobileFileViewers = Self.parsePresence(data: data, source: "direct-link")
         } else if !mobileFileViewers.isEmpty {
             mobileFileViewers = [:]
         }
-        rebuild()
+        rebuild(now: now)
     }
 
     private static func parsePresence(
         data: Data,
-        kind: ViewerInfo.Kind
+        source: String
     ) -> [String: [ViewerInfo]] {
         struct PresenceFile: Decodable {
             let sessions: [String: [PresenceEntry]]?
         }
         struct PresenceEntry: Decodable {
             let ip: String?
-            let kind: String?
             let device: String?
             let lastSeen: Int64?
 
             enum CodingKeys: String, CodingKey {
-                case ip, kind, device
+                case ip, device
                 case lastSeen = "last_seen"
             }
         }
@@ -244,18 +234,18 @@ final class ViewerPresenceStore: ObservableObject {
             var list: [ViewerInfo] = []
             for entry in entries {
                 let identity = entry.device ?? entry.ip ?? "remote"
+                let deviceID = deviceID(fromDevice: entry.device)
                 let viewer = ViewerInfo(
-                    id: "\(kind == .mobile ? "mobile" : "remote"):\(identity)",
-                    deviceID: deviceID(fromDevice: entry.device),
+                    id: deviceID.map { "device:\($0)" } ?? "legacy:\(source):\(identity)",
+                    deviceID: deviceID,
                     displayName: displayName(fromDevice: entry.device, ip: entry.ip),
-                    kind: kind,
                     lastSeen: Date(
                         timeIntervalSince1970: Double(entry.lastSeen ?? 0) / 1000
                     )
                 )
-                if !list.contains(where: { $0.id == viewer.id }) {
-                    list.append(viewer)
-                }
+                // Keep duplicates until the timestamp-aware merge. The first
+                // connection in the file may be older than another live one.
+                list.append(viewer)
             }
             if !list.isEmpty { result[sessionID] = list }
         }
@@ -302,14 +292,14 @@ final class ViewerPresenceStore: ObservableObject {
         // @Sendable: these closures are formed in a @MainActor context but run
         // on the source's utility queue — without it they inherit MainActor
         // isolation and the runtime's executor check crashes the app.
-        source.setEventHandler(handler: { @Sendable in
-            Task { @MainActor in
-                ViewerPresenceStore.shared.handleDirectoryEvent()
+        source.setEventHandler(handler: { @Sendable [weak self] in
+            Task { @MainActor [weak self] in
+                self?.handleDirectoryEvent()
             }
         })
         source.setCancelHandler(handler: { @Sendable in close(fd) })
         source.resume()
-        directoryWatcher = source
+        observation.directoryWatcher = source
     }
 
     private func handleDirectoryEvent() {
@@ -317,9 +307,21 @@ final class ViewerPresenceStore: ObservableObject {
         if !FileManager.default.fileExists(
             atPath: presenceURL.deletingLastPathComponent().path
         ) {
-            directoryWatcher?.cancel()
-            directoryWatcher = nil
+            observation.directoryWatcher?.cancel()
+            observation.directoryWatcher = nil
         }
         reloadPresenceFile()
+    }
+}
+
+/// Resource lifetime is local to a store. Test stores can disable observation;
+/// future per-Host stores must not leave timers or file descriptors behind.
+private final class PresenceObservation {
+    var timer: Timer?
+    var directoryWatcher: DispatchSourceFileSystemObject?
+
+    deinit {
+        timer?.invalidate()
+        directoryWatcher?.cancel()
     }
 }

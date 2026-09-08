@@ -1440,6 +1440,14 @@ struct TerminalPaneContainer: View {
                 HStack(spacing: 0) {
                     Spacer(minLength: 0)
 
+                    if let entry {
+                        TerminalPresenceView(
+                            sessionID: entry.id,
+                            showsLocalViewers: isOwnLocalScope,
+                            fittedGrid: isLocalMachineScope ? store.phoneResizeOverrides[entry.id] : nil,
+                            onFitToDesktop: { store.clearPhoneResizeOverride(for: entry.id) }
+                        )
+                    }
                     // Same verbs as Session ▸ Split Pane Right (⌘D) / Down
                     // (⌘⇧D): empty launcher splitting THIS pane. Hidden when
                     // those menu items would be disabled (remote, full group,
@@ -1555,30 +1563,14 @@ struct TerminalPaneContainer: View {
             || SetupTool.detect(in: entry.command) != nil
     }
 
-    /// Ghost controls in the terminal's top-right corner, stacked
-    /// left-to-right [fit to desktop][gallery]: the return-to-desktop-grid
-    /// affordance while a phone drives this session's size, and the
-    /// gallery/screenshot chip. They sit on the terminal surface below the
-    /// pane header, so they never collide with the header's split/more
-    /// glyphs or the title strip's activity button. Empty (and outside the
-    /// terminal's hit area) whenever nothing applies.
+    /// Gallery access stays over the terminal. Presence and shared-grid fit
+    /// live together in the pane header, including for plain shell sessions.
     @ViewBuilder
     private func paneCornerControls(for entry: SessionEntry) -> some View {
-        let phoneResize = isLocalMachineScope ? store.phoneResizeOverrides[entry.id] : nil
-        let showsGallery = isOwnLocalScope && store.showSessionGallery
-        if isAgentTerminal(entry), phoneResize != nil || showsGallery {
-            HStack(spacing: 2) {
-                if let phoneResize {
-                    PaneFitToDesktopButton(grid: phoneResize) {
-                        store.clearPhoneResizeOverride(for: entry.id)
-                    }
-                }
-                if showsGallery {
-                    SessionGalleryButton(sessionID: entry.id, cache: cache, ghost: true)
-                }
-            }
-            .padding(.top, 4)
-            .padding(.trailing, 6)
+        if isAgentTerminal(entry), isOwnLocalScope && store.showSessionGallery {
+            SessionGalleryButton(sessionID: entry.id, cache: cache, ghost: true)
+                .padding(.top, 4)
+                .padding(.trailing, 6)
         }
     }
 
@@ -2184,12 +2176,10 @@ private struct PaneSplitButton: View {
     }
 }
 
-// MARK: - Fit to desktop (phone resize) corner control
+// MARK: - Shared terminal size
 
-/// Ghost glyph shown while a phone temporarily drives this session's
-/// terminal size (PhoneResizeOverride). Clicking reverts to the desktop's
-/// natural grid — the same action the former "Resized for phone" banner
-/// offered, now living in the pane's top-right corner.
+/// The legacy phone-fit marker describes the shared grid, not a device's
+/// liveness or exclusive control. Keep its recovery action beside presence.
 struct PaneFitToDesktopButton: View {
     let grid: PhoneResizeOverride
     let onRevert: () -> Void
@@ -2197,7 +2187,7 @@ struct PaneFitToDesktopButton: View {
 
     var body: some View {
         Button(action: onRevert) {
-            Image(systemName: "iphone.slash")
+            Image(systemName: "arrow.up.left.and.arrow.down.right")
                 .font(.system(size: 10.5, weight: .semibold))
                 .foregroundStyle(hovering ? Theme.foreground : Theme.mutedForeground)
                 .frame(width: 24, height: 22)
@@ -2206,7 +2196,7 @@ struct PaneFitToDesktopButton: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .animation(.easeInOut(duration: 0.12), value: hovering)
-        .help("Resized for phone (\(grid.cols)×\(grid.rows)) — fit to desktop")
+        .help("Terminal fitted to another device (\(grid.cols)×\(grid.rows)) — fit to desktop")
         .accessibilityLabel("Fit to desktop")
     }
 }

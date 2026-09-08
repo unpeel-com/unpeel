@@ -104,8 +104,8 @@ struct ContentArea: View {
         ) { _ in
             normalizeShownTerminalSize()
         }
-        // A phone/remote viewer leaving is the "no longer mobile controlled"
-        // moment — snap the grid back once nothing else owns the shared PTY.
+        // When the last viewer leaves, the desktop can restore its grid
+        // provided no explicit Host fit remains. Presence is not ownership.
         .onChange(of: shownSessionHasViewers) { hasViewers in
             if !hasViewers { normalizeShownTerminalSize() }
         }
@@ -161,7 +161,8 @@ struct ContentArea: View {
     /// session (so it may be driving the shared PTY size on purpose).
     private var shownSessionHasViewers: Bool {
         guard let id = selection.sessionID else { return false }
-        return !(viewerPresence.viewers[id]?.isEmpty ?? true)
+        guard !isRemoteScope else { return false }
+        return viewerPresence.hasViewers(sessionID: id)
     }
 
     /// Snap the shown session's hosted PTY back to the desktop's full grid
@@ -176,9 +177,9 @@ struct ContentArea: View {
     /// session switches. The viewer-presence latch splits the difference:
     /// only a session some remote viewer has actually been seen on gets the
     /// forced re-assert (once per sighting); everything else keeps the
-    /// cheap drift check. No-op while phone-controlled (a live letterbox
-    /// override or an active viewer owns the grid on purpose), so it never
-    /// fights a phone that is still connected.
+    /// cheap drift check. A live fit or viewer blocks automatic restoration;
+    /// this avoids fighting connected devices without treating observation
+    /// as an exclusive control lease.
     private func normalizeShownTerminalSize() {
         guard !isRemoteScope else { return }
         guard !store.settingsVisible,
@@ -187,14 +188,26 @@ struct ContentArea: View {
               let id = selection.sessionID
         else { return }
         guard store.phoneResizeOverrides[id] == nil else { return }
-        guard viewerPresence.viewers[id]?.isEmpty ?? true else { return }
+        guard !viewerPresence.hasViewers(sessionID: id) else { return }
         DispatchQueue.main.async {
+            // Presence, fit, selection, or Host scope can change before this
+            // deferred AppKit operation runs. Never restore a stale target.
+            guard store.selectedHostScope == .local,
+                  selection.sessionID == id,
+                  !store.settingsVisible,
+                  store.archivedProjectID == nil,
+                  !store.recentActivityVisible,
+                  store.phoneResizeOverrides[id] == nil,
+                  !viewerPresence.hasViewers(sessionID: id)
+            else { return }
             // Consume only when the pane can actually act on it — a pane
             // mid-swap (detached, window nil) keeps its candidacy for the
             // next trigger instead of losing the repair.
             guard let pane = cache.existingPane(for: id), pane.window != nil
             else { return }
-            if ViewerPresenceStore.shared.consumeGridReassertCandidate(id) {
+            if viewerPresence.consumeGridReassertCandidate(
+                id, hasActiveFit: store.phoneResizeOverrides[id] != nil
+            ) {
                 pane.forceRefitNow()
             } else {
                 pane.refitNow()

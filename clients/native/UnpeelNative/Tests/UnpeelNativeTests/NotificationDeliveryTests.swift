@@ -47,7 +47,8 @@ final class NotificationDeliveryTests: XCTestCase {
         {"version":1,"updated_at":\(now),"sessions":{"session-1":[{"ip":"127.0.0.1","kind":"ws","device":"Alice's iPhone (phone-a)","device_id":"phone-a","last_seen":\(now)}]}}
         """.utf8).write(to: directory.appendingPathComponent("mobile-presence.json"))
         let store = ViewerPresenceStore(
-            presenceURL: directory.appendingPathComponent("presence.json")
+            presenceURL: directory.appendingPathComponent("presence.json"),
+            automaticallyUpdates: false
         )
 
         XCTAssertTrue(store.isDeviceViewing(sessionID: "session-1", deviceID: "phone-a"))
@@ -69,7 +70,7 @@ final class NotificationDeliveryTests: XCTestCase {
         """
         try Data(body.utf8).write(to: presenceURL)
 
-        let store = ViewerPresenceStore(presenceURL: presenceURL)
+        let store = ViewerPresenceStore(presenceURL: presenceURL, automaticallyUpdates: false)
 
         XCTAssertTrue(store.isDeviceViewing(sessionID: "session-1", deviceID: "phone-a"))
         XCTAssertFalse(store.isDeviceViewing(sessionID: "session-1", deviceID: "phone-b"))
@@ -91,12 +92,12 @@ final class NotificationDeliveryTests: XCTestCase {
         )
 
         let store = ViewerPresenceStore(
-            presenceURL: directory.appendingPathComponent("presence.json")
+            presenceURL: directory.appendingPathComponent("presence.json"),
+            automaticallyUpdates: false
         )
 
-        XCTAssertTrue(store.hasLiveMobileViewer(sessionID: "session-1"))
+        XCTAssertTrue(store.hasViewers(sessionID: "session-1"))
         XCTAssertTrue(store.isDeviceViewing(sessionID: "session-1", deviceID: "phone-a"))
-        XCTAssertEqual(store.viewers["session-1"]?.first?.kind, .mobile)
     }
 
     func testMenuPromptNotifiesOncePerFalseToTrueEdge() {

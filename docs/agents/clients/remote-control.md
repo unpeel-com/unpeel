@@ -613,8 +613,10 @@ depend on the native app being present.
     includes a "How is this different from SSH?" comparison.
 - Viewer presence: the server writes `~/.unpeel/remote/presence.json` and
   the worker writes `mobile-presence.json` beside it; `ViewerPresence.swift`
-  merges both files and `ViewerAvatarsView` renders avatar chips in the
-  terminal title bar.
+  merges both files by device identity. `TerminalPresenceView` renders
+  device chips beside the shared-grid fit control in each native pane header.
+  Mobile viewers count too; a persisted fit is separate from live presence.
+  See [viewer presence and terminal sizing](presence.md) for scope and expiry.
 - Connection resilience (security correction 2026-08-14): the phone persists
   the Mac's `/mobile` endpoint at pairing time, and the worker's Direct
   listener normally re-binds that port from `~/.unpeel/mobile/server-port`. When

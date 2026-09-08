@@ -4,47 +4,35 @@
 //
 //  Small avatar chips for devices currently viewing a session's terminal
 //  (fed by ViewerPresenceStore). Mounted at the trailing edge of the
-//  terminal title bar in TerminalArea.
+//  pane header in TerminalPaneContainer, alongside the shared-grid fit control.
 //
 
 import AppKit
-import OpenDirectory
 import SwiftUI
 
-/// Loads the local macOS user's account picture without any permission
-/// prompt, via OpenDirectory's local node. Used as the avatar for a viewer
-/// whose paired device identity is this Mac itself (and, later, remote-Mac
-/// viewers matching the local host).
-@MainActor
-enum MacUserAvatar {
-    private static var cached: NSImage??
+/// One header surface for device observation and the Host's explicit fit.
+/// The fit marker has no device identity: do not attribute it to an arbitrary
+/// viewer, or synthesize a live viewer from a marker that survives disconnects.
+struct TerminalPresenceView: View {
+    @ObservedObject private var presence = ViewerPresenceStore.shared
+    let sessionID: String
+    let showsLocalViewers: Bool
+    let fittedGrid: PhoneResizeOverride?
+    let onFitToDesktop: () -> Void
 
-    static func current() -> NSImage? {
-        if let cached { return cached }
-        let image = load()
-        cached = .some(image)
-        return image
-    }
-
-    private static func load() -> NSImage? {
-        do {
-            let session = ODSession.default()
-            let node = try ODNode(session: session, name: "/Local/Default")
-            let record = try node.record(
-                withRecordType: kODRecordTypeUsers,
-                name: NSUserName(),
-                attributes: [kODAttributeTypeJPEGPhoto]
-            )
-            let values = try record.values(forAttribute: kODAttributeTypeJPEGPhoto)
-            for value in values {
-                if let data = value as? Data, let image = NSImage(data: data) {
-                    return image
-                }
+    var body: some View {
+        // The disk feed belongs to this Controller's own Host. Session ids
+        // can collide across Hosts; remote presence needs a Host projection.
+        let viewers = showsLocalViewers ? presence.viewers[sessionID] ?? [] : []
+        HStack(spacing: 4) {
+            if !viewers.isEmpty {
+                ViewerAvatarsView(viewers: viewers)
             }
-        } catch {
-            // No local record / no picture — callers fall back to initials.
+            if let fittedGrid {
+                PaneFitToDesktopButton(grid: fittedGrid, onRevert: onFitToDesktop)
+            }
         }
-        return nil
+        .fixedSize()
     }
 }
 
@@ -64,7 +52,8 @@ struct ViewerAvatarsView: View {
             }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(viewers.count) viewer\(viewers.count == 1 ? "" : "s")")
+        .accessibilityLabel("\(viewers.count) viewing device\(viewers.count == 1 ? "" : "s")")
+        .accessibilityValue(viewers.map(\.displayName).joined(separator: ", "))
     }
 
     private func overflowChip(count: Int) -> some View {
@@ -87,37 +76,14 @@ private struct ViewerAvatarChip: View {
     let size: CGFloat
 
     var body: some View {
-        Group {
-            if let image = macUserImage {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: size, height: size)
-                    .clipShape(Circle())
-            } else {
-                Text(initials)
-                    .font(.system(size: 8, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: size, height: size)
-                    .background(Circle().fill(chipColor))
-            }
-        }
-        .overlay(Circle().strokeBorder(chipBorderColor, lineWidth: 1))
-        .help("\(viewer.displayName) — \(kindDescription)")
-    }
-
-    /// This Mac's own paired identity gets the local account picture; every
-    /// other viewer falls back to colored initials.
-    private var macUserImage: NSImage? {
-        guard viewer.displayName == Host.current().localizedName else { return nil }
-        return MacUserAvatar.current()
-    }
-
-    private var kindDescription: String {
-        switch viewer.kind {
-        case .mobile: return "Viewing on iPhone"
-        case .remote: return "Viewing remotely"
-        }
+        Text(initials)
+            .font(.system(size: 8, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: size, height: size)
+            .background(Circle().fill(chipColor))
+            .overlay(Circle().strokeBorder(chipBorderColor, lineWidth: 1))
+            .help("\(viewer.displayName) — viewing this terminal")
+            .accessibilityLabel("\(viewer.displayName), viewing this terminal")
     }
 
     private var initials: String {
@@ -129,11 +95,11 @@ private struct ViewerAvatarChip: View {
         return String(letters).uppercased()
     }
 
-    /// Stable per-name hue so a device keeps its color across refreshes and
+    /// Stable per-device hue so a device keeps its color across refreshes and
     /// launches (Hasher is seeded per-process, so avoid hashValue here).
     private var chipColor: Color {
         var hash: UInt32 = 2_166_136_261
-        for byte in viewer.displayName.utf8 {
+        for byte in viewer.id.utf8 {
             hash = (hash ^ UInt32(byte)) &* 16_777_619
         }
         let hue = Double(hash % 360) / 360
