@@ -5,7 +5,10 @@ import Security
 public enum RemoteControlProtocol {
     public static let version = 1
     public static let hostMajorVersion = 1
-    public static let hostMinorVersion = 19
+    public static let hostMinorVersion = 20
+    /// Opt in with raw=1 only when the feed never inserts bytes between pages.
+    /// iOS synchronization brackets require the default safe-boundary replies.
+    public static let rawOutputCapability = "session.output.raw"
     public static let resumableArtifactUploadCapability = "artifact.upload.resumable"
     public static let sessionOrderCapability = "session.order.set"
     public static let sessionRuntimeRestartCapability = "session.runtime.restart"
