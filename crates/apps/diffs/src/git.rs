@@ -474,18 +474,27 @@ impl Repository {
         {
             return Err(io::Error::other("Invalid commit id"));
         }
+        // An explicit first-parent comparison also works on Git 2.30
+        // (Debian 11), before --diff-merges=first-parent was available.
+        let parents = self.git(["rev-list", "--parents", "--max-count=1", &commit.id, "--"])?;
+        if !parents.status.success() {
+            return Err(git_error(&parents, "Unable to read commit parents"));
+        }
+        let parents = String::from_utf8_lossy(&parents.stdout);
         let mut command = self.git_command();
         command.args([
             "diff-tree",
             "--root",
             "--no-commit-id",
             "-r",
-            "--diff-merges=first-parent",
             "--no-color",
             "--no-ext-diff",
             "--no-textconv",
             "--find-renames",
         ]);
+        if let Some(parent) = parents.split_whitespace().nth(1) {
+            command.arg(parent);
+        }
         Ok(command)
     }
 
