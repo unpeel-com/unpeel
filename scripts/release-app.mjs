@@ -129,7 +129,9 @@ if (!args['skip-build'] && process.platform === 'darwin') {
   // lipo drops the arm64 slice's linker-generated signature; re-sign ad hoc.
   run('codesign', ['--force', '--sign', '-', out])
   const archive = resolve(stage, `${bin}-${version}-macos-universal.tar.gz`)
-  run('tar', ['-czf', archive, '-C', stage, bin])
+  run('tar', ['-czf', archive, '-C', stage, bin], {
+    env: { ...process.env, COPYFILE_DISABLE: '1' }
+  })
   tarballs['macos-universal'] = archive
 }
 
