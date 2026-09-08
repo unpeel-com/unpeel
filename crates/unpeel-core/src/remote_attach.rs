@@ -535,20 +535,30 @@ impl rustls::client::danger::ServerCertVerifier for FingerprintVerifier {
 
     fn verify_tls12_signature(
         &self,
-        _message: &[u8],
-        _cert: &rustls::pki_types::CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &rustls::crypto::ring::default_provider().signature_verification_algorithms,
+        )
     }
 
     fn verify_tls13_signature(
         &self,
-        _message: &[u8],
-        _cert: &rustls::pki_types::CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &rustls::crypto::ring::default_provider().signature_verification_algorithms,
+        )
     }
 
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
@@ -595,4 +605,111 @@ fn read_peer_file(path: &str) -> Option<(String, String, Option<String>)> {
         .and_then(Value::as_str)
         .map(str::to_string);
     Some((url, token, fingerprint))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug)]
+    struct FixedCertificate(Arc<rustls::sign::CertifiedKey>);
+
+    impl rustls::server::ResolvesServerCert for FixedCertificate {
+        fn resolve(
+            &self,
+            _hello: rustls::server::ClientHello<'_>,
+        ) -> Option<Arc<rustls::sign::CertifiedKey>> {
+            Some(Arc::clone(&self.0))
+        }
+    }
+
+    /// Drives one in-memory handshake and returns the client's verdict.
+    fn handshake(
+        client: rustls::ClientConfig,
+        server: rustls::ServerConfig,
+    ) -> Result<(), rustls::Error> {
+        let server_name = rustls::pki_types::ServerName::try_from("localhost").unwrap();
+        let mut client = rustls::ClientConnection::new(Arc::new(client), server_name)?;
+        let mut server = rustls::ServerConnection::new(Arc::new(server))?;
+        for _ in 0..8 {
+            let mut to_server = Vec::new();
+            while client.wants_write() {
+                client.write_tls(&mut to_server).unwrap();
+            }
+            let mut cursor = &to_server[..];
+            while !cursor.is_empty() {
+                server.read_tls(&mut cursor).unwrap();
+            }
+            // A server-side rejection surfaces to the client as an alert; the
+            // client verdict below is the one under test.
+            let _ = server.process_new_packets();
+            let mut to_client = Vec::new();
+            while server.wants_write() {
+                server.write_tls(&mut to_client).unwrap();
+            }
+            let mut cursor = &to_client[..];
+            while !cursor.is_empty() {
+                client.read_tls(&mut cursor).unwrap();
+            }
+            client.process_new_packets()?;
+            if !client.is_handshaking() {
+                return Ok(());
+            }
+        }
+        Err(rustls::Error::General("handshake did not complete".into()))
+    }
+
+    fn server_with(
+        cert: &rustls::pki_types::CertificateDer<'static>,
+        key: rcgen::KeyPair,
+    ) -> rustls::ServerConfig {
+        let key = rustls::pki_types::PrivatePkcs8KeyDer::from(key.serialize_der());
+        let signing_key = rustls::crypto::ring::sign::any_supported_type(&key.into()).unwrap();
+        let certified = rustls::sign::CertifiedKey::new(vec![cert.clone()], signing_key);
+        rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_cert_resolver(Arc::new(FixedCertificate(Arc::new(certified))))
+    }
+
+    /// The pin alone is not authentication: a peer that copied the Host's
+    /// public certificate must still prove possession of its private key in
+    /// the handshake. This is the regression test for a verifier that
+    /// accepted every handshake signature once the fingerprint matched.
+    #[test]
+    fn pinned_verifier_requires_proof_of_the_pinned_private_key() {
+        let impostor_key = rcgen::KeyPair::generate().unwrap();
+        let certified = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+        let cert = certified.cert.der().clone();
+        let fingerprint = Sha256::digest(cert.as_ref())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+
+        let impostor = handshake(
+            pinned_client_config(Some(fingerprint.clone())),
+            server_with(&cert, impostor_key),
+        );
+        assert!(
+            impostor.is_err(),
+            "a copied certificate without its private key must not complete the handshake"
+        );
+
+        let wrong_pin = handshake(
+            pinned_client_config(Some("00".repeat(32))),
+            server_with(
+                &cert,
+                rcgen::KeyPair::from_pem(&certified.key_pair.serialize_pem()).unwrap(),
+            ),
+        );
+        assert!(
+            wrong_pin.is_err(),
+            "a certificate that does not match the pin must be rejected"
+        );
+
+        handshake(
+            pinned_client_config(Some(fingerprint)),
+            server_with(&cert, certified.key_pair),
+        )
+        .expect("the pinned Host with its own key completes the handshake");
+    }
 }
