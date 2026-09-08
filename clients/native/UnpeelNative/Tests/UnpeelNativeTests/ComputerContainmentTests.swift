@@ -3,7 +3,7 @@ import XCTest
 
 final class ComputerContainmentTests: XCTestCase {
     func testComputerUseDefaultsOff() {
-        XCTAssertFalse(ExperimentalFeature.computerUse.defaultOn)
+        XCTAssertFalse(AppFeature.computerUse.defaultOn)
     }
 
     func testComputerUseIsRetiredInDevelopmentBuildsToo() {
@@ -28,12 +28,34 @@ final class ComputerContainmentTests: XCTestCase {
             .computerUse, developmentBuild: true
         ))
 
-        for feature in ExperimentalFeature.all where feature != .computerUse {
+        for feature in AppFeature.all where feature != .computerUse {
             XCTAssertTrue(
                 UnpeelFeatureFlags.isAvailable(feature, developmentBuild: false),
                 "production unexpectedly hid \(feature.key)"
             )
         }
+    }
+
+    /// 2026-09-08: only Browser use is still experimental; the others are
+    /// shipped Features rows. Graduating or demoting one is a deliberate
+    /// registry edit, so pin the split here.
+    func testOnlyBrowserUseRemainsExperimental() {
+        XCTAssertEqual(
+            UnpeelFeatureFlags.availableExperimentalFeatures.map(\.key),
+            [AppFeature.browserMcp.key]
+        )
+        XCTAssertEqual(
+            UnpeelFeatureFlags.availableShippedFeatures.map(\.key),
+            [
+                AppFeature.remoteWorkspaces.key, AppFeature.worktrees.key,
+                AppFeature.sessionsMcp.key, AppFeature.workspaces.key,
+            ]
+        )
+        XCTAssertEqual(
+            UnpeelFeatureFlags.availableFeatures,
+            UnpeelFeatureFlags.availableShippedFeatures
+                + UnpeelFeatureFlags.availableExperimentalFeatures
+        )
     }
 
     func testRetirementAlsoAppliesToOlderHostsAdvertisingComputerUse() {

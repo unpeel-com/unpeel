@@ -635,12 +635,12 @@ final class UnpeelStore: ObservableObject {
         suppressMenuAttentionPersistence = false
     }
 
-    /// Decision 4's revert for Experimental on THIS instance: drop every own
+    /// Decision 4's revert for Features on THIS instance: drop every own
     /// flag value and republish the inherited resolution.
     func revertExperimentalToInheritedBaseline() {
         UnpeelFeatureFlags.revertToInheritedBaseline()
         enabledExperimentalKeys = Set(
-            ExperimentalFeature.all
+            AppFeature.all
                 .filter { UnpeelFeatureFlags.isEnabled($0) }
                 .map(\.key)
         )
@@ -1108,12 +1108,12 @@ final class UnpeelStore: ObservableObject {
     /// first tab in the nav.
     @Published var settingsTab: SettingsTab = .presets
 
-    /// Keys of the experimental features (Settings ▸ Experimental) that are
-    /// currently enabled. Seeded from the registry so an env override or a
+    /// Keys of the features (Settings ▸ Features) that are currently
+    /// enabled. Seeded from the registry so an env override or a
     /// stored preference is reflected at launch; publishing it lets the
     /// sidebar's worktree gates re-evaluate live when a toggle flips.
     @Published private(set) var enabledExperimentalKeys: Set<String> =
-        Set(ExperimentalFeature.all.filter { UnpeelFeatureFlags.isEnabled($0) }.map(\.key))
+        Set(AppFeature.all.filter { UnpeelFeatureFlags.isEnabled($0) }.map(\.key))
 
     /// This app's Host-side remote-control server. Mobile was its first
     /// Controller, so the shipped implementation and routes retain legacy
@@ -4278,7 +4278,7 @@ final class UnpeelStore: ObservableObject {
         }
         TransparencyModel.shared.reloadFromDefaults()
         TerminalFontModel.shared.reloadFromDefaults()
-        // Peers also edit this workspace's Notifications/Experimental knobs
+        // Peers also edit this workspace's Notifications/Features knobs
         // (and their reverts) through the same suite + ping — re-resolve
         // without materializing inherited values as own overrides.
         let resolvedMenuAttention = Self.resolveMenuAttentionDetection()
@@ -4288,7 +4288,7 @@ final class UnpeelStore: ObservableObject {
             suppressMenuAttentionPersistence = false
         }
         let resolvedFlags = Set(
-            ExperimentalFeature.all
+            AppFeature.all
                 .filter { UnpeelFeatureFlags.isEnabled($0) }
                 .map(\.key)
         )
@@ -11133,17 +11133,17 @@ final class UnpeelStore: ObservableObject {
         }
     }
 
-    // MARK: - Experimental features (Settings ▸ Experimental)
+    // MARK: - Feature toggles (Settings ▸ Features)
 
-    /// Whether an experimental feature is active for this store. Reads the
+    /// Whether a feature is active for this store. Reads the
     /// published set so SwiftUI views that gate on it recompute when it flips.
-    func isExperimentalEnabled(_ feature: ExperimentalFeature) -> Bool {
+    func isExperimentalEnabled(_ feature: AppFeature) -> Bool {
         enabledExperimentalKeys.contains(feature.key)
     }
 
-    /// Toggle an experimental feature: persist the preference and update the
+    /// Toggle a feature: persist the preference and update the
     /// published set (which republishes the store so dependent UI re-evaluates).
-    func setExperimental(_ enabled: Bool, for feature: ExperimentalFeature) {
+    func setExperimental(_ enabled: Bool, for feature: AppFeature) {
         UnpeelFeatureFlags.setEnabled(enabled, for: feature)
         if enabled {
             enabledExperimentalKeys.insert(feature.key)

@@ -1300,8 +1300,8 @@ public struct RemoteBootstrapSnapshot: Codable, Equatable, Sendable {
     /// Controller uses this field from an E2E Relay bootstrap to repair an
     /// older persisted IP/port without asking the user to pair again.
     public let directEndpoint: URL?
-    /// Whether the Mac has the experimental **Git worktrees** feature enabled
-    /// (Settings ▸ Experimental). Optional for backward compatibility: an
+    /// Whether the Mac has the **Git worktrees** feature enabled (Settings ▸
+    /// Features; the field keeps its shipped name). Optional for backward compatibility: an
     /// older Mac omits it, and clients treat a missing value as *off* so
     /// worktree UI stays hidden until the Mac explicitly opts in.
     public let experimentalWorktreesEnabled: Bool?
@@ -2316,8 +2316,9 @@ public struct RemoteNotificationSettings: Codable, Equatable, Sendable {
     }
 }
 
-/// Experimental Host behavior. These stable fields mirror the native
-/// feature registry; session-tool changes take effect for new sessions.
+/// Host feature toggles (Settings ▸ Features; the wire keeps the shipped
+/// `experimental` spelling). These stable fields mirror the native feature
+/// registry; session-tool changes take effect for new sessions.
 public struct RemoteExperimentalSettingsUpdate: Codable, Equatable, Sendable {
     public let worktrees: Bool?
     public let sessionsMcp: Bool?

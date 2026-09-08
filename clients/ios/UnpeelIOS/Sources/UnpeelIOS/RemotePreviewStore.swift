@@ -7,8 +7,8 @@ import UnpeelShared
 public final class RemotePreviewStore {
     public private(set) var snapshot: RemoteBootstrapSnapshot
 
-    /// Whether the connected Mac has the experimental **Git worktrees** feature
-    /// enabled (Settings ▸ Experimental). A missing value (older Mac) is treated
+    /// Whether the connected Mac has the **Git worktrees** feature enabled
+    /// (Settings ▸ Features). A missing value (older Mac) is treated
     /// as off, so the phone hides all worktree surfaces unless the Mac opts in —
     /// keeping the phone in lockstep with the desktop's gating.
     public var worktreesEnabled: Bool { snapshot.experimentalWorktreesEnabled == true }

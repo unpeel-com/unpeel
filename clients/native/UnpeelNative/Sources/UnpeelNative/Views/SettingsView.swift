@@ -55,7 +55,10 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     case browser
     case computer
     case worktrees
-    case experimental
+    /// The Features tab (shipped feature toggles plus an Experimental
+    /// section). The raw value is the released deep-link/snapshot spelling
+    /// from when the tab was called Experimental; never change it.
+    case features = "experimental"
     case advanced
     // The standalone "Unpeel Link" license tab was merged into Remote
     // (2026-08-13): license + seat status now render as a section of the
@@ -68,7 +71,11 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     /// isolated-instance feature became Workspaces. It was never persisted as
     /// app state, but accepting it keeps existing snapshot/dev commands valid.
     static func compatibleRawValue(_ rawValue: String) -> SettingsTab? {
-        SettingsTab(rawValue: rawValue == "profiles" ? "workspaces" : rawValue)
+        switch rawValue {
+        case "profiles": return .workspaces
+        case "features": return .features
+        default: return SettingsTab(rawValue: rawValue)
+        }
     }
 
     static var visibleCases: [SettingsTab] {
@@ -80,16 +87,16 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         allCases.filter { tab in
             switch tab {
             case .mobile: return UnpeelFeatureFlags.mobileRemoteControlEnabled
-            // Sessions MCP is experimental (Settings ▸ Experimental); its
-            // panel only exists while the feature is on.
+            // Sessions use is a Settings ▸ Features toggle; its panel only
+            // exists while the feature is on.
             case .sessions: return UnpeelFeatureFlags.isEnabled(.sessionsMcp)
-            // The Browser panel follows its experimental feature.
+            // The Browser panel follows its (still experimental) feature.
             case .browser: return UnpeelFeatureFlags.isEnabled(.browserMcp)
             // Keep the saved enum case readable, but never show its old panel.
             case .computer:
                 return false
             case .workspaces: return UnpeelFeatureFlags.isEnabled(.workspaces)
-            // Git worktrees is experimental; its panel only exists while
+            // Git worktrees is a Features toggle; its panel only exists while
             // the feature is on (same live gate as the sidebar folders).
             case .worktrees: return UnpeelFeatureFlags.isEnabled(.worktrees)
             default: return true
@@ -104,7 +111,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     static var hostScopedCases: [SettingsTab] {
         [
             .presets, .appearance, .transcripts, .notifications, .sessions,
-            .browser, .computer, .experimental, .advanced,
+            .browser, .computer, .features, .advanced,
         ]
     }
 
@@ -120,7 +127,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .browser: return "Browser use"
         case .computer: return "Computer use"
         case .worktrees: return "Worktrees"
-        case .experimental: return "Experimental"
+        case .features: return "Features"
         case .advanced: return "Advanced"
         }
     }
@@ -139,7 +146,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .browser: return .settingsBrowser
         case .computer: return .settingsComputer
         case .worktrees: return .settingsWorktrees
-        case .experimental: return .settingsExperimental
+        case .features: return .settingsFeatures
         case .advanced: return .settingsAdvanced
         }
     }
@@ -1117,10 +1124,10 @@ private struct HostNotificationsSettingsPanel: View {
     }
 }
 
-/// Experimental features for the ACTIVE local workspace: per-workspace
-/// suite flags, written cross-suite. A running instance applies most flags
-/// on its next UI evaluation; some fully land on its next launch.
-private struct HostExperimentalSettingsPanel: View {
+/// Feature toggles for the ACTIVE local workspace: per-workspace suite
+/// flags, written cross-suite. A running instance applies most flags on its
+/// next UI evaluation; some fully land on its next launch.
+private struct HostFeaturesSettingsPanel: View {
     @ObservedObject var store: UnpeelStore
     let home: String
     let name: String
@@ -1131,8 +1138,8 @@ private struct HostExperimentalSettingsPanel: View {
 
     private var suite: UserDefaults { AppDefaults.suite(forUnpeelHome: home) }
 
-    private var features: [ExperimentalFeature] {
-        ExperimentalFeature.all.filter { UnpeelFeatureFlags.isAvailable($0) }
+    private var features: [AppFeature] {
+        UnpeelFeatureFlags.availableFeatures
     }
 
     private var defaultWorkspaceLabel: String {
@@ -1144,8 +1151,8 @@ private struct HostExperimentalSettingsPanel: View {
             Form {
                 Section {} header: {
                     SettingsPaneHeader(
-                        title: "Experimental",
-                        description: "\(name)'s experimental features. Some "
+                        title: "Features",
+                        description: "\(name)'s optional features. Some "
                             + "changes fully apply when \(name) next launches."
                     )
                     .padding(.bottom, 4)
@@ -1160,14 +1167,27 @@ private struct HostExperimentalSettingsPanel: View {
                     SettingsSectionHeader(
                         title: "Inherits from \(defaultWorkspaceLabel)",
                         description: "\(name) uses \(defaultWorkspaceLabel)'s "
-                            + "experimental features until a toggle below is "
+                            + "features until a toggle below is "
                             + "changed. Revert drops \(name)'s own values."
                     )
                 }
 
                 Section {
-                    ForEach(features) { feature in
+                    ForEach(UnpeelFeatureFlags.availableShippedFeatures) { feature in
                         featureRow(feature)
+                    }
+                }
+
+                if !UnpeelFeatureFlags.availableExperimentalFeatures.isEmpty {
+                    Section {
+                        ForEach(UnpeelFeatureFlags.availableExperimentalFeatures) { feature in
+                            featureRow(feature)
+                        }
+                    } header: {
+                        SettingsSectionHeader(
+                            title: "Experimental",
+                            description: AppFeature.experimentalSectionDescription
+                        )
                     }
                 }
             }
@@ -1188,7 +1208,7 @@ private struct HostExperimentalSettingsPanel: View {
     }
 
     /// Own value → default workspace's (.standard baseline) → built-in.
-    private func resolve(_ feature: ExperimentalFeature) -> Bool {
+    private func resolve(_ feature: AppFeature) -> Bool {
         if let own = suite.object(forKey: feature.defaultsKey) as? Bool {
             return own
         }
@@ -1201,7 +1221,7 @@ private struct HostExperimentalSettingsPanel: View {
     }
 
     private func revertToDefault() {
-        for feature in ExperimentalFeature.all {
+        for feature in AppFeature.all {
             suite.removeObject(forKey: feature.defaultsKey)
         }
         loaded = false
@@ -1211,9 +1231,9 @@ private struct HostExperimentalSettingsPanel: View {
         )
     }
 
-    /// Same row design as the local Experimental panel (Decision 6),
+    /// Same row design as the local Features panel (Decision 6),
     /// writing the workspace's own suite instead of the store.
-    private func featureRow(_ feature: ExperimentalFeature) -> some View {
+    private func featureRow(_ feature: AppFeature) -> some View {
         LabeledContent {
             Toggle("", isOn: Binding(
                 get: { values[feature.defaultsKey] ?? resolve(feature) },
@@ -1700,10 +1720,11 @@ private struct RemoteNotificationsSettingsPanel: View {
     }
 }
 
-/// Experimental switches stored and enforced by the selected Host. The rows
-/// stay data-driven from the native registry; the wire uses stable named
-/// fields so unknown future additions remain additive.
-private struct RemoteExperimentalSettingsPanel: View {
+/// Feature switches stored and enforced by the selected Host. The rows stay
+/// data-driven from the native registry; the wire uses stable named fields
+/// (still spelled `experimentalSettings`) so unknown future additions remain
+/// additive.
+private struct RemoteFeaturesSettingsPanel: View {
     @ObservedObject var store: UnpeelStore
     @ObservedObject var runtime: RemoteHostRuntime
 
@@ -1718,8 +1739,8 @@ private struct RemoteExperimentalSettingsPanel: View {
         runtime.snapshot?.workspaceSettings?.experimentalSettings
     }
 
-    private var features: [ExperimentalFeature] {
-        UnpeelFeatureFlags.availableExperimentalFeatures
+    private var features: [AppFeature] {
+        UnpeelFeatureFlags.availableFeatures
     }
 
     var body: some View {
@@ -1727,8 +1748,8 @@ private struct RemoteExperimentalSettingsPanel: View {
             Form {
                 Section {} header: {
                     SettingsPaneHeader(
-                        title: "Experimental",
-                        description: "Early features owned by \(scopeName). Session-tool "
+                        title: "Features",
+                        description: "Optional features owned by \(scopeName). Session-tool "
                             + "changes apply to sessions started after the toggle."
                     )
                     .padding(.bottom, 4)
@@ -1737,14 +1758,26 @@ private struct RemoteExperimentalSettingsPanel: View {
                 if let settings {
                     if features.isEmpty {
                         Section {
-                            Text("No experimental features are available in this build.")
+                            Text("No optional features are available in this build.")
                                 .font(.system(size: 12))
                                 .foregroundStyle(Theme.mutedForeground)
                         }
                     } else {
                         Section {
-                            ForEach(features) { feature in
+                            ForEach(UnpeelFeatureFlags.availableShippedFeatures) { feature in
                                 featureRow(feature, settings: settings)
+                            }
+                        }
+                        if !UnpeelFeatureFlags.availableExperimentalFeatures.isEmpty {
+                            Section {
+                                ForEach(UnpeelFeatureFlags.availableExperimentalFeatures) { feature in
+                                    featureRow(feature, settings: settings)
+                                }
+                            } header: {
+                                SettingsSectionHeader(
+                                    title: "Experimental",
+                                    description: AppFeature.experimentalSectionDescription
+                                )
                             }
                         }
                     }
@@ -1771,7 +1804,7 @@ private struct RemoteExperimentalSettingsPanel: View {
     }
 
     private func featureRow(
-        _ feature: ExperimentalFeature,
+        _ feature: AppFeature,
         settings: RemoteExperimentalSettings
     ) -> some View {
         return LabeledContent {
@@ -1803,7 +1836,7 @@ private struct RemoteExperimentalSettingsPanel: View {
     }
 
     private func value(
-        _ feature: ExperimentalFeature,
+        _ feature: AppFeature,
         in settings: RemoteExperimentalSettings
     ) -> Bool {
         if feature == .worktrees { return settings.worktrees }
@@ -1815,7 +1848,7 @@ private struct RemoteExperimentalSettingsPanel: View {
     }
 
     private func update(
-        _ feature: ExperimentalFeature,
+        _ feature: AppFeature,
         enabled: Bool
     ) -> RemoteExperimentalSettingsUpdate {
         if feature == .worktrees {
@@ -2125,16 +2158,16 @@ struct SettingsContentHost: View {
                     store: store,
                     runtime: store.remoteHostRuntime
                 )
-            } else if selectedTab == .experimental,
+            } else if selectedTab == .features,
                       case let .localWorkspace(home, name) = store.selectedHostScope {
-                HostExperimentalSettingsPanel(store: store, home: home, name: name)
-            } else if selectedTab == .experimental,
+                HostFeaturesSettingsPanel(store: store, home: home, name: name)
+            } else if selectedTab == .features,
                       store.remoteHostRuntime.supportsHostOperation(
                           RemoteHostRuntime.HostOperation.workspaceSettingsSet
                       ),
                       store.remoteHostRuntime.snapshot?.workspaceSettings?
                           .experimentalSettings != nil {
-                RemoteExperimentalSettingsPanel(
+                RemoteFeaturesSettingsPanel(
                     store: store,
                     runtime: store.remoteHostRuntime
                 )
@@ -2171,8 +2204,8 @@ struct SettingsContentHost: View {
             BrowserSettingsPanel(store: store)
         case .computer:
             EmptyView() // Old saved selection falls back through visibleCases.
-        case .experimental:
-            ExperimentalSettingsPanel(store: store)
+        case .features:
+            FeaturesSettingsPanel(store: store)
         case .mobile:
             RemoteSettingsPanel(store: store)
         case .workspaces:
@@ -4268,13 +4301,13 @@ struct SettingsValueRow: View {
     }
 }
 
-// MARK: - Experimental panel
+// MARK: - Features panel
 
-/// Data-driven list of experimental feature toggles. Every entry in
-/// `ExperimentalFeature.all` renders one row here automatically, so adding a
-/// future experiment needs no new UI — just a registry entry in
-/// `FeatureFlags.swift`.
-struct ExperimentalSettingsPanel: View {
+/// Data-driven list of feature toggles. Every entry in `AppFeature.all`
+/// renders one row here automatically — shipped features in the plain list,
+/// experimental ones under their own section — so adding a feature needs no
+/// new UI, just a registry entry in `FeatureFlags.swift`.
+struct FeaturesSettingsPanel: View {
     @ObservedObject var store: UnpeelStore
 
     var body: some View {
@@ -4282,17 +4315,16 @@ struct ExperimentalSettingsPanel: View {
             Form {
                 Section {} header: {
                     SettingsPaneHeader(
-                        title: "Experimental",
-                        description: "Early features that are still being shaped. They can "
-                            + "change or disappear between releases. Turn one off here if it "
-                            + "gets in the way — no restart needed."
+                        title: "Features",
+                        description: "Turn Unpeel's optional features on or off — no "
+                            + "restart needed."
                     )
                     .padding(.bottom, 4)
                 }
 
                 // Decision 4 generalized: a workspace instance inherits the
-                // default workspace's experimental flags until it sets its
-                // own; offer the revert right here.
+                // default workspace's feature flags until it sets its own;
+                // offer the revert right here.
                 if !UnpeelWorkspaceContext.isDefaultInstance {
                     Section {
                         Button(
@@ -4301,7 +4333,7 @@ struct ExperimentalSettingsPanel: View {
                             store.revertExperimentalToInheritedBaseline()
                         }
                         .disabled(
-                            !ExperimentalFeature.all.contains {
+                            !AppFeature.all.contains {
                                 UnpeelFeatureFlags.hasOwnSetting($0)
                             }
                         )
@@ -4309,23 +4341,34 @@ struct ExperimentalSettingsPanel: View {
                         SettingsSectionHeader(
                             title: "Inherits from \(UnpeelWorkspaceContext.defaultWorkspaceName ?? "Personal")",
                             description: "This workspace uses the default "
-                                + "workspace's experimental features until a "
-                                + "toggle below is changed. Revert drops its "
-                                + "own values."
+                                + "workspace's features until a toggle below "
+                                + "is changed. Revert drops its own values."
                         )
                     }
                 }
 
-                if UnpeelFeatureFlags.availableExperimentalFeatures.isEmpty {
+                if UnpeelFeatureFlags.availableFeatures.isEmpty {
                     Section {
-                        Text("No experimental features right now. Check back after an update.")
+                        Text("No optional features right now. Check back after an update.")
                             .font(.system(size: 12))
                             .foregroundStyle(Theme.mutedForeground)
                     }
                 } else {
                     Section {
-                        ForEach(UnpeelFeatureFlags.availableExperimentalFeatures) { feature in
+                        ForEach(UnpeelFeatureFlags.availableShippedFeatures) { feature in
                             featureRow(feature)
+                        }
+                    }
+                    if !UnpeelFeatureFlags.availableExperimentalFeatures.isEmpty {
+                        Section {
+                            ForEach(UnpeelFeatureFlags.availableExperimentalFeatures) { feature in
+                                featureRow(feature)
+                            }
+                        } header: {
+                            SettingsSectionHeader(
+                                title: "Experimental",
+                                description: AppFeature.experimentalSectionDescription
+                            )
                         }
                     }
                 }
@@ -4335,7 +4378,7 @@ struct ExperimentalSettingsPanel: View {
         }
     }
 
-    private func featureRow(_ feature: ExperimentalFeature) -> some View {
+    private func featureRow(_ feature: AppFeature) -> some View {
         LabeledContent {
             Toggle("", isOn: Binding(
                 get: { store.isExperimentalEnabled(feature) },

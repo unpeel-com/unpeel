@@ -94,8 +94,9 @@ own** — Unpeel authors the server and owns the tool schema).
   in `browser_approvals`, pruned when the session is removed and carried
   on restart. Grants are revocable in Settings ▸ Browser. `On` serializes as
   `"on"` for wire compat; `from_state_str` accepts `"allow"` as a synonym.
-  Browser MCP is also **experimental** in the native app
-  (`ExperimentalFeature.browserMcp`, env `UNPEEL_DEV_BROWSER_MCP=1`), gating
+  Browser MCP is also **experimental** in the native app (Settings ▸
+  Features ▸ Experimental; `AppFeature.browserMcp`, env
+  `UNPEEL_DEV_BROWSER_MCP=1`), gating
   the Settings ▸ Browser tab and native launch injection. Headless/CLI
   launches have no native UserDefaults feature layer, so they derive launch
   injection directly from the shared `browser_default_access` setting. There

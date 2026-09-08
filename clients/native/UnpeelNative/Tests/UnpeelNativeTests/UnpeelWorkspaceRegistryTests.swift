@@ -54,7 +54,7 @@ final class UnpeelWorkspaceRegistryTests: XCTestCase {
     }
 
     func testWorkspaceFeatureRetainsReleasedPreferenceAndLegacyEnvAlias() {
-        let feature = ExperimentalFeature.workspaces
+        let feature = AppFeature.workspaces
 
         XCTAssertEqual(feature.key, "profiles")
         XCTAssertEqual(feature.defaultsKey, "unpeel.experimental.profiles")

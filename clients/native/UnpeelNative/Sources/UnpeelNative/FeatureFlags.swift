@@ -1,13 +1,18 @@
 import Foundation
 
-/// A user-facing experimental feature, toggleable in Settings ▸ Experimental.
+/// A user-facing optional feature, toggleable in Settings ▸ Features.
 ///
-/// Adding a new experiment is a single entry in `all` below: it automatically
-/// gets a toggle row in the Experimental tab and an `isEnabled` check you can
-/// gate UI on. Persistence is a native UserDefaults overlay (never
-/// app-state.json), keyed by `defaultsKey`; optional environment overrides are
-/// dev escape hatches that force-enable the feature when an env var == "1".
-struct ExperimentalFeature: Identifiable, Hashable {
+/// Adding a feature is a single entry in `all` below: it automatically gets
+/// a toggle row in the Features tab and an `isEnabled` check you can gate UI
+/// on. A feature is either shipped (the plain Features list) or
+/// `experimental` (the tab's Experimental section: still being shaped, may
+/// change or disappear between releases). Graduating one is flipping that
+/// flag; the toggle, key, and gates stay. Persistence is a native
+/// UserDefaults overlay (never app-state.json), keyed by `defaultsKey` —
+/// the `unpeel.experimental.` prefix is the shipped spelling for every
+/// feature, graduated or not; optional environment overrides are dev escape
+/// hatches that force-enable the feature when an env var == "1".
+struct AppFeature: Identifiable, Hashable {
     /// Stable id; also the UserDefaults key suffix. Never rename once shipped.
     let key: String
     let title: String
@@ -16,6 +21,9 @@ struct ExperimentalFeature: Identifiable, Hashable {
     let envOverride: String?
     let legacyEnvOverrides: [String]
     let defaultOn: Bool
+    /// Still being shaped: listed under the Features tab's Experimental
+    /// section instead of the shipped list.
+    let experimental: Bool
 
     var id: String { key }
 
@@ -25,7 +33,8 @@ struct ExperimentalFeature: Identifiable, Hashable {
         summary: String,
         envOverride: String? = nil,
         legacyEnvOverrides: [String] = [],
-        defaultOn: Bool = false
+        defaultOn: Bool = false,
+        experimental: Bool = false
     ) {
         self.key = key
         self.title = title
@@ -34,6 +43,7 @@ struct ExperimentalFeature: Identifiable, Hashable {
         self.envOverride = envOverride
         self.legacyEnvOverrides = legacyEnvOverrides
         self.defaultOn = defaultOn
+        self.experimental = experimental
     }
 
     var envOverrides: [String] {
@@ -41,11 +51,11 @@ struct ExperimentalFeature: Identifiable, Hashable {
     }
 }
 
-extension ExperimentalFeature {
+extension AppFeature {
     /// Run sessions in isolated git worktrees so multiple agents can work the
     /// same repo in parallel. Gates the project-menu worktree controls, the
     /// inline worktree folder rows, and Settings ▸ Worktrees.
-    static let worktrees = ExperimentalFeature(
+    static let worktrees = AppFeature(
         key: "worktrees",
         title: "Git worktrees",
         summary: "Run sessions in an isolated git worktree of a project so multiple "
@@ -59,7 +69,7 @@ extension ExperimentalFeature {
     /// Sessions MCP: agent sessions can read other sessions and request write
     /// access to explicit targets. Gates the Settings ▸ Sessions use tab and
     /// whether new sessions launch with the MCP client injected.
-    static let sessionsMcp = ExperimentalFeature(
+    static let sessionsMcp = AppFeature(
         key: "sessionsMcp",
         title: "Sessions use",
         summary: "Let an agent session see your other sessions: it can read them all, "
@@ -76,7 +86,7 @@ extension ExperimentalFeature {
     /// (own sessions, projects, settings, and phone pairing identity).
     /// Gates the Settings ▸ Workspaces tab. The persisted key is deliberately
     /// still `profiles`: shipped experimental-feature keys are immutable.
-    static let workspaces = ExperimentalFeature(
+    static let workspaces = AppFeature(
         key: "profiles",
         title: "Workspaces",
         summary: "Use extra, fully separate workspaces on this Mac — each "
@@ -89,16 +99,18 @@ extension ExperimentalFeature {
     )
 
     /// Legacy preference identity retained for decoding saved settings.
-    static let computerUse = ExperimentalFeature(
+    static let computerUse = AppFeature(
         key: "computerUse",
         title: "Computer use",
-        summary: "Unpeel computer use has been retired."
+        summary: "Unpeel computer use has been retired.",
+        experimental: true
     )
 
     /// Browser MCP: agent sessions get an isolated real browser. Gates the
     /// Settings ▸ Browser tab and whether new sessions launch with the
-    /// `browser` domain advertised.
-    static let browserMcp = ExperimentalFeature(
+    /// `browser` domain advertised. Still experimental (2026-09-08): the
+    /// engine pin, login persistence, and takeover story are moving.
+    static let browserMcp = AppFeature(
         key: "browserMcp",
         title: "Browser use",
         summary: "Let agent sessions drive a real browser — open pages, click, "
@@ -107,14 +119,15 @@ extension ExperimentalFeature {
             + "access prompts are cooperation controls, not a sandbox against commands "
             + "running as your macOS user. Adds the Browser settings tab.",
         envOverride: "UNPEEL_DEV_BROWSER_MCP",
-        defaultOn: true
+        defaultOn: true,
+        experimental: true
     )
 
     /// Remote workspaces in the released app (decided 2026-09-02): the Host
     /// picker, Share This Mac…, Add Workspace… ▸ Nearby/code and SSH. Direct is
     /// bearer-authenticated plaintext meant for LAN/VPN; Link carries the
     /// encrypted path off-network. Off hides the picker again at the next launch.
-    static let remoteWorkspaces = ExperimentalFeature(
+    static let remoteWorkspaces = AppFeature(
         key: "remoteWorkspaces",
         title: "Remote workspaces",
         summary: "Add and control workspaces on other machines — pair another Mac, a "
@@ -125,11 +138,20 @@ extension ExperimentalFeature {
         defaultOn: true
     )
 
-    /// Everything shown in Settings ▸ Experimental, in display order.
-    static let all: [ExperimentalFeature] = [
-        .remoteWorkspaces, .worktrees, .sessionsMcp, .browserMcp,
-        .workspaces,
+    /// Everything shown in Settings ▸ Features, in display order (shipped
+    /// features first; the panel then groups the experimental ones under
+    /// their own section). Remote workspaces, Git worktrees, Sessions use,
+    /// and Workspaces graduated on 2026-09-08; Browser use stays experimental.
+    static let all: [AppFeature] = [
+        .remoteWorkspaces, .worktrees, .sessionsMcp, .workspaces,
+        .browserMcp,
     ]
+
+    /// Header copy for the Features tab's Experimental section, shared by the
+    /// local, per-workspace, and remote Host panels.
+    static let experimentalSectionDescription =
+        "Early features that are still being shaped. They can change or "
+        + "disappear between releases. Turn one off here if it gets in the way."
 }
 
 enum UnpeelFeatureFlags {
@@ -140,25 +162,36 @@ enum UnpeelFeatureFlags {
 
     static func computerUseControllable(hostAdvertisesAvailability: Bool?) -> Bool { false }
 
-    static func isAvailable(_ feature: ExperimentalFeature) -> Bool {
+    static func isAvailable(_ feature: AppFeature) -> Bool {
         feature != .computerUse
     }
 
-    static func isAvailable(_ feature: ExperimentalFeature, developmentBuild: Bool) -> Bool {
+    static func isAvailable(_ feature: AppFeature, developmentBuild: Bool) -> Bool {
         isAvailable(feature)
     }
 
-    static var availableExperimentalFeatures: [ExperimentalFeature] {
-        ExperimentalFeature.all.filter(isAvailable)
+    /// Every feature this build offers a toggle for, in display order.
+    static var availableFeatures: [AppFeature] {
+        AppFeature.all.filter(isAvailable)
     }
 
-    /// Whether an experimental feature is currently enabled — env override
+    /// The shipped features: the Features tab's plain list.
+    static var availableShippedFeatures: [AppFeature] {
+        availableFeatures.filter { !$0.experimental }
+    }
+
+    /// The features still marked experimental: the tab's Experimental section.
+    static var availableExperimentalFeatures: [AppFeature] {
+        availableFeatures.filter(\.experimental)
+    }
+
+    /// Whether a feature is currently enabled — env override
     /// first (dev escape hatch), then this workspace's own stored
     /// preference, then the default workspace's value (Decision 4
     /// generalized, 2026-08-23: a local workspace with no setting of its own
     /// inherits the default's from the shared `.standard` domain — same
     /// filesystem only), then the feature's built-in default.
-    static func isEnabled(_ feature: ExperimentalFeature) -> Bool {
+    static func isEnabled(_ feature: AppFeature) -> Bool {
         guard isAvailable(feature) else { return false }
         if feature.envOverrides.contains(where: {
             ProcessInfo.processInfo.environment[$0] == "1"
@@ -177,20 +210,20 @@ enum UnpeelFeatureFlags {
 
     /// Whether this workspace records its OWN value for the feature — the
     /// revert-to-default button's enablement.
-    static func hasOwnSetting(_ feature: ExperimentalFeature) -> Bool {
+    static func hasOwnSetting(_ feature: AppFeature) -> Bool {
         AppDefaults.shared.object(forKey: feature.defaultsKey) != nil
     }
 
-    /// Decision 4's revert for experimental flags: drop every own value so
-    /// this workspace inherits the default workspace's flags again.
+    /// Decision 4's revert for feature flags: drop every own value so this
+    /// workspace inherits the default workspace's flags again.
     static func revertToInheritedBaseline() {
-        for feature in ExperimentalFeature.all {
+        for feature in AppFeature.all {
             AppDefaults.shared.removeObject(forKey: feature.defaultsKey)
         }
     }
 
-    /// Persist a user preference for an experimental feature.
-    static func setEnabled(_ enabled: Bool, for feature: ExperimentalFeature) {
+    /// Persist a user preference for a feature.
+    static func setEnabled(_ enabled: Bool, for feature: AppFeature) {
         guard isAvailable(feature) else { return }
         AppDefaults.shared.set(enabled, forKey: feature.defaultsKey)
     }

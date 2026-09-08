@@ -9,8 +9,8 @@ identity** (`<home>/mobile/mac-id`). It may be served by its own app instance
 or selected in another desktop Controller's existing window through the
 loopback Host gateway; in both cases it is the same Host contract and state.
 Each workspace therefore appears as its own "Mac" in the iOS app's multi-Mac
-picker. Gated behind Settings ▸ Experimental
-(`ExperimentalFeature.workspaces`, env `UNPEEL_DEV_WORKSPACES=1`; legacy
+picker. Gated behind the Settings ▸ Features toggle
+(`AppFeature.workspaces`, env `UNPEEL_DEV_WORKSPACES=1`; legacy
 `UNPEEL_DEV_PROFILES=1` is also accepted); managed in Settings ▸ Workspaces
 (`WorkspacesSettingsPanel.swift`). The feature's shipped UserDefaults key
 remains `unpeel.experimental.profiles`.
@@ -170,9 +170,9 @@ CLI-side rules:
 - Registry reads/writes are unknown-key tolerant (serde `flatten` on the
   file and each record), so a newer app writing extra fields survives a CLI
   rewrite. Covered by the unit tests in `workspaces.rs`.
-- No experimental gate on the CLI: the flag is pure env plumbing over the
+- No feature gate on the CLI: the flag is pure env plumbing over the
   already-ungated `UNPEEL_HOME` mechanism (the app's
-  `ExperimentalFeature.workspaces` gate is UI visibility, not a capability
+  `AppFeature.workspaces` gate is UI visibility, not a capability
   boundary). `unpeel serve` also has no per-home single-instance guard —
   multiple frontends on one home is the normal peer-frontend model, unlike a
   second app instance.

@@ -9,8 +9,9 @@ terminal container; an agent is a recognized runtime occurrence currently
 occupying one. The other domains are `workspace`, `artifacts`, `browser`,
 preview `apps`, and the root `skills` registry.
 
-**Experimental compatibility gate:** Settings ▸ Experimental ▸ Sessions use
-(`ExperimentalFeature.sessionsMcp`, `UNPEEL_DEV_SESSIONS_MCP=1`) still owns
+**Compatibility gate:** Settings ▸ Features ▸ Sessions use
+(`AppFeature.sessionsMcp`, `UNPEEL_DEV_SESSIONS_MCP=1`; shipped, no longer
+listed as experimental since 2026-09-08) still owns
 the saved `mcp_enabled` bit. For compatibility that one bit enables
 `sessions`, `agents`, `workspace`, and `artifacts`; do not rename the persisted
 field, environment variable, feature id, or provider config filenames. Existing

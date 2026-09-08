@@ -15,7 +15,7 @@ import UnpeelShared
 /// The App→Host picker (Share This Mac…, Add Workspace… ▸ Nearby/code and
 /// SSH, paired/SSH switcher rows). Released to everyone in 0.4.0 (decided
 /// 2026-09-02 — early users, risks accepted) behind the Settings ▸
-/// Experimental "Remote workspaces" switch, default on. Known caveats stay
+/// "Remote workspaces" Features switch, default on. Known caveats stay
 /// documented rather than gating: Direct is bearer-authenticated plaintext
 /// for LAN/VPN use (pinned Direct TLS is still unbuilt) and Link carries the
 /// encrypted path off-network. Development bundles always show the picker.
