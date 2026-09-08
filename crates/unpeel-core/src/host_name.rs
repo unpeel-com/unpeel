@@ -78,6 +78,9 @@ mod tests {
         let first = machine_display_name();
         assert_eq!(first, machine_display_name());
         assert!(!first.is_empty());
-        assert!(!first.ends_with(".lan") && !first.ends_with(".local"), "{first}");
+        assert!(
+            !first.ends_with(".lan") && !first.ends_with(".local"),
+            "{first}"
+        );
     }
 }

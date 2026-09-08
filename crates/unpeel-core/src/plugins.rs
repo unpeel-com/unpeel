@@ -23,27 +23,38 @@ pub fn agents_wire() -> Value {
 }
 
 pub(crate) fn agents_wire_in_dirs(dirs: &[std::path::PathBuf]) -> Value {
-    Value::Array(crate::runtime_catalog::builtin_runtime_catalog()
-        .current_platform_descriptors()
-        .filter(|runtime| runtime.display.kind == crate::runtime_catalog::RuntimeKind::Agent)
-        .map(|runtime| {
-            let command = runtime.detection.command_aliases.first().cloned().unwrap_or_default();
-            let installed = runtime.detection.command_aliases.iter()
-                .any(|alias| crate::setup::find_command_path(alias, dirs).is_some());
-            let install_command = runtime.install.as_ref().and_then(|install| {
-                if installed {
-                    install.update_command.as_ref().or(install.command.as_ref())
-                } else {
-                    install.command.as_ref()
-                }
-            });
-            json!({
-                "id": runtime.id, "name": runtime.label, "command": command,
-                "installed": installed,
-                "installCommand": install_command,
-                "websiteURL": runtime.install.as_ref().map(|install| &install.official_url),
+    Value::Array(
+        crate::runtime_catalog::builtin_runtime_catalog()
+            .current_platform_descriptors()
+            .filter(|runtime| runtime.display.kind == crate::runtime_catalog::RuntimeKind::Agent)
+            .map(|runtime| {
+                let command = runtime
+                    .detection
+                    .command_aliases
+                    .first()
+                    .cloned()
+                    .unwrap_or_default();
+                let installed = runtime
+                    .detection
+                    .command_aliases
+                    .iter()
+                    .any(|alias| crate::setup::find_command_path(alias, dirs).is_some());
+                let install_command = runtime.install.as_ref().and_then(|install| {
+                    if installed {
+                        install.update_command.as_ref().or(install.command.as_ref())
+                    } else {
+                        install.command.as_ref()
+                    }
+                });
+                json!({
+                    "id": runtime.id, "name": runtime.label, "command": command,
+                    "installed": installed,
+                    "installCommand": install_command,
+                    "websiteURL": runtime.install.as_ref().map(|install| &install.official_url),
+                })
             })
-        }).collect())
+            .collect(),
+    )
 }
 
 /// A one-plugin patch, validated before any shared-state edit takes place.

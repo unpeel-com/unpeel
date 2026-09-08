@@ -332,7 +332,9 @@ fn advertised_name(snapshot: &SharedSnapshot) -> String {
                 .filter(|name| !name.is_empty())
                 .map(str::to_owned)
         })
-        .unwrap_or_else(|| crate::app_context::advertised_host_name(crate::overlay::load().as_ref()))
+        .unwrap_or_else(|| {
+            crate::app_context::advertised_host_name(crate::overlay::load().as_ref())
+        })
 }
 
 pub struct MobileServer {
@@ -2453,7 +2455,8 @@ fn handle_connection(
                 let mac_id = std::fs::read_to_string(mobile_dir().join("mac-id"))
                     .map(|s| s.trim().to_string())
                     .unwrap_or_default();
-                let (status, body) = pairing.handle_pair(&request.body, &mac_id, &advertised_name(&snapshot));
+                let (status, body) =
+                    pairing.handle_pair(&request.body, &mac_id, &advertised_name(&snapshot));
                 // Pairing is a one-shot exchange. Force-close even when the
                 // URLSession client requested HTTP/1.1 keep-alive so a
                 // `pair --serve` handoff never retains this listener's port.
@@ -3744,7 +3747,10 @@ non-ephemeral ports — a product regression, not a port race. Attempts: {failur
                     port,
                     certificate_fingerprint: String::new(),
                     shutdown,
-                    bonjour: Arc::new(Mutex::new(BonjourAdvertisement { name: String::new(), child: None })),
+                    bonjour: Arc::new(Mutex::new(BonjourAdvertisement {
+                        name: String::new(),
+                        child: None,
+                    })),
                     remote: Arc::new(Mutex::new(
                         crate::remote_streamer::RemoteStreamer::stopped_for_tests(),
                     )),

@@ -54,10 +54,10 @@ mod ghostty_vt;
 pub mod hook_assets;
 #[cfg(feature = "native-host")]
 pub mod hook_cancellation;
-#[cfg(feature = "native-host")]
-pub mod host_name;
 #[cfg(feature = "controller-core")]
 pub mod host_connection;
+#[cfg(feature = "native-host")]
+pub mod host_name;
 #[cfg(feature = "native-host")]
 pub mod http_fetch;
 #[cfg(feature = "native-host")]
@@ -79,9 +79,9 @@ pub mod menu_prompt;
 #[cfg(feature = "native-host")]
 mod pane_context;
 #[cfg(feature = "native-host")]
-pub mod plugins;
-#[cfg(feature = "native-host")]
 pub mod plugin_updates;
+#[cfg(feature = "native-host")]
+pub mod plugins;
 /// Lexical guard that `controller-core` modules never reach into
 /// `native-host` modules ungated (the portable build is otherwise only
 /// exercised by `scripts/ci/check-portable-core.sh`).

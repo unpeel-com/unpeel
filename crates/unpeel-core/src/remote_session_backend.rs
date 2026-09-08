@@ -2841,7 +2841,8 @@ impl RemoteSessionBackend {
             &[],
         )?;
         serde_json::from_slice(&body).map_err(|error| RemoteSessionBackendError::InvalidResponse {
-            operation: "plugin updates", message: error.to_string(),
+            operation: "plugin updates",
+            message: error.to_string(),
         })
     }
 
@@ -7289,20 +7290,32 @@ mod tests {
             let connection = ScriptedConnection::new();
             let generation = connection.generation(1);
             let mut capabilities = vec![BOOTSTRAP_CAPABILITY];
-            if supported { capabilities.push("settings.plugins.updates.read"); }
-            add_bootstrap(&connection, generation,
-                bootstrap_json(Some("host-1"), HOST_PROTOCOL_MAJOR, Some(&capabilities)));
+            if supported {
+                capabilities.push("settings.plugins.updates.read");
+            }
+            add_bootstrap(
+                &connection,
+                generation,
+                bootstrap_json(Some("host-1"), HOST_PROTOCOL_MAJOR, Some(&capabilities)),
+            );
             let response = json!({"checking":false,"items":[{"id":"remote-app","state":"available","installedVersion":"1.0.0","latestVersion":"1.1.0","updateAvailable":true}]});
             if supported {
-                connection.push(reply_step(expected_read(generation, "/mobile/plugin-updates", vec![]),
-                    generation, 200, serde_json::to_vec(&response).unwrap()));
+                connection.push(reply_step(
+                    expected_read(generation, "/mobile/plugin-updates", vec![]),
+                    generation,
+                    200,
+                    serde_json::to_vec(&response).unwrap(),
+                ));
             }
             let backend = RemoteSessionBackend::new(connection.clone());
             backend.bootstrap().unwrap();
             if supported {
                 assert_eq!(backend.read_plugin_updates().unwrap(), response);
             } else {
-                assert!(matches!(backend.read_plugin_updates(), Err(RemoteSessionBackendError::MissingCapability(_))));
+                assert!(matches!(
+                    backend.read_plugin_updates(),
+                    Err(RemoteSessionBackendError::MissingCapability(_))
+                ));
                 assert_eq!(connection.calls().len(), 1);
             }
             assert_eq!(connection.remaining(), 0);

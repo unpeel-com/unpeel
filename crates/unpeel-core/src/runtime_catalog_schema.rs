@@ -620,7 +620,10 @@ pub fn validate_runtime_descriptors(
                 ("command", &install.command),
                 ("update_command", &install.update_command),
             ] {
-                if command.as_deref().is_some_and(|command| command.trim().is_empty()) {
+                if command
+                    .as_deref()
+                    .is_some_and(|command| command.trim().is_empty())
+                {
                     errors.push(format!(
                         "{prefix}: install.{field} must not be empty when present"
                     ));
@@ -629,29 +632,65 @@ pub fn validate_runtime_descriptors(
         }
 
         if let Some(updates) = &descriptor.updates {
-            if !updates.latest_url.starts_with("https://") || updates.latest_url.chars().any(char::is_whitespace) {
+            if !updates.latest_url.starts_with("https://")
+                || updates.latest_url.chars().any(char::is_whitespace)
+            {
                 errors.push(format!("{prefix}: updates.latest_url must be an https URL"));
             }
-            if updates.version_args.is_empty() || updates.version_args.len() > 8
-                || updates.version_args.iter().any(|arg| arg.is_empty() || arg.len() > 128 || arg.chars().any(char::is_control)) {
-                errors.push(format!("{prefix}: updates.version_args must contain bounded nonempty arguments"));
+            if updates.version_args.is_empty()
+                || updates.version_args.len() > 8
+                || updates.version_args.iter().any(|arg| {
+                    arg.is_empty() || arg.len() > 128 || arg.chars().any(char::is_control)
+                })
+            {
+                errors.push(format!(
+                    "{prefix}: updates.version_args must contain bounded nonempty arguments"
+                ));
             }
-            if updates.json_pointer.as_ref().is_some_and(|pointer| !pointer.starts_with('/')) {
+            if updates
+                .json_pointer
+                .as_ref()
+                .is_some_and(|pointer| !pointer.starts_with('/'))
+            {
                 errors.push(format!("{prefix}: updates.json_pointer must start with /"));
             }
-            if [&updates.version_prefix, &updates.version_suffix].into_iter().flatten().any(String::is_empty) {
-                errors.push(format!("{prefix}: updates version delimiters must not be empty"));
+            if [&updates.version_prefix, &updates.version_suffix]
+                .into_iter()
+                .flatten()
+                .any(String::is_empty)
+            {
+                errors.push(format!(
+                    "{prefix}: updates version delimiters must not be empty"
+                ));
             }
-            if updates.channel_settings_path.as_ref().is_some_and(|path| path.is_empty() ||
-                Path::new(path).components().any(|component| !matches!(component, std::path::Component::Normal(_)))) {
-                errors.push(format!("{prefix}: updates.channel_settings_path must be a safe home-relative path"));
+            if updates.channel_settings_path.as_ref().is_some_and(|path| {
+                path.is_empty()
+                    || Path::new(path)
+                        .components()
+                        .any(|component| !matches!(component, std::path::Component::Normal(_)))
+            }) {
+                errors.push(format!(
+                    "{prefix}: updates.channel_settings_path must be a safe home-relative path"
+                ));
             }
             if updates.channel_settings_path.is_some() != updates.channel_settings_pointer.is_some()
-                || updates.channel_settings_pointer.as_ref().is_some_and(|pointer| !pointer.starts_with('/')) {
-                errors.push(format!("{prefix}: updates channel settings require a path and JSON pointer"));
+                || updates
+                    .channel_settings_pointer
+                    .as_ref()
+                    .is_some_and(|pointer| !pointer.starts_with('/'))
+            {
+                errors.push(format!(
+                    "{prefix}: updates channel settings require a path and JSON pointer"
+                ));
             }
-            if updates.channel_urls.values().any(|url| !url.starts_with("https://") || url.chars().any(char::is_whitespace)) {
-                errors.push(format!("{prefix}: updates.channel_urls must contain https URLs"));
+            if updates
+                .channel_urls
+                .values()
+                .any(|url| !url.starts_with("https://") || url.chars().any(char::is_whitespace))
+            {
+                errors.push(format!(
+                    "{prefix}: updates.channel_urls must contain https URLs"
+                ));
             }
         }
 
@@ -1379,7 +1418,13 @@ attention_reliable = true
     #[test]
     fn install_update_recipe_is_optional_and_rejects_blank_values() {
         let legacy = parsed("alpha", "com.example.alpha");
-        assert!(legacy.descriptor.install.as_ref().unwrap().update_command.is_none());
+        assert!(legacy
+            .descriptor
+            .install
+            .as_ref()
+            .unwrap()
+            .update_command
+            .is_none());
         assert!(validate_runtime_descriptors(vec![legacy]).is_ok());
 
         for (command, valid) in [("command alpha update", true), ("   ", false)] {

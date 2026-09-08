@@ -415,7 +415,10 @@ mod tests {
         }
         let machine = advertised_host_name(None);
         assert!(!machine.is_empty());
-        assert!(!machine.ends_with(".lan") && !machine.ends_with(".local"), "{machine}");
+        assert!(
+            !machine.ends_with(".lan") && !machine.ends_with(".local"),
+            "{machine}"
+        );
         let blank = NativeOverlay {
             default_workspace_name: Some("   ".into()),
             ..NativeOverlay::default()

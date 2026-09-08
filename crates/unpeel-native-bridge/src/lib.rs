@@ -189,7 +189,10 @@ impl RegisteredRemoteOutputPage for RegisteredCoreOutputPage {
 /// launching a real SSH daemon.
 trait RegisteredRemoteBackend: Send + Sync {
     fn read_plugin_updates(&self) -> Result<serde_json::Value, NativeRemoteError> {
-        Err(NativeRemoteError::remote("plugin_updates_unavailable", "Update checks are unavailable on this Host"))
+        Err(NativeRemoteError::remote(
+            "plugin_updates_unavailable",
+            "Update checks are unavailable on this Host",
+        ))
     }
     fn bootstrap_snapshot(&self) -> Result<RemoteBootstrapSnapshot, NativeRemoteError>;
     fn poll_output(
@@ -467,7 +470,9 @@ struct RegisteredCoreBackend {
 
 impl RegisteredRemoteBackend for RegisteredCoreBackend {
     fn read_plugin_updates(&self) -> Result<serde_json::Value, NativeRemoteError> {
-        self.backend.read_plugin_updates().map_err(|error| native_remote_backend_error("plugin updates", error))
+        self.backend
+            .read_plugin_updates()
+            .map_err(|error| native_remote_backend_error("plugin updates", error))
     }
     fn bootstrap_snapshot(&self) -> Result<RemoteBootstrapSnapshot, NativeRemoteError> {
         self.backend
@@ -4774,7 +4779,9 @@ pub unsafe extern "C" fn unpeel_native_bridge_remote_plugin_updates(
     out_pointer: *mut *mut u8,
     out_length: *mut usize,
 ) -> i32 {
-    if out_pointer.is_null() || out_length.is_null() { return ERROR_INVALID_INPUT; }
+    if out_pointer.is_null() || out_length.is_null() {
+        return ERROR_INVALID_INPUT;
+    }
     *out_pointer = ptr::null_mut();
     *out_length = 0;
     let outcome = catch_unwind(AssertUnwindSafe(|| {
@@ -4782,13 +4789,19 @@ pub unsafe extern "C" fn unpeel_native_bridge_remote_plugin_updates(
         encode_remote_read("plugin updates", &updates)
     }));
     match outcome {
-        Ok(Ok(bytes)) => { return_bytes(bytes, out_pointer, out_length); RESULT_OK }
+        Ok(Ok(bytes)) => {
+            return_bytes(bytes, out_pointer, out_length);
+            RESULT_OK
+        }
         Ok(Err(error)) => {
             let result = error.result;
             return_bytes(encode_remote_error(error), out_pointer, out_length);
             result
         }
-        Err(_) => { return_bytes(remote_panic_error(), out_pointer, out_length); ERROR_PANIC }
+        Err(_) => {
+            return_bytes(remote_panic_error(), out_pointer, out_length);
+            ERROR_PANIC
+        }
     }
 }
 
