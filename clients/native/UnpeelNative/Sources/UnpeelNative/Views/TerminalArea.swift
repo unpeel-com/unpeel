@@ -1213,6 +1213,8 @@ struct PixelMascotView: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var frameIndex = 0
+    @State private var playbackStarted = false
+    @State private var motionAllowed = false
 
     /// The webp's frame cadence: 4 frames × 200ms.
     private static let frameDuration: TimeInterval = 0.2
@@ -1236,25 +1238,31 @@ struct PixelMascotView: View {
                     .interpolation(.none)
                     .resizable()
                     .scaledToFit()
-                    .task { await playLoop(frameCount: frames.count) }
+                    .task(id: motionAllowed && !reduceMotion) {
+                        await playOnce(frameCount: frames.count)
+                    }
             } else {
                 AppBrandLogo()
                     .foregroundStyle(Theme.mutedForeground)
             }
         }
         .frame(width: size, height: size)
+        .background(DecorationMotionReader(allowed: $motionAllowed))
         .accessibilityHidden(true)
     }
 
-    /// Loop the frames at the webp's cadence (like the phone). Cancels
-    /// cleanly with the view via `.task`; static under Reduce Motion.
-    private func playLoop(frameCount: Int) async {
-        guard !reduceMotion else { return }
+    /// A finite greeting. Hiding or enabling Reduce Motion cancels playback
+    /// and returns to rest rather than restarting the greeting on reveal.
+    private func playOnce(frameCount: Int) async {
+        frameIndex = 0
+        guard !reduceMotion, motionAllowed, !playbackStarted else { return }
+        playbackStarted = true
         let step = UInt64(Self.frameDuration * 1_000_000_000)
-        while !Task.isCancelled {
-            try? await Task.sleep(nanoseconds: step)
+        for index in 1...frameCount {
+            do { try await Task.sleep(nanoseconds: step) }
+            catch { return }
             guard !Task.isCancelled else { return }
-            frameIndex = (frameIndex + 1) % frameCount
+            frameIndex = index % frameCount
         }
     }
 }

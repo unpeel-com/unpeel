@@ -111,6 +111,11 @@
             setupTrackingArea()
 
             core.isAttached = { [weak self] in self?.window != nil }
+            core.isPresented = { [weak self] in
+                guard let self else { return false }
+                return !isHiddenOrHasHiddenAncestor
+                    && window?.occlusionState.contains(.visible) == true
+            }
             core.scaleFactor = { [weak self] in
                 // Detached views keep their LAST window's scale: falling
                 // back to NSScreen.main mid-reparent can flip a 2x surface

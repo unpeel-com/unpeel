@@ -339,12 +339,8 @@
                 y: event.scrollingDeltaY,
                 mods: scrollMods.rawValue
             )
-            // Open the render pump so repaints present at display rate from
-            // the first wheel event instead of waiting on coalesced wakeups.
-            // Covers both local scrollback moves inside the core and
-            // mouse-captured TUIs (Claude's virtual scroll) repainting via
-            // the PTY roundtrip — with no per-event main-thread tick, since
-            // the pump refreshes the renderer off-main.
+            // Coalesce wheel events into one refresh on main. Later PTY
+            // output drives the core renderer; no timed refresh tail runs.
             core.noteRenderActivity()
         }
 

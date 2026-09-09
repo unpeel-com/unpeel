@@ -2501,6 +2501,33 @@ final class RemoteHostRuntimeTests: XCTestCase {
         runtime.disconnect()
     }
 
+    func testEmptySuccessfulOutputIsCommittedThenPacedAndCancellationStopsRetry() async {
+        let backend = ControlledRemoteBackend()
+        let runtime = makeRuntime(
+            outputIdleIntervalNanoseconds: 200_000_000,
+            backendFactory: { _ in backend }
+        )
+        await connectWithSelectedSession(runtime, backend: backend)
+        XCTAssertNotNil(runtime.terminalPane(for: "session"))
+        await waitUntil { await backend.pollCount == 1 }
+        await backend.resolvePoll(.success(makePage(sessionID: "session", bytes: Data())))
+        await waitUntil { await backend.committedPageCount == 1 }
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let pacedCount = await backend.pollCount
+        XCTAssertEqual(pacedCount, 1)
+        await waitUntil(iterations: 5_000) { await backend.pollCount == 2 }
+
+        // Real output should immediately continue draining, without idle pacing.
+        await backend.resolvePoll(.success(makePage(sessionID: "session", bytes: Data("x".utf8))))
+        await waitUntil { await backend.pollCount == 3 }
+        await backend.resolvePoll(.success(makePage(sessionID: "session", bytes: Data())))
+        await waitUntil { await backend.committedPageCount == 3 }
+        runtime.disconnect()
+        try? await Task.sleep(nanoseconds: 220_000_000)
+        let stoppedCount = await backend.pollCount
+        XCTAssertEqual(stoppedCount, 3)
+    }
+
     func testUTF8ScalarSplitAcrossCallbacksStartsFreshBoundedBatch() async {
         let backend = ControlledRemoteBackend(controlWrites: true)
         let runtime = makeRuntime(backend: backend)
@@ -2897,6 +2924,7 @@ final class RemoteHostRuntimeTests: XCTestCase {
 
     private func makeRuntime(
         refreshIntervalNanoseconds: UInt64 = 60_000_000_000,
+        outputIdleIntervalNanoseconds: UInt64 = 1_000_000,
         initialBootstrapRetryIntervalNanoseconds: UInt64 = 1_000_000,
         initialBootstrapFastRetryCount: Int = 3,
         initialDirectLinkGraceNanoseconds: UInt64 = 60_000_000_000,
@@ -2917,7 +2945,7 @@ final class RemoteHostRuntimeTests: XCTestCase {
             initialDirectLinkGraceNanoseconds: initialDirectLinkGraceNanoseconds,
             directProbeSuccessfulLinkRefreshes: directProbeSuccessfulLinkRefreshes,
             forceLinkForDevelopment: forceLinkForDevelopment,
-            outputIdleIntervalNanoseconds: 1_000_000,
+            outputIdleIntervalNanoseconds: outputIdleIntervalNanoseconds,
             resizeDebounceNanoseconds: 1_000_000,
             fitSettleNanoseconds: 0,
             fitClearDelayNanoseconds: 0,

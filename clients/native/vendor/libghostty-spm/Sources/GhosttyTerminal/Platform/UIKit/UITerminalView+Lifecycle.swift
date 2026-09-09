@@ -64,7 +64,7 @@
                     core.rebuildIfReady()
                 }
                 updateColorScheme()
-                core.startDisplayLink()
+                core.refreshPresentationVisibility()
                 // Defer sublayer frame and metrics sync to the next runloop
                 // so that AutoLayout has resolved final bounds.
                 DispatchQueue.main.async { [weak self] in
@@ -78,7 +78,7 @@
                 }
             } else {
                 lastSynchronousLayoutPixelSize = .zero
-                core.stopDisplayLink()
+                core.stopRendering()
                 if retainsSurfaceWhenDetached {
                     TerminalDebugLog.log(.lifecycle, "surface retained while detached")
                 } else {

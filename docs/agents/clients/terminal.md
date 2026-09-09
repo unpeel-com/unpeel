@@ -68,6 +68,28 @@ The native terminal is a **libghostty** surface (GhosttyKit), Metal-rendered, no
   config so its theme, keybind clearing, and padding stay in control.
 - Agent TUIs that repaint the screen in place can still appear to "crop" or "overwrite" detail while streaming — normal terminal behavior; intermediate full-screen redraw states are not guaranteed to survive as scrollback.
 
+### Rendering and retained panes
+
+Renderer visibility and callback processing are separate. A detached pane, a
+pane under a hidden ancestor, or a pane in an occluded window tells Ghostty
+it is occluded and cancels scheduled refreshes. Its app mailbox still drains
+on every wakeup. Stopping those ticks can block replay IO and deadlock the
+next synchronous surface call during adoption.
+
+The wrapper coalesces explicit render requests, scroll input, and completed
+host-fed writes into one main-queue refresh per pending batch. It owns no
+repeating display-link subscription or one-second refresh tail. Ghostty core
+owns vsync and ordinary local-PTY output rendering. Resize and adoption keep
+their synchronous fresh-frame path and cancel redundant queued refreshes.
+
+Controllers must explicitly opt into raw HTTP byte-stream continuations.
+Their feed must retain parser state and insert no bytes between pages,
+including inside split UTF-8 and OSC/APC payloads larger than a page. Older
+Controllers keep boundary-safe pages because their feed may add its own
+synchronized-output brackets. Replay-start alignment still applies to rebased
+cursors. Long polls wait for deliverable progress, and the native Controller
+paces empty unchanged-cursor replies from older Hosts.
+
 ### Terminal links
 
 Both local PTY panes and retained Host-streamed panes handle Ghostty's URL,

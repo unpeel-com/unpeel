@@ -624,8 +624,8 @@ final class GhosttyTerminalPane: NSView {
     /// in an occluded/minimized window must not keep Ghostty's renderer
     /// drawing frames nobody sees. The wrapper exposes this as
     /// `TerminalView.setSurfaceVisible(_:)` → `ghostty_surface_set_occlusion`
-    /// plus suspension of its wakeup→tick→draw loop, mirroring what Ghostty
-    /// itself does on `NSWindow.occlusionState` changes.
+    /// plus cancellation of scheduled refreshes. App-mailbox draining stays
+    /// wakeup-driven regardless of presentation visibility.
     private var occlusionObserver: NSObjectProtocol?
     var onPresentationVisibilityChanged: (() -> Void)?
     private var lastThemeSamplingVisibility = false
@@ -633,13 +633,8 @@ final class GhosttyTerminalPane: NSView {
         window?.occlusionState.contains(.visible) == true && !isHiddenOrHasHiddenAncestor
     }
 
-    // NOTE for pre-warmed panes (WarmPaneHostView): they are mounted inside
-    // a HIDDEN container but must NOT be paused via setSurfaceVisible(false)
-    // — that suspends the wrapper's wakeup→tick loop, and a surface that
-    // never ticks while its attach client floods the replay wedges its IO;
-    // the next synchronous surface call from the main thread (adoption on
-    // click) then deadlocks. Hidden-but-ticking is the safe state; the
-    // hidden container already keeps them out of the compositor.
+    // Warm panes remain occluded while their app mailboxes keep draining.
+    // Suppressing those ticks would let replay block IO and deadlock adoption.
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if let observer = occlusionObserver {
@@ -666,7 +661,7 @@ final class GhosttyTerminalPane: NSView {
             lastThemeSamplingVisibility = presented
             onPresentationVisibilityChanged?()
         }
-        let visible = window.map { $0.occlusionState.contains(.visible) } ?? false
+        let visible = presented
         terminalView.setSurfaceVisible(visible)
         if visible {
             // Resume with a fresh frame so the viewport is current: the
@@ -688,6 +683,16 @@ final class GhosttyTerminalPane: NSView {
     /// an image-streaming app-mode session visibly froze between forced
     /// draws while its io thread happily consumed megabytes.
     func refreshSurfaceVisibility() {
+        updateSurfaceVisibility()
+    }
+
+    override func viewDidHide() {
+        super.viewDidHide()
+        updateSurfaceVisibility()
+    }
+
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
         updateSurfaceVisibility()
     }
 
@@ -1948,15 +1953,15 @@ struct RemoteTerminalLocalFeed: Equatable, Sendable {
             + endSynchronizedOutput
     )
 
-    /// Atomic reset + replacement output. RIS must precede DEC 2026 because
-    /// RIS itself resets synchronized-output mode.
+    /// Reset then feed in one delivery. End our bracket before Host bytes:
+    /// a raw page can end inside UTF-8 or a VT string, even after a reset.
     static func resettingBeforeFeeding(_ payload: Data) -> RemoteTerminalLocalFeed {
         RemoteTerminalLocalFeed(
             bytes: reset
                 + beginSynchronizedOutput
                 + clearDisplayAndScrollback
-                + payload
                 + endSynchronizedOutput
+                + payload
         )
     }
 }

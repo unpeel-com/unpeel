@@ -3,12 +3,12 @@ import Foundation
 import GhosttyKit
 import Testing
 
-/// Locks the render-arming contract of host-fed sessions: every byte fed
+/// Locks the refresh-request contract of host-fed sessions: every byte fed
 /// while a surface is attached must fire `onHostBytes` (which the surface
-/// coordinator wires to its render pump), and an attach that flushes
+/// coordinator wires to its refresh scheduler), and an attach that flushes
 /// buffered bytes must fire it too. This is the regression suite for the
 /// "blank/stale regions until a manual resize" bug: bytes were written
-/// into the surface but nothing armed the pump, so the core's coalesced
+/// into the surface but nothing requested a refresh, so the core's coalesced
 /// render wakeups let freshly parsed output sit on a stale frame.
 struct InMemoryTerminalSessionHostBytesTests {
     /// Thread-safe event recorder (the session's callbacks are @Sendable).
@@ -86,6 +86,7 @@ struct InMemoryTerminalSessionHostBytesTests {
         }
         session.onHostBytes = { recorder.append("notify") }
         session.setSurface(fakeSurface)
+        session.armResizeDispatch(syncedWidthPixels: 640, syncedHeightPixels: 480)
         recorder.reset()
 
         let completed = DispatchSemaphore(value: 0)

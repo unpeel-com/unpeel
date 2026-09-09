@@ -1122,6 +1122,8 @@ struct JournalSession {
 /// A Session whose journal saw no bytes for this long drops its batch
 /// buffer capacity (it is re-grown from the next chunk).
 const JOURNAL_IDLE_RELEASE: Duration = Duration::from_secs(1);
+/// Bound each drain so a continuously busy producer cannot starve deadlines.
+const JOURNAL_MESSAGE_BATCH_MAX: usize = 64;
 
 impl JournalSession {
     /// Idle diet: once a quiet second has passed since the last chunk and
@@ -1168,7 +1170,7 @@ fn run_journal_writer(rx: mpsc::Receiver<JournalMsg>, reactor: ReactorHandle) {
             .map(|at| at + JOURNAL_FLUSH_INTERVAL)
             .min()
             .or_else(|| holds_capacity.then(|| now + JOURNAL_IDLE_RELEASE));
-        let message = match next_deadline {
+        let mut message = match next_deadline {
             Some(deadline) => match rx.recv_timeout(deadline.saturating_duration_since(now)) {
                 Ok(message) => Some(message),
                 Err(mpsc::RecvTimeoutError::Timeout) => None,
@@ -1179,83 +1181,102 @@ fn run_journal_writer(rx: mpsc::Receiver<JournalMsg>, reactor: ReactorHandle) {
                 Err(_) => return,
             },
         };
-        match message {
-            Some(JournalMsg::Open {
-                id,
-                writer,
-                pressure,
-            }) => {
-                sessions.insert(
+        let mut processed = 0;
+        loop {
+            match message.take() {
+                Some(JournalMsg::Open {
                     id,
-                    JournalSession {
-                        writer,
-                        pressure,
-                        pending: Vec::new(),
-                        first_pending_at: None,
-                        last_chunk_at: Instant::now(),
-                        error: None,
-                    },
-                );
-            }
-            Some(JournalMsg::Chunk { id, data }) => {
-                let Some(session) = sessions.get_mut(&id) else {
-                    continue;
-                };
-                let slot = session.pressure.slot.load(Ordering::Acquire);
-                let previous = session
-                    .pressure
-                    .backlog
-                    .fetch_sub(data.len(), Ordering::AcqRel);
-                let remaining = previous.saturating_sub(data.len());
-                if session.pressure.paused.load(Ordering::Acquire)
-                    && remaining < JOURNAL_BACKLOG_LOW_BYTES
-                {
-                    session.pressure.paused.store(false, Ordering::Release);
-                    reactor.send(Control::JournalDrained(slot));
+                    writer,
+                    pressure,
+                }) => {
+                    sessions.insert(
+                        id,
+                        JournalSession {
+                            writer,
+                            pressure,
+                            pending: Vec::new(),
+                            first_pending_at: None,
+                            last_chunk_at: Instant::now(),
+                            error: None,
+                        },
+                    );
                 }
-                session.last_chunk_at = Instant::now();
-                if session.error.is_none() {
-                    if session.pending.is_empty() {
-                        session.first_pending_at = Some(Instant::now());
+                Some(JournalMsg::Chunk { id, data }) => {
+                    let Some(session) = sessions.get_mut(&id) else {
+                        break;
+                    };
+                    let slot = session.pressure.slot.load(Ordering::Acquire);
+                    let previous = session
+                        .pressure
+                        .backlog
+                        .fetch_sub(data.len(), Ordering::AcqRel);
+                    let remaining = previous.saturating_sub(data.len());
+                    if session.pressure.paused.load(Ordering::Acquire)
+                        && remaining < JOURNAL_BACKLOG_LOW_BYTES
+                    {
+                        session.pressure.paused.store(false, Ordering::Release);
+                        reactor.send(Control::JournalDrained(slot));
                     }
-                    session.pending.extend_from_slice(&data);
-                    if session.pending.len() >= JOURNAL_BATCH_MAX_BYTES {
-                        session.flush();
-                    }
-                    if session.error.is_some() {
-                        reactor.send(Control::JournalFailed(slot));
-                    }
-                }
-            }
-            Some(JournalMsg::Flush { id, ack }) => {
-                let result = match sessions.get_mut(&id) {
-                    Some(session) => {
-                        session.flush();
-                        match session.error.clone() {
-                            Some(error) => Err(error),
-                            None => Ok(()),
+                    session.last_chunk_at = Instant::now();
+                    if session.error.is_none() {
+                        if session.pending.is_empty() {
+                            session.first_pending_at = Some(Instant::now());
+                        }
+                        session.pending.extend_from_slice(&data);
+                        if session.pending.len() >= JOURNAL_BATCH_MAX_BYTES {
+                            session.flush();
+                        }
+                        if session.error.is_some() {
+                            reactor.send(Control::JournalFailed(slot));
                         }
                     }
-                    None => Ok(()),
-                };
-                let _ = ack.send(result);
-            }
-            Some(JournalMsg::Close { id, ack }) => {
-                let result = match sessions.remove(&id) {
-                    Some(mut session) => {
-                        session.flush();
-                        // Drop the writer: closes the file and its retention
-                        // record like the old writer thread's exit did.
-                        match session.error.take() {
-                            Some(error) => Err(error),
-                            None => Ok(()),
+                }
+                Some(JournalMsg::Flush { id, ack }) => {
+                    let result = match sessions.get_mut(&id) {
+                        Some(session) => {
+                            session.flush();
+                            match session.error.clone() {
+                                Some(error) => Err(error),
+                                None => Ok(()),
+                            }
                         }
-                    }
-                    None => Ok(()),
-                };
-                let _ = ack.send(result);
+                        None => Ok(()),
+                    };
+                    let _ = ack.send(result);
+                }
+                Some(JournalMsg::Close { id, ack }) => {
+                    let result = match sessions.remove(&id) {
+                        Some(mut session) => {
+                            session.flush();
+                            // Drop the writer: closes the file and its retention
+                            // record like the old writer thread's exit did.
+                            match session.error.take() {
+                                Some(error) => Err(error),
+                                None => Ok(()),
+                            }
+                        }
+                        None => Ok(()),
+                    };
+                    let _ = ack.send(result);
+                }
+                None => {}
             }
-            None => {}
+            processed += 1;
+            // A newly queued first byte also needs a deadline even when the
+            // batch began with no pending writes. Bound elapsed work by the
+            // flush interval as well as the earliest pre-existing deadline.
+            if processed >= JOURNAL_MESSAGE_BATCH_MAX
+                || Instant::now()
+                    >= next_deadline
+                        .unwrap_or(now + JOURNAL_FLUSH_INTERVAL)
+                        .min(now + JOURNAL_FLUSH_INTERVAL)
+            {
+                break;
+            }
+            message = rx.try_recv().ok();
+            if message.is_none() {
+                break;
+            }
         }
         let now = Instant::now();
         let mut failed = Vec::new();
@@ -1290,7 +1311,7 @@ fn run_timer(rx: mpsc::Receiver<TimerMsg>) {
     loop {
         let now = Instant::now();
         let mut next_wake = now + HOST_TIMER_MAX_SLEEP;
-        for (_, session_jobs) in jobs.iter_mut() {
+        for session_jobs in jobs.values_mut() {
             session_jobs.retain_mut(|job| {
                 if now >= job.next_at {
                     let keep =
@@ -1359,6 +1380,74 @@ mod tests {
             control_tx,
             waker: Arc::new(Waker::new().unwrap()),
         }
+    }
+
+    #[test]
+    fn journal_batches_preserve_chunk_order_and_flush_close_barriers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("output.bin");
+        let file = std::fs::File::create(&path).unwrap();
+        let writer = RetainedOutputWriter::new(file, path.clone(), 0, 1 << 20, 1 << 20).unwrap();
+        let pressure = Arc::new(JournalBackpressure::default());
+        let (tx, rx) = mpsc::channel();
+        tx.send(JournalMsg::Open {
+            id: 1,
+            writer,
+            pressure: Arc::clone(&pressure),
+        })
+        .unwrap();
+        let mut expected = Vec::new();
+        // Queue several batches before starting the consumer.
+        for index in 0..(JOURNAL_MESSAGE_BATCH_MAX * 3) {
+            let data = format!("{index}\n").into_bytes();
+            pressure.backlog.fetch_add(data.len(), Ordering::Relaxed);
+            expected.extend_from_slice(&data);
+            tx.send(JournalMsg::Chunk { id: 1, data }).unwrap();
+        }
+        let (flush_tx, flush_rx) = mpsc::channel();
+        tx.send(JournalMsg::Flush {
+            id: 1,
+            ack: flush_tx,
+        })
+        .unwrap();
+        let reactor = reactor_handle_stub();
+        let thread = std::thread::spawn(move || run_journal_writer(rx, reactor));
+        flush_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), expected);
+        assert_eq!(pressure.backlog.load(Ordering::Acquire), 0);
+        pressure.backlog.fetch_add(4, Ordering::Relaxed);
+        tx.send(JournalMsg::Chunk {
+            id: 1,
+            data: b"tail".to_vec(),
+        })
+        .unwrap();
+        // No more messages: the first-pending deadline must flush this tail
+        // even after the burst was drained as one sequence of batches.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while std::fs::metadata(&path).unwrap().len() < (expected.len() + 4) as u64 {
+            assert!(
+                Instant::now() < deadline,
+                "quiet journal tail was not flushed"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let (close_tx, close_rx) = mpsc::channel();
+        tx.send(JournalMsg::Close {
+            id: 1,
+            ack: close_tx,
+        })
+        .unwrap();
+        close_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        expected.extend_from_slice(b"tail");
+        assert_eq!(std::fs::read(&path).unwrap(), expected);
+        drop(tx);
+        thread.join().unwrap();
     }
 
     #[test]

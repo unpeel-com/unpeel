@@ -3051,6 +3051,9 @@ impl BackendInner {
         let mut call = HostCall::new("GET", OUTPUT_PATH, RequestSemantics::ReadOnly)
             .with_query("session_id", session_id)
             .with_query("limit", options.limit.to_string());
+        if accepted.value.snapshot.supports("session.output.raw") {
+            call = call.with_query("raw", "1");
+        }
         if let Some(offset) = token.requested_offset {
             call = call.with_query("offset", offset.to_string());
         }
@@ -5392,6 +5395,50 @@ mod tests {
         );
         assert!(!backend.needs_bootstrap());
         assert_eq!(connection.remaining(), 0);
+    }
+
+    #[test]
+    fn raw_output_is_requested_only_when_advertised_and_preserves_split_bytes() {
+        for advertised in [false, true] {
+            let connection = ScriptedConnection::new();
+            let generation = connection.generation(1);
+            let mut capabilities = vec![BOOTSTRAP_CAPABILITY, OUTPUT_CAPABILITY];
+            if advertised {
+                capabilities.push("session.output.raw");
+            }
+            add_bootstrap(
+                &connection,
+                generation,
+                bootstrap_json(Some("host-1"), HOST_PROTOCOL_MAJOR, Some(&capabilities)),
+            );
+            let mut expected = expected_output(generation, "s1", None);
+            if advertised {
+                expected.query.push(("raw".to_owned(), "1".to_owned()));
+            }
+            let bytes: &[u8] = if advertised {
+                b"\x1b]title\xe2\x82"
+            } else {
+                b"safe"
+            };
+            connection.push(reply_step(
+                expected,
+                generation,
+                200,
+                output_json("s1", 0, bytes, false),
+            ));
+            let backend = RemoteSessionBackend::new(connection.clone());
+            backend.bootstrap().unwrap();
+            let page = backend
+                .poll_output("s1", RemoteOutputPollOptions::default())
+                .unwrap();
+            assert_eq!(page.bytes(), bytes);
+            page.commit().unwrap();
+            assert_eq!(
+                backend.committed_output_offset("s1"),
+                Some(bytes.len() as u64)
+            );
+            assert_eq!(connection.remaining(), 0);
+        }
     }
 
     #[test]

@@ -11,6 +11,98 @@ import AppKit
 import SwiftUI
 import UnpeelShared
 
+/// Shared presentation gate for decorative layers and SwiftUI timelines.
+class DecorationLifecycleView: NSView {
+    private(set) var motionAllowed = false
+    private let workspaceNotifications = NSWorkspace.shared.notificationCenter
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(windowVisibilityChanged(_:)),
+            name: NSWindow.didChangeOcclusionStateNotification, object: nil
+        )
+        workspaceNotifications.addObserver(
+            self, selector: #selector(motionPreferenceChanged),
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil
+        )
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not supported") }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        workspaceNotifications.removeObserver(self)
+    }
+
+    @objc private func windowVisibilityChanged(_ notification: Notification) {
+        guard let changedWindow = notification.object as? NSWindow,
+              changedWindow === window else { return }
+        updateMotionEligibility()
+    }
+
+    @objc private func motionPreferenceChanged() { updateMotionEligibility() }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateMotionEligibility()
+    }
+
+    override func viewDidHide() {
+        super.viewDidHide()
+        updateMotionEligibility()
+    }
+
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        updateMotionEligibility()
+    }
+
+    override func layout() {
+        super.layout()
+        updateMotionEligibility()
+    }
+
+    static func allowsMotion(attached: Bool, visible: Bool, hidden: Bool, reduceMotion: Bool) -> Bool {
+        attached && visible && !hidden && !reduceMotion
+    }
+
+    private func updateMotionEligibility() {
+        let allowed = Self.allowsMotion(
+            attached: window != nil,
+            visible: window?.occlusionState.contains(.visible) == true,
+            hidden: isHiddenOrHasHiddenAncestor,
+            reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        )
+        guard allowed != motionAllowed else { return }
+        motionAllowed = allowed
+        motionEligibilityChanged()
+    }
+
+    func motionEligibilityChanged() {}
+}
+
+/// Observes the actual containing window, including Menu-label hosting.
+struct DecorationMotionReader: NSViewRepresentable {
+    @Binding var allowed: Bool
+
+    func makeNSView(context: Context) -> ReaderView {
+        let view = ReaderView(frame: .zero)
+        view.onChange = { value in
+            DispatchQueue.main.async { self.allowed = value }
+        }
+        return view
+    }
+
+    func updateNSView(_ view: ReaderView, context: Context) {}
+
+    final class ReaderView: DecorationLifecycleView {
+        var onChange: ((Bool) -> Void)?
+        override func motionEligibilityChanged() { onChange?(motionAllowed) }
+    }
+}
+
 
 /// Gradient sweep over a one-line label, replicating the Svelte
 /// `.project-name.shimmer` CSS:
@@ -69,9 +161,10 @@ struct ShimmerGradientView: NSViewRepresentable {
     }
 }
 
-final class ShimmerGradientLayerView: NSView {
+final class ShimmerGradientLayerView: DecorationLifecycleView {
     private var color: NSColor
     private let gradientLayer = CAGradientLayer()
+    private var animatedWidth: CGFloat?
 
     init(color: NSColor) {
         self.color = color
@@ -137,20 +230,23 @@ final class ShimmerGradientLayerView: NSView {
             width: bounds.width * 4, height: bounds.height
         )
         CATransaction.commit()
-        restartAnimation()
+        updateAnimation()
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window != nil {
-            needsLayout = true
-        } else {
-            gradientLayer.removeAnimation(forKey: "shimmer")
-        }
+        needsLayout = true
     }
 
-    private func restartAnimation() {
-        guard window != nil, bounds.width > 0 else { return }
+    override func motionEligibilityChanged() { updateAnimation() }
+
+    private func updateAnimation() {
+        guard motionAllowed, bounds.width > 0, bounds.height > 0 else {
+            gradientLayer.removeAnimation(forKey: "shimmer")
+            animatedWidth = nil
+            return
+        }
+        guard animatedWidth != bounds.width || gradientLayer.animation(forKey: "shimmer") == nil else { return }
         // background-position 100% → -100% over 1.8s linear infinite:
         // with a 2w gradient anchored at x = -w, that is a translation
         // from 0 to +2w.
@@ -162,6 +258,7 @@ final class ShimmerGradientLayerView: NSView {
         animation.repeatCount = .infinity
         gradientLayer.removeAnimation(forKey: "shimmer")
         gradientLayer.add(animation, forKey: "shimmer")
+        animatedWidth = bounds.width
     }
 }
 
@@ -198,7 +295,7 @@ private struct SpinnerLayerRepresentable: NSViewRepresentable {
     }
 }
 
-final class SpinnerLayerView: NSView {
+final class SpinnerLayerView: DecorationLifecycleView {
     private var color: NSColor
 
     init(color: NSColor) {
@@ -213,29 +310,29 @@ final class SpinnerLayerView: NSView {
     func setColor(_ color: NSColor) {
         guard !self.color.isEqual(color) else { return }
         self.color = color
-        if window != nil { restartAnimation() }
+        refreshFrames()
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window != nil {
-            restartAnimation()
-        } else {
-            layer?.removeAnimation(forKey: "spinner")
-        }
+        refreshFrames()
     }
 
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
-        if window != nil { restartAnimation() }
+        refreshFrames()
     }
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        if window != nil { restartAnimation() }
+        refreshFrames()
     }
 
-    private func restartAnimation() {
+    private var renderedFrames: [CGImage] = []
+
+    override func motionEligibilityChanged() { updateAnimation() }
+
+    private func refreshFrames() {
         guard let layer else { return }
         let scale = window?.backingScaleFactor ?? 2
         // Theme colors are appearance-dynamic; flatten against the view's
@@ -249,10 +346,22 @@ final class SpinnerLayerView: NSView {
         layer.contentsScale = scale
         // Static contents so non-animated renders (snapshots) show a frame.
         layer.contents = frames[0]
+        renderedFrames = frames
+        layer.removeAnimation(forKey: "spinner")
+        updateAnimation()
+    }
+
+    private func updateAnimation() {
+        guard let layer else { return }
+        guard motionAllowed, !renderedFrames.isEmpty else {
+            layer.removeAnimation(forKey: "spinner")
+            return
+        }
+        guard layer.animation(forKey: "spinner") == nil else { return }
         let animation = CAKeyframeAnimation(keyPath: "contents")
-        animation.values = frames
+        animation.values = renderedFrames
         animation.calculationMode = .discrete
-        animation.duration = Theme.spinnerInterval * Double(frames.count)
+        animation.duration = Theme.spinnerInterval * Double(renderedFrames.count)
         animation.repeatCount = .infinity
         layer.removeAnimation(forKey: "spinner")
         layer.add(animation, forKey: "spinner")

@@ -464,6 +464,10 @@ impl ScreenChangeTracker {
             self.last_hash = Some(hash);
             self.changed_at = Some(now_ms);
         }
+        self.flush_due(now_ms)
+    }
+
+    fn flush_due(&mut self, now_ms: u64) -> Option<u64> {
         let pending = self.changed_at.filter(|c| Some(*c) != self.written_at)?;
         if self.written_at.is_some()
             && now_ms.saturating_sub(self.last_write_ms) < SCREEN_STAMP_COALESCE_MS
@@ -5452,7 +5456,19 @@ pub(crate) fn build_session_timer_jobs(inputs: SessionJobInputs) -> Vec<HostTime
                 {
                     if let Some(expected_runtime_id) = runtime_observer_expected_id.as_deref() {
                         let prior_observation = tracker.current.clone();
-                        if let Some(inspection) =
+                        if prior_observation.as_ref().is_some_and(|prior| {
+                            crate::runtime_observer::retained_runtime_is_present(
+                                session_leader_pid,
+                                session_leader_started_at_ms,
+                                prior,
+                            )
+                        }) {
+                            // The full scan gives this exact retained identity
+                            // precedence too. Only a miss needs discovery of
+                            // remaining group members and shell recovery.
+                            observation = prior_observation;
+                            returned_to_owned_shell = false;
+                        } else if let Some(inspection) =
                             crate::runtime_observer::inspect_owned_session_processes(
                                 session_leader_pid,
                                 session_leader_started_at_ms,
@@ -5614,19 +5630,31 @@ pub(crate) fn build_session_timer_jobs(inputs: SessionJobInputs) -> Vec<HostTime
         let mut last_modes: Option<crate::terminal_viewport::TerminalModeState> = None;
         let mut url_tracker = crate::local_urls::LocalUrlTracker::default();
         let mut screen_tracker = ScreenChangeTracker::default();
+        let mut screen_generation = None;
         let mut ticks_since_probe: u32 = 0;
         HostTimerJob::new(
             Duration::from_millis(SESSION_MENU_SCAN_INTERVAL_MS),
             Duration::from_millis(SESSION_MENU_SCAN_INTERVAL_MS),
             move || {
-                let (screen, modes) = {
+                let input = {
                     let mut viewport = viewport_for_menu.lock().unwrap();
-                    (
-                        viewport.current_screen_text(),
-                        viewport.terminal_mode_state(),
-                    )
+                    let generation = viewport.screen_generation();
+                    if screen_generation == Some(generation) {
+                        None
+                    } else {
+                        screen_generation = Some(generation);
+                        Some((
+                            viewport.current_screen_text(),
+                            viewport.terminal_mode_state(),
+                        ))
+                    }
                 };
-                if let Some(stamp) = screen_tracker.observe(&screen, current_timestamp_ms()) {
+                let now = current_timestamp_ms();
+                let stamp = match input.as_ref() {
+                    Some((screen, _)) => screen_tracker.observe(screen, now),
+                    None => screen_tracker.flush_due(now),
+                };
+                if let Some(stamp) = stamp {
                     let _ = update_manifest_session(&menu_session_id, |manifest| {
                         manifest.screen_changed_at = Some(stamp);
                     });
@@ -5634,20 +5662,23 @@ pub(crate) fn build_session_timer_jobs(inputs: SessionJobInputs) -> Vec<HostTime
                 // Edge-written like `menu_prompt_active`: steady state costs
                 // zero manifest writes; mode flips are rare (workload
                 // startup/exit, alt-screen apps opening a pager, …).
-                if last_modes.as_ref() != Some(&modes) {
-                    last_modes = Some(modes.clone());
-                    let _ = update_manifest_session(&menu_session_id, |manifest| {
-                        manifest.terminal_modes = (!modes.is_default()).then(|| modes.clone());
-                    });
+                let mut saw_new_url = false;
+                if let Some((screen, modes)) = input {
+                    if last_modes.as_ref() != Some(&modes) {
+                        last_modes = Some(modes.clone());
+                        let _ = update_manifest_session(&menu_session_id, |manifest| {
+                            manifest.terminal_modes = (!modes.is_default()).then(|| modes.clone());
+                        });
+                    }
+                    let active = viewport_has_menu_prompt(&screen);
+                    if active != last_active {
+                        last_active = active;
+                        let _ = update_manifest_session(&menu_session_id, |manifest| {
+                            manifest.menu_prompt_active = active;
+                        });
+                    }
+                    saw_new_url = url_tracker.observe_screen(&screen);
                 }
-                let active = viewport_has_menu_prompt(&screen);
-                if active != last_active {
-                    last_active = active;
-                    let _ = update_manifest_session(&menu_session_id, |manifest| {
-                        manifest.menu_prompt_active = active;
-                    });
-                }
-                let saw_new_url = url_tracker.observe_screen(&screen);
                 ticks_since_probe += 1;
                 if url_tracker.has_candidates()
                     && (saw_new_url || ticks_since_probe >= URL_PROBE_TICKS)
@@ -6433,9 +6464,10 @@ mod tests {
         // Content settles on "e" at 3.4s; the trailing change must still be
         // persisted once the window reopens, even with no further changes.
         assert_eq!(tracker.observe("e", 3_400), None);
-        assert_eq!(tracker.observe("e", 5_500), Some(3_400));
+        assert_eq!(tracker.flush_due(4_000), None);
+        assert_eq!(tracker.flush_due(5_500), Some(3_400));
         // Fully settled: no more writes.
-        assert_eq!(tracker.observe("e", 60_000), None);
+        assert_eq!(tracker.flush_due(60_000), None);
     }
 
     #[derive(Clone, Default)]

@@ -780,12 +780,30 @@ fn style_color_string(color: &vt::GhosttyStyleColor) -> Option<String> {
 }
 
 fn read_row_cells(cells: vt::GhosttyRenderStateRowCells, with_styles: bool) -> TerminalViewportRow {
+    if !with_styles {
+        let mut text = String::new();
+        let default_style = CellStyle::default();
+        let mut text_end = 0;
+        while unsafe { vt::ghostty_render_state_row_cells_next(cells) } {
+            let (piece, _) = read_cell(cells, false, &default_style);
+            text.push_str(&piece);
+            if !piece.is_empty() && piece != " " {
+                text_end = text.len();
+            }
+        }
+        text.truncate(text_end);
+        return TerminalViewportRow {
+            text,
+            styles: Vec::new(),
+            wrapped: false,
+        };
+    }
     let mut pieces: Vec<String> = Vec::new();
     let mut cell_styles: Vec<CellStyle> = Vec::new();
     let mut previous_style = CellStyle::default();
 
     while unsafe { vt::ghostty_render_state_row_cells_next(cells) } {
-        let (text, style) = read_cell(cells, with_styles, &previous_style);
+        let (text, style) = read_cell(cells, true, &previous_style);
         previous_style = style.clone();
         pieces.push(text);
         cell_styles.push(style);
@@ -800,11 +818,7 @@ fn read_row_cells(cells: vt::GhosttyRenderStateRowCells, with_styles: bool) -> T
         .unwrap_or(0);
     let text: String = pieces[..text_end].concat();
 
-    let styles = if with_styles {
-        style_runs(&cell_styles)
-    } else {
-        Vec::new()
-    };
+    let styles = style_runs(&cell_styles);
     TerminalViewportRow {
         text,
         styles,
@@ -989,6 +1003,8 @@ pub struct TerminalViewportState {
     output_offset: u64,
     history_truncated: bool,
     apc_filter: KittyApcFilter,
+    /// Invalidates detector input independently of journal offsets and replay.
+    screen_generation: u64,
     /// Complete kitty APC sequences captured for passthrough, oldest first.
     /// Only populated when `set_graphics_capture(true)`; bounded by
     /// `MAX_CAPTURED_GRAPHICS` / `MAX_CAPTURED_APC_BYTES`.
@@ -1186,6 +1202,7 @@ impl TerminalViewportState {
             output_offset: 0,
             history_truncated: false,
             apc_filter: KittyApcFilter::default(),
+            screen_generation: 0,
             captured_graphics: Vec::new(),
         }
     }
@@ -1216,6 +1233,7 @@ impl TerminalViewportState {
         history_truncated: bool,
     ) {
         let capture = self.apc_filter.capture;
+        self.screen_generation = self.screen_generation.wrapping_add(1);
         self.term = VtTerminal::new(cols, rows);
         self.resize_replay.clear();
         self.output_offset = output_offset;
@@ -1266,6 +1284,9 @@ impl TerminalViewportState {
     }
 
     fn write_terminal(&mut self, bytes: &[u8]) {
+        if !bytes.is_empty() {
+            self.screen_generation = self.screen_generation.wrapping_add(1);
+        }
         self.term.write(bytes);
         if self.journal.is_some() {
             return;
@@ -1348,7 +1369,15 @@ impl TerminalViewportState {
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) {
+        if self.term.cols != cols || self.term.rows != rows {
+            self.screen_generation = self.screen_generation.wrapping_add(1);
+        }
         self.term.resize(cols, rows);
+    }
+
+    /// Read under the same lock as detector input to avoid racing output.
+    pub fn screen_generation(&self) -> u64 {
+        self.screen_generation
     }
 
     /// The exact lifetime journal offset up to which this VT has consumed
@@ -2364,6 +2393,51 @@ mod tests {
         // detector must clear.
         state.feed(b"\x1b[2J\x1b[HWorking on it\xe2\x80\xa6");
         assert!(!viewport_has_menu_prompt(&state.current_screen_text()));
+    }
+
+    #[test]
+    fn detector_generation_tracks_text_modes_resize_and_reset_not_offset() {
+        let mut state = TerminalViewportState::new(20, 4);
+        let initial = state.screen_generation();
+        state.feed(b"");
+        state.resize(20, 4);
+        state.set_output_offset(100);
+        state.feed(b"\x1b_Ga=T,f=24;AAAA\x1b\\");
+        assert_eq!(state.screen_generation(), initial);
+        state.feed(b"hello");
+        let painted = state.screen_generation();
+        assert_ne!(painted, initial);
+        state.current_screen_text();
+        state.snapshot(0, None);
+        assert_eq!(state.screen_generation(), painted);
+        state.feed(b"\x1b[?1006h");
+        let mode_changed = state.screen_generation();
+        assert_ne!(mode_changed, painted);
+        assert!(state.terminal_mode_state().set.contains(&1006));
+        state.resize(10, 4);
+        let resized = state.screen_generation();
+        assert_ne!(resized, mode_changed);
+        let offset = state.output_offset();
+        state.reset_at_output_offset(10, 4, offset, false);
+        assert_ne!(state.screen_generation(), resized);
+        assert_eq!(state.output_offset(), offset);
+        assert!(state.current_screen_text().trim().is_empty());
+    }
+
+    #[test]
+    fn text_only_rows_match_styled_rows_for_unicode_and_blanks() {
+        let mut state = TerminalViewportState::new(24, 5);
+        state.feed("\x1b[31m中 e\u{301}  x  \r\n\tend\r\n\x1b[44m  \x1b[K".as_bytes());
+        state.term.scroll_bottom();
+        let styled = state.term.viewport_rows(true);
+        let plain = state.term.viewport_rows(false);
+        assert_eq!(plain.len(), styled.len());
+        for (plain, styled) in plain.iter().zip(&styled) {
+            assert_eq!(plain.text, styled.text);
+            assert_eq!(plain.wrapped, styled.wrapped);
+            assert!(plain.styles.is_empty());
+        }
+        assert!(plain[0].text.contains("中 e\u{301}  x"));
     }
 
     #[test]
