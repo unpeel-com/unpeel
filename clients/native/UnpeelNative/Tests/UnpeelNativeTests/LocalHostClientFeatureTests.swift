@@ -155,4 +155,40 @@ final class LocalHostClientFeatureTests: XCTestCase {
             localHostProjectionReady: true
         ))
     }
+
+    func testReturningToLocalKeepsARememberedSessionUntilHostTruthIsReady() {
+        let createdAfterLaunch = "bdbbc5b7-051f-42a1-8504-41f7a058570d"
+        XCTAssertEqual(
+            UnpeelStore.resolveRememberedSelection(
+                rememberedID: createdAfterLaunch,
+                knownIDs: [],
+                hostTruthIsComplete: false
+            ),
+            .keepRemembered
+        )
+        XCTAssertEqual(
+            UnpeelStore.resolveRememberedSelection(
+                rememberedID: createdAfterLaunch,
+                knownIDs: [createdAfterLaunch],
+                hostTruthIsComplete: false
+            ),
+            .select(createdAfterLaunch)
+        )
+        XCTAssertEqual(
+            UnpeelStore.resolveRememberedSelection(
+                rememberedID: createdAfterLaunch,
+                knownIDs: ["other"],
+                hostTruthIsComplete: true
+            ),
+            .forget
+        )
+        XCTAssertEqual(
+            UnpeelStore.resolveRememberedSelection(
+                rememberedID: nil,
+                knownIDs: [createdAfterLaunch],
+                hostTruthIsComplete: true
+            ),
+            .forget
+        )
+    }
 }
