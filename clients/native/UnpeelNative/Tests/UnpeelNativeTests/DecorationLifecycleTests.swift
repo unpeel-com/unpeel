@@ -67,7 +67,7 @@ final class DecorationLifecycleTests: XCTestCase {
         shimmer.frame = NSRect(x: 0, y: 0, width: 100, height: 16)
         shimmer.layout()
         let gradient = try XCTUnwrap(shimmer.layer?.sublayers?.first)
-        let original = try XCTUnwrap(gradient.animation(forKey: "shimmer"))
+        let original = try XCTUnwrap(gradient.animation(forKey: "shimmer")?.copy() as? CAAnimation)
         original.beginTime = 123
         gradient.add(original, forKey: "shimmer")
         shimmer.layout()

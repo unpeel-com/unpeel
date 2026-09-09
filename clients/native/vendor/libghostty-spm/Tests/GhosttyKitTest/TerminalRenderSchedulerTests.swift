@@ -56,7 +56,7 @@ struct TerminalRenderSchedulerTests {
         scheduler.request()
         let old = queue.take()
         scheduler.setEnabled(false)
-        #expect(old.allSatisfy(\.isCancelled))
+        #expect(old.allSatisfy { $0.isCancelled })
         for _ in 0..<100 { scheduler.request() }
         #expect(queue.take().isEmpty)
 
@@ -144,7 +144,7 @@ struct TerminalRenderSchedulerTests {
         scheduler.request()
         let pending = queue.take()
         scheduler.cancel()
-        #expect(pending.allSatisfy(\.isCancelled))
+        #expect(pending.allSatisfy { $0.isCancelled })
         pending.forEach { $0.perform() }
         #expect(renders == 0)
         scheduler.request()

@@ -86,6 +86,7 @@ struct InMemoryTerminalSessionHostBytesTests {
         }
         session.onHostBytes = { recorder.append("notify") }
         session.setSurface(fakeSurface)
+        session.armResizeDispatch(syncedWidthPixels: 640, syncedHeightPixels: 480)
         recorder.reset()
 
         let completed = DispatchSemaphore(value: 0)
