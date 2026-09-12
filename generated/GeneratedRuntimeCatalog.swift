@@ -710,7 +710,7 @@ public enum UnpeelRuntimeCatalog {
             anchorStartEventToOutput: true,
             attentionClearsOnOutput: true,
             distrustStopsWhileOutputGrows: false,
-            capabilities: [.lifecycleHooks, .resume, .restartAgent, .transcript, .notifyWhenDone],
+            capabilities: [.lifecycleHooks, .resume, .restartAgent, .mcpSessions, .mcpBrowser, .mcpComputer, .transcript, .notifyWhenDone],
             usageStores: [
                 UnpeelRuntimeUsageStore(
                     root: ".local/share/muse/sessions",

@@ -61,6 +61,11 @@ pub(crate) fn muse_plugin_manifest_json() -> Result<String, String> {
             })
         })
         .collect();
+    // Static always-on entry (rewritten only when staged content changes):
+    // the unified server fail-closes per session grant, and Muse spawns MCP
+    // servers with a stripped env, so identity comes from process ancestry
+    // (mcp_host::self_session_id), like cursor-agent.
+    let exe = crate::session_host::resolve_current_executable()?;
     let manifest = json!({
         "schemaVersion": 1,
         "name": MUSE_PLUGIN_ID,
@@ -72,7 +77,7 @@ pub(crate) fn muse_plugin_manifest_json() -> Result<String, String> {
             "skills": [],
             "commands": [],
             "hooks": hooks,
-            "mcpServers": [],
+            "mcpServers": [{ "id": "unpeel", "command": [exe.to_string_lossy(), crate::mcp_host::MCP_HOST_ARG] }],
             "reminders": []
         }
     });

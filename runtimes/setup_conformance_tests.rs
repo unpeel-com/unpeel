@@ -1052,6 +1052,23 @@ mod tests {
     }
 
     #[test]
+    fn muse_plugin_manifest_registers_unified_mcp_server() {
+        let manifest: Value =
+            serde_json::from_str(&super::muse_plugin_manifest_json().expect("manifest"))
+                .expect("parse manifest");
+        let servers = manifest["capabilities"]["mcpServers"]
+            .as_array()
+            .expect("mcpServers array");
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0]["id"], "unpeel");
+        let command = servers[0]["command"]
+            .as_array()
+            .expect("command array");
+        assert_eq!(command.len(), 2);
+        assert_eq!(command[1], "__mcp__");
+    }
+
+    #[test]
     fn muse_hook_script_records_stop_but_not_session_start() {
         let session_dir = temp_path("muse-record-session");
         let stop_payload = json!({
