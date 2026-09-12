@@ -33,6 +33,10 @@ fn configure_host_command(
     Ok(())
 }
 
+fn has_automatic_mcp_setup(_command: &str) -> bool {
+    true
+}
+
 pub(crate) const INTEGRATION: Integration = Integration::new(
     Some(setup::install_muse_hooks),
     Some(configure_host_command),
@@ -40,6 +44,7 @@ pub(crate) const INTEGRATION: Integration = Integration::new(
 // Muse 1.0.3 interrupts the foreground turn on ESC without emitting Stop.
 // https://dev.meta.ai/docs/muse-code/interactive#steering
 .with_escape_cancellation()
+.with_automatic_mcp_setup(has_automatic_mcp_setup)
 .with_resume_adapter(resume::ADAPTER);
 
 #[cfg(test)]
