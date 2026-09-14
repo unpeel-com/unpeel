@@ -934,80 +934,179 @@ pub(crate) fn principal_for_bearer(
         })
 }
 
-/// ANSI/UTF-8 boundary scan (port of `align_tail_start_in_window`): returns
-/// the last safe boundary at or before `data.len()`, scanning from 0.
-fn last_safe_boundary(data: &[u8]) -> usize {
-    #[derive(PartialEq)]
-    enum S {
+fn prepare_output_chunk(
+    mut chunk: unpeel_core::session_host::SessionOutputChunk,
+    limit: usize,
+    raw: bool,
+) -> Result<unpeel_core::session_host::SessionOutputChunk, String> {
+    // Replay-start alignment may extend the core read backwards. Keep the
+    // wire page within the Controller's limit, including relay frame budgets.
+    if chunk.data.len() > limit {
+        chunk.next_offset -= (chunk.data.len() - limit) as u64;
+        chunk.data.truncate(limit);
+    }
+    if raw {
+        Ok(chunk)
+    } else {
+        legacy_output_chunk(chunk, limit)
+    }
+}
+
+/// Legacy Controllers inject VT bytes between replies. Only return complete
+/// scalars and ground-state VT prefixes, including on replay/reset pages.
+fn legacy_output_chunk(
+    mut chunk: unpeel_core::session_host::SessionOutputChunk,
+    limit: usize,
+) -> Result<unpeel_core::session_host::SessionOutputChunk, String> {
+    let safe = legacy_output_prefix_len(&chunk.data);
+    if safe == 0 && !chunk.data.is_empty() && (chunk.data.len() >= limit || chunk.exited) {
+        return Err("terminal output has no safe boundary within the requested limit; use a Controller supporting session.output.raw or increase limit (maximum 8 MiB)".to_owned());
+    }
+    chunk.next_offset -= (chunk.data.len() - safe) as u64;
+    chunk.data.truncate(safe);
+    Ok(chunk)
+}
+
+fn legacy_output_prefix_len(data: &[u8]) -> usize {
+    #[derive(Clone, Copy, PartialEq)]
+    enum State {
         Ground,
         Esc,
+        Intermediate,
         Csi,
-        Osc,
-        OscEsc,
+        String(bool),
+        StringEsc(bool),
     }
-    let mut state = S::Ground;
-    let mut boundary = 0usize;
-    let mut i = 0usize;
+    let mut state = State::Ground;
+    let mut safe = 0;
+    let mut i = 0;
     while i < data.len() {
-        let b = data[i];
-        match state {
-            S::Ground => match b {
-                0x1b => state = S::Esc,
-                0x80..=0xbf => {} // utf-8 continuation: not a boundary start
-                _ => {
-                    // boundary after complete utf-8 scalar
-                    let len = if b < 0x80 {
-                        1
-                    } else if b >= 0xf0 {
-                        4
-                    } else if b >= 0xe0 {
-                        3
-                    } else {
-                        2
+        let byte = data[i];
+        if matches!(byte, 0x18 | 0x1a) {
+            state = State::Ground;
+        } else {
+            state = match state {
+                State::Ground if byte == 0x1b => State::Esc,
+                State::Ground => {
+                    let width = match byte {
+                        0xc2..=0xdf => 2,
+                        0xe0..=0xef => 3,
+                        0xf0..=0xf4 => 4,
+                        _ => 1,
                     };
-                    if i + len <= data.len() {
-                        i += len;
-                        boundary = i;
-                        continue;
-                    } else {
-                        break;
+                    let available = &data[i..(i + width).min(data.len())];
+                    match std::str::from_utf8(available) {
+                        Err(error) if error.error_len().is_none() => break,
+                        Ok(_) => i += width - 1,
+                        _ => {} // Invalid bytes still travel verbatim.
                     }
+                    State::Ground
                 }
-            },
-            S::Esc => match b {
-                b'[' => state = S::Csi,
-                b']' | b'P' | b'X' | b'^' | b'_' => state = S::Osc,
-                _ => {
-                    state = S::Ground;
-                    boundary = i + 1;
-                }
-            },
-            S::Csi => {
-                if (0x40..=0x7e).contains(&b) {
-                    state = S::Ground;
-                    boundary = i + 1;
-                }
-            }
-            S::Osc => match b {
-                0x07 => {
-                    state = S::Ground;
-                    boundary = i + 1;
-                }
-                0x1b => state = S::OscEsc,
-                _ => {}
-            },
-            S::OscEsc => {
-                state = if b == b'\\' {
-                    boundary = i + 1;
-                    S::Ground
-                } else {
-                    S::Osc
-                };
-            }
+                State::Esc => match byte {
+                    b'[' => State::Csi,
+                    b']' => State::String(true),
+                    b'P' | b'X' | b'^' | b'_' => State::String(false),
+                    0x20..=0x2f => State::Intermediate,
+                    0x1b => State::Esc,
+                    0x00..=0x1f => State::Esc,
+                    _ => State::Ground,
+                },
+                State::Intermediate | State::Csi if byte == 0x1b => State::Esc,
+                State::Intermediate if (0x30..=0x7e).contains(&byte) => State::Ground,
+                State::Csi if (0x40..=0x7e).contains(&byte) => State::Ground,
+                State::String(true) | State::StringEsc(true) if byte == 0x07 => State::Ground,
+                State::String(osc) if byte == 0x1b => State::StringEsc(osc),
+                State::StringEsc(_) if byte == b'\\' => State::Ground,
+                State::StringEsc(osc) if byte != 0x1b => State::String(osc),
+                other => other,
+            };
         }
         i += 1;
+        if state == State::Ground {
+            safe = i;
+        }
     }
-    boundary
+    safe
+}
+
+/// Coalesce an incomplete UTF-8 suffix, but preserve invalid bytes verbatim.
+/// Unlike replay *start* alignment, continuation pages must not require VT
+/// ground state: the Controller retains its parser across pages, including
+/// inside arbitrarily large OSC/APC strings. Never buffer a whole string here.
+fn output_prefix_len(data: &[u8], limit: usize, exited: bool) -> usize {
+    if data.len() >= limit || exited {
+        // Even a one-byte page must progress. The retained parser also handles
+        // split scalars; this is byte transport, not independent text records.
+        return data.len();
+    }
+    let mut start = 0;
+    while start < data.len() {
+        match std::str::from_utf8(&data[start..]) {
+            Ok(_) => return data.len(),
+            Err(error) => {
+                start += error.valid_up_to();
+                match error.error_len() {
+                    Some(len) => start += len,
+                    None => return start,
+                }
+            }
+        }
+    }
+    data.len()
+}
+
+type OutputFingerprint = [Option<(u64, u64, Option<std::time::SystemTime>)>; 3];
+
+fn output_fingerprint(paths: &[std::path::PathBuf; 3]) -> OutputFingerprint {
+    use std::os::unix::fs::MetadataExt;
+
+    paths.each_ref().map(|path| {
+        std::fs::metadata(path)
+            .ok()
+            .map(|metadata| (metadata.len(), metadata.ino(), metadata.modified().ok()))
+    })
+}
+
+// Match core's manifest-health cache lifetime. Even without a file change,
+// process death must eventually go through the authoritative health reader.
+const OUTPUT_HEALTH_RECHECK: Duration = Duration::from_millis(500);
+
+fn poll_output_chunk(
+    offset: Option<u64>,
+    limit: usize,
+    wait: Duration,
+    mut fingerprint: impl FnMut() -> OutputFingerprint,
+    mut read: impl FnMut() -> Result<unpeel_core::session_host::SessionOutputChunk, String>,
+) -> Result<(u64, Vec<u8>, bool), String> {
+    let deadline = Instant::now() + wait;
+    loop {
+        // Sample before reading so a concurrent append or retention update
+        // cannot be mistaken for the state of the cached empty result.
+        let observed = fingerprint();
+        let chunk = read()?;
+        let health_deadline = Instant::now() + OUTPUT_HEALTH_RECHECK;
+        let start = chunk.next_offset.saturating_sub(chunk.data.len() as u64);
+        let truncated = offset.map_or(start > 0, |requested| requested != start);
+        let mut data = chunk.data;
+        if !truncated {
+            data.truncate(output_prefix_len(&data, limit, chunk.exited));
+        }
+        if !data.is_empty() || truncated || chunk.exited || offset.is_none() {
+            return Ok((start, data, truncated));
+        }
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Ok((start, data, truncated));
+            }
+            std::thread::sleep(remaining.min(Duration::from_millis(20)));
+            // These stats avoid journal reads, retention JSON parsing and
+            // manifest-health work on each idle tick. Cache only this request.
+            if fingerprint() != observed || Instant::now() >= health_deadline {
+                break;
+            }
+        }
+    }
 }
 
 const B64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -1250,7 +1349,6 @@ fn handle_output(request: &Request) -> (u16, String) {
     else {
         return (400, error_body("invalid session id"));
     };
-    let path = session_dir(session_id).join("output.bin");
     let limit = request
         .query
         .get("limit")
@@ -1268,38 +1366,33 @@ fn handle_output(request: &Request) -> (u16, String) {
         .unwrap_or(0)
         .min(25_000);
 
-    let mut size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-    if wait_ms > 0 {
-        if let Some(offset) = offset {
-            if offset == size {
-                let deadline = Instant::now() + Duration::from_millis(wait_ms);
-                while Instant::now() < deadline {
-                    std::thread::sleep(Duration::from_millis(20));
-                    size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                    if size > offset {
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    let chunk = match unpeel_core::session_host::read_output_chunk(
-        session_id,
+    let dir = session_dir(session_id);
+    // Raw continuation requires a retained parser with no injected bytes
+    // between pages. Older Controllers omit this explicit opt-in.
+    let raw = request.query.get("raw").is_some_and(|value| value == "1");
+    let watched_paths = [
+        dir.join("output.bin"),
+        dir.join(unpeel_core::session_host::OUTPUT_RETENTION_FILE),
+        dir.join("manifest.json"),
+    ];
+    let (start, data, truncated) = match poll_output_chunk(
         offset,
-        Some(limit as usize),
-        Some(limit as usize),
+        limit as usize,
+        Duration::from_millis(wait_ms),
+        || output_fingerprint(&watched_paths),
+        || {
+            let chunk = unpeel_core::session_host::read_output_chunk(
+                session_id,
+                offset,
+                Some(limit as usize),
+                Some(limit as usize),
+            )?;
+            prepare_output_chunk(chunk, limit as usize, raw)
+        },
     ) {
         Ok(chunk) => chunk,
         Err(error) => return (500, error_body(&error)),
     };
-    let start = chunk.next_offset.saturating_sub(chunk.data.len() as u64);
-    let truncated = offset.map_or(start > 0, |requested| requested != start);
-    let mut data = chunk.data;
-    if !truncated {
-        let boundary = last_safe_boundary(&data);
-        data.truncate(boundary);
-    }
     let body = serde_json::json!({
         "sessionID": session_id,
         "offset": start,
@@ -3810,12 +3903,324 @@ non-ephemeral ports — a product regression, not a port race. Attempts: {failur
     }
 
     #[test]
-    fn boundary_withholds_partial_escape() {
-        assert_eq!(last_safe_boundary(b"hello \x1b[31m red"), 15);
-        assert_eq!(last_safe_boundary(b"hello \x1b[3"), 6);
-        assert_eq!(last_safe_boundary(b"plain"), 5);
-        // partial utf-8 tail withheld
-        assert_eq!(last_safe_boundary(&[b'a', 0xe2, 0x82]), 1);
+    fn output_prefix_preserves_control_and_invalid_bytes() {
+        assert_eq!(output_prefix_len(b"hello \x1b[3", 512, false), 9);
+        assert_eq!(output_prefix_len(&[b'a', 0xe2, 0x82], 512, false), 1);
+        assert_eq!(output_prefix_len(&[0xff, 0xe2, 0x82], 512, false), 1);
+        assert_eq!(output_prefix_len(&[0xe2], 1, false), 1);
+        assert_eq!(output_prefix_len(&[0xe2, 0x82], 512, true), 2);
+    }
+
+    #[test]
+    fn legacy_output_keeps_utf8_and_vt_boundaries_before_injected_brackets() {
+        for sequence in [
+            "€".as_bytes(),
+            b"\x1b]title\x07",
+            b"\x1b_payload\x1b\\",
+            b"\x1bPdata\x07more\x1b\\",
+            b"\x1b[31m",
+            b"\x1b(B",
+        ] {
+            for split in 1..sequence.len() {
+                let mut bytes = b"ok".to_vec();
+                bytes.extend_from_slice(&sequence[..split]);
+                let chunk = legacy_output_chunk(output_chunk(7, &bytes), bytes.len()).unwrap();
+                assert_eq!(chunk.data, b"ok");
+                assert_eq!(chunk.next_offset, 9);
+            }
+            assert_eq!(legacy_output_prefix_len(sequence), sequence.len());
+        }
+        assert_eq!(legacy_output_prefix_len(b"\xffok"), 3);
+    }
+
+    #[test]
+    fn aligned_replay_still_respects_wire_limit_and_legacy_boundaries() {
+        let bytes = b"\x1b]title\x07rest";
+        let raw = prepare_output_chunk(output_chunk(7, bytes), 4, true).unwrap();
+        assert_eq!(raw.data, &bytes[..4]);
+        assert_eq!(raw.next_offset, 11);
+        assert!(prepare_output_chunk(output_chunk(7, bytes), 4, false).is_err());
+        let safe = prepare_output_chunk(output_chunk(7, bytes), 9, false).unwrap();
+        assert_eq!(safe.data, &bytes[..9]);
+        assert_eq!(safe.next_offset, 16);
+    }
+
+    #[test]
+    fn legacy_oversized_strings_and_tiny_scalars_fail_with_bounded_error() {
+        for introducer in b"]_P" {
+            let mut bytes = vec![0x1b, *introducer];
+            bytes.resize(200 * 1024, b'x');
+            let error = legacy_output_chunk(output_chunk(0, &bytes), bytes.len()).unwrap_err();
+            assert!(error.contains("no safe boundary"));
+            assert!(error.contains("session.output.raw"));
+            // Below the bound an incomplete sequence waits at its exact cursor.
+            let pending = legacy_output_chunk(output_chunk(7, &bytes[..10]), bytes.len()).unwrap();
+            assert!(pending.data.is_empty());
+            assert_eq!(pending.next_offset, 7);
+        }
+        assert!(legacy_output_chunk(output_chunk(0, &[0xe2]), 1).is_err());
+        let mut exited = output_chunk(0, b"\x1b]unfinished");
+        exited.exited = true;
+        assert!(legacy_output_chunk(exited, 512).is_err());
+    }
+
+    #[test]
+    fn legacy_incomplete_control_string_long_poll_uses_metadata_and_keeps_cursor() {
+        let mut reads = 0;
+        let began = Instant::now();
+        let page = poll_output_chunk(
+            Some(7),
+            512,
+            Duration::from_millis(45),
+            || [None; 3],
+            || {
+                reads += 1;
+                legacy_output_chunk(output_chunk(7, b"\x1b]unfinished"), 512)
+            },
+        )
+        .unwrap();
+        assert!(began.elapsed() >= Duration::from_millis(45));
+        assert_eq!(reads, 1);
+        assert_eq!(page, (7, vec![], false));
+    }
+
+    // Inject journal reads so these timing/cursor tests never access a real
+    // UNPEEL_HOME or depend on process-global environment mutation.
+    fn output_chunk(start: u64, bytes: &[u8]) -> unpeel_core::session_host::SessionOutputChunk {
+        unpeel_core::session_host::SessionOutputChunk {
+            data: bytes.to_vec(),
+            next_offset: start + bytes.len() as u64,
+            exited: false,
+            exists: true,
+        }
+    }
+
+    #[test]
+    fn output_long_poll_waits_for_deliverable_utf8_and_keeps_cursor_on_timeout() {
+        let began = Instant::now();
+        let mut reads = 0;
+        let (start, data, truncated) = poll_output_chunk(
+            Some(7),
+            512,
+            Duration::from_millis(45),
+            || [None; 3],
+            || {
+                reads += 1;
+                Ok(output_chunk(7, &[0xe2, 0x82]))
+            },
+        )
+        .unwrap();
+        assert!(began.elapsed() >= Duration::from_millis(45));
+        assert_eq!(reads, 1, "unchanged incomplete suffix is read only once");
+        assert_eq!(start, 7);
+        assert!(data.is_empty());
+        assert!(!truncated);
+
+        let mut reads = 0;
+        let mut generation = 0;
+        let (start, data, truncated) = poll_output_chunk(
+            Some(7),
+            512,
+            Duration::from_secs(1),
+            || {
+                generation += 1;
+                [Some((generation, 0, None)), None, None]
+            },
+            || {
+                reads += 1;
+                Ok(output_chunk(
+                    7,
+                    if reads == 1 {
+                        &[0xe2, 0x82]
+                    } else {
+                        &[0xe2, 0x82, 0xac]
+                    },
+                ))
+            },
+        )
+        .unwrap();
+        assert_eq!(reads, 2);
+        assert_eq!(start + data.len() as u64, 10);
+        assert_eq!(data, "€".as_bytes());
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn output_empty_poll_waits_but_cursor_reset_returns_immediately() {
+        let began = Instant::now();
+        let page = poll_output_chunk(
+            Some(7),
+            512,
+            Duration::from_millis(25),
+            || [None; 3],
+            || Ok(output_chunk(7, &[])),
+        )
+        .unwrap();
+        assert!(began.elapsed() >= Duration::from_millis(25));
+        assert_eq!(page, (7, vec![], false));
+        let mut reads = 0;
+        let page = poll_output_chunk(
+            Some(7),
+            512,
+            Duration::from_secs(1),
+            || [None; 3],
+            || {
+                reads += 1;
+                Ok(output_chunk(9, &[]))
+            },
+        )
+        .unwrap();
+        assert_eq!(reads, 1);
+        assert_eq!(page, (9, vec![], true));
+    }
+
+    #[test]
+    fn output_idle_ticks_use_metadata_until_the_health_deadline() {
+        let mut probes = 0;
+        let mut reads = 0;
+        let began = Instant::now();
+        let page = poll_output_chunk(
+            Some(7),
+            512,
+            Duration::from_secs(2),
+            || {
+                probes += 1;
+                [None; 3]
+            },
+            || {
+                reads += 1;
+                let mut chunk = output_chunk(7, &[]);
+                // Model process death with no journal or manifest write.
+                chunk.exited = reads == 2;
+                Ok(chunk)
+            },
+        )
+        .unwrap();
+        assert_eq!(reads, 2);
+        assert!(probes > reads);
+        assert!(began.elapsed() >= OUTPUT_HEALTH_RECHECK);
+        assert_eq!(page, (7, vec![], false));
+    }
+
+    #[test]
+    fn output_file_changes_wake_bytes_retention_and_exit_without_idle_full_reads() {
+        // All files are private fixtures, never the operator's UNPEEL_HOME.
+        let home = scratch_dir("output-poll");
+        std::fs::create_dir_all(&home).unwrap();
+        let paths = [
+            home.join("output.bin"),
+            home.join("output-retention.json"),
+            home.join("manifest.json"),
+        ];
+        for changed in 0..paths.len() {
+            for path in &paths {
+                std::fs::write(path, b"x").unwrap();
+            }
+            let mut probes = 0;
+            let mut reads = 0;
+            let page = poll_output_chunk(
+                Some(7),
+                512,
+                Duration::from_secs(2),
+                || {
+                    probes += 1;
+                    if probes == 3 {
+                        if changed == 0 {
+                            // Journal growth completes the withheld scalar.
+                            std::fs::write(&paths[changed], b"xx").unwrap();
+                        } else {
+                            // Atomic state replacement can keep the same size.
+                            let replacement = home.join("replacement");
+                            std::fs::write(&replacement, b"y").unwrap();
+                            std::fs::rename(replacement, &paths[changed]).unwrap();
+                        }
+                    }
+                    output_fingerprint(&paths)
+                },
+                || {
+                    reads += 1;
+                    if reads == 1 {
+                        return Ok(output_chunk(7, &[0xe2, 0x82]));
+                    }
+                    Ok(match changed {
+                        0 => output_chunk(7, &[0xe2, 0x82, 0xac]),
+                        1 => output_chunk(9, &[]),
+                        _ => {
+                            let mut chunk = output_chunk(7, &[0xe2, 0x82]);
+                            chunk.exited = true;
+                            chunk
+                        }
+                    })
+                },
+            )
+            .unwrap();
+            assert_eq!(reads, 2, "idle metadata tick must not read the journal");
+            assert_eq!(probes, 4, "change wakes on its first metadata sample");
+            match changed {
+                0 => assert_eq!(page, (7, "€".as_bytes().to_vec(), false)),
+                1 => assert_eq!(page, (9, vec![], true)),
+                _ => assert_eq!(page, (7, vec![0xe2, 0x82], false)),
+            }
+        }
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn output_tiny_pages_preserve_split_utf8_without_resetting_the_parser() {
+        let journal = "a€😀z".as_bytes();
+        for limit in 1..=4 {
+            let mut cursor = 0;
+            let mut received = Vec::new();
+            while cursor < journal.len() {
+                let end = (cursor + limit).min(journal.len());
+                let (start, data, truncated) = poll_output_chunk(
+                    Some(cursor as u64),
+                    limit,
+                    Duration::ZERO,
+                    || [None; 3],
+                    || Ok(output_chunk(cursor as u64, &journal[cursor..end])),
+                )
+                .unwrap();
+                assert_eq!(start, cursor as u64);
+                assert!(!truncated);
+                assert!(!data.is_empty());
+                cursor += data.len();
+                received.extend(data);
+            }
+            assert_eq!(received, journal);
+        }
+    }
+
+    #[test]
+    fn output_oversized_control_strings_progress_byte_exactly_in_bounded_pages() {
+        for &introducer in b"]_" {
+            let mut journal = vec![0x1b, introducer];
+            journal.extend(vec![b'x'; 1024 * 1024]);
+            // Include controls and split ST: no page-local VT interpretation
+            // may drop or rewrite payload or reset the Controller's parser.
+            journal.extend_from_slice(b"\x07\x1b[3\x18\x1b\\done");
+            for limit in [1, 127, 512 * 1024] {
+                let mut cursor = 0;
+                while cursor < journal.len() {
+                    let end = (cursor + limit).min(journal.len());
+                    let (start, data, truncated) = poll_output_chunk(
+                        Some(cursor as u64),
+                        limit,
+                        Duration::ZERO,
+                        || [None; 3],
+                        || Ok(output_chunk(cursor as u64, &journal[cursor..end])),
+                    )
+                    .unwrap();
+                    assert_eq!(start, cursor as u64);
+                    assert!(!truncated);
+                    assert!(!data.is_empty());
+                    assert!(data.len() <= limit);
+                    assert_eq!(data, journal[cursor..cursor + data.len()]);
+                    cursor += data.len();
+                }
+                assert_eq!(cursor, journal.len());
+            }
+        }
     }
 
     #[test]

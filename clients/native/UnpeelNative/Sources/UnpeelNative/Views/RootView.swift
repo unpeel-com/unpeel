@@ -1054,15 +1054,21 @@ private struct TitlebarActivityMenuRow: View {
 /// frames with a lightweight TimelineView for the single titlebar affordance.
 private struct TitlebarBrailleSpinner: View {
     let color: Color
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var motionAllowed = false
+    @State private var isPresented = false
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: Theme.spinnerInterval)) { context in
-            Text(frame(for: context.date))
+        TimelineView(.animation(minimumInterval: Theme.spinnerInterval, paused: !isPresented || !motionAllowed || reduceMotion)) { context in
+            Text(reduceMotion ? Theme.spinnerFrames[0] : frame(for: context.date))
                 .font(.system(size: 14.7, weight: .bold, design: .monospaced))
                 .foregroundStyle(color)
                 .shadow(color: color.opacity(0.45), radius: 3)
                 .frame(width: 16, height: 16)
         }
+        .background(DecorationMotionReader(allowed: $motionAllowed))
+        .onAppear { isPresented = true }
+        .onDisappear { isPresented = false }
         .accessibilityHidden(true)
     }
 

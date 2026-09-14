@@ -1632,6 +1632,15 @@ final class UnpeelStore: ObservableObject {
     /// twin above.
     private var scopeSessionMemory: [String: String] = [:]
 
+    /// A seed or connecting Local client is not Host truth yet. Forgetting the
+    /// remembered Local selection against that incomplete view is how a Session
+    /// created after launch vanished from the pane on workspace return.
+    private var localHostTruthIsComplete: Bool {
+        guard localHostProjectionReady else { return false }
+        if case .connected = remoteHostRuntime.connectionState { return true }
+        return false
+    }
+
     /// The remembered last selection for a scope — the swipe preview uses
     /// this so the pooled page highlights the row the committed scope will
     /// restore, instead of flashing the Host's default (top) row.
@@ -2219,11 +2228,10 @@ final class UnpeelStore: ObservableObject {
         // check Host truth, not the launch-frozen Swift scan, or a Session
         // created since launch would lose its selection on every return.
         connectLocalHostServiceIfNeeded()
-        if let prior = localSelectedSessionIDBeforeRemote,
-           displaySessionsByID[prior] != nil {
-            selectedSessionID = prior
-        }
-        localSelectedSessionIDBeforeRemote = nil
+        applyRememberedLocalSelection(
+            knownIDs: localHostProjectionReady ? Set(displaySessionsByID.keys) : [],
+            hostTruthIsComplete: localHostTruthIsComplete
+        )
         refreshTitlebarBranch()
         applyScopeTint()
         refreshScopeAppearance()
@@ -15271,6 +15279,50 @@ extension UnpeelStore {
         scope != .local || (localClientStarted && localProjectionReady)
     }
 
+    /// What to do with the Session that was selected when this window left Local.
+    enum RememberedScopeSelection: Equatable {
+        case select(String)
+        case keepRemembered
+        case forget
+    }
+
+    /// Host truth only. An incomplete projection (no Host snapshot yet, or a
+    /// seed that has not connected) must keep the remembered id: consulting the
+    /// launch-frozen disk scan, then discarding memory, is how a Session
+    /// created after launch returned to "No session selected".
+    nonisolated static func resolveRememberedSelection(
+        rememberedID: String?,
+        knownIDs: Set<String>,
+        hostTruthIsComplete: Bool
+    ) -> RememberedScopeSelection {
+        guard let rememberedID else { return .forget }
+        if knownIDs.contains(rememberedID) { return .select(rememberedID) }
+        if hostTruthIsComplete { return .forget }
+        return .keepRemembered
+    }
+
+    /// Re-select the Session that was open before this window left Local.
+    private func applyRememberedLocalSelection(
+        knownIDs: Set<String>,
+        hostTruthIsComplete: Bool
+    ) {
+        switch Self.resolveRememberedSelection(
+            rememberedID: localSelectedSessionIDBeforeRemote,
+            knownIDs: knownIDs,
+            hostTruthIsComplete: hostTruthIsComplete
+        ) {
+        case .select(let id):
+            localSelectedSessionIDBeforeRemote = nil
+            if selectedSessionID != id {
+                selectedSessionID = id
+            }
+        case .keepRemembered:
+            break
+        case .forget:
+            localSelectedSessionIDBeforeRemote = nil
+        }
+    }
+
     /// Once the Local Host client starts, semantic effects fail closed to its
     /// workspace worker even while startup/recovery is still showing the disk
     /// fallback. A missing socket must never silently reactivate the duplicate
@@ -15910,8 +15962,13 @@ extension UnpeelStore {
             if let selectedSessionID,
                projectedSessions[selectedSessionID] == nil {
                 self.selectedSessionID = nil
-            } else if !remoteHostRuntime.directDataPlaneSelectionIntentPending,
-                      remoteHostRuntime.selectedSessionID != selectedSessionID {
+            }
+            applyRememberedLocalSelection(
+                knownIDs: Set(projectedSessions.keys),
+                hostTruthIsComplete: localHostTruthIsComplete
+            )
+            if !remoteHostRuntime.directDataPlaneSelectionIntentPending,
+               remoteHostRuntime.selectedSessionID != selectedSessionID {
                 remoteHostRuntime.selectDirectDataPlaneSession(selectedSessionID)
             }
         }

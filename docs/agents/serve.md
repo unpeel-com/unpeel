@@ -622,6 +622,24 @@ running. Scripted Link activation for the same provisioning lane is
 `unpeel link enroll <key>` (shared `unpeel_core::license` implementation
 with the interactive path — see `docs/agents/cli.md` for the invariants).
 
+### HTTP terminal output pagination
+
+Protocol 1.20 advertises `session.output.raw`. A Controller may request
+`GET /mobile/output?raw=1` only when it retains parser state and inserts no
+bytes between pages. Native negotiates that capability from bootstrap. iOS
+keeps the default UTF-8 and VT-safe boundaries because its feed inserts local
+synchronized-output brackets.
+
+Raw pages preserve byte-exact continuation through split scalars and control
+strings. Default pages withhold incomplete sequences; a sequence that cannot
+fit the requested limit returns an explicit error instead of unsafe partial
+data. Both modes respect the requested wire limit, capped at 8 MiB.
+
+Long polls wait for deliverable progress, not just journal growth. Quiet ticks
+check journal, retention, and manifest metadata; a bounded health recheck
+still detects process exit. The native Controller also paces empty replies
+with unchanged cursors from older Hosts.
+
 ### Change gates
 
 Serve lifecycle, protocol, or launch changes must run these gates serially

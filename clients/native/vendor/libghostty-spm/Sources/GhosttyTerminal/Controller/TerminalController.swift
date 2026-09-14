@@ -59,7 +59,6 @@ public final class TerminalController {
 
     public internal(set) var lastConfigurationIssue: String?
     var onWakeup: (() -> Void)?
-    var shouldProcessWakeup: (() -> Bool)?
 
     // MARK: - Config Resolution State
 
@@ -290,11 +289,8 @@ public final class TerminalController {
     }
 
     func handleWakeup() {
-        guard shouldProcessWakeup?() ?? true else {
-            TerminalDebugLog.log(.lifecycle, "wakeup suspended")
-            return
-        }
-
+        // The mailbox carries lifecycle and IO callbacks even for hidden or
+        // detached retained surfaces. Only rendering may depend on visibility.
         tick()
         onWakeup?()
     }

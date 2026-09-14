@@ -1952,8 +1952,14 @@ impl Drop for HostRuntime {
 pub fn run(mut report: impl FnMut(ServeEvent)) -> Result<(), String> {
     SHUTDOWN_REQUESTED.store(false, Ordering::Release);
     unsafe {
-        libc::signal(libc::SIGINT, request_shutdown as libc::sighandler_t);
-        libc::signal(libc::SIGTERM, request_shutdown as libc::sighandler_t);
+        libc::signal(
+            libc::SIGINT,
+            request_shutdown as *const () as libc::sighandler_t,
+        );
+        libc::signal(
+            libc::SIGTERM,
+            request_shutdown as *const () as libc::sighandler_t,
+        );
     }
     let (mut driver, events) = HostRuntime::start()?;
     for event in events {

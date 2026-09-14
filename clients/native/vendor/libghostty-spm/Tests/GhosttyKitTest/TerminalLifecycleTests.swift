@@ -75,18 +75,50 @@ struct TerminalLifecycleTests {
     }
 
     @Test
-    func `suspended wakeup does not schedule render`() {
+    func `hidden wakeup delivers callbacks without rendering`() {
         let controller = TerminalController()
+        let coordinator = TerminalSurfaceCoordinator()
         var wakeups = 0
+        var renders = 0
 
-        controller.shouldProcessWakeup = { false }
+        coordinator.isAttached = { true }
+        coordinator.setDisplayVisible(false)
+        coordinator.onPostRender = { renders += 1 }
         controller.onWakeup = {
             wakeups += 1
+            coordinator.requestImmediateTick()
         }
 
         controller.handleWakeup()
+        coordinator.renderImmediately()
 
-        #expect(wakeups == 0)
+        #expect(wakeups == 1)
+        #expect(renders == 0)
+    }
+
+    @Test
+    func `hidden ancestor blocks rendering and adoption restores it`() {
+        let coordinator = TerminalSurfaceCoordinator()
+        var presented = false
+        var renders = 0
+        coordinator.isAttached = { true }
+        coordinator.isPresented = { presented }
+        coordinator.onPostRender = { renders += 1 }
+
+        coordinator.refreshPresentationVisibility()
+        coordinator.noteRenderActivity()
+        coordinator.renderImmediately(synchronousDraw: true)
+        #expect(renders == 0)
+
+        presented = true
+        coordinator.refreshPresentationVisibility()
+        coordinator.renderImmediately(synchronousDraw: true)
+        #expect(renders == 1)
+
+        coordinator.isAttached = { false }
+        coordinator.stopRendering()
+        coordinator.renderImmediately()
+        #expect(renders == 1)
     }
 
     @Test

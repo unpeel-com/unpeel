@@ -71,15 +71,8 @@ struct FrameBackdrop: View {
     var body: some View {
         ZStack {
             // Translucent paths stack their wash over a native glass base.
-            // .hudWindow is the clearest standard material, so low opacities
-            // read as glass rather than a gray slab. WITHIN-window blending,
-            // never behind-window: a behind-window blur is re-sampled from
-            // the desktop by WindowServer on the GPU every time anything in
-            // the window changes, and a TUI redrawing at 60 fps (OpenCode's
-            // progress UI) turned that into 80-90% whole-GPU utilization on
-            // a Retina/ProMotion display (unpeel#9). Within-window frosts
-            // only the window's own content, which costs nothing while the
-            // terminal repaints.
+            // The glass base requests .hudWindow material with within-window
+            // blending; the selected tone and opacity supply the color wash.
             if !transparency.backgroundUsesDesignTone {
                 // Custom tone: flat color (dark appearance; light keeps its
                 // designed white) plus the workspace wash every area shares.

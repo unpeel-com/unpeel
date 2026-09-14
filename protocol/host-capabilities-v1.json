@@ -2,13 +2,19 @@
   "schemaVersion": 1,
   "protocol": {
     "major": 1,
-    "minor": 19,
+    "minor": 20,
     "compatibility": {
       "major": "must-match",
       "minor": "additive",
       "unknownCapabilities": "ignore"
     },
     "history": [
+      {
+        "minor": 20,
+        "release": "0.6.0",
+        "summary": "Explicit raw=1 output continuation for Controllers that retain their parser and inject no bytes between pages. Default replies end at UTF-8 and VT ground boundaries; a sequence that cannot fit the requested limit returns an explicit error, bounded at 8 MiB.",
+        "capabilities": ["session.output.raw"]
+      },
       {
         "minor": 19,
         "release": "0.6.0",
@@ -241,6 +247,13 @@
       "id": "session.output.read",
       "method": "GET",
       "path": "/mobile/output",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "session.output.raw",
+      "method": "GET",
+      "path": "/mobile/output?raw=1",
       "native": true,
       "tui": true
     },
