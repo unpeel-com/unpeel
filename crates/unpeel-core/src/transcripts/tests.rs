@@ -595,6 +595,63 @@ fn kimi_code_wire_entries_parse_messages_loop_events_and_tools() {
 }
 
 #[test]
+fn omp_transcript_entries_parse_messages_reasoning_and_tools() {
+    let raw = r#"
+{"type":"session","id":"01a0b32e","timestamp":"2026-09-18T06:23:12.771Z","cwd":"/private/tmp","version":"18.2.3"}
+{"type":"title","title":"Summarize the grading notes","updatedAt":"2026-09-18T06:24:02.309Z","v":1}
+{"type":"model_change","id":"m1","model":"openrouter/deepseek/deepseek-v4.1-flash","timestamp":"2026-09-18T06:23:13.000Z"}
+{"type":"message","id":"u1","parentId":"m1","message":{"role":"user","content":[{"type":"text","text":"Read /tmp/notes.md"}],"attribution":"user"}}
+{"type":"message","id":"a1","parentId":"u1","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Read the file first."},{"type":"text","text":"Reading it now."},{"type":"toolCall","id":"tool_ABC","name":"read","arguments":{"path":"/tmp/notes.md"}}]}}
+{"type":"message","id":"t1","parentId":"a1","message":{"role":"toolResult","toolCallId":"tool_ABC","toolName":"read","content":[{"type":"text","text":"1:pipeline capture notes"}]}}
+{"type":"message","id":"a2","parentId":"t1","message":{"role":"assistant","content":[{"type":"text","text":"It lists pipeline capture notes."}]}}
+{"type":"custom","id":"c1","customType":"unpeel.test","data":{}}
+"#;
+    let entries = collect_transcript_entries(provider("omp"), raw, true);
+    assert!(entries
+        .iter()
+        .any(|entry| entry.role == "User" && entry.text == "Read /tmp/notes.md"));
+    assert!(entries
+        .iter()
+        .any(|entry| entry.role == "Reasoning" && entry.text == "Read the file first."));
+    let tool_call = entries
+        .iter()
+        .find(|entry| entry.text.contains("/tmp/notes.md") && entry.role == "Tool")
+        .expect("OMP tool call");
+    assert_eq!(tool_call.blocks[0].tool_name.as_deref(), Some("read"));
+    assert!(entries
+        .iter()
+        .any(|entry| entry.text.contains("1:pipeline capture notes")));
+    assert_eq!(
+        entries.last().unwrap().text,
+        "It lists pipeline capture notes."
+    );
+
+    // Tool traffic is hidden unless the caller asks for it, and OMP's own
+    // bookkeeping entries (title, model_change, custom) stay out of the
+    // conversation either way.
+    let hidden = collect_transcript_entries(provider("omp"), raw, false);
+    assert!(!hidden.iter().any(|entry| entry.role == "Tool"));
+    assert!(!hidden
+        .iter()
+        .any(|entry| entry.text.contains("Read the file first.")));
+    assert!(hidden
+        .iter()
+        .any(|entry| entry.text == "It lists pipeline capture notes."));
+}
+
+#[test]
+fn omp_transcript_titles_come_from_the_title_entry() {
+    let raw = r#"
+{"type":"session","id":"01a0b32e","cwd":"/private/tmp","version":"18.2.3"}
+{"type":"title","title":"Summarize the grading notes","updatedAt":"2026-09-18T06:24:02.309Z","v":1}
+"#;
+    assert_eq!(
+        transcript_title_candidate(provider("omp"), raw).as_deref(),
+        Some("Summarize the grading notes")
+    );
+}
+
+#[test]
 fn kiro_v3_transcript_entries_parse_messages_and_tools() {
     let raw = r#"
 {"id":"u","payload":{"type":"user","content":"Run pwd"}}

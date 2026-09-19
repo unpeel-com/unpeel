@@ -344,6 +344,22 @@ fn latest_version(bytes: &[u8], recipe: &RuntimeUpdates) -> Option<String> {
 
 fn version_in(text: &str, date: bool) -> Option<String> {
     text.split_whitespace()
+        .flat_map(|token| {
+            // A provider may print `name/<version>` (`omp/18.2.3`). Accept the
+            // tail only when the head is a bare identifier, so a URL or path in
+            // the same output cannot contribute a version-looking segment.
+            match token.rsplit_once('/') {
+                Some((head, tail))
+                    if !head.is_empty()
+                        && head
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') =>
+                {
+                    vec![token, tail]
+                }
+                _ => vec![token],
+            }
+        })
         .map(|token| {
             token.trim_matches(|c: char| {
                 !(c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '+')
@@ -626,5 +642,24 @@ mod tests {
         )
         .unwrap();
         assert_eq!(version_in(&output, false).as_deref(), Some("1.2.3"));
+    }
+
+    #[test]
+    fn version_output_may_name_the_tool_before_its_version() {
+        // OMP prints `omp/18.2.3`, so a bare-identifier head contributes its
+        // tail to version extraction.
+        assert_eq!(version_in("omp/18.2.3\n", false).as_deref(), Some("18.2.3"));
+        // A URL or path in the same output must not supply a version.
+        assert_eq!(version_in("https://example.com/1.2.3\n", false), None);
+        assert_eq!(version_in("/usr/local/pi/1.2.3\n", false), None);
+        // Labelled multi-version output keeps the first token.
+        assert_eq!(
+            version_in(
+                "Current version: 18.2.3\nNew version available: 18.2.5\n",
+                false
+            )
+            .as_deref(),
+            Some("18.2.3")
+        );
     }
 }

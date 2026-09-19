@@ -190,6 +190,57 @@ Pi:
   Resume uses Pi's own `--continue`. Older launches that recorded a managed
   `--session-dir` beneath the Unpeel home keep it across resume and cleanup.
 
+OMP (oh-my-pi's `omp`, omp.sh; npm `@oh-my-pi/pi-coding-agent`):
+
+- OMP is the oh-my-pi fork of Pi with its own extension event bus, so it is a
+  hook-capable runtime rather than a Pi alias: the integration is an extension
+  module Unpeel writes into `<agent dir>/extensions/`, which OMP's native
+  discovery loads, and nothing is added to OMP's own configuration. Detection
+  is the `omp` command/process alias plus the
+  `@oh-my-pi/pi-coding-agent` script path signature.
+- Event map (`runtimes/omp/assets/extensions/unpeel-lifecycle.ts`):
+  `session_start` → HookSeen carrying the conversation id and transcript path
+  from `ctx.sessionManager`; `before_agent_start` → UserPromptSubmit, so a
+  steer or queued batch opens a turn like any other prompt; `agent_end` →
+  Stop, suppressed while `willContinue` reports a scheduled continuation;
+  `tool_approval_requested` → PermissionRequest with `tool_name`;
+  `session_shutdown` → Stop.
+- Escape aborts the foreground turn and OMP still emits `turn_end` and
+  `agent_end` (measured on 18.2.3: Escape sent 10.0 s into a 90 s `sleep`, both
+  events 0.27 s later), so an interrupted turn settles without the Host's
+  Escape-cancellation fence and `escape_cancels_turn` stays off. `session_stop`
+  fires only for a completed turn, while `agent_end` fires for both, which is
+  why the reporter settles on `agent_end` and suppresses it only when
+  `willContinue` reports a scheduled continuation.
+- MCP: OMP reads its own `mcp.json` and does not import another tool's user
+  configuration (foreign user sources are opt-in), so the integration merges
+  the `unpeel` stdio entry there. A user's own `unpeel` server is never
+  replaced; the managed entry falls back to `omp-unpeel`.
+- Resume: a captured id becomes `omp --resume '<id>'`, otherwise the
+  documented continue-last `omp --continue`. A fresh launch drops `-r`,
+  `--resume`, `-c`, and `--continue`
+  (`runtimes/omp/adapter/resume.rs`).
+- Transcript: `<agent dir>/sessions/<cwd slug>/<timestamp>_<session id>.jsonl`,
+  one `{type:"message", message:{role, content}}` entry per turn, with the
+  session title in its own `title` entry. Task and subagent logs live in a
+  nested directory of the same session id and are not conversation
+  transcripts (`runtimes/omp/adapter/transcript.rs`).
+- Agent directory: `PI_CODING_AGENT_DIR` is honored for the extension, the MCP
+  config, and the transcript root, matching OMP's own resolution. A user who
+  redirects it from a shell alias gets the integration there rather than in
+  `~/.omp/agent`.
+- `[updates]` probes `omp --version`, which prints `omp/<version>`; version
+  extraction accepts the tail of a bare-identifier head, so the installed
+  version resolves to `18.2.3` against the npm registry.
+- Screen fallback: the loader row above the composer reads `esc Working…`
+  while a turn runs, and the `❯` composer prompt is present in both states, so
+  the working marker decides the verdict.
+- Verified against a host built from this tree (isolated `UNPEEL_HOME`): install, detection, the
+  MCP mount, busy → done with `completed`/`unread`, captured identity, `unpeel transcript`, and
+  `unpeel resume` relaunching `omp --resume '<captured id>'`. A stale `unpeel_runtime_generation`
+  is acknowledged and ignored. The provider event stream and Escape behavior were measured against
+  a real 18.2.3 TUI session, as recorded above.
+
 Antigravity (Google's `agy`, antigravity.google/product/antigravity-cli;
 community request orgs/unpeel-com discussions #13):
 

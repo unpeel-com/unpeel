@@ -1,0 +1,68 @@
+schema_version = 1
+id = "sh.omp.cli"
+slug = "omp"
+legacy_slug = "omp"
+label = "OMP"
+adapter = "builtin:omp"
+legacy_order = 15
+platforms = ["macos", "linux"]
+supports_quick_launch = true
+capabilities = ["lifecycle_hooks", "resume", "restart_agent", "mcp_sessions", "mcp_browser", "transcript", "notify_when_done"]
+
+[display]
+tint = "#F97316"
+spinner_tint = "#F97316"
+icon = "omp"
+icon_asset = "assets/icon.svg"
+icon_source = "https://github.com/can1357/oh-my-pi/blob/main/assets/icon.svg"
+icon_license = "MIT"
+icon_template = true
+window_padding_x = 8
+
+[install]
+official_url = "https://omp.sh"
+command = "npm install -g @oh-my-pi/pi-coding-agent"
+# OMP updates itself (`omp update`); the shell builtin keeps the maintenance
+# command out of a managed agent launch.
+update_command = "command omp update"
+
+[updates]
+version_args = ["--version"]
+latest_url = "https://registry.npmjs.org/@oh-my-pi/pi-coding-agent/latest"
+json_pointer = "/version"
+
+# OMP is the oh-my-pi fork of Pi: the `omp` CLI, a bun/npm-installed
+# `@oh-my-pi/pi-coding-agent` package, and a Pi-compatible session store under
+# the agent directory. `pi` is a different runtime and stays its own package.
+[detection]
+command_aliases = ["omp"]
+process_aliases = ["omp"]
+script_path_signatures = [{ components = ["@oh-my-pi", "pi-coding-agent"] }]
+
+[lifecycle]
+source = "hooks"
+authority = "complete"
+fallback = "screen"
+completion_reliable = true
+attention_reliable = true
+
+# Screen fallback (integration not installed): the loader row above the
+# composer reads "esc Working…" while a turn runs, and disappears when the
+# turn settles. The "❯" composer prompt is visible in both states, so the
+# working marker decides the verdict.
+[screen]
+working = ["Working…", "esc to interrupt"]
+idle_prompt = ["❯"]
+
+[integration]
+summary = "Writes Unpeel's lifecycle extension into OMP's agent directory (~/.omp/agent/extensions/) and the unpeel MCP server into ~/.omp/agent/mcp.json."
+
+[[usage.stores]]
+root = ".omp/agent/sessions"
+extensions = ["jsonl"]
+
+[[suggested_presets]]
+id = "omp"
+label = "omp"
+command = "omp"
+quick_launch = true

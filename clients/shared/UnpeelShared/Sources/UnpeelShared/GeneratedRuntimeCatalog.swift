@@ -822,6 +822,56 @@ public enum UnpeelRuntimeCatalog {
                 ),
             ]
         ),
+        // runtimes/omp/runtime.toml
+        UnpeelRuntimeMetadata(
+            stableID: "sh.omp.cli",
+            slug: "omp",
+            legacySlug: "omp",
+            legacyOrder: 15,
+            label: "OMP",
+            platforms: Set([.macos, .linux]),
+            supportsQuickLaunch: true,
+            kind: .agent,
+            tintColorHex: 0xF97316,
+            spinnerTintColorHex: 0xF97316,
+            iconKey: "omp",
+            iconSVG: "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 120 90\" width=\"120\" height=\"90\"><path fill=\"#FFFFFF\" d=\"M10 8h100v12H10zM25 20h12v62H25zM75 20h12v45H75zM71 55h20v16H71zM16 14a2 2 0 1 0 4 0 2 2 0 1 0-4 0zM100 14a2 2 0 1 0 4 0 2 2 0 1 0-4 0z\"/></svg>",
+            iconIsTemplate: true,
+            iconSource: "https://github.com/can1357/oh-my-pi/blob/main/assets/icon.svg",
+            iconLicense: "MIT",
+            windowPaddingX: 8,
+            installURL: "https://omp.sh",
+            installCommand: "npm install -g @oh-my-pi/pi-coding-agent",
+            commandAliases: ["omp"],
+            processAliases: ["omp"],
+            searchPathSuffixes: [],
+            lifecycleSource: "hooks",
+            lifecycleAuthority: "complete",
+            lifecycleFallback: "screen",
+            completionReliable: true,
+            attentionReliable: true,
+            anchorStartEventToOutput: true,
+            attentionClearsOnOutput: true,
+            distrustStopsWhileOutputGrows: false,
+            capabilities: [.lifecycleHooks, .resume, .restartAgent, .mcpSessions, .mcpBrowser, .transcript, .notifyWhenDone],
+            usageStores: [
+                UnpeelRuntimeUsageStore(
+                    root: ".omp/agent/sessions",
+                    extensions: Set(["jsonl"]),
+                    fileName: nil,
+                    fileNameSuffix: nil,
+                    parentDirName: nil
+                ),
+            ],
+            suggestedPresets: [
+                UnpeelRuntimeSuggestedPreset(
+                    id: "omp",
+                    label: "omp",
+                    command: "omp",
+                    quickLaunch: true
+                ),
+            ]
+        ),
     ]
 
     private static let identityIndex: [String: Int] = {
