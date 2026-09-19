@@ -582,10 +582,7 @@ struct WorkspacesSettingsPanel: View {
 
     private func refresh() {
         let refreshedRows = WorkspaceListOrder.apply(
-            to: Self.buildRows(
-                store: store,
-                includeExtraLocal: license.isPro
-            ),
+            to: Self.buildRows(store: store),
             key: \.id
         )
         rows = refreshedRows
@@ -638,10 +635,7 @@ struct WorkspacesSettingsPanel: View {
 
     /// Shared row builder: the sidebar picker renders the same unified,
     /// user-ordered model.
-    static func buildRows(
-        store: UnpeelStore,
-        includeExtraLocal: Bool
-    ) -> [WorkspaceListRowModel] {
+    static func buildRows(store: UnpeelStore) -> [WorkspaceListRowModel] {
         let registry = UnpeelWorkspaceRegistry.load()
         let defaultHome = UnpeelWorkspaceRegistry.realUnpeelDir
         let normalizedDefault = UnpeelWorkspaceRegistry.normalizePath(defaultHome.path)
@@ -674,10 +668,10 @@ struct WorkspacesSettingsPanel: View {
         for record in registry {
             let normalized = UnpeelWorkspaceRegistry.normalizePath(record.home)
             let isCurrent = normalized == currentHome
-            // Without Pro, extra workspaces are managed elsewhere; the list
-            // still shows the one this instance IS so the screen never
-            // contradicts reality.
-            guard includeExtraLocal || isCurrent else { continue }
+            // Every registered workspace is listed, licensed or not: the app
+            // already lets any of them be created and scoped to from the
+            // sidebar switcher, so hiding them here made the screen
+            // contradict reality. Pro gating lives in the upsell section.
             let isRunning = isCurrent
                 || UnpeelWorkspaceLauncher.runningPid(
                     home: URL(fileURLWithPath: record.home, isDirectory: true)
