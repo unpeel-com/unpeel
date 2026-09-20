@@ -2374,7 +2374,12 @@ mod tests {
         failed.body = json!({ "sessionID": "broken" });
         let response = route_with_effects(&failed, None, None, Some(&effects)).unwrap();
         assert_eq!(response.status, 500);
-        assert_eq!(response.body["error"], "Could not restart session: broken");
+        // The Host reason rides along so a Controller can tell a dead host
+        // from a corrupt Session (#18).
+        assert_eq!(
+            response.body["error"],
+            "Could not restart session broken: adapter detail"
+        );
 
         assert_eq!(
             captured.lock().expect("capture lock").as_slice(),
