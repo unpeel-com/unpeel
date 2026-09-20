@@ -133,6 +133,7 @@ pub fn stop_session(session_id: &str) -> Result<(), String> {
 /// the same inode (which is not a portable re-entrant lock).
 fn stop_session_unlocked(session_id: &str) -> Result<(), String> {
     let socket_result = socket_command(session_id, serde_json::json!({"type": "kill"}));
+    let mut direct_stop_note = String::new();
     match &socket_result {
         Ok(response) if response.get("ok").and_then(serde_json::Value::as_bool) == Some(true) => {
             // A host is actually going down: peers should drop the row's
@@ -147,8 +148,23 @@ fn stop_session_unlocked(session_id: &str) -> Result<(), String> {
                 .to_owned());
         }
         // A missing socket is only "already stopped" when disk agrees. A
-        // running manifest still names a child we may be able to stop safely.
-        Err(_) => {}
+        // running manifest still names a child we may be able to stop safely:
+        // a host that died (or lost its socket) under a live child must not
+        // make the Session unstoppable and unremovable. The child is signaled
+        // only when its recorded start time proves it is ours.
+        Err(_) => {
+            if let Some(manifest) = load_manifest(session_id) {
+                match crate::session_host::stop_unreachable_session_child(&manifest) {
+                    Ok(()) => {
+                        crate::state_bus::announce(
+                            crate::state_bus::Change::Lifecycle,
+                            own_listener_port(),
+                        );
+                    }
+                    Err(reason) => direct_stop_note = format!("; {reason}"),
+                }
+            }
+        }
     }
 
     if wait_for_exited_manifest(session_id, STOP_WAIT) {
@@ -159,7 +175,7 @@ fn stop_session_unlocked(session_id: &str) -> Result<(), String> {
         .map(|error| format!("; socket request failed: {error}"))
         .unwrap_or_default();
     Err(format!(
-        "session {session_id} host did not publish an exited manifest within {}ms{socket_note}",
+        "session {session_id} host did not publish an exited manifest within {}ms{socket_note}{direct_stop_note}",
         STOP_WAIT.as_millis()
     ))
 }

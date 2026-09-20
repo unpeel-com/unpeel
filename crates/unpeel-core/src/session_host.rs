@@ -4380,6 +4380,68 @@ pub fn cleanup_session_artifacts(session_id: &str) -> Result<(), String> {
 /// considered stale and eligible for reaping — 24 hours.
 const REAP_STALE_AGE_MS: u64 = 24 * 60 * 60 * 1000;
 
+/// Stop a Running Session whose host no longer answers its control socket,
+/// using the same kill discipline as [`reap_dead_sessions`] but on demand:
+/// the user asked for this exact Session to stop, so a dead host must not
+/// leave it unstoppable (and therefore unremovable — GitHub #18). Only the
+/// recorded child is ever signaled, and only when its start time proves it
+/// is the process the manifest names; a child that is gone or whose pid was
+/// recycled is marked exited without a signal, and an unverifiable one is
+/// refused so the caller reports it instead of guessing.
+pub(crate) fn stop_unreachable_session_child(
+    manifest: &HostedSessionManifest,
+) -> Result<(), String> {
+    let session_id = &manifest.session.id;
+    if manifest.state != HostedSessionState::Running {
+        return Ok(());
+    }
+    let Some(pid) = manifest.pid else {
+        if manifest_launching_host_is_alive(manifest) {
+            return Err(format!(
+                "session {session_id} is still launching inside a live host that did not answer"
+            ));
+        }
+        mark_manifest_exited(session_id);
+        return Ok(());
+    };
+    if !process_exists(pid) {
+        mark_manifest_exited(session_id);
+        return Ok(());
+    }
+    match manifest_pid_identity(manifest) {
+        PidIdentity::NotOurs => {
+            // Recycled onto a stranger: the child is long dead.
+            mark_manifest_exited(session_id);
+            return Ok(());
+        }
+        PidIdentity::Unknown => {
+            return Err(format!(
+                "session {session_id} host is unreachable and child pid {pid} cannot be verified as its own; not signaling it"
+            ));
+        }
+        PidIdentity::Matches => {}
+    }
+    // The child is the PTY session leader, so its own group is the shell and
+    // whatever runs in it; when the leader exits the kernel hangs up the
+    // foreground job as well.
+    #[cfg(unix)]
+    if pid > 1 {
+        unsafe { libc::kill(-(pid as i32), libc::SIGTERM) };
+    }
+    for _ in 0..20 {
+        thread::sleep(Duration::from_millis(100));
+        if !process_exists(pid) {
+            break;
+        }
+    }
+    #[cfg(unix)]
+    if process_exists(pid) && pid > 1 {
+        unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
+    }
+    mark_manifest_exited(session_id);
+    Ok(())
+}
+
 /// Kill stale session host processes and remove orphaned session directories.
 ///
 /// A running session is considered stale when:
@@ -7160,6 +7222,51 @@ exit "${UNPEEL_FAKE_PROVIDER_STATUS:-0}"
         manifest.pid = Some(self_pid);
         manifest.pid_started_at = Some(started.saturating_sub(3_600_000));
         assert!(!manifest_host_is_healthy(&manifest));
+    }
+
+    /// GitHub #18: a Session whose host stopped answering must still stop —
+    /// by signaling the recorded child, and only a provably identical one.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn stop_unreachable_session_child_signals_only_a_verified_child() {
+        use std::os::unix::process::CommandExt;
+
+        // Own process group, so `kill(-pid)` reaches exactly this child.
+        let mut child = std::process::Command::new("sleep")
+            .arg("300")
+            .process_group(0)
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id();
+        let started = process_start_time_ms(pid).expect("child start time");
+        let mut manifest = manifest_with_times(1, 1);
+        manifest.pid = Some(pid);
+        manifest.pid_started_at = Some(started);
+
+        assert_eq!(super::stop_unreachable_session_child(&manifest), Ok(()));
+        let status = child.wait().expect("child reaped");
+        assert!(
+            !status.success(),
+            "child must have been signaled: {status:?}"
+        );
+
+        // Unverifiable identity (legacy record, argv without the session id)
+        // is refused, never signaled: this test process is still here.
+        let self_pid = std::process::id();
+        let self_started = process_start_time_ms(self_pid).expect("own start time");
+        manifest.pid = Some(self_pid);
+        manifest.pid_started_at = None;
+        let refused = super::stop_unreachable_session_child(&manifest).unwrap_err();
+        assert!(refused.contains("cannot be verified"), "{refused}");
+
+        // A recycled pid is a dead child: marked exited without a signal.
+        manifest.pid_started_at = Some(self_started.saturating_sub(3_600_000));
+        assert_eq!(super::stop_unreachable_session_child(&manifest), Ok(()));
+
+        // Not Running: nothing to do.
+        manifest.state = HostedSessionState::Exited;
+        manifest.pid_started_at = None;
+        assert_eq!(super::stop_unreachable_session_child(&manifest), Ok(()));
     }
 
     #[test]

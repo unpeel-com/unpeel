@@ -172,7 +172,15 @@ fn status(json: bool) -> i32 {
         }
     };
     print_state(&state, json);
-    let usable = state.payload.is_some()
+    if link_authority_usable(&state) {
+        0
+    } else {
+        1
+    }
+}
+
+fn link_authority_usable(state: &LinkState) -> bool {
+    state.payload.is_some()
         && state.tombstone.is_none()
         && matches!(
             state.cache_state,
@@ -180,12 +188,13 @@ fn status(json: bool) -> i32 {
                 relay_uplink::EntitlementCacheState::Fresh
                     | relay_uplink::EntitlementCacheState::RefreshDue
             )
-        );
-    if usable {
-        0
-    } else {
-        1
-    }
+        )
+}
+
+/// Whether this Host can currently carry a paired Controller over Link: the
+/// same test `unpeel link status` exits 0 on. Unreadable state counts as no.
+pub fn host_has_link_authority() -> bool {
+    read_state().is_ok_and(|state| link_authority_usable(&state))
 }
 
 /// `unpeel link enroll <key>` — the scripted equivalent of pasting the key

@@ -648,8 +648,12 @@ fn pair_list(json: bool) -> Result<(), String> {
         println!("no paired devices -- pair one: unpeel pair");
         return Ok(());
     }
+    // The Host omits `relayAllowed` for a device that may use Link; that is
+    // a scope, not a path. Whether Link actually carries the device depends
+    // on this Host holding usable Link authority (`unpeel link status`).
+    let link_ready = crate::link_cli::host_has_link_authority();
     for device in &devices {
-        let relay = device
+        let relay_allowed = device
             .get("relayAllowed")
             .and_then(|value| value.as_bool())
             .unwrap_or(true);
@@ -658,10 +662,19 @@ fn pair_list(json: bool) -> Result<(), String> {
             device_field(device, "id"),
             device_field(device, "name"),
             device_field(device, "platform"),
-            if relay { "link" } else { "direct only" }
+            pair_reach_label(relay_allowed, link_ready)
         );
     }
     Ok(())
+}
+
+/// What a paired device can reach right now, for `unpeel pair list`.
+fn pair_reach_label(relay_allowed: bool, link_ready: bool) -> &'static str {
+    match (relay_allowed, link_ready) {
+        (false, _) => "direct only",
+        (true, true) => "direct + link",
+        (true, false) => "direct (link allowed; Host not enrolled)",
+    }
 }
 
 fn pair_remove(selector: &str) -> Result<(), String> {

@@ -914,8 +914,11 @@ pub(crate) fn principal_for_bearer(
                 if device.get("tokenHash").and_then(|value| value.as_str()) != Some(hash.as_str()) {
                     return None;
                 }
+                let device_id = device.get("id")?.as_str()?.to_owned();
+                // Authenticated: the phone is in use now, not just paired.
+                crate::pairing::touch_device_last_seen(&device_id);
                 Some(ControllerPrincipal::PairedDevice {
-                    device_id: device.get("id")?.as_str()?.to_owned(),
+                    device_id,
                     name: device
                         .get("name")
                         .and_then(|value| value.as_str())

@@ -16,6 +16,7 @@
 //! - Issued tokens: 32 CSPRNG bytes as unpadded base64url; stored only as
 //!   lowercase-hex SHA-256 in `devices.json`.
 
+use std::collections::HashMap;
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -698,6 +699,60 @@ pub fn set_device_relay_allowed(device_id: &str, allowed: bool) -> Result<(), St
         }
         write_private(&devices_path, &store).map_err(|e| format!("devices.json: {e}"))
     })
+}
+
+/// Minimum spacing between two `lastSeenAtUnixMs` writes for one device.
+/// The stamp answers "is this phone still in use", not "what was its last
+/// request", so a once-a-minute write keeps the store quiet under polling.
+const LAST_SEEN_WRITE_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Advance a paired device's `lastSeenAtUnixMs` after it authenticated a
+/// Host request (GitHub #18: the stamp used to be written once, at pairing,
+/// and never moved). Throttled per device and best-effort: a failed write
+/// must never affect the request that triggered it.
+pub fn touch_device_last_seen(device_id: &str) {
+    static LAST_WRITE: OnceLock<Mutex<HashMap<String, std::time::Instant>>> = OnceLock::new();
+    {
+        let mut recent = LAST_WRITE
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let now = std::time::Instant::now();
+        if recent
+            .get(device_id)
+            .is_some_and(|last| now.duration_since(*last) < LAST_SEEN_WRITE_INTERVAL)
+        {
+            return;
+        }
+        recent.insert(device_id.to_owned(), now);
+    }
+    let result = with_device_store_lock(|dir| {
+        let devices_path = dir.join("devices.json");
+        let mut store = read_json_or_default(
+            &devices_path,
+            || serde_json::json!({ "version": 1, "devices": [] }),
+        )?;
+        let devices = store
+            .get_mut("devices")
+            .and_then(|value| value.as_array_mut())
+            .ok_or("devices.json has no devices array")?;
+        let Some(device) = devices
+            .iter_mut()
+            .find(|device| device.get("id").and_then(|value| value.as_str()) == Some(device_id))
+            .and_then(serde_json::Value::as_object_mut)
+        else {
+            // Revoked between authentication and now: nothing to stamp.
+            return Ok(());
+        };
+        device.insert("lastSeenAtUnixMs".into(), now_ms().into());
+        write_private(&devices_path, &store).map_err(|e| format!("devices.json: {e}"))
+    });
+    if let Err(error) = result {
+        crate::tracelog::trace(
+            "pairing",
+            &format!("lastSeenAtUnixMs for {device_id} not updated: {error}"),
+        );
+    }
 }
 
 /// Sanitized paired-Controller rows for same-user Host management clients.

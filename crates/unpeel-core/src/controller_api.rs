@@ -1179,7 +1179,12 @@ fn run_session_action(
                     ControllerSessionAction::Remove => "remove",
                     ControllerSessionAction::Reload => "reload",
                 };
-                ControllerApiError::new(500, format!("Could not {verb} session: {session_id}"))
+                // Carry the Host's reason: a Controller cannot tell a dead
+                // host from a corrupt Session from the verb alone (#18).
+                ControllerApiError::new(
+                    500,
+                    format!("Could not {verb} session {session_id}: {message}"),
+                )
             }
         })?;
     Ok(json!({ "ok": true }))
