@@ -80,10 +80,7 @@ enum WorkspaceSwitching {
     /// order as Settings ▸ Workspaces / the sidebar picker.
     static func orderedRows(store: UnpeelStore) -> [WorkspaceListRowModel] {
         WorkspaceListOrder.apply(
-            to: WorkspacesSettingsPanel.buildRows(
-                store: store,
-                includeExtraLocal: true
-            ),
+            to: WorkspacesSettingsPanel.buildRows(store: store),
             key: \.id
         )
     }
