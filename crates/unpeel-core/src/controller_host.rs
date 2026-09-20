@@ -250,6 +250,11 @@ impl DiskCatalog {
             .flat_map(|modes| modes.iter())
             .filter_map(|(id, mode)| (mode.as_str() == Some("date")).then_some(id.clone()))
             .collect();
+        // Folder colors ride the same disk carrier as the sort mode. Without
+        // them a Controller scoped to a workspace it does not run renders
+        // every project neutral: its own defaults are the wrong home's, and
+        // this projection is the only source it has.
+        let project_colors = state.get("project_colors").and_then(Value::as_object);
         let mut projects = project_records(&state);
         projects.sort_by(|left, right| {
             left.sort_order
@@ -329,6 +334,12 @@ impl DiskCatalog {
                 }
                 if date_sorted_projects.contains(&project.id) {
                     object.insert("dateSorted".into(), true.into());
+                }
+                if let Some(color) = project_colors
+                    .and_then(|colors| colors.get(&project.id))
+                    .and_then(Value::as_str)
+                {
+                    object.insert("colorID".into(), color.into());
                 }
             }
             wire_projects.push(value);
