@@ -169,6 +169,51 @@ final class RemoteHostStoreTests: XCTestCase {
         XCTAssertNil(restored.selectedHostID)
     }
 
+    /// GitHub #21: a sibling local workspace selection survives a relaunch
+    /// exactly like a remote one, and the two selections are exclusive.
+    func testLocalWorkspaceSelectionPersistsAndExcludesRemote() throws {
+        let fixture = makeFixture()
+        let store = RemoteHostStore(
+            defaults: fixture.defaults,
+            credentialStore: fixture.credentials,
+            deviceName: "Controller"
+        )
+        XCTAssertNil(store.selectedLocalWorkspaceHome)
+
+        store.selectLocalWorkspace(home: "/Users/me/.unpeel/profiles/work")
+        XCTAssertEqual(store.selectedLocalWorkspaceHome, "/Users/me/.unpeel/profiles/work")
+        XCTAssertNil(store.selectedHostID)
+
+        let relaunched = RemoteHostStore(
+            defaults: fixture.defaults,
+            credentialStore: fixture.credentials,
+            deviceName: "Controller"
+        )
+        XCTAssertEqual(relaunched.selectedLocalWorkspaceHome, "/Users/me/.unpeel/profiles/work")
+
+        // Pairing (which selects the new Host) replaces the local selection.
+        try relaunched.adopt(pairingResponse(
+            hostID: "host-1",
+            token: "secret",
+            deviceID: relaunched.controllerIdentity.id
+        ))
+        XCTAssertEqual(relaunched.selectedHostID, "host-1")
+        XCTAssertNil(relaunched.selectedLocalWorkspaceHome)
+
+        // And a local selection replaces the remote one; back to Local clears both.
+        relaunched.selectLocalWorkspace(home: "/Users/me/.unpeel/profiles/work")
+        XCTAssertNil(relaunched.selectedHostID)
+        relaunched.selectHost(nil)
+        XCTAssertNil(relaunched.selectedLocalWorkspaceHome)
+        let cleared = RemoteHostStore(
+            defaults: fixture.defaults,
+            credentialStore: fixture.credentials,
+            deviceName: "Controller"
+        )
+        XCTAssertNil(cleared.selectedLocalWorkspaceHome)
+        XCTAssertNil(cleared.selectedHostID)
+    }
+
     func testNearbySelectionMustMatchAuthenticatedPairingCode() async throws {
         let fixture = makeFixture()
         let store = RemoteHostStore(

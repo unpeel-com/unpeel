@@ -1937,6 +1937,9 @@ final class UnpeelStore: ObservableObject {
                 connectSSHHost(host)
             }
             projectRemoteScope(snapshot: remoteHostRuntime.snapshot)
+        } else if RemoteHostFeature.pickerEnabled,
+                  let persisted = remoteHostStore.selectedLocalWorkspaceHome {
+            restorePersistedLocalWorkspaceScope(home: persisted)
         }
         // Rescans are normally event-driven (FSEvents on app-sessions and
         // the preset files, set up by rescan() above). The 5s timer is a
@@ -2243,10 +2246,38 @@ final class UnpeelStore: ObservableObject {
     /// Scope this window to another LOCAL workspace over the loopback gateway
     /// (workspaces-unification phase 2). Same rules as a remote Host scope:
     /// verbs ride the Host connection, local spawns stay refused, and coming
-    /// back is `selectHost(nil)`. Selection is deliberately not persisted —
-    /// a relaunch starts in this instance's own Local scope.
+    /// back is `selectHost(nil)`. The selection persists across relaunches
+    /// like a remote Host selection (`restorePersistedLocalWorkspaceScope`).
     func selectLocalWorkspace(_ record: UnpeelWorkspaceRecord) {
         selectLocalWorkspace(home: record.home, name: record.name)
+    }
+
+    /// Launch-time counterpart of the remote restore above (GitHub #21): a
+    /// remembered local workspace comes back only while it still exists —
+    /// the default home or a registry record — and is not this instance's
+    /// own home (a scoped instance relaunched inside that workspace is
+    /// already there). Anything else forgets the selection and starts Local.
+    private func restorePersistedLocalWorkspaceScope(home: String) {
+        let normalized = UnpeelWorkspaceRegistry.normalizePath(home)
+        let defaultHome = UnpeelWorkspaceRegistry.normalizePath(
+            UnpeelWorkspaceRegistry.realUnpeelDir.path
+        )
+        let ownHome = UnpeelWorkspaceContext.isDefaultInstance
+            ? defaultHome
+            : UnpeelWorkspaceRegistry.normalizePath(LaunchConfig.unpeelDir.path)
+        let name: String?
+        if normalized == defaultHome {
+            name = UnpeelWorkspaceContext.defaultWorkspaceName ?? "Personal"
+        } else {
+            name = UnpeelWorkspaceRegistry.load().first {
+                UnpeelWorkspaceRegistry.normalizePath($0.home) == normalized
+            }?.name
+        }
+        guard normalized != ownHome, let name else {
+            remoteHostStore.selectHost(nil)
+            return
+        }
+        selectLocalWorkspace(home: normalized, name: name)
     }
 
     func selectLocalWorkspace(home: String, name: String) {
@@ -2272,7 +2303,7 @@ final class UnpeelStore: ObservableObject {
         launcherProjectID = nil
         archivedProjectID = nil
         recentActivityVisible = false
-        remoteHostStore.selectHost(nil)
+        remoteHostStore.selectLocalWorkspace(home: normalizedHome)
         selectedHostScope = .localWorkspace(home: normalizedHome, name: name)
         settingsScopePinnedToThisMac = false
         // A never-started workspace has no home dir yet; create it exactly

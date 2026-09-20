@@ -224,12 +224,19 @@ final class RemoteHostStore: ObservableObject {
     private static let recordsKey = "unpeel.native.remoteHosts"
     private static let sshRecordsKey = "unpeel.native.sshHosts"
     private static let selectedHostKey = "unpeel.native.selectedRemoteHost"
+    private static let selectedLocalWorkspaceKey = "unpeel.native.selectedLocalWorkspace"
     private static let controllerIDKey = "unpeel.native.remoteControllerID"
 
     @Published private(set) var records: [PairedHostRecord]
     @Published private(set) var sshRecords: [SSHHostRecord]
     /// Nil means Local. Fresh installs therefore always start in Local scope.
     @Published private(set) var selectedHostID: String?
+    /// The sibling local workspace (normalized `UNPEEL_HOME`) this window was
+    /// scoped to, remembered across relaunches exactly like a remote Host
+    /// selection (GitHub #21). Mutually exclusive with `selectedHostID`; the
+    /// store only records it — `UnpeelStore` decides at launch whether the
+    /// workspace still exists and is not this instance's own home.
+    @Published private(set) var selectedLocalWorkspaceHome: String?
 
     let controllerIdentity: RemoteDeviceIdentity
 
@@ -291,6 +298,14 @@ final class RemoteHostStore: ObservableObject {
         }
         if selectedHostID == nil {
             defaults.removeObject(forKey: Self.selectedHostKey)
+        }
+        // A remote selection wins over a stale local-workspace one: the two
+        // keys are written exclusively, so both present means an old build.
+        selectedLocalWorkspaceHome = selectedHostID == nil
+            ? defaults.string(forKey: Self.selectedLocalWorkspaceKey)
+            : nil
+        if selectedLocalWorkspaceHome == nil {
+            defaults.removeObject(forKey: Self.selectedLocalWorkspaceKey)
         }
         if !removedLocalRecords.isEmpty {
             for record in removedLocalRecords {
@@ -477,6 +492,7 @@ final class RemoteHostStore: ObservableObject {
         guard let hostID else {
             selectedHostID = nil
             defaults.removeObject(forKey: Self.selectedHostKey)
+            clearSelectedLocalWorkspace()
             return
         }
         let pairedIsUsable = records.contains(where: { $0.hostID == hostID })
@@ -487,6 +503,21 @@ final class RemoteHostStore: ObservableObject {
         guard pairedIsUsable || sshIsUsable else { return }
         selectedHostID = hostID
         defaults.set(hostID, forKey: Self.selectedHostKey)
+        clearSelectedLocalWorkspace()
+    }
+
+    /// Remember a sibling local workspace as the selected scope. Clears any
+    /// remote selection: a window is scoped to exactly one Host.
+    func selectLocalWorkspace(home: String) {
+        selectedHostID = nil
+        defaults.removeObject(forKey: Self.selectedHostKey)
+        selectedLocalWorkspaceHome = home
+        defaults.set(home, forKey: Self.selectedLocalWorkspaceKey)
+    }
+
+    private func clearSelectedLocalWorkspace() {
+        selectedLocalWorkspaceHome = nil
+        defaults.removeObject(forKey: Self.selectedLocalWorkspaceKey)
     }
 
     /// Scope a paired Host to Direct-only (enabled = false) or restore its
