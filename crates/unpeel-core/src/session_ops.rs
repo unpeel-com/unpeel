@@ -155,12 +155,16 @@ fn stop_session_unlocked(session_id: &str) -> Result<(), String> {
         Err(_) => {
             if let Some(manifest) = load_manifest(session_id) {
                 match crate::session_host::stop_unreachable_session_child(&manifest) {
-                    Ok(()) => {
+                    // Announce only when something changed: an already-exited
+                    // record must not ping peers ahead of the caller's own
+                    // marker write.
+                    Ok(true) => {
                         crate::state_bus::announce(
                             crate::state_bus::Change::Lifecycle,
                             own_listener_port(),
                         );
                     }
+                    Ok(false) => {}
                     Err(reason) => direct_stop_note = format!("; {reason}"),
                 }
             }

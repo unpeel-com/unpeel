@@ -4388,12 +4388,15 @@ const REAP_STALE_AGE_MS: u64 = 24 * 60 * 60 * 1000;
 /// is the process the manifest names; a child that is gone or whose pid was
 /// recycled is marked exited without a signal, and an unverifiable one is
 /// refused so the caller reports it instead of guessing.
+///
+/// Returns `Ok(true)` when it changed something (signaled the child or
+/// normalized the manifest), `Ok(false)` when the record was not Running.
 pub(crate) fn stop_unreachable_session_child(
     manifest: &HostedSessionManifest,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let session_id = &manifest.session.id;
     if manifest.state != HostedSessionState::Running {
-        return Ok(());
+        return Ok(false);
     }
     let Some(pid) = manifest.pid else {
         if manifest_launching_host_is_alive(manifest) {
@@ -4402,17 +4405,17 @@ pub(crate) fn stop_unreachable_session_child(
             ));
         }
         mark_manifest_exited(session_id);
-        return Ok(());
+        return Ok(true);
     };
     if !process_exists(pid) {
         mark_manifest_exited(session_id);
-        return Ok(());
+        return Ok(true);
     }
     match manifest_pid_identity(manifest) {
         PidIdentity::NotOurs => {
             // Recycled onto a stranger: the child is long dead.
             mark_manifest_exited(session_id);
-            return Ok(());
+            return Ok(true);
         }
         PidIdentity::Unknown => {
             return Err(format!(
@@ -4439,7 +4442,7 @@ pub(crate) fn stop_unreachable_session_child(
         unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
     }
     mark_manifest_exited(session_id);
-    Ok(())
+    Ok(true)
 }
 
 /// Kill stale session host processes and remove orphaned session directories.
@@ -7243,7 +7246,7 @@ exit "${UNPEEL_FAKE_PROVIDER_STATUS:-0}"
         manifest.pid = Some(pid);
         manifest.pid_started_at = Some(started);
 
-        assert_eq!(super::stop_unreachable_session_child(&manifest), Ok(()));
+        assert_eq!(super::stop_unreachable_session_child(&manifest), Ok(true));
         let status = child.wait().expect("child reaped");
         assert!(
             !status.success(),
@@ -7261,12 +7264,12 @@ exit "${UNPEEL_FAKE_PROVIDER_STATUS:-0}"
 
         // A recycled pid is a dead child: marked exited without a signal.
         manifest.pid_started_at = Some(self_started.saturating_sub(3_600_000));
-        assert_eq!(super::stop_unreachable_session_child(&manifest), Ok(()));
+        assert_eq!(super::stop_unreachable_session_child(&manifest), Ok(true));
 
-        // Not Running: nothing to do.
+        // Not Running: nothing to do, and nothing to announce.
         manifest.state = HostedSessionState::Exited;
         manifest.pid_started_at = None;
-        assert_eq!(super::stop_unreachable_session_child(&manifest), Ok(()));
+        assert_eq!(super::stop_unreachable_session_child(&manifest), Ok(false));
     }
 
     #[test]
