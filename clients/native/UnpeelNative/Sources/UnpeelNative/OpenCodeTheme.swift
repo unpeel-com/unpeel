@@ -704,25 +704,24 @@ enum OpenCodeThemeResolver {
             .appendingPathComponent("kv.json")
     }
 
-    private static func ancestorDirectories(workingDirectory: String?) -> [URL] {
+    /// Root first, working directory last — the order OpenCode merges
+    /// config in. Built from the path components rather than by repeated
+    /// `deletingLastPathComponent()`: on macOS 15 Foundation the parent of
+    /// `/` is `/..` (then `/../..`, …), so a parent walk never reaches a
+    /// fixed point and spins the main thread forever (GitHub #20).
+    static func ancestorDirectories(workingDirectory: String?) -> [URL] {
         guard let workingDirectory = nonEmptyString(workingDirectory) else { return [] }
 
-        var current = URL(fileURLWithPath: workingDirectory).standardizedFileURL
-        var result: [URL] = []
-        var seen = Set<String>()
+        let components = URL(fileURLWithPath: workingDirectory).standardizedFileURL.pathComponents
+        guard let root = components.first else { return [] }
 
-        while true {
-            let path = current.path
-            if seen.contains(path) { break }
-            seen.insert(path)
+        var current = URL(fileURLWithPath: root, isDirectory: true)
+        var result = [current]
+        for component in components.dropFirst() {
+            current = current.appendingPathComponent(component, isDirectory: true)
             result.append(current)
-
-            let parent = current.deletingLastPathComponent()
-            if parent.path == current.path { break }
-            current = parent
         }
-
-        return result.reversed()
+        return result
     }
 
     private static func readJSONObject(at url: URL) -> [String: Any]? {

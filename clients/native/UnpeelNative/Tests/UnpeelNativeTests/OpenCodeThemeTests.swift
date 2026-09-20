@@ -9,6 +9,24 @@ final class OpenCodeThemeTests: XCTestCase {
         XCTAssertEqual(background.dark, 0x0F0F0F)
     }
 
+    /// GitHub #20: the config lookup walks from `/` down to the working
+    /// directory. It must be a finite, root-first list — never a parent walk
+    /// that spins past `/` (macOS 15 Foundation answers `/..` there).
+    func testAncestorDirectoriesRunRootFirstAndStopAtRoot() {
+        let ancestors = OpenCodeThemeResolver.ancestorDirectories(
+            workingDirectory: "/Users/Shared/unpeel-test/"
+        ).map(\.path)
+        XCTAssertEqual(ancestors, ["/", "/Users", "/Users/Shared", "/Users/Shared/unpeel-test"])
+
+        XCTAssertEqual(OpenCodeThemeResolver.ancestorDirectories(workingDirectory: "/").map(\.path), ["/"])
+        XCTAssertEqual(OpenCodeThemeResolver.ancestorDirectories(workingDirectory: nil), [])
+        XCTAssertEqual(OpenCodeThemeResolver.ancestorDirectories(workingDirectory: "  "), [])
+        XCTAssertEqual(
+            OpenCodeThemeResolver.ancestorDirectories(workingDirectory: "/Users/../Library/./x").map(\.path),
+            ["/", "/Library", "/Library/x"]
+        )
+    }
+
     func testDefaultOpenCodeBackgroundMatchesBuiltInTheme() throws {
         let background = try resolvedBackground(forTheme: "opencode")
 
