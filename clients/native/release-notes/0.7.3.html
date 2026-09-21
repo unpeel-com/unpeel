@@ -1,0 +1,33 @@
+<h2>Unpeel 0.7.3</h2>
+<ul>
+  <li><b>Approval prompts in every workspace.</b> When an agent in a workspace other than Personal asked to type into another session, the prompt never appeared: the request timed out after two minutes and the agent was told you had declined. Scoped workspaces now show the prompt within a couple of seconds, on the target session's pane, and a prompt nobody answers is reported to the agent as unanswered rather than declined.</li>
+  <li><b>Your workspace comes back on relaunch.</b> Quitting while scoped to another local workspace reopens in that workspace, the way a selected Host already did.</li>
+  <li><b>Folder colors in scoped workspaces.</b> Colors chosen on projects of another local workspace now show up (contributed by anilsenay).</li>
+</ul>
+<h3>Also in 0.7.2</h3>
+<ul>
+  <li><b>OpenCode no longer freezes the app on macOS 15.</b> Starting an <code>opencode</code> session pinned the main thread at 100 % while resolving the OpenCode theme (the config lookup walked past <code>/</code> forever on macOS 15 Foundation) and the app had to be force quit. The lookup is finite now.</li>
+  <li><b>A session whose host died can be stopped and removed again.</b> When a host stops answering its control socket while its shell is still alive, Stop and Remove now signal that exact child (verified by its recorded start time) instead of failing with an opaque 500, and the error a Controller sees now carries the Host's reason.</li>
+  <li><b>Paired devices report what they can reach.</b> <code>unpeel pair list</code> says <i>direct + link</i> only when this Host holds Link authority, and a phone's last-seen time advances while it is in use instead of freezing at pairing.</li>
+  <li><b>Settings &#9656; Workspaces lists every workspace</b> you have created, not only the one this instance runs, with or without a license.</li>
+  <li><b>Returning to Local keeps your selected session.</b> A session created after launch is no longer deselected when you switch back from another Host.</li>
+  <li><b>OMP (oh-my-pi).</b> The <code>omp</code> agent CLI is recognized with a launch preset, hooks, resume, transcripts, and the unpeel MCP server through Install integration.</li>
+</ul>
+<h3>Also in 0.7.1</h3>
+<ul>
+  <li><b>Line height.</b> Settings &#9656; Appearance &#9656; Terminal font has a Line height control (&minus;20 % to +100 %), applied live to every pane.</li>
+  <li><b>Quick Launch for custom commands.</b> Any command can be starred on Settings &#9656; Agents and becomes its own sidebar chip.</li>
+  <li><b>Agents and Plugins in the new-session menu.</b> The "+" menus list agents and plugins in their own sections, each with its Manage entry.</li>
+  <li><b>Antigravity CLI.</b> Google's <code>agy</code> is recognized, has a launch preset, resumes with <code>--continue</code>, and gets the unpeel MCP server through Install integration.</li>
+</ul>
+<h3>Also in 0.7.0</h3>
+<ul>
+  <li><b>Launches are plain; integrations are explicit.</b> A launch command runs in your login shell exactly as typed: nothing is wrapped, no flag is appended, no conversation id is minted, and no agent configuration is edited behind your back. Each agent's hooks and its <code>unpeel</code> MCP registration are now its <i>integration</i>, installed once per account from Settings &#9656; Agents (or <code>unpeel integrations install</code>) into the agent's own configuration, shared by every local workspace on the Mac, and kept current by the Host after upgrades. Upgrading from 0.6 keeps your agents connected: hooks Unpeel installed before are adopted as integrations and refreshed on first start. Without it an agent still gets identity and, where the runtime declares screen rules, busy and idle read from the screen; with it you get exact status, done notifications, transcripts, precise resume, and Unpeel's tools inside the agent.</li>
+  <li><b>Settings: Agents, Plugins, Agent access.</b> One expandable row per agent CLI covers install and update, the integration, launch commands with Quick Launch and reordering, and activation. Unpeel Apps are managed under <b>Plugins</b>. What agents may do through Unpeel's tools &mdash; reading and typing into other sessions, the browser, worktrees, the gallery &mdash; lives on one <b>Agent access</b> page.</li>
+  <li><b>The <code>unpeel</code> CLI is a full peer of the MCP server.</b> <code>unpeel mcp</code> reaches every tool and action, and <code>unpeel send</code> / <code>unpeel keys</code> from inside a session follow the same write-approval policy as the MCP server.</li>
+  <li><b>Agents typed into a blank terminal get transcripts and auto-titles</b> once they report through their integration.</li>
+  <li><b>Choose Host folders and send files from any Controller.</b> A paired Mac or phone can add a Host folder as a project and move files to a remote session, with every path resolved on the Host inside an explicit scope.</li>
+  <li><b>Terminal panes run to the window top again</b> while the sidebar is open; the title strip stays for a collapsed sidebar, Settings, and the libraries. The active project's branch now shows beside its name in the sidebar.</li>
+  <li><b>Fixes.</b> Agent writes in a workspace created after installation no longer fail on a missing approval token. A session created in a sibling workspace appears and is selected at once. A hidden busy pane can no longer deadlock a workspace switch. Muse Code registers the unified MCP server.</li>
+  <li>Host protocol minors 20 and 21, both additive: Host folder selection and file transfer, and <code>integrations.install</code>. Controllers keep checking capability ids, never the minor.</li>
+</ul>
