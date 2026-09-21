@@ -148,8 +148,17 @@ other session** (reworked 2026-08-31):
   grant is about (write: the destination, otherwise the caller) plus that
   Session's attention badge — never a floating window and never
   `NSAlert.runModal()`, which stalls queued main-actor work including mobile
-  bootstrap. Pending prompts ride phone bootstrap and are answerable through
-  `POST /mobile/approvals/answer`; first answer wins. `mcp_app_open_approvals`
+  bootstrap. Pending prompts ride every Controller bootstrap as
+  `pendingApprovals` — the HTTP `/mobile` route sets it in the route context,
+  and the framed gateway route (`host.sock`, the path a window scoped to a
+  sibling local workspace uses) stamps it onto the disk-built body
+  (`ApprovalHub::decorate_bootstrap`; before 0.7.3 that path could answer
+  prompts but was never told about them, so a scoped workspace showed no
+  prompt anywhere). Answers go through `POST /mobile/approvals/answer` /
+  the live `approval.answer` gateway route; first answer wins. A prompt
+  nobody answers within the Host's 125 s window resolves as `timedOut: true`
+  (not a decline): the MCP host tells the agent nothing was sent and to ask
+  the user, instead of "the user declined". `mcp_app_open_approvals`
   (caller Session → App ids) is a pre-2026-09-06 grant map: still decoded,
   pruned/carried with caller replacement like other Session-keyed grants, but
   no current open consults it.

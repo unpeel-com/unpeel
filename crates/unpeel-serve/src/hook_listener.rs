@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use unpeel_core::app_paths;
 
-use crate::approvals::{already_granted, persist_grant, ApprovalHub};
+use crate::approvals::{already_granted, persist_grant, ApprovalHub, ApprovalOutcome};
 
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(125);
 
@@ -252,12 +252,16 @@ fn handle_mcp(
             .filter(|s| !s.is_empty())
             .map(str::to_owned)
     };
-    let approve = |ok: bool, stream: &mut TcpStream| {
-        respond(
-            stream,
-            "200 OK",
-            &serde_json::json!({ "approved": ok }).to_string(),
-        );
+    // `timedOut` lets the MCP host tell "nobody answered in time" from a
+    // real decline. Additive and only present on a timeout, so every other
+    // answer stays byte-identical for older MCP hosts and the conformance
+    // fixtures.
+    let approve = |outcome: ApprovalOutcome, stream: &mut TcpStream| {
+        let mut body = serde_json::json!({ "approved": outcome.approved() });
+        if outcome == ApprovalOutcome::TimedOut {
+            body["timedOut"] = serde_json::Value::Bool(true);
+        }
+        respond(stream, "200 OK", &body.to_string());
     };
     match path {
         "/mcp/approve-write" => {
@@ -272,10 +276,10 @@ fn handle_mcp(
                 return;
             };
             if already_granted("write", &caller, Some(&target)) {
-                approve(true, stream);
+                approve(ApprovalOutcome::Approved, stream);
                 return;
             }
-            let ok = hub.request(
+            let outcome = hub.request(
                 "write",
                 format!(
                     "Allow session {} to write to session {}?",
@@ -287,10 +291,10 @@ fn handle_mcp(
                 Some(target.clone()),
                 APPROVAL_TIMEOUT,
             );
-            if ok {
+            if outcome.approved() {
                 persist_grant("write", &caller, Some(&target));
             }
-            approve(ok, stream);
+            approve(outcome, stream);
         }
         "/mcp/approve-browser" | "/mcp/approve-computer" => {
             let kind = if path.ends_with("browser") {
@@ -307,10 +311,10 @@ fn handle_mcp(
                 return;
             };
             if already_granted(kind, &session_id, None) {
-                approve(true, stream);
+                approve(ApprovalOutcome::Approved, stream);
                 return;
             }
-            let ok = hub.request(
+            let outcome = hub.request(
                 kind,
                 format!(
                     "Allow {kind} access for session {}?",
@@ -321,10 +325,10 @@ fn handle_mcp(
                 None,
                 APPROVAL_TIMEOUT,
             );
-            if ok {
+            if outcome.approved() {
                 persist_grant(kind, &session_id, None);
             }
-            approve(ok, stream);
+            approve(outcome, stream);
         }
         "/mcp/approve-app-open" => {
             let (Some(caller), Some(app_id)) = (field("caller_session_id"), field("app_id")) else {
@@ -336,12 +340,12 @@ fn handle_mcp(
                 return;
             };
             if already_granted("app-open", &caller, Some(&app_id)) {
-                approve(true, stream);
+                approve(ApprovalOutcome::Approved, stream);
                 return;
             }
             let app_name = field("app_name").unwrap_or_else(|| app_id.clone());
             let caller_label = session_display_name(&caller);
-            let ok = hub.request(
+            let outcome = hub.request(
                 "app-open",
                 format!("Allow session {caller_label} to open {app_name}?"),
                 format!("This remembers access to {app_name} for this session."),
@@ -351,10 +355,10 @@ fn handle_mcp(
                 None,
                 APPROVAL_TIMEOUT,
             );
-            if ok {
+            if outcome.approved() {
                 persist_grant("app-open", &caller, Some(&app_id));
             }
-            approve(ok, stream);
+            approve(outcome, stream);
         }
         "/mcp/computer-permissions-needed" => {
             respond(stream, "200 OK", r#"{"ok":true}"#);

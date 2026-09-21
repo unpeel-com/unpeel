@@ -306,6 +306,12 @@ fn serve_connection(
                     &computer_status,
                     &mut response.body,
                 );
+                // The disk-backed runtime cannot see this worker's in-memory
+                // prompt queue; a scoped Controller answers through the live
+                // `approval.answer` route, so it must also be told what is
+                // pending (GitHub-reported 2026-09-21: no prompt anywhere in
+                // a sibling workspace).
+                approvals.decorate_bootstrap(&mut response.body);
             }
             if let Some(request) = notify_when_done {
                 response = match platform_adapters.call("session.notify_when_done.set", request) {

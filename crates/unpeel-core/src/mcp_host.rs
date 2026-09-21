@@ -3794,6 +3794,14 @@ Settings ▸ Agent access ▸ Writing to other sessions."
     if response.get("approved").and_then(Value::as_bool) == Some(true) {
         return Ok(());
     }
+    if response.get("timedOut").and_then(Value::as_bool) == Some(true) {
+        return Err(format!(
+            "Nobody answered the approval prompt for writing to session '{target_id}' within \
+2 minutes, so nothing was sent. The prompt appears in the Unpeel window on the target \
+Session's pane and on a paired phone. Tell the user it is waiting for their approval, then \
+retry once."
+        ));
+    }
     Err(
         "The user declined this write. Do not retry on your own — you can still read the \
 session; ask the user if they want to approve future writes (or change Settings ▸ Agent access \

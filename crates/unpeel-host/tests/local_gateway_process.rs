@@ -426,6 +426,80 @@ fn local_gateway_becomes_a_proxy_when_the_unified_host_service_is_live() {
         0,
         "the compatibility child ran a second semantic Host instead of proxying the service"
     );
+    // The gateway bootstrap carries the worker's prompt queue (empty here):
+    // a window scoped to this workspace must learn about approvals the same
+    // way a phone does, not only be able to answer them.
+    assert_eq!(
+        bootstrap.snapshot.pending_approvals,
+        Some(Vec::new()),
+        "gateway bootstrap must publish pendingApprovals"
+    );
+
+    // An agent in this workspace asks to write into another Session: the
+    // MCP host POSTs the worker's /mcp/approve-write and blocks. The prompt
+    // must show up in the gateway bootstrap and be answerable through it.
+    let hook_port = std::fs::read(fixture.host_home.join("serve.json"))
+        .ok()
+        .and_then(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok())
+        .and_then(|status| status.get("hookPort").and_then(serde_json::Value::as_u64))
+        .and_then(|port| u16::try_from(port).ok())
+        .expect("worker hook port");
+    let auth_token = std::fs::read_to_string(fixture.host_home.join("mcp").join("auth-token"))
+        .expect("the worker mints the MCP auth token at start")
+        .trim()
+        .to_owned();
+    let approval_request = std::thread::spawn(move || {
+        let mut stream = TcpStream::connect(("127.0.0.1", hook_port)).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(60)))
+            .unwrap();
+        let body = br#"{"caller_session_id":"s1","target_session_id":"s2"}"#;
+        write!(
+            stream,
+            "POST /mcp/approve-write HTTP/1.1\r\nHost: 127.0.0.1\r\nx-unpeel-auth: {auth_token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .unwrap();
+        stream.write_all(body).unwrap();
+        stream.flush().unwrap();
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).unwrap();
+        String::from_utf8_lossy(&response).into_owned()
+    });
+    let mut pending = None;
+    assert!(
+        wait_until(Duration::from_secs(15), || {
+            pending = backend
+                .bootstrap()
+                .ok()
+                .and_then(|bootstrap| bootstrap.snapshot.pending_approvals)
+                .and_then(|approvals| approvals.into_iter().next());
+            pending.is_some()
+        }),
+        "the queued write approval never reached the gateway bootstrap"
+    );
+    let pending = pending.unwrap();
+    assert_eq!(pending.kind, "write");
+    assert_eq!(pending.caller_session_id, "s1");
+    assert_eq!(pending.target_session_id.as_deref(), Some("s2"));
+    backend
+        .answer_approval(&pending.id, true)
+        .expect("answer the prompt through the gateway");
+    let response = approval_request.join().unwrap();
+    assert!(
+        response.contains(r#""approved":true"#),
+        "the MCP host must see the gateway answer: {response}"
+    );
+    assert!(
+        wait_until(Duration::from_secs(10), || {
+            backend
+                .bootstrap()
+                .ok()
+                .and_then(|bootstrap| bootstrap.snapshot.pending_approvals)
+                .is_some_and(|approvals| approvals.is_empty())
+        }),
+        "an answered prompt must leave the gateway bootstrap"
+    );
     backend.disconnect();
 
     unsafe {

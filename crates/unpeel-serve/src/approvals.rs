@@ -36,10 +36,25 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
+/// How a queued prompt ended. A timeout is not a decision: the caller must
+/// be able to tell "nobody answered" from "the user said no".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalOutcome {
+    Approved,
+    Declined,
+    TimedOut,
+}
+
+impl ApprovalOutcome {
+    pub fn approved(self) -> bool {
+        self == ApprovalOutcome::Approved
+    }
+}
+
 impl ApprovalHub {
-    /// Queue a request and block until answered or `timeout` (denied). The
-    /// caller is an HTTP handler thread, so blocking here is the contract —
-    /// the MCP host is itself blocking on our response.
+    /// Queue a request and block until answered or `timeout`. The caller is
+    /// an HTTP handler thread, so blocking here is the contract — the MCP
+    /// host is itself blocking on our response.
     pub fn request(
         self: &Arc<Self>,
         kind: &str,
@@ -48,7 +63,7 @@ impl ApprovalHub {
         caller_session_id: String,
         target_session_id: Option<String>,
         timeout: Duration,
-    ) -> bool {
+    ) -> ApprovalOutcome {
         let (tx, rx): (Sender<bool>, Receiver<bool>) = std::sync::mpsc::channel();
         let id = uuid::Uuid::new_v4().to_string();
         if let Ok(mut guard) = self.pending.lock() {
@@ -64,7 +79,11 @@ impl ApprovalHub {
             });
             self.generation.fetch_add(1, Ordering::AcqRel);
         }
-        let approved = rx.recv_timeout(timeout).unwrap_or(false);
+        let outcome = match rx.recv_timeout(timeout) {
+            Ok(true) => ApprovalOutcome::Approved,
+            Ok(false) => ApprovalOutcome::Declined,
+            Err(_) => ApprovalOutcome::TimedOut,
+        };
         // Drop the entry if it's still queued (timeout path).
         if let Ok(mut guard) = self.pending.lock() {
             let before = guard.len();
@@ -73,7 +92,7 @@ impl ApprovalHub {
                 self.generation.fetch_add(1, Ordering::AcqRel);
             }
         }
-        approved
+        outcome
     }
 
     /// Answer by id (from the TUI keys or the phone). Returns false when the
@@ -94,6 +113,17 @@ impl ApprovalHub {
     pub fn front(&self) -> Option<(String, String)> {
         let guard = self.pending.lock().ok()?;
         guard.first().map(|p| (p.id.clone(), p.title.clone()))
+    }
+
+    /// Stamp `pendingApprovals` onto a bootstrap body that was built without
+    /// this hub — the gateway path (`host.sock`, SSH) routes through the
+    /// disk-backed `ControllerHostRuntime`, which cannot see in-memory
+    /// prompts. Without this a window scoped to a sibling workspace could
+    /// answer prompts but was never told they existed (0.7.2 and earlier).
+    pub fn decorate_bootstrap(&self, bootstrap: &mut serde_json::Value) {
+        if let Some(object) = bootstrap.as_object_mut() {
+            object.insert("pendingApprovals".into(), self.list_json().into());
+        }
     }
 
     /// `pendingApprovals` for the mobile bootstrap (Swift wire dialect).
@@ -259,8 +289,70 @@ mod tests {
         let id = queued["id"].as_str().expect("approval id");
 
         assert!(hub.answer(id, true));
-        assert!(waiter.join().expect("request thread should finish"));
+        assert_eq!(
+            waiter.join().expect("request thread should finish"),
+            ApprovalOutcome::Approved
+        );
         assert!(hub.list_json().is_empty());
         assert!(hub.generation() > queued_generation);
+    }
+
+    #[test]
+    fn a_prompt_nobody_answers_times_out_rather_than_declining() {
+        let hub = Arc::new(ApprovalHub::default());
+        let outcome = hub.request(
+            "write",
+            "Allow?".into(),
+            "a → b".into(),
+            "a".into(),
+            Some("b".into()),
+            Duration::from_millis(50),
+        );
+        assert_eq!(outcome, ApprovalOutcome::TimedOut);
+        assert!(!outcome.approved());
+        assert!(hub.list_json().is_empty());
+    }
+
+    #[test]
+    fn decorate_bootstrap_publishes_the_queue_on_a_gateway_built_body() {
+        let hub = Arc::new(ApprovalHub::default());
+        let mut body = serde_json::json!({ "sessions": [] });
+        hub.decorate_bootstrap(&mut body);
+        assert_eq!(body["pendingApprovals"], serde_json::json!([]));
+
+        let request_hub = Arc::clone(&hub);
+        let waiter = thread::spawn(move || {
+            request_hub.request(
+                "write",
+                "Allow session A to write to session B?".into(),
+                "a → b".into(),
+                "a".into(),
+                Some("b".into()),
+                Duration::from_secs(2),
+            )
+        });
+        let mut queued = None;
+        for _ in 0..100 {
+            let mut body = serde_json::json!({ "sessions": [] });
+            hub.decorate_bootstrap(&mut body);
+            queued = body["pendingApprovals"]
+                .as_array()
+                .and_then(|a| a.first().cloned());
+            if queued.is_some() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        let queued = queued.expect("the queued prompt rides the decorated bootstrap");
+        assert_eq!(queued["kind"], "write");
+        assert_eq!(queued["callerSessionID"], "a");
+        assert_eq!(queued["targetSessionID"], "b");
+        assert!(hub.answer(queued["id"].as_str().unwrap(), false));
+        assert_eq!(waiter.join().unwrap(), ApprovalOutcome::Declined);
+
+        // A non-object body is left alone rather than corrupted.
+        let mut scalar = serde_json::json!("error");
+        hub.decorate_bootstrap(&mut scalar);
+        assert_eq!(scalar, serde_json::json!("error"));
     }
 }
