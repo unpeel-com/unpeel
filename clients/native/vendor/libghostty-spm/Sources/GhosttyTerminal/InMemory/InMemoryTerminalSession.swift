@@ -66,7 +66,7 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
         var notify: (@Sendable () -> Void)?
         if surface != nil {
             flushPendingReceiveBufferLocked()
-            // Arm the render pump for the attach itself: a freshly attached
+            // Request a refresh for the attach itself: a freshly attached
             // (or re-attached, e.g. cache remount) surface must present its
             // replayed content without waiting for the next byte.
             notify = hostBytesHandler
@@ -163,12 +163,12 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
     // MARK: - Receiving Data
 
     /// Fired after host bytes are written into the surface. The surface
-    /// coordinator wires this to its render pump: the embedded core
+    /// coordinator wires this to its coalesced refresh scheduler: the embedded core
     /// coalesces render wakeups under IO load, so a purely host-fed surface
     /// (no PTY, no local input) can hold freshly parsed terminal state on a
-    /// stale frame — blank or partial regions until a resize forces a draw.
-    /// Arming the pump on every host write makes remote-fed output present
-    /// like local IO. Invoked outside the session lock.
+    /// stale frame with blank or partial regions until a resize forces a draw.
+    /// Every completed host write requests a refresh without an idle timer.
+    /// Invoked outside the session lock, including while rendering is hidden.
     var onHostBytes: (@Sendable () -> Void)? {
         get {
             lock.lock()

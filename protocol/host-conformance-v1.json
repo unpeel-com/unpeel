@@ -54,6 +54,13 @@
       }
     },
     {
+      "id": "output.raw.missing-session",
+      "method": "GET",
+      "path": "/mobile/output",
+      "query": {"raw": "1"},
+      "expected": {"native": 400, "tui": 400}
+    },
+    {
       "id": "metrics.missing-session",
       "method": "GET",
       "path": "/mobile/metrics",
