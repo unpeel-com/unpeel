@@ -624,7 +624,7 @@ with the interactive path — see `docs/agents/cli.md` for the invariants).
 
 ### HTTP terminal output pagination
 
-Protocol 1.20 advertises `session.output.raw`. A Controller may request
+Protocol 1.22 advertises `session.output.raw`. A Controller may request
 `GET /mobile/output?raw=1` only when it retains parser state and inserts no
 bytes between pages. Native negotiates that capability from bootstrap. iOS
 keeps the default UTF-8 and VT-safe boundaries because its feed inserts local
