@@ -141,6 +141,9 @@ struct RemoteScopeEmptySidebarView: View {
     /// being empty then means the workspace HAS no projects, not that they
     /// are still on the way.
     var hasLoadedSnapshot: Bool = false
+    /// Reachability hint for a failed/reconnecting paired Host.
+    var hint: String? = nil
+    var onLearnMore: (() -> Void)? = nil
     private var presentation: RemoteConnectionPresentation {
         .init(state: state, hasSnapshot: false)
     }
@@ -188,6 +191,18 @@ struct RemoteScopeEmptySidebarView: View {
                         .foregroundStyle(Theme.mutedForeground)
                         .multilineTextAlignment(.center)
                         .lineLimit(4)
+                }
+                if let hint {
+                    Text(hint)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.mutedForeground)
+                        .multilineTextAlignment(.center)
+                        .padding(.top, 6)
+                    if let onLearnMore {
+                        Button("About Unpeel Link", action: onLearnMore)
+                            .buttonStyle(.link)
+                            .font(.system(size: 11, weight: .medium))
+                    }
                 }
             }
             .padding(.horizontal, 20)
@@ -470,25 +485,63 @@ struct RemoteConnectionPresentation {
     }
 }
 
+/// Why a paired Mac cannot be reached, for the Mac Controller. Unlike the
+/// phone, the Mac app may point at the Link page.
+enum RemoteHostReachabilityHint {
+    static func text(linkAllowed: Bool, route: RemoteHostConnectionRoute?) -> String? {
+        if route == .link {
+            // Link carried the last connection: the Host itself is the
+            // likelier cause (asleep, offline, Unpeel quit there).
+            return nil
+        }
+        if !linkAllowed {
+            return "Direct connections only reach this Mac on the same network, or on a Tailscale network shared by both Macs. This Host is scoped to Direct only — allow Unpeel Link for it in Settings ▸ Remote (and enroll Link on that Mac) to reach it from anywhere."
+        }
+        return "Not reachable directly, and Unpeel Link is not carrying it either. From another network this needs Link enrolled on that Mac (Unpeel ▸ Settings ▸ Remote), or a Tailscale network shared by both Macs."
+    }
+}
+
 struct RemoteHostConnectionBanner: View {
     let banner: RemoteConnectionPresentation.Banner
+    /// Reachability hint under the status line (`UnpeelStore.remoteScopeReachabilityHint`).
+    var hint: String? = nil
+    var onLearnMore: (() -> Void)? = nil
 
     var body: some View {
-        HStack(spacing: 8) {
-            if banner.showsProgress {
-                ProgressView()
-                    .controlSize(.small)
-                    .tint(banner.tint)
-            } else {
-                Image(systemName: banner.icon)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(banner.tint)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                if banner.showsProgress {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(banner.tint)
+                } else {
+                    Image(systemName: banner.icon)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(banner.tint)
+                }
+                Text(banner.message)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Theme.mutedForeground)
+                    .lineLimit(2)
+                Spacer(minLength: 0)
             }
-            Text(banner.message)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(Theme.mutedForeground)
-                .lineLimit(2)
-            Spacer(minLength: 0)
+            if let hint {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(hint)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.mutedForeground)
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let onLearnMore {
+                        Button("About Unpeel Link", action: onLearnMore)
+                            .buttonStyle(.link)
+                            .font(.system(size: 11, weight: .medium))
+                            .fixedSize()
+                    }
+                }
+                .padding(.leading, 19)
+                .padding(.bottom, 6)
+            }
         }
         .padding(.horizontal, 12)
         .frame(minHeight: 34)

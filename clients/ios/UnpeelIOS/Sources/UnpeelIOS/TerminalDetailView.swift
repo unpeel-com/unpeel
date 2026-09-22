@@ -938,6 +938,15 @@ struct EmptyTerminalState: View {
                         )
                     }
                     .liquidGlassProminentButton(tint: .cyan)
+                    if let hint = connection.reachabilityHint(unreachable: true) {
+                        Text(hint)
+                            .font(.footnote)
+                            .foregroundStyle(.white.opacity(0.5))
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: 420)
+                            .padding(.horizontal, 24)
+                            .padding(.top, 4)
+                    }
                 } else {
                     // A young outage is ordinary connecting — cold launch,
                     // foreground resume, the Mac restarting — so keep it

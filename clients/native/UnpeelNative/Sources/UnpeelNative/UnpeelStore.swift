@@ -1650,6 +1650,33 @@ final class UnpeelStore: ObservableObject {
 
     /// Capture the outgoing scope's selection before a scope switch clears
     /// it. Call at the top of every scope-changing verb.
+    /// Why a paired remote Mac is out of reach, in words the user can act on
+    /// (`RemoteScopeEmptySidebarView`, the content banner). Only for paired
+    /// Hosts in a persistent failure: SSH Hosts and local workspaces have no
+    /// Link, and a healthy or merely connecting scope says nothing.
+    var remoteScopeReachabilityHint: String? {
+        guard case let .remote(hostID) = selectedHostScope else { return nil }
+        switch remoteHostRuntime.connectionState {
+        case .failed, .reconnecting: break
+        default: return nil
+        }
+        guard let record = remoteHostStore.records.first(where: { $0.hostID == hostID }) else {
+            return nil
+        }
+        return RemoteHostReachabilityHint.text(
+            linkAllowed: record.isLinkEnabled,
+            route: remoteHostRuntime.connectionRoute
+        )
+    }
+
+    /// Opens the Unpeel Link explainer on the website (the Mac app may link
+    /// out; the phone never does).
+    func openLinkExplainer() {
+        if let url = URL(string: "https://unpeel.com/link") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
     private func rememberOutgoingScopeSelection() {
         guard selectedHostScope != .local, let id = selectedSessionID else { return }
         scopeSessionMemory[selectedHostScope.paneScopeID] = id

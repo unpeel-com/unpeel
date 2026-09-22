@@ -819,7 +819,9 @@ struct SidebarView: View {
                         RemoteScopeEmptySidebarView(
                             hostName: store.remoteScopeDisplayName ?? "Remote Host",
                             state: store.remoteHostRuntime.connectionState,
-                            hasLoadedSnapshot: store.remoteHostRuntime.snapshot != nil
+                            hasLoadedSnapshot: store.remoteHostRuntime.snapshot != nil,
+                            hint: store.remoteScopeReachabilityHint,
+                            onLearnMore: { store.openLinkExplainer() }
                         )
                     }
                 }

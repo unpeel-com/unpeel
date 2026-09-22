@@ -6,6 +6,20 @@ import UnpeelShared
 
 @MainActor
 final class RemoteHostRuntimeTests: XCTestCase {
+    /// The Link/Tailscale hint for a paired Mac that Direct cannot reach:
+    /// silent while Link carries the connection, otherwise it names Link and
+    /// Tailscale, and a Direct-only scope says how to allow Link.
+    func testRemoteHostReachabilityHintCopy() {
+        XCTAssertNil(RemoteHostReachabilityHint.text(linkAllowed: true, route: .link))
+        let allowed = RemoteHostReachabilityHint.text(linkAllowed: true, route: nil)
+        XCTAssertTrue(allowed?.contains("Unpeel Link") == true)
+        XCTAssertTrue(allowed?.contains("Tailscale") == true)
+        XCTAssertTrue(allowed?.contains("enrolled") == true)
+        let directOnly = RemoteHostReachabilityHint.text(linkAllowed: false, route: .direct)
+        XCTAssertTrue(directOnly?.contains("Direct only") == true)
+        XCTAssertTrue(directOnly?.contains("Tailscale") == true)
+    }
+
     func testUpdateReadsRequireCapabilityAndRejectResultsAfterDisconnect() async throws {
         let backend = ControlledRemoteBackend()
         let runtime = makeRuntime(backend: backend)

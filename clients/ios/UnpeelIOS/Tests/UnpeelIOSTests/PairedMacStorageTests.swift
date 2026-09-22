@@ -32,6 +32,25 @@ final class PairedMacStorageTests: XCTestCase {
         XCTAssertFalse(Policy.shouldRetry(presented: true, visible: false, attempt: 3, limit: 3))
     }
 
+    /// The Link/Tailscale hint appears only for a persistent Direct outage
+    /// of a paired Mac, never while Link is carrying the connection, and it
+    /// never carries a purchase link (App Store 3.1.3(b)).
+    func testReachabilityHintCopy() {
+        typealias Hint = RemoteReachabilityHint
+        XCTAssertNil(Hint.text(unreachable: false, hasPairedMac: true, usingRelay: false, linkConfigured: false))
+        XCTAssertNil(Hint.text(unreachable: true, hasPairedMac: false, usingRelay: false, linkConfigured: false))
+        XCTAssertNil(Hint.text(unreachable: true, hasPairedMac: true, usingRelay: true, linkConfigured: true))
+        let notConfigured = Hint.text(unreachable: true, hasPairedMac: true, usingRelay: false, linkConfigured: false)
+        XCTAssertTrue(notConfigured?.contains("Unpeel Link") == true)
+        XCTAssertTrue(notConfigured?.contains("Tailscale") == true)
+        let configured = Hint.text(unreachable: true, hasPairedMac: true, usingRelay: false, linkConfigured: true)
+        XCTAssertTrue(configured?.contains("enrolled") == true)
+        for text in [notConfigured, configured].compactMap({ $0 }) {
+            XCTAssertFalse(text.contains("http"), "the phone never links out to buy Link")
+            XCTAssertFalse(text.contains("$"))
+        }
+    }
+
     private let legacyRecordKey = "unpeel.ios.pairedMac"
     private let recordsKey = "unpeel.ios.pairedMacs"
     private let activeMacIDKey = "unpeel.ios.activeMacID"

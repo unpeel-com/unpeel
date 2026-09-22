@@ -927,7 +927,11 @@ struct SessionSidebarView: View {
                                 // No live connection means the session list
                                 // is stale by definition — say so instead of
                                 // rendering sessions the phone can't reach.
-                                SidebarDisconnectedView()
+                                SidebarDisconnectedView(
+                                    hint: connection.reachabilityHint(
+                                        unreachable: store.isUnreachable
+                                    )
+                                )
                             } else {
                                 listContent
                                     .id("main")
@@ -1891,6 +1895,10 @@ private struct SidebarPushWarningBanner: View {
 /// Reconnection retries the saved Direct endpoint and the E2E Relay, so this
 /// only informs — the pairing sheet stays one tap away via the status row.
 private struct SidebarDisconnectedView: View {
+    /// Why the Mac may be out of reach (`RemoteReachabilityHint`), once the
+    /// outage has outlived the grace period.
+    var hint: String? = nil
+
     var body: some View {
         VStack(spacing: 10) {
             // Friendlier company than a wifi-slash glyph — the user stares at
@@ -1904,6 +1912,13 @@ private struct SidebarDisconnectedView: View {
                 .font(.system(size: 12))
                 .foregroundStyle(IOSSidebarTheme.mutedForeground)
                 .multilineTextAlignment(.center)
+            if let hint {
+                Text(hint)
+                    .font(.system(size: 11))
+                    .foregroundStyle(IOSSidebarTheme.mutedForeground)
+                    .multilineTextAlignment(.center)
+                    .padding(.top, 4)
+            }
             ProgressView()
                 .controlSize(.small)
                 .tint(IOSSidebarTheme.mutedForeground)

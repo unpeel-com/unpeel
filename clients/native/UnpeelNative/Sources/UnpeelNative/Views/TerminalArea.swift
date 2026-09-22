@@ -257,7 +257,11 @@ struct ContentArea: View {
             // surfaces as a banner in the same slot the local restart /
             // resume banners use.
             if let banner = contentConnectionBanner {
-                RemoteHostConnectionBanner(banner: banner)
+                RemoteHostConnectionBanner(
+                    banner: banner,
+                    hint: store.remoteScopeReachabilityHint,
+                    onLearnMore: { store.openLinkExplainer() }
+                )
             }
             // Local scope: the bundled Host service did not answer. The
             // already-scanned disk view stays visible; this is the only

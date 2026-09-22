@@ -864,6 +864,25 @@ enum RemotePairingPresentationPolicy {
     }
 }
 
+/// Why the paired Mac is out of reach, in words the user can act on. Shown
+/// once the unreachable grace period lapses. App Store 3.1.3(b): this names
+/// Unpeel Link as a service switched on from the Mac and never links to a
+/// purchase; Tailscale is the self-hosted alternative.
+enum RemoteReachabilityHint {
+    static func text(unreachable: Bool, hasPairedMac: Bool, usingRelay: Bool, linkConfigured: Bool) -> String? {
+        guard unreachable, hasPairedMac else { return nil }
+        if usingRelay {
+            // Link carried the last connection; the Mac itself is the
+            // likelier cause (asleep, offline, Unpeel quit).
+            return nil
+        }
+        if linkConfigured {
+            return "Retrying over Unpeel Link as well. If this keeps happening, check that Link is enrolled in Unpeel ▸ Settings ▸ Remote on the Mac, or put both devices on a Tailscale network."
+        }
+        return "Away from your Mac’s network? A direct connection only works on the same network, or on a Tailscale network shared by both devices. To reach this Mac from anywhere, turn on Unpeel Link in Unpeel on the Mac (Settings ▸ Remote)."
+    }
+}
+
 /// What `presentPairingSheet()` should do, given the request flag and
 /// whether the sheet is actually on screen. Pure so the iOS unit suite can
 /// pin it: a latched-but-invisible request must be re-issued as a fresh
@@ -1036,6 +1055,20 @@ final class RemoteConnectionStore: ObservableObject {
     /// Cheap gate so the per-poll credential upgrade never touches the
     /// Keychain unnecessarily. Per-Mac: reloaded on every active-Mac change.
     private var hasRelayCredentials = false
+    /// Whether the active Mac was paired with Unpeel Link credentials (the
+    /// Mac had Link enrolled at pairing time). Read-only for the UI.
+    var linkConfiguredForActiveMac: Bool { hasRelayCredentials }
+
+    /// The reachability hint for the current outage, or nil while nothing is
+    /// worth saying (still connecting, connected, or riding Link).
+    func reachabilityHint(unreachable: Bool) -> String? {
+        RemoteReachabilityHint.text(
+            unreachable: unreachable,
+            hasPairedMac: pairedMacName != nil,
+            usingRelay: usingRelay,
+            linkConfigured: hasRelayCredentials
+        )
+    }
     private var relayCredentialsNeedRefresh = true
     private var relayCredentialFetchInFlight = false
     private var relayCredentialFetchRetryAfter = Date.distantPast
