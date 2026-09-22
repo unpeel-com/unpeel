@@ -125,7 +125,22 @@ xcodebuild -project UnpeelIOS.xcodeproj -scheme UnpeelIOSApp \
   -derivedDataPath /tmp/unpeel-ios-dd build
 xcrun simctl install <SIM_UDID> /tmp/unpeel-ios-dd/Build/Products/Debug-iphonesimulator/Unpeel.app
 xcrun simctl launch <SIM_UDID> com.unpeel.ios.remote
+# Device path in the simulator (no dev bridge, pairing required at launch):
+SIMCTL_CHILD_UNPEEL_IOS_DEVICE_PATH=1 xcrun simctl launch <SIM_UDID> com.unpeel.ios.remote
 ```
+
+A simulator run normally takes the dev-bridge path (`RemoteConnectionStore.
+devBridgeAvailable`), which never auto-presents pairing. `UNPEEL_IOS_DEVICE_
+PATH=1` makes it behave like hardware with nothing paired — how the iPad
+"Pair with your Mac does nothing" report (community #12) was reproduced:
+on a regular-width root (`NavigationSplitView`) the root view stops
+re-rendering for the connection store's published changes, so a `.sheet`
+bound from the root body never presented. The pairing sheet is therefore
+owned by `PairingSheetHost`, a child that observes the store itself, and
+`RemoteConnectionStore.presentPairingSheet()` re-presents a request that
+never became visible (`pairingSheetVisible`, reported by `PairingView`).
+Present the pairing sheet through that method, never by writing
+`pairingSheetPresented = true`.
 
 Physical device (needs the code-signing flags — `project.yml` sets
 `CODE_SIGNING_ALLOWED: NO` for simulators, so the CLI must re-enable it):

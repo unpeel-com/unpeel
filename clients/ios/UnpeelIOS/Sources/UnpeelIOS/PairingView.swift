@@ -90,6 +90,11 @@ struct PairingView: View {
         // height; the scanner state keeps the room it needs.
         .presentationDetents(showPairingInputs ? [.large] : [.medium, .large])
         .presentationDragIndicator(.visible)
+        // The store re-presents a request that never became visible (iPadOS
+        // drops a sheet presented during split-view setup); this is the
+        // "it is on screen" signal it waits for.
+        .onAppear { connection.pairingSheetVisible = true }
+        .onDisappear { connection.pairingSheetVisible = false }
     }
 
     private var navigationTitle: String {

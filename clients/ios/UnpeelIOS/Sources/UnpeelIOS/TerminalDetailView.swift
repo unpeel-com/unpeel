@@ -930,7 +930,7 @@ struct EmptyTerminalState: View {
                         .font(.subheadline)
                         .foregroundStyle(.white.opacity(0.6))
                     Button {
-                        connection.pairingSheetPresented = true
+                        connection.presentPairingSheet()
                     } label: {
                         Label(
                             connection.pairedMacName == nil ? "Pair with your Mac" : "Connection…",

@@ -864,6 +864,31 @@ enum RemotePairingPresentationPolicy {
     }
 }
 
+/// What `presentPairingSheet()` should do, given the request flag and
+/// whether the sheet is actually on screen. Pure so the iOS unit suite can
+/// pin it: a latched-but-invisible request must be re-issued as a fresh
+/// false → true edge, never treated as "already showing".
+enum RemotePairingSheetPresentationPolicy {
+    enum Request: Equatable {
+        case present
+        case represent
+        case alreadyVisible
+    }
+
+    static func request(presented: Bool, visible: Bool) -> Request {
+        switch (presented, visible) {
+        case (true, true): .alreadyVisible
+        case (true, false): .represent
+        case (false, _): .present
+        }
+    }
+
+    /// Whether a presentation watchdog tick should toggle the binding again.
+    static func shouldRetry(presented: Bool, visible: Bool, attempt: Int, limit: Int) -> Bool {
+        presented && !visible && attempt < limit
+    }
+}
+
 struct PreparedRemotePairingCommit {
     let record: PairedMacRecord
     let records: [PairedMacRecord]
@@ -938,6 +963,62 @@ final class RemoteConnectionStore: ObservableObject {
     /// client at creation (terminal renderers) key their identity on this.
     @Published private(set) var epoch = 0
     @Published var pairingSheetPresented = false
+    /// Whether the pairing sheet is actually on screen (PairingView reports
+    /// appear/disappear). `pairingSheetPresented` alone is a request: iPadOS
+    /// can drop a sheet presented while the split view is still installing
+    /// its columns (launch with nothing paired), after which the flag stays
+    /// `true` and every later `= true` is a no-op — "Pair with your Mac does
+    /// nothing" (community #12).
+    var pairingSheetVisible = false
+    private var pairingPresentationRetry: Task<Void, Never>?
+
+    /// Present the pairing/Workspaces sheet, and keep presenting until it is
+    /// actually visible: a request that iPadOS swallowed is re-issued by
+    /// toggling the binding, at most a few times.
+    func presentPairingSheet() {
+        switch RemotePairingSheetPresentationPolicy.request(
+            presented: pairingSheetPresented,
+            visible: pairingSheetVisible
+        ) {
+        case .alreadyVisible:
+            return
+        case .represent:
+            // Latched from a dropped presentation: SwiftUI only presents on a
+            // false → true edge.
+            pairingSheetPresented = false
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.pairingSheetPresented = true
+                self.armPairingPresentationRetry()
+            }
+        case .present:
+            pairingSheetPresented = true
+            armPairingPresentationRetry()
+        }
+    }
+
+    static let pairingPresentationRetryLimit = 3
+    static let pairingPresentationRetryDelay: Duration = .milliseconds(600)
+
+    private func armPairingPresentationRetry(attempt: Int = 0) {
+        pairingPresentationRetry?.cancel()
+        pairingPresentationRetry = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.pairingPresentationRetryDelay)
+            guard let self, !Task.isCancelled,
+                  RemotePairingSheetPresentationPolicy.shouldRetry(
+                      presented: self.pairingSheetPresented,
+                      visible: self.pairingSheetVisible,
+                      attempt: attempt,
+                      limit: Self.pairingPresentationRetryLimit
+                  )
+            else { return }
+            self.pairingSheetPresented = false
+            try? await Task.sleep(for: .milliseconds(50))
+            guard !Task.isCancelled, !self.pairingSheetVisible else { return }
+            self.pairingSheetPresented = true
+            self.armPairingPresentationRetry(attempt: attempt + 1)
+        }
+    }
     @Published private(set) var lastPairingError: String?
 
     /// Every Mac this phone is paired with, in pairing order.
@@ -987,6 +1068,13 @@ final class RemoteConnectionStore: ObservableObject {
     /// builds must pair — localhost is the phone itself there.
     static var devBridgeAvailable: Bool {
         #if targetEnvironment(simulator)
+        // `UNPEEL_IOS_DEVICE_PATH=1` makes a simulator run take the real
+        // device path (no dev bridge, pairing required) so launch-time
+        // presentation bugs that only reproduce on hardware can be driven
+        // from `xcrun simctl launch`.
+        if ProcessInfo.processInfo.environment["UNPEEL_IOS_DEVICE_PATH"] == "1" {
+            return false
+        }
         return true
         #else
         return false
