@@ -87,6 +87,12 @@ do next depends on the change:
 - **Clean-state testing:** `bun run dev:native:blank` (isolated `UNPEEL_HOME`,
   own UserDefaults suite) runs independently of the installed app.
 
+`build-app.sh` builds the app with SwiftPM's `native` build system while the
+toolchain offers it. SwiftPM 6.4's default `swiftbuild` engine records the
+deployment target (13.0) as the binary's SDK version, and AppKit then runs
+the app in its pre-26 compatibility look: no Liquid Glass popovers or menus.
+The script fails the build if `vtool -show-build` reports an SDK below 26.
+
 Confirm which binary is serving with
 `pgrep -fl "Unpeel.app/Contents/MacOS/UnpeelNative"` (the path shows dist vs
 /Applications), and that a new route made it into a build with e.g.
