@@ -4380,6 +4380,11 @@ pub fn cleanup_session_artifacts(session_id: &str) -> Result<(), String> {
 /// considered stale and eligible for reaping — 24 hours.
 const REAP_STALE_AGE_MS: u64 = 24 * 60 * 60 * 1000;
 
+/// How long a Running manifest without a child pid may go without a
+/// heartbeat and still count as "launching" inside a live host: two
+/// heartbeat intervals, well past any real spawn.
+const STOP_UNREACHABLE_LAUNCH_WINDOW_MS: u64 = 2 * SESSION_HEARTBEAT_INTERVAL_MS;
+
 /// Stop a Running Session whose host no longer answers its control socket,
 /// using the same kill discipline as [`reap_dead_sessions`] but on demand:
 /// the user asked for this exact Session to stop, so a dead host must not
@@ -4399,10 +4404,19 @@ pub(crate) fn stop_unreachable_session_child(
         return Ok(false);
     }
     let Some(pid) = manifest.pid else {
+        // No child pid: either the launch window of a live host, or a
+        // session whose spawn never completed. A live host heartbeats its
+        // sessions; one that has been silent for longer than the launch
+        // window is not launching anything and would otherwise stay
+        // unremovable forever (GitHub #27).
         if manifest_launching_host_is_alive(manifest) {
-            return Err(format!(
-                "session {session_id} is still launching inside a live host that did not answer"
-            ));
+            let silent_for =
+                current_timestamp_ms().saturating_sub(manifest_last_heartbeat_at(manifest));
+            if silent_for < STOP_UNREACHABLE_LAUNCH_WINDOW_MS {
+                return Err(format!(
+                    "session {session_id} is still launching inside a live host that did not answer"
+                ));
+            }
         }
         mark_manifest_exited(session_id);
         return Ok(true);
@@ -4418,9 +4432,12 @@ pub(crate) fn stop_unreachable_session_child(
             return Ok(true);
         }
         PidIdentity::Unknown => {
-            return Err(format!(
-                "session {session_id} host is unreachable and child pid {pid} cannot be verified as its own; not signaling it"
-            ));
+            // Same rule as `reap_dead_sessions`: an unprovable identity is
+            // filed without a signal. Worst case an orphaned shell lingers,
+            // which beats group-killing a stranger — or leaving the user a
+            // Session they cannot remove.
+            mark_manifest_exited(session_id);
+            return Ok(true);
         }
         PidIdentity::Matches => {}
     }
@@ -7254,13 +7271,29 @@ exit "${UNPEEL_FAKE_PROVIDER_STATUS:-0}"
         );
 
         // Unverifiable identity (legacy record, argv without the session id)
-        // is refused, never signaled: this test process is still here.
+        // is filed without a signal, like the reaper: this test process is
+        // still here afterwards.
         let self_pid = std::process::id();
         let self_started = process_start_time_ms(self_pid).expect("own start time");
         manifest.pid = Some(self_pid);
         manifest.pid_started_at = None;
-        let refused = super::stop_unreachable_session_child(&manifest).unwrap_err();
-        assert!(refused.contains("cannot be verified"), "{refused}");
+        assert_eq!(super::stop_unreachable_session_child(&manifest), Ok(true));
+
+        // No child pid under a live host: launching while the heartbeat is
+        // fresh, filed once the host has been silent past the launch window
+        // (GitHub #27: a spawn that never completed stayed unremovable).
+        manifest.pid = None;
+        manifest.host_pid = Some(self_pid);
+        manifest.host_pid_started_at = Some(self_started);
+        manifest.heartbeat_at = super::current_timestamp_ms();
+        let launching = super::stop_unreachable_session_child(&manifest).unwrap_err();
+        assert!(launching.contains("still launching"), "{launching}");
+        manifest.heartbeat_at = super::current_timestamp_ms()
+            .saturating_sub(super::STOP_UNREACHABLE_LAUNCH_WINDOW_MS + 1);
+        assert_eq!(super::stop_unreachable_session_child(&manifest), Ok(true));
+        manifest.pid = Some(self_pid);
+        manifest.host_pid = None;
+        manifest.host_pid_started_at = None;
 
         // A recycled pid is a dead child: marked exited without a signal.
         manifest.pid_started_at = Some(self_started.saturating_sub(3_600_000));
