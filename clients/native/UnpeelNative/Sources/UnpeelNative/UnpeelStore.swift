@@ -369,6 +369,10 @@ final class UnpeelStore: ObservableObject {
                     if recentActivityVisible { recentActivityVisible = false }
                     if remoteHostRuntime.selectedSessionID != id {
                         remoteHostRuntime.selectSession(id)
+                    } else {
+                        // Re-landing on the already-selected row (its
+                        // notification, the activity menu) is still a look.
+                        clearObservedHostUnreadIfNeeded()
                     }
                 }
                 // The title-strip branch is not local-host bookkeeping: a
@@ -1560,6 +1564,11 @@ final class UnpeelStore: ObservableObject {
     /// Busy/attention sessions the user switched away from; they become
     /// unread when they settle (sessionUnread.ts pendingUnreadSessions).
     private var pendingUnreadSessions: Set<String> = []
+
+    /// Host-reported unread rows this app already sent a read receipt for
+    /// while observing them. Pruned when the Host republishes them as read,
+    /// so one unread episode costs one receipt, never one per refresh.
+    private var observedHostUnreadReceiptIDs: Set<String> = []
 
     /// Sessions whose current `menu_prompt_active` flag the user dismissed
     /// ("Clear attention" in the sidebar context menu). The host's flag is
@@ -5245,7 +5254,73 @@ final class UnpeelStore: ObservableObject {
         // only if reconciliation actually changes unread membership; the
         // rescan path still requests a full status snapshot below.
         reconcileUnread(persistSessionStates: false)
+        if let observedSessionID {
+            // A deliberate look always earns a fresh receipt attempt.
+            observedHostUnreadReceiptIDs.remove(observedSessionID)
+        }
+        clearObservedHostUnreadIfNeeded()
         refreshTitlebarBranch()
+    }
+
+    /// Host truth can mark the row on screen unread without any observation
+    /// edge: a Session that settles while its row is already selected (app
+    /// in the background, then brought forward or reached through its
+    /// notification), or a late child finish that advances the lifecycle
+    /// clock past an earlier receipt. The local reconciliation above only
+    /// runs on observation changes and trusts its own clock, so without this
+    /// the dot stayed until something else (opening Settings) re-observed
+    /// the row. Runs on every observation change and Host projection.
+    private func clearObservedHostUnreadIfNeeded() {
+        guard displaysHostProjection,
+              let sessionID = observedSessionID,
+              remoteSummary(for: sessionID)?.unread == true
+        else { return }
+        if selectedHostScope == .local {
+            guard observedHostUnreadReceiptIDs.insert(sessionID).inserted else { return }
+            // The Host already judged the row unread against its own clock;
+            // don't let the local estimate veto the receipt.
+            removeUnread(sessionID, forceReceipt: true)
+        } else {
+            remoteHostRuntime.requestMarkReadIfNeeded(sessionID)
+        }
+    }
+
+    /// "Mark all read" in the activity dropdowns: clears every Done row this
+    /// app can write a receipt for. The foreground workspace goes through
+    /// its own Host (mark-read verb or shared receipt); this instance's
+    /// Local workspace takes a shared receipt even while another scope is
+    /// selected. Other pooled workspaces are read-only background
+    /// connections by design, so their rows clear when visited.
+    func markActivityItemsRead(_ items: [GlobalActivityMenuItem]) {
+        for item in items {
+            switch activityReadRoute(for: item.workspaceKey) {
+            case .foregroundHost:
+                remoteHostRuntime.requestMarkReadIfNeeded(item.session.sessionID)
+            case .localReceipt:
+                removeUnread(item.session.sessionID, forceReceipt: true)
+            case nil:
+                continue
+            }
+        }
+    }
+
+    /// Whether `markActivityItemsRead` can clear at least one of `items`.
+    func canMarkActivityItemsRead(_ items: [GlobalActivityMenuItem]) -> Bool {
+        items.contains { activityReadRoute(for: $0.workspaceKey) != nil }
+    }
+
+    private enum ActivityReadRoute { case foregroundHost, localReceipt }
+
+    private func activityReadRoute(for workspaceKey: String) -> ActivityReadRoute? {
+        if selectedHostScope != .local, workspaceKey == workspacePoolForegroundKey() {
+            return .foregroundHost
+        }
+        if workspaceKey == WorkspaceListOrder.localKey(
+            home: Self.currentInstanceNormalizedHome()
+        ) {
+            return .localReceipt
+        }
+        return nil
     }
 
     private func reconcileUnread(persistSessionStates: Bool = true) {
@@ -5592,7 +5667,7 @@ final class UnpeelStore: ObservableObject {
         qos: .utility
     )
 
-    private func removeUnread(_ sessionID: String) {
+    private func removeUnread(_ sessionID: String, forceReceipt: Bool = false) {
         // The visible state is entirely in memory, so clear it synchronously.
         // The shared receipt requires several filesystem reads (and sometimes
         // an atomic write); doing those in a sidebar click handler made even a
@@ -5619,7 +5694,8 @@ final class UnpeelStore: ObservableObject {
                 ),
                 alertAt: alertAt
             )
-            if Self.sharedReadReceiptNeedsRefresh(readAt: readAt, settledAt: settledAt),
+            if forceReceipt
+                || Self.sharedReadReceiptNeedsRefresh(readAt: readAt, settledAt: settledAt),
                Self.writeSharedMarker(
                    sessionID,
                    .read,
@@ -16057,6 +16133,10 @@ extension UnpeelStore {
                 remoteHostRuntime.selectDirectDataPlaneSession(selectedSessionID)
             }
         }
+        observedHostUnreadReceiptIDs = observedHostUnreadReceiptIDs.filter {
+            remoteSummariesByID[$0]?.unread == true
+        }
+        clearObservedHostUnreadIfNeeded()
         refreshTitlebarBranch()
     }
 
