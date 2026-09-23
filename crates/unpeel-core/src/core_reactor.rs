@@ -324,8 +324,8 @@ pub(crate) struct Registry {
     poller: sys::Poller,
     next_token: u64,
     owners: HashMap<u64, (usize, TokenKind)>,
-    /// Shared PTY read buffer (see `SessionIo::pty_readable`).
-    pub(crate) scratch: Vec<u8>,
+    /// Shared PTY read buffer, lent out by `with_read_buffer`.
+    scratch: Vec<u8>,
 }
 
 impl Registry {
@@ -336,6 +336,21 @@ impl Registry {
             owners: HashMap::new(),
             scratch: vec![0u8; super::SESSION_OUTPUT_READ_BUFFER_BYTES],
         })
+    }
+
+    /// Lend the shared PTY read buffer to `f` for one read; it is back in
+    /// place on every path `f` returns by. A buffer lost to a panic inside
+    /// `f` (the reactor catches it) is re-grown here: a read into an empty
+    /// slice answers `Ok(0)`, which every later Session would take for EOF
+    /// and end on its first byte of output.
+    pub(crate) fn with_read_buffer<R>(&mut self, f: impl FnOnce(&mut [u8], &mut Self) -> R) -> R {
+        let mut buffer = std::mem::take(&mut self.scratch);
+        if buffer.len() < super::SESSION_OUTPUT_READ_BUFFER_BYTES {
+            buffer.resize(super::SESSION_OUTPUT_READ_BUFFER_BYTES, 0);
+        }
+        let result = f(&mut buffer, self);
+        self.scratch = buffer;
+        result
     }
 
     pub(crate) fn add(
@@ -497,15 +512,13 @@ pub(crate) enum JournalMsg {
     },
 }
 
+/// Timer jobs are keyed by the Session's journal id, never its reactor slot:
+/// a slot is reused the moment a Session ends, while its teardown thread
+/// retires the jobs later, and a slot-keyed `Remove` would take the next
+/// Session's heartbeat and observers with it.
 pub(crate) enum TimerMsg {
-    Add {
-        slot: usize,
-        jobs: Vec<HostTimerJob>,
-    },
-    Remove {
-        slot: usize,
-        ack: mpsc::Sender<()>,
-    },
+    Add { key: u64, jobs: Vec<HostTimerJob> },
+    Remove { key: u64, ack: mpsc::Sender<()> },
 }
 
 #[derive(Clone)]
@@ -865,7 +878,8 @@ impl Reactor {
             self.free_slots.push(slot);
             return Err(error);
         }
-        let _ = self.timer_tx.send(TimerMsg::Add { slot, jobs });
+        let key = session.journal_id();
+        let _ = self.timer_tx.send(TimerMsg::Add { key, jobs });
         self.sessions[slot] = Some(Box::new(session));
         Ok(())
     }
@@ -969,7 +983,7 @@ impl Reactor {
             }
             let (timer_ack_tx, timer_ack_rx) = mpsc::channel();
             let _ = self.timer_tx.send(TimerMsg::Remove {
-                slot,
+                key: session.journal_id(),
                 ack: timer_ack_tx,
             });
             if timer_ack_rx.recv_timeout(Duration::from_secs(10)).is_err() {
@@ -1072,7 +1086,8 @@ impl Reactor {
             let registry = &mut self.registry;
             if let Some(session) = self.sessions[slot].as_mut() {
                 let jobs = session.resume_after_handoff(registry);
-                let _ = self.timer_tx.send(TimerMsg::Add { slot, jobs });
+                let key = session.journal_id();
+                let _ = self.timer_tx.send(TimerMsg::Add { key, jobs });
             }
         }
         Err(error)
@@ -1285,7 +1300,7 @@ fn run_journal_writer(rx: mpsc::Receiver<JournalMsg>, reactor: ReactorHandle) {
 /// never interleave with each other), and the idle tick never exceeds
 /// `HOST_TIMER_MAX_SLEEP` so a removal ack is never held hostage.
 fn run_timer(rx: mpsc::Receiver<TimerMsg>) {
-    let mut jobs: HashMap<usize, Vec<HostTimerJob>> = HashMap::new();
+    let mut jobs: HashMap<u64, Vec<HostTimerJob>> = HashMap::new();
     let running = AtomicBool::new(true);
     loop {
         let now = Instant::now();
@@ -1316,11 +1331,11 @@ fn run_timer(rx: mpsc::Receiver<TimerMsg>) {
         let mut pending = message;
         while let Some(message) = pending.take() {
             match message {
-                TimerMsg::Add { slot, jobs: new } => {
-                    jobs.entry(slot).or_default().extend(new);
+                TimerMsg::Add { key, jobs: new } => {
+                    jobs.entry(key).or_default().extend(new);
                 }
-                TimerMsg::Remove { slot, ack } => {
-                    jobs.remove(&slot);
+                TimerMsg::Remove { key, ack } => {
+                    jobs.remove(&key);
                     let _ = ack.send(());
                 }
             }
@@ -1403,5 +1418,88 @@ mod tests {
         assert_eq!(std::fs::metadata(&path).unwrap().len(), 96 * 1024 + 4);
         let _ = reactor_handle_stub();
         let _ = UnixStream::pair();
+    }
+
+    /// A read that leaves early (a stopped Session's drained PTY) or panics
+    /// must not cost the reactor its read buffer: an empty buffer reads as
+    /// EOF, and every later Session died on its first byte of output.
+    #[test]
+    fn the_shared_read_buffer_survives_early_returns_and_panics() {
+        let mut registry = Registry::new().unwrap();
+        let full = super::super::SESSION_OUTPUT_READ_BUFFER_BYTES;
+
+        // Leaves from the middle of the read, like a drained stopped Session.
+        let outcome = registry.with_read_buffer(|buffer, _| {
+            if buffer.len() == full {
+                return "ended";
+            }
+            "short buffer"
+        });
+        assert_eq!(outcome, "ended");
+        assert_eq!(registry.scratch.len(), full);
+
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            registry.with_read_buffer(|_, _| -> () { panic!("session I/O panicked") })
+        }));
+        assert!(panicked.is_err());
+        assert!(
+            registry.scratch.is_empty(),
+            "the panic dropped the lent buffer"
+        );
+        let (tx, rx) = std::os::unix::net::UnixStream::pair().unwrap();
+        (&tx).write_all(b"first bytes").unwrap();
+        let read =
+            registry.with_read_buffer(|buffer, _| std::io::Read::read(&mut &rx, buffer).unwrap());
+        assert_eq!(
+            read,
+            b"first bytes".len(),
+            "a re-grown buffer reads data, not EOF"
+        );
+        assert_eq!(registry.scratch.len(), full);
+    }
+
+    /// A slot is reused as soon as a Session ends, but its teardown retires
+    /// the timer jobs later: the late Remove must not take the new
+    /// occupant's jobs with it.
+    #[test]
+    fn retiring_a_sessions_timer_jobs_spares_the_next_session() {
+        let (timer_tx, timer_rx) = mpsc::channel();
+        thread::spawn(move || run_timer(timer_rx));
+        let job = |runs: &Arc<std::sync::atomic::AtomicUsize>| {
+            let runs = Arc::clone(runs);
+            HostTimerJob::new(Duration::ZERO, Duration::from_millis(10), move || {
+                runs.fetch_add(1, Ordering::SeqCst);
+                true
+            })
+        };
+        let old_runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let new_runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        // Same reactor slot, two incarnations (distinct journal ids).
+        timer_tx
+            .send(TimerMsg::Add {
+                key: 1,
+                jobs: vec![job(&old_runs)],
+            })
+            .unwrap();
+        timer_tx
+            .send(TimerMsg::Add {
+                key: 2,
+                jobs: vec![job(&new_runs)],
+            })
+            .unwrap();
+        let (ack_tx, ack_rx) = mpsc::channel();
+        timer_tx
+            .send(TimerMsg::Remove {
+                key: 1,
+                ack: ack_tx,
+            })
+            .unwrap();
+        ack_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+        let old_after_remove = old_runs.load(Ordering::SeqCst);
+        let new_before = new_runs.load(Ordering::SeqCst);
+        thread::sleep(Duration::from_millis(100));
+        assert_eq!(old_runs.load(Ordering::SeqCst), old_after_remove);
+        assert!(new_runs.load(Ordering::SeqCst) > new_before);
     }
 }
