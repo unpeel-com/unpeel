@@ -1146,7 +1146,7 @@ impl SessionTeardown {
             journal_tx,
             journal_id,
             exit,
-            _pty_reader,
+            mut _pty_reader,
         } = self;
         let mut result = outcome;
 
@@ -1180,35 +1180,55 @@ impl SessionTeardown {
         let Some(exit) = exit else {
             return;
         };
-        let exit_code = shared
-            .runtime
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .child
-            .try_wait()
-            .ok()
-            .flatten()
-            .map(|status| status.exit_code() as i32);
-        let input_was_written = shared.has_been_written_to.load(Ordering::Relaxed);
-        let host_build_id = exit.host_build_id.clone();
-        let _ = update_manifest_session(&shared.session_id, |manifest| {
-            manifest.state = HostedSessionState::Exited;
-            manifest.pid = exit.pid;
-            manifest.pid_started_at = exit.pid_started_at;
-            manifest.exit_code = exit_code;
-            manifest.host_build_id = host_build_id.clone();
-            manifest.host_protocol_version = Some(SESSION_HOST_PROTOCOL_VERSION);
-            manifest.has_been_written_to |= input_was_written;
-            manifest.runtime = None;
-            manifest.runtime_launch_pending = false;
-            manifest.menu_prompt_active = false;
-            manifest.screen_changed_at = None;
-            manifest.detected_local_urls.clear();
-            manifest.terminal_modes = None;
-            manifest.heartbeat_at = current_timestamp_ms();
-        });
+        // The child must be over before its exit is recorded. On the ordinary
+        // path the reader loop ended because the child exited and `try_wait`
+        // reaps it at once. When the Host ended the Session itself (a journal
+        // write failed — a full disk is the observed case) the child is still
+        // running: it is SIGKILLed, but a process blocked writing to the PTY
+        // cannot finish exiting while nothing drains the master (the reactor
+        // detached that fd in `finish`), so the reap keeps draining the
+        // reader until the child is gone. Skipping this leaves a `<defunct>`
+        // child that still answers `kill(pid, 0)` and a manifest stuck
+        // `running`.
+        let exit_code =
+            reap_child_for_teardown(&shared.runtime, _pty_reader.as_mut(), result.is_err())
+                .map(|status| status.exit_code() as i32);
+
+        // Remove the sockets before the (possibly slow) manifest write. The
+        // socket is what every reader probes for liveness, and unlinking it
+        // needs no disk space; do it first so a Session whose disk is full
+        // reads as dead at once instead of drawing an auto-archive retry loop
+        // for the whole time the manifest write is failing.
         let _ = fs::remove_file(socket_path(&shared.session_id));
         let _ = fs::remove_file(&exit.session_socket_path);
+
+        let input_was_written = shared.has_been_written_to.load(Ordering::Relaxed);
+        let host_build_id = exit.host_build_id.clone();
+        // A write that fails here usually fails for the reason the Session
+        // ended (no space left); keep trying for a while rather than leave a
+        // running manifest whose Host has already let go.
+        let _ = update_manifest_session_with_retry(
+            &shared.session_id,
+            "exited manifest",
+            &EXIT_PUBLISH_RETRY_MS,
+            thread::sleep,
+            |manifest| {
+                manifest.state = HostedSessionState::Exited;
+                manifest.pid = exit.pid;
+                manifest.pid_started_at = exit.pid_started_at;
+                manifest.exit_code = exit_code;
+                manifest.host_build_id = host_build_id.clone();
+                manifest.host_protocol_version = Some(SESSION_HOST_PROTOCOL_VERSION);
+                manifest.has_been_written_to |= input_was_written;
+                manifest.runtime = None;
+                manifest.runtime_launch_pending = false;
+                manifest.menu_prompt_active = false;
+                manifest.screen_changed_at = None;
+                manifest.detected_local_urls.clear();
+                manifest.terminal_modes = None;
+                manifest.heartbeat_at = current_timestamp_ms();
+            },
+        );
         // Release the PTY master and child handle now that the exit edge is
         // published; the runtime Arc may still be held by a late one-shot
         // command thread, which then finds a closed child.
@@ -1220,6 +1240,68 @@ impl SessionTeardown {
         // the pages back once its next idle tick finds no teardown racing.
         reactor.session_ended();
     }
+}
+
+/// Reap the Session's child for its exit record. `ended_by_host` means the
+/// reader loop did not end because the child exited — the Host gave the
+/// Session up — so the child is terminated first; otherwise it gets a short
+/// grace to finish exiting before the same escalation. Throughout, the PTY
+/// `reader` is drained and discarded: after `finish` detached the master
+/// from the reactor nothing else reads it, and a child blocked writing to a
+/// full PTY buffer cannot finish exiting (even after SIGKILL) until the
+/// buffer is drained. A handed-over child that is already gone (its exit was
+/// never observed) is reported as such at once rather than waited for.
+fn reap_child_for_teardown(
+    runtime: &Arc<Mutex<HostRuntime>>,
+    reader: &mut (dyn Read + Send),
+    ended_by_host: bool,
+) -> Option<portable_pty::ExitStatus> {
+    let mut runtime = runtime.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Ok(Some(status)) = runtime.child.try_wait() {
+        return Some(status);
+    }
+    if runtime
+        .child
+        .process_id()
+        .is_some_and(|pid| !process_exists(pid))
+    {
+        return None;
+    }
+    // The master is `O_NONBLOCK`, so an empty read returns `WouldBlock`; a
+    // gone child eventually returns EOF or an error. Discard everything.
+    fn drain(reader: &mut (dyn Read + Send)) {
+        let mut scratch = [0u8; 8192];
+        for _ in 0..64 {
+            match reader.read(&mut scratch) {
+                Ok(n) if n > 0 => continue,
+                _ => break,
+            }
+        }
+    }
+    fn poll(
+        runtime: &mut HostRuntime,
+        reader: &mut (dyn Read + Send),
+        budget: Duration,
+    ) -> Option<portable_pty::ExitStatus> {
+        let deadline = Instant::now() + budget;
+        loop {
+            drain(reader);
+            if let Ok(Some(status)) = runtime.child.try_wait() {
+                return Some(status);
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+    }
+    if !ended_by_host {
+        if let Some(status) = poll(&mut runtime, reader, Duration::from_millis(500)) {
+            return Some(status);
+        }
+    }
+    terminate_hosted_runtime(&mut runtime);
+    poll(&mut runtime, reader, Duration::from_secs(5))
 }
 
 /// Hand freed heap back to the OS. A long-lived core that hosted many busy

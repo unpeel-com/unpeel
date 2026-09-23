@@ -100,6 +100,7 @@ printed only when the check fails.
 | `state_bus` | cross-frontend sync: pings land immediately, writes announce |
 | `link_enroll` / `link_lifecycle` / `link_token_rotation` | scripted Link enrollment; the live-serve refresh/reject/race ladder; relay credential rotation |
 | `relay_conformance` | the Host's relay uplink against the shipped known-answer vectors |
+| `full_disk` | a Session on a 4 MiB volume that fills up: the child is reaped (no zombie), the exited manifest lands once space returns, `rm` works (SKIPPED without hdiutil / passwordless tmpfs) |
 | `compat_state` | **upgrade safety**: unmodelled keys, legacy/future manifests, corrupt files, through the Host and the CLI |
 | `compat_bridge` | **version skew**: this CLI/Host beside an older app that 404s new routes |
 | `compat_serve` | **version skew**: the shipped 0.4.3 `unpeel` beside this tree's binaries over one home, both directions |

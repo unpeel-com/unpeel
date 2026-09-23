@@ -3566,6 +3566,13 @@ pub fn load_manifest(session_id: &str) -> Option<HostedSessionManifest> {
     serde_json::from_slice(&raw).ok()
 }
 
+/// Whether `pid` names something that could still own a terminal. A zombie —
+/// exited, not yet reaped by its parent — answers `kill(pid, 0)` exactly like
+/// a live process, but it runs nothing, ignores every signal, and keeps its
+/// pid only until the parent waits. Every liveness question here (health,
+/// reaping, stop, identity) means "is the child still there", so a zombie
+/// counts as gone; otherwise a Session whose Host lost its child stays
+/// `running`, unremovable and unresumable, until that Host exits.
 #[cfg(unix)]
 fn process_exists(pid: u32) -> bool {
     if pid == 0 {
@@ -3573,7 +3580,7 @@ fn process_exists(pid: u32) -> bool {
     }
     let rc = unsafe { libc::kill(pid as i32, 0) };
     if rc == 0 {
-        return true;
+        return !process_is_zombie(pid);
     }
     matches!(
         std::io::Error::last_os_error().raw_os_error(),
@@ -3584,6 +3591,48 @@ fn process_exists(pid: u32) -> bool {
 #[cfg(not(unix))]
 fn process_exists(_pid: u32) -> bool {
     true
+}
+
+/// True only when the kernel positively reports `pid` as a zombie. macOS
+/// exposes no `kinfo_proc` through `libc`, but `proc_pidinfo` refuses a
+/// zombie with `ESRCH` while `kill(pid, 0)` still succeeds — no live process
+/// of our own shows that pair, and another user's process fails both with
+/// `EPERM`. Linux reads the state letter from `/proc/<pid>/stat`.
+#[cfg(target_os = "macos")]
+pub fn process_is_zombie(pid: u32) -> bool {
+    if pid == 0 || unsafe { libc::kill(pid as i32, 0) } != 0 {
+        return false;
+    }
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::uninit();
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    let rc = unsafe {
+        libc::proc_pidinfo(
+            pid as libc::c_int,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr() as *mut libc::c_void,
+            size,
+        )
+    };
+    rc <= 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+}
+
+#[cfg(target_os = "linux")]
+pub fn process_is_zombie(pid: u32) -> bool {
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return false;
+    };
+    // The comm field can contain spaces and parens; the state letter is the
+    // first field after the last closing paren.
+    stat.rsplit(')')
+        .next()
+        .and_then(|rest| rest.split_whitespace().next())
+        .is_some_and(|state| state == "Z")
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub fn process_is_zombie(_pid: u32) -> bool {
+    false
 }
 
 /// Tolerance when comparing a manifest's recorded pid start time against the
@@ -3686,6 +3735,14 @@ pub fn manifest_pid_identity(manifest: &HostedSessionManifest) -> PidIdentity {
     let Some(pid) = manifest.pid else {
         return PidIdentity::Unknown;
     };
+    // An unreaped child is positively over: nothing to signal, nothing that
+    // could still own the terminal. Without this a zombie reads as "exists,
+    // start time unknowable" and lands in `Unknown`, which no reaper may act
+    // on — the Session then stays running forever.
+    #[cfg(unix)]
+    if process_is_zombie(pid) {
+        return PidIdentity::NotOurs;
+    }
     if let (Some(recorded), Some(actual)) = (manifest.pid_started_at, process_start_time_ms(pid)) {
         return if actual.abs_diff(recorded) <= PID_START_TOLERANCE_MS {
             PidIdentity::Matches
@@ -4574,6 +4631,75 @@ pub(crate) fn mark_manifest_exited(session_id: &str) {
         manifest.pid = None;
         manifest.runtime_launch_pending = false;
     });
+}
+
+/// Backoff for recording a Session's exit when the manifest write fails.
+/// The observed case is a full disk: the journal write that ends the
+/// Session and the manifest write that would record it fail together, and
+/// a `running` manifest nobody can update is a Session nobody can remove.
+/// About ten minutes in total, which outlasts the operator clearing space.
+pub(crate) const EXIT_PUBLISH_RETRY_MS: [u64; 16] = [
+    500, 1_000, 2_000, 5_000, 10_000, 15_000, 30_000, 30_000, 60_000, 60_000, 60_000, 60_000,
+    60_000, 60_000, 60_000, 60_000,
+];
+
+/// `update_manifest_session` that retries along `schedule` — one sleep per
+/// failed attempt, the failure after the last sleep is final. Returns how
+/// many attempts the write took. A missing manifest is a success: there is
+/// nothing left to record.
+pub(crate) fn update_manifest_session_with_retry<F>(
+    session_id: &str,
+    what: &str,
+    schedule: &[u64],
+    sleep: impl Fn(Duration),
+    mut edit: F,
+) -> Result<u32, String>
+where
+    F: FnMut(&mut HostedSessionManifest),
+{
+    retry_manifest_write(session_id, what, schedule, sleep, || {
+        update_manifest_session(session_id, &mut edit).map(|_| ())
+    })
+}
+
+/// The retry loop behind `update_manifest_session_with_retry`, generic over
+/// the write so the schedule and its bookkeeping can be tested without a
+/// disk that fails on cue.
+fn retry_manifest_write(
+    session_id: &str,
+    what: &str,
+    schedule: &[u64],
+    sleep: impl Fn(Duration),
+    mut write: impl FnMut() -> Result<(), String>,
+) -> Result<u32, String> {
+    let mut attempts: u32 = 0;
+    loop {
+        attempts += 1;
+        match write() {
+            Ok(()) => {
+                if attempts > 1 {
+                    crate::hook_assets::append_trace_log_line(&format!(
+                        "session {session_id}: published the {what} on attempt {attempts}"
+                    ));
+                }
+                return Ok(attempts);
+            }
+            Err(error) => {
+                let Some(delay_ms) = schedule.get(attempts as usize - 1) else {
+                    crate::hook_assets::append_trace_log_line(&format!(
+                        "session {session_id}: gave up publishing the {what} after {attempts} attempts: {error}"
+                    ));
+                    return Err(error);
+                };
+                if attempts == 1 {
+                    crate::hook_assets::append_trace_log_line(&format!(
+                        "session {session_id}: could not publish the {what}: {error}; retrying"
+                    ));
+                }
+                sleep(Duration::from_millis(*delay_ms));
+            }
+        }
+    }
 }
 
 /// Why a leftover per-process session host was reaped.
@@ -6300,11 +6426,13 @@ mod tests {
         attach_ready_path, attach_ready_wait_snippet, build_startup_shell_script,
         cleanup_session_artifacts, compact_output_journal_path, ensure_managed_storage_path,
         env_keys_with_prefix, extract_submitted_prompt, fallback_shell_exec_snippet,
-        fish_bridge_script, fish_single_quote, load_manifest, manifest_heartbeat_is_stale,
-        manifest_host_is_healthy, manifest_last_heartbeat_at, manifest_pid_identity,
-        normalize_prompt_title, output_path, output_retained_from, process_start_time_ms,
-        read_input_stream_frame, read_output_chunk, read_output_stream_frame,
-        refresh_manifest_health_from_manifest, run_batched_output_stream_forwarder,
+        fish_bridge_script, fish_single_quote, load_manifest, manifest_child_is_definitively_gone,
+        manifest_heartbeat_is_stale, manifest_host_is_healthy, manifest_last_heartbeat_at,
+        manifest_pid_identity, normalize_prompt_title, output_path, output_retained_from,
+        process_exists, process_is_zombie, process_start_time_ms, read_input_stream_frame,
+        read_output_chunk, read_output_stream_frame, recorded_pid_identity,
+        refresh_manifest_health_from_manifest, retry_manifest_write,
+        run_batched_output_stream_forwarder,
         run_batched_output_writer, run_host, runtime_generation_scoped_command,
         safe_output_retention_boundary, save_manifest, shell_family,
         strip_env_prefix_from_process_command, strip_env_prefix_from_pty_command,
@@ -7242,6 +7370,84 @@ exit "${UNPEEL_FAKE_PROVIDER_STATUS:-0}"
         manifest.pid = Some(self_pid);
         manifest.pid_started_at = Some(started.saturating_sub(3_600_000));
         assert!(!manifest_host_is_healthy(&manifest));
+    }
+
+    /// A child its Host never reaped still answers `kill(pid, 0)`; every
+    /// liveness reading must nonetheless call it gone, or the Session it
+    /// belonged to stays running, unremovable, until the Host exits.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn zombie_child_counts_as_gone() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id();
+        let started = process_start_time_ms(pid).expect("child start time");
+        assert!(process_exists(pid));
+        assert!(!process_is_zombie(pid));
+        assert_eq!(
+            recorded_pid_identity(pid, Some(started)),
+            PidIdentity::Matches
+        );
+
+        // Kill without waiting: the child is a zombie until this test reaps it.
+        assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGKILL) }, 0);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !process_is_zombie(pid) && std::time::Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(process_is_zombie(pid), "child never became a zombie");
+        assert!(!process_exists(pid));
+        assert_eq!(
+            recorded_pid_identity(pid, Some(started)),
+            PidIdentity::NotOurs
+        );
+
+        let mut manifest = manifest_with_times(1, 1);
+        manifest.pid = Some(pid);
+        manifest.pid_started_at = Some(started);
+        assert_eq!(manifest_pid_identity(&manifest), PidIdentity::NotOurs);
+        assert!(manifest_child_is_definitively_gone(&manifest));
+        assert!(!manifest_host_is_healthy(&manifest));
+
+        let _ = child.wait();
+        assert!(!process_is_zombie(std::process::id()));
+    }
+
+    #[test]
+    fn retry_manifest_write_follows_the_schedule_until_the_write_lands() {
+        let slept = std::sync::Mutex::new(Vec::new());
+        let mut failures_left = 2;
+        let attempts = retry_manifest_write(
+            "s",
+            "exited manifest",
+            &[500, 1_000, 2_000],
+            |delay: std::time::Duration| slept.lock().unwrap().push(delay.as_millis() as u64),
+            || {
+                if failures_left > 0 {
+                    failures_left -= 1;
+                    Err("No space left on device".into())
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .expect("write lands within the schedule");
+        assert_eq!(attempts, 3);
+        assert_eq!(*slept.lock().unwrap(), vec![500, 1_000]);
+    }
+
+    #[test]
+    fn retry_manifest_write_gives_up_after_the_schedule() {
+        let mut calls = 0;
+        let error = retry_manifest_write("s", "exited manifest", &[1, 2], |_| {}, || {
+            calls += 1;
+            Err("No space left on device".into())
+        })
+        .expect_err("never lands");
+        assert_eq!(calls, 3, "one attempt per sleep plus the final one");
+        assert_eq!(error, "No space left on device");
     }
 
     /// GitHub #18: a Session whose host stopped answering must still stop —

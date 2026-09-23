@@ -456,8 +456,8 @@ pub(crate) enum Control {
     Wake(usize),
     /// The journal writer drained this Session below the low mark.
     JournalDrained(usize),
-    /// The journal writer failed for this Session; end it.
-    JournalFailed(usize),
+    /// The journal writer failed for this Session (with the OS reason); end it.
+    JournalFailed(usize, String),
     /// A teardown finished; release freed heap on the next idle tick.
     SessionEnded,
     /// Hand every hosted Session (and the core's own lock/listener fds) to
@@ -825,8 +825,8 @@ impl Reactor {
                         None
                     });
                 }
-                Control::JournalFailed(slot) => {
-                    self.end_session(slot, Err("Failed to write output log".into()));
+                Control::JournalFailed(slot, error) => {
+                    self.end_session(slot, Err(error));
                 }
                 Control::SessionEnded => {
                     self.release_pending = true;
@@ -1222,8 +1222,8 @@ fn run_journal_writer(rx: mpsc::Receiver<JournalMsg>, reactor: ReactorHandle) {
                     if session.pending.len() >= JOURNAL_BATCH_MAX_BYTES {
                         session.flush();
                     }
-                    if session.error.is_some() {
-                        reactor.send(Control::JournalFailed(slot));
+                    if let Some(error) = &session.error {
+                        reactor.send(Control::JournalFailed(slot, error.clone()));
                     }
                 }
             }
@@ -1265,14 +1265,14 @@ fn run_journal_writer(rx: mpsc::Receiver<JournalMsg>, reactor: ReactorHandle) {
                 .is_some_and(|at| now.duration_since(at) >= JOURNAL_FLUSH_INTERVAL)
             {
                 session.flush();
-                if session.error.is_some() {
-                    failed.push(session.pressure.slot.load(Ordering::Acquire));
+                if let Some(error) = &session.error {
+                    failed.push((session.pressure.slot.load(Ordering::Acquire), error.clone()));
                 }
             }
             session.release_idle_capacity(now);
         }
-        for slot in failed {
-            reactor.send(Control::JournalFailed(slot));
+        for (slot, error) in failed {
+            reactor.send(Control::JournalFailed(slot, error));
         }
     }
 }

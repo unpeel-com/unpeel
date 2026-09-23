@@ -135,12 +135,22 @@ restores blocking `write_all` for the transient-thread paths by waiting for
 rest for the PTY's writable event (bounded at 1 MiB, then the input client
 is dropped).
 
-Session end (PTY EOF/error, or Kill followed by a final drain) detaches the
-fds on the reactor and runs the old epilogue on a `session-exit` thread:
-journal flushed and closed, timer jobs retired, exit code, exited manifest
-under the manifest lock, sockets removed, then the owner's `on_exit`. The
-per-process `__session_host__` runs the same services with N = 1 and just
-blocks its main thread on that callback. After a teardown the reactor's
+Session end (PTY EOF/error, Kill followed by a final drain, or a failed
+journal write) detaches the fds on the reactor and runs the old epilogue on
+a `session-exit` thread: journal flushed and closed, timer jobs retired, the
+child reaped, exited manifest under the manifest lock, sockets removed,
+then the owner's `on_exit`. The child is always reaped before its exit is
+recorded: when the Host ended the Session itself (the journal failed — a
+full disk is the observed case) the child is still running and is
+terminated first, because a child left to die of the PTY closing becomes a
+zombie that answers `kill(pid, 0)` for as long as the core lives. The
+exited manifest write is retried for about ten minutes
+(`EXIT_PUBLISH_RETRY_MS`) since it usually fails for the same reason the
+Session ended; and every liveness reading (`process_exists`, pid identity,
+health, reaping) counts a zombie as gone, so a Session whose child was never
+reaped by an older core still files as stopped. The per-process
+`__session_host__` runs the same services with N = 1 and just blocks its
+main thread on that callback. After a teardown the reactor's
 next idle tick hands freed heap back to the OS
 (`malloc_zone_pressure_relief` / `malloc_trim`), so the core shrinks again
 after `unpeel rm`.
