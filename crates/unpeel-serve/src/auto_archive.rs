@@ -75,6 +75,11 @@ pub struct Sweeper {
     /// the worker existed never archives anything on the first sweep, so a
     /// Host restart (or a freshly adopted home) is not a mass archive.
     started_at_ms: u64,
+    /// When this worker first saw each row running. A resumed or restarted
+    /// Session is a new run that keeps its predecessor's `created_at` (and
+    /// so an old lifecycle stamp); its idle clock never starts before the
+    /// run itself did, or a resume after a long idle is archived at once.
+    running_since_ms: HashMap<String, u64>,
     idle_since_ms: HashMap<String, u64>,
     /// Last reported skip reason per row, so the trace line fires once per
     /// reason change instead of once per tick.
@@ -93,6 +98,7 @@ impl Default for Sweeper {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|elapsed| elapsed.as_millis() as u64)
                 .unwrap_or(0),
+            running_since_ms: HashMap::new(),
             idle_since_ms: HashMap::new(),
             skip_reasons: HashMap::new(),
             issued: HashSet::new(),
@@ -133,23 +139,37 @@ impl Sweeper {
             apply_outcome(&mut self.issued, &mut self.retry_after_ms, outcome, now_ms);
         }
 
-        let started_at_ms = self.started_at_ms;
         for row in rows {
-            if row.running && row.status == Status::Idle {
-                self.idle_since_ms
-                    .entry(row.id.clone())
-                    .and_modify(|idle_since| {
-                        *idle_since =
-                            observed_idle_since(Some(*idle_since), row.activity_at, now_ms)
-                    })
-                    .or_insert_with(|| {
-                        observed_idle_since(None, row.activity_at, now_ms).max(started_at_ms)
-                    });
-            } else {
+            if !row.running {
+                self.running_since_ms.remove(&row.id);
                 self.idle_since_ms.remove(&row.id);
+                continue;
             }
+            let running_since = *self
+                .running_since_ms
+                .entry(row.id.clone())
+                .or_insert(now_ms);
+            if row.status != Status::Idle {
+                self.idle_since_ms.remove(&row.id);
+                continue;
+            }
+            // Never before this worker, this run (first seen running here),
+            // or the run's recorded start (catches an in-place relaunch the
+            // sweep never saw exit).
+            let floor = self
+                .started_at_ms
+                .max(running_since)
+                .max(row.host_started_at.unwrap_or(0).min(now_ms));
+            self.idle_since_ms
+                .entry(row.id.clone())
+                .and_modify(|idle_since| {
+                    *idle_since =
+                        observed_idle_since(Some(*idle_since), row.activity_at, now_ms).max(floor)
+                })
+                .or_insert_with(|| observed_idle_since(None, row.activity_at, now_ms).max(floor));
         }
         let live = |id: &String| rows.iter().any(|row| row.id == *id);
+        self.running_since_ms.retain(|id, _| live(id));
         self.idle_since_ms.retain(|id, _| live(id));
         self.skip_reasons.retain(|id, _| live(id));
         self.issued.retain(live);
@@ -462,6 +482,54 @@ mod tests {
             group_id: "p".into(),
             detected_local_urls: Vec::new(),
         }
+    }
+
+    /// A resume or restart relaunches under a row that keeps its
+    /// predecessor's `created_at` (and so a lifecycle stamp from long ago).
+    /// On a worker that has been up past the cutoff, that run must get the
+    /// whole cutoff from when it started, not be archived seconds in.
+    #[test]
+    fn a_resumed_session_gets_the_full_cutoff_from_its_own_start() {
+        let worker_start = 90_000_000_000;
+        let cutoff = 60 * 60_000;
+        let resumed_at = worker_start + 3 * cutoff;
+        let mut sweeper = Sweeper::starting_at(worker_start);
+        // A new id, but created and last active before the worker started.
+        let row = idle_row("resumed", 1_000);
+        sweeper.step(std::slice::from_ref(&row), &HashSet::new(), 60, resumed_at);
+        let (due, _) = sweeper.next_due(
+            std::slice::from_ref(&row),
+            &HashSet::new(),
+            cutoff,
+            resumed_at + 2_000,
+        );
+        assert_eq!(due, None, "archived right after the resume");
+        let (due, _) = sweeper.next_due(
+            std::slice::from_ref(&row),
+            &HashSet::new(),
+            cutoff,
+            resumed_at + cutoff,
+        );
+        assert_eq!(due, Some("resumed".to_string()));
+
+        // An in-place relaunch (same id) the sweep never saw exit restarts
+        // the clock from the new run's recorded start.
+        let relaunched_at = resumed_at + 2 * cutoff;
+        let mut relaunched = row.clone();
+        relaunched.host_started_at = Some(relaunched_at);
+        sweeper.step(
+            std::slice::from_ref(&relaunched),
+            &HashSet::new(),
+            60,
+            relaunched_at,
+        );
+        let (due, _) = sweeper.next_due(
+            std::slice::from_ref(&relaunched),
+            &HashSet::new(),
+            cutoff,
+            relaunched_at + 2_000,
+        );
+        assert_eq!(due, None, "archived right after an in-place relaunch");
     }
 
     /// Unread alone no longer blocks: an idle Session nobody viewed

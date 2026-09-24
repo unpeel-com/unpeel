@@ -437,12 +437,10 @@ impl SessionIo {
         }
         // One read buffer for the whole reactor (it never reads two PTYs at
         // once), so an idle Session holds no 64 KiB of its own.
-        let mut scratch = std::mem::take(&mut registry.scratch);
-        let read = self.pty_reader.read(&mut scratch);
-        let outcome = match read {
+        registry.with_read_buffer(|buffer, registry| match self.pty_reader.read(buffer) {
             Ok(0) => ReadOutcome::Ended,
             Ok(n) => {
-                self.process_pty_bytes(&scratch[..n]);
+                self.process_pty_bytes(&buffer[..n]);
                 self.apply_journal_backpressure(registry);
                 ReadOutcome::Continue
             }
@@ -464,9 +462,7 @@ impl SessionIo {
                 ));
                 ReadOutcome::Ended
             }
-        };
-        registry.scratch = scratch;
-        outcome
+        })
     }
 
     /// After Kill: drain whatever termination output is still buffered, then
@@ -1102,10 +1098,8 @@ impl SessionIo {
         for client in clients {
             self.close_client(registry, client);
         }
-        let slot = self.shared.slot.load(Ordering::Acquire);
         SessionTeardown {
             shared: Arc::clone(&self.shared),
-            slot,
             journal_tx: self.journal.tx.clone(),
             journal_id: self.journal.id,
             exit: self.exit.take(),
@@ -1128,7 +1122,6 @@ pub(crate) enum TokenKind {
 
 pub(crate) struct SessionTeardown {
     pub shared: Arc<SessionShared>,
-    pub slot: usize,
     pub journal_tx: mpsc::Sender<JournalMsg>,
     pub journal_id: u64,
     pub exit: Option<SessionExitPlan>,
@@ -1142,7 +1135,6 @@ impl SessionTeardown {
     pub(crate) fn run(self, timer_tx: &mpsc::Sender<TimerMsg>, outcome: Result<(), String>) {
         let SessionTeardown {
             shared,
-            slot,
             journal_tx,
             journal_id,
             exit,
@@ -1169,7 +1161,7 @@ impl SessionTeardown {
         let (timer_ack_tx, timer_ack_rx) = mpsc::channel();
         if timer_tx
             .send(TimerMsg::Remove {
-                slot,
+                key: journal_id,
                 ack: timer_ack_tx,
             })
             .is_ok()
