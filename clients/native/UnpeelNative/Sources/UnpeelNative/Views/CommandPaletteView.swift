@@ -143,6 +143,10 @@ struct PaletteItem: Identifiable {
 
 struct CommandPaletteOverlay: View {
     @ObservedObject var store: UnpeelStore
+    /// The cross-workspace activity model behind the Recent-activity dropdown;
+    /// the palette's top tiers mirror it so ⌘K lists what is spinning or done
+    /// across every workspace, not only the one it opened in.
+    @ObservedObject private var activityMenu: GlobalActivityMenuModel
 
     @State private var query = ""
     @State private var selectedIndex = 0
@@ -155,6 +159,7 @@ struct CommandPaletteOverlay: View {
 
     init(store: UnpeelStore) {
         self.store = store
+        self.activityMenu = store.globalActivityMenu
         _recencyByID = State(initialValue: store.paletteRecencySnapshot())
     }
     /// Last mouse position (screen coords) that drove a hover-selection.
@@ -255,6 +260,7 @@ struct CommandPaletteOverlay: View {
     /// A session row plus the facts the tiered empty-query view groups by.
     private struct SessionMeta {
         let item: PaletteItem
+        let sessionID: String
         let working: Bool
         let blocked: Bool
         let unread: Bool
@@ -303,9 +309,10 @@ struct CommandPaletteOverlay: View {
                         unread: unread,
                         trailingLabel: session.ageString(since: recency),
                         action: { [id = session.id] in
-                            store.revealSessionInSidebar(id)
+                            store.revealSessionInCurrentScope(id)
                         }
                     ),
+                    sessionID: session.id,
                     working: working,
                     blocked: blocked,
                     unread: unread,
@@ -334,6 +341,79 @@ struct CommandPaletteOverlay: View {
     }
 
     private var sessionItems: [PaletteItem] { sessionMeta.map(\.item) }
+
+    // MARK: Cross-workspace activity (the Recent-activity dropdown's data)
+
+    /// One activity-dropdown row as a palette item: subtitle names the
+    /// workspace (and project path), and activating it switches to that
+    /// workspace and reveals the session — the same reveal the dropdown uses.
+    private func globalActivityItem(
+        _ item: GlobalActivityMenuItem,
+        indicator: PaletteItem.Indicator,
+        unread: Bool
+    ) -> PaletteItem {
+        let path = item.session.projectPath
+        let subtitle = path.isEmpty ? item.workspaceName : "\(item.workspaceName) · \(path)"
+        return PaletteItem(
+            id: "activity:\(item.id)",
+            kind: .session,
+            title: item.session.title,
+            subtitle: subtitle,
+            keywords: [item.session.command, item.workspaceName].joined(separator: " "),
+            indicator: indicator,
+            unread: unread,
+            trailingLabel: item.session.status,
+            action: { [key = item.workspaceKey, id = item.session.sessionID] in
+                store.revealGlobalActivitySession(workspaceKey: key, sessionID: id)
+            }
+        )
+    }
+
+    private var globalBlockedItems: [PaletteItem] {
+        activityMenu.activity.blockers.map { globalActivityItem($0, indicator: .attention, unread: false) }
+    }
+
+    private var globalActiveItems: [PaletteItem] {
+        activityMenu.activity.jobs.map {
+            globalActivityItem(
+                $0,
+                indicator: .spinner(Theme.toolSpinnerColor(forCommand: $0.session.command)),
+                unread: false
+            )
+        }
+    }
+
+    private var globalDoneItems: [PaletteItem] {
+        activityMenu.activity.finished.map { globalActivityItem($0, indicator: .done, unread: true) }
+    }
+
+    /// Activity rows for workspaces other than the one the palette opened in —
+    /// added to search so a query finds a spinning or finished session
+    /// anywhere, without duplicating the current scope's own session rows.
+    private var otherWorkspaceActivityItems: [PaletteItem] {
+        let current = store.currentScopeWorkspaceKey
+        let blocked = activityMenu.activity.blockers
+            .filter { $0.workspaceKey != current }
+            .map { globalActivityItem($0, indicator: .attention, unread: false) }
+        let active = activityMenu.activity.jobs
+            .filter { $0.workspaceKey != current }
+            .map {
+                globalActivityItem(
+                    $0,
+                    indicator: .spinner(Theme.toolSpinnerColor(forCommand: $0.session.command)),
+                    unread: false
+                )
+            }
+        let done = activityMenu.activity.finished
+            .filter { $0.workspaceKey != current }
+            .map { globalActivityItem($0, indicator: .done, unread: true) }
+        return blocked + active + done
+    }
+
+    /// Whether the local-only tiers (Projects, New session, All sessions,
+    /// Recent activity) apply: those actions are local-host operations, so in a
+    /// scoped or remote workspace the palette shows activity and recents only.
+    private var localTiersEnabled: Bool { store.selectedHostScope == .local }
 
     /// The top-level project family the empty-query palette stays close to:
     /// the selected session's, else the ⌘N launch target's.
@@ -426,8 +506,10 @@ struct CommandPaletteOverlay: View {
     private var actionItems: [PaletteItem] {
         var items: [PaletteItem] = []
 
-        // Preset launches in the current (⌘N-target) project.
-        if let projectID = store.defaultLaunchProjectID {
+        // Preset launches in the current (⌘N-target) project. Preset labels
+        // are the local catalog, so these lead only in the local workspace;
+        // a scoped/remote workspace resolves its own presets elsewhere.
+        if localTiersEnabled, let projectID = store.defaultLaunchProjectID {
             let projectName = store.displayProjectsByID[projectID]?.name ?? ""
             for preset in [Preset.newTerminal] + store.availablePresets {
                 items.append(PaletteItem(
@@ -446,14 +528,15 @@ struct CommandPaletteOverlay: View {
                     }
                 ))
             }
+            // ⌘T new terminal is a local-host launch too.
+            items.append(PaletteItem(
+                id: "command:new-terminal", kind: .command,
+                title: "New Terminal", subtitle: "⌘T", keywords: "shell blank",
+                action: { store.launchDefaultTerminal() }
+            ))
         }
 
-        // App commands (each already has a home elsewhere in the UI).
-        items.append(PaletteItem(
-            id: "command:new-terminal", kind: .command,
-            title: "New Terminal", subtitle: "⌘T", keywords: "shell blank",
-            action: { store.launchDefaultTerminal() }
-        ))
+        // App commands that work in every scope.
         items.append(PaletteItem(
             id: "command:toggle-sidebar", kind: .command,
             title: "Toggle Sidebar", subtitle: "⌘B", keywords: "hide show",
@@ -485,19 +568,33 @@ struct CommandPaletteOverlay: View {
             items.append(first)
             items += rows.dropFirst()
         }
-        tier("Blocked", metas.filter { !$0.working && $0.blocked }.map(\.item))
-        tier("Active", metas.filter(\.working).map(\.item))
-        tier("Done", metas.filter { !$0.working && !$0.blocked && $0.unread }.map(\.item))
+        // Top tiers mirror the Recent-activity dropdown: blocked leads
+        // (actionable), then working (any workspace), then unread-finished.
+        tier("Blocked", globalBlockedItems)
+        tier("Active", globalActiveItems)
+        tier("Done", globalDoneItems)
+        // The current scope's idle recents stay close to home. Sessions the
+        // activity tiers already show (a working/blocked/unread row of this
+        // workspace) are excluded so they never appear twice.
+        let activeElsewhere = Set(
+            (activityMenu.activity.blockers + activityMenu.activity.jobs + activityMenu.activity.finished)
+                .map(\.session.sessionID)
+        )
         let home = metas.filter {
             !$0.working && !$0.blocked && !$0.unread
+                && !activeElsewhere.contains($0.sessionID)
                 && (current == nil || $0.topLevelProjectID == current)
         }
         tier(
             current.flatMap { store.displayProjectsByID[$0]?.name },
             Array(home.prefix(Self.recentSessionLimit).map(\.item))
         )
-        items.append(allSessionsLink)
-        tier("Projects", projectItems.filter { $0.id != "project:\(current ?? "")" })
+        // Projects, launches, and the All-sessions page are local-host
+        // actions; in a scoped or remote workspace the palette stops here.
+        if localTiersEnabled {
+            items.append(allSessionsLink)
+            tier("Projects", projectItems.filter { $0.id != "project:\(current ?? "")" })
+        }
         tier(nil, actionItems)
         return Array(items.prefix(Self.maxResults))
     }
@@ -507,7 +604,12 @@ struct CommandPaletteOverlay: View {
         guard !trimmed.isEmpty else { return tieredRecents }
         let sessions = sessionItems
         let archived = archivedSessionItems
-        let regularResults = (sessions + [allSessionsLink] + projectItems + actionItems)
+        // Search spans the current scope's sessions plus every other
+        // workspace's active/blocked/finished rows, so a query finds a
+        // spinning or done session anywhere. The local-only Projects and
+        // All-sessions rows join only in the local workspace.
+        let localOnly = localTiersEnabled ? [allSessionsLink] + projectItems : []
+        let regularResults = (sessions + otherWorkspaceActivityItems + localOnly + actionItems)
             .compactMap { item -> (PaletteItem, Int)? in
                 let titleScore = PaletteFuzzy.score(trimmed, in: item.title)
                     .map { $0 * 2 }

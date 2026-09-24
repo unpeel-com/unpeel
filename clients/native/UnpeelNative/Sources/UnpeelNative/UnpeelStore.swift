@@ -15346,7 +15346,10 @@ final class UnpeelStore: ObservableObject {
     @Published var commandPaletteVisible = false
 
     func toggleCommandPalette() {
-        guard selectedHostScope == .local else { return }
+        // ⌘K is a Controller surface, not a local-host action: it opens in
+        // every workspace scope. Its cross-workspace activity rows reveal
+        // through `revealGlobalActivitySession`, and its current-scope rows
+        // through `revealSessionInCurrentScope`, both scope-correct.
         commandPaletteVisible.toggle()
     }
 
@@ -16549,6 +16552,29 @@ extension UnpeelStore {
         }
 
         rescopeToPooledWorkspace(key: workspaceKey, sessionID: sessionID)
+    }
+
+    /// The workspace-order key for the scope this window currently shows — the
+    /// same key space the activity dropdown and `revealGlobalActivitySession`
+    /// use. The ⌘K palette needs it to tell "this workspace" from the others.
+    var currentScopeWorkspaceKey: String {
+        let localKey = WorkspaceListOrder.localKey(home: Self.currentInstanceNormalizedHome())
+        guard selectedHostScope != .local else { return localKey }
+        return workspacePoolForegroundKey() ?? localKey
+    }
+
+    /// Reveal a Session in whatever scope this window is in. `revealSessionInSidebar`
+    /// is local-only (it no-ops under a Host projection); a projection selects the
+    /// row instead. The ⌘K palette, which now opens in every workspace, reveals
+    /// its current-scope rows through here.
+    func revealSessionInCurrentScope(_ sessionID: String) {
+        guard selectedHostScope != .local else {
+            revealSessionInSidebar(sessionID)
+            return
+        }
+        guard remoteSessionsByID[sessionID] != nil else { return }
+        closeSettings()
+        selectedSessionID = sessionID
     }
 
     /// Display name for a workspace-order key (registry/record names win, the

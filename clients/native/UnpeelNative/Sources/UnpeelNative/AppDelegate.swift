@@ -742,9 +742,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, SPUU
             return store?.selectedHostScope == .local
                 && (store?.showSessionGallery ?? false)
         }
+        // ⌘K opens in every workspace scope: its rows reveal cross-workspace
+        // activity and current-scope sessions, both scope-correct. Keeping it
+        // in the local-only group below disabled the shortcut everywhere but
+        // the main workspace.
+        if menuItem.action == #selector(toggleCommandPaletteFromMenu) {
+            return window != nil
+        }
         if menuItem.action == #selector(newSessionFromMenu)
             || menuItem.action == #selector(newTerminalFromMenu)
-            || menuItem.action == #selector(toggleCommandPaletteFromMenu)
         {
             if menuItem.action == #selector(newTerminalFromMenu) {
                 menuItem.title = store?.commandTAction == .presetPicker
