@@ -610,6 +610,19 @@ int32_t unpeel_native_bridge_remote_session_metrics(
     size_t *out_length
 );
 
+/*
+ * One Session's uncommitted-change summary. Success returns owned JSON with
+ * sessionID, repository (null, or root, branch, files, additions,
+ * deletions), and capturedAtUnixMs.
+ */
+int32_t unpeel_native_bridge_remote_session_git_status(
+    unpeel_native_bridge_remote_handle_t handle,
+    const uint8_t *session_id_pointer,
+    size_t session_id_length,
+    uint8_t **out_pointer,
+    size_t *out_length
+);
+
 /* Lazy update availability from the selected Host. Returns owned JSON. */
 int32_t unpeel_native_bridge_remote_plugin_updates(
     unpeel_native_bridge_remote_handle_t handle,

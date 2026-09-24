@@ -308,6 +308,47 @@ final class TitlebarBranchState: ObservableObject {
     }
 }
 
+/// Host-reported uncommitted changes per Session for the pane-header Git
+/// indicator (`session.git.status.read`). Its own object for the same reason
+/// as `TitlebarBranchState`: a poll result publishes only to the indicators,
+/// never through `UnpeelStore`, so a refresh cannot invalidate the sidebar.
+@MainActor
+final class PaneGitStatusState: ObservableObject {
+    typealias Repository = NativeRemoteSessionGitStatus.Repository
+
+    /// Absent until the first answer, and for a Session outside Git.
+    @Published private(set) var repositories: [String: Repository] = [:]
+    /// Caller Session id -> its live Git App companion, from the Host's
+    /// `app_presentations`: the indicator shows pressed and closes it.
+    @Published private(set) var openCompanions: [String: String] = [:]
+    /// The selected Host reports Git status and can open an installed,
+    /// active Git App. Recomputed on every Host snapshot: the indicators
+    /// observe this object, not the runtime, so gating on it is what makes
+    /// them appear as soon as the Host connects.
+    @Published private(set) var isAvailable = false
+
+    func updateAvailability(_ available: Bool) {
+        guard isAvailable != available else { return }
+        isAvailable = available
+    }
+
+    func update(_ repository: Repository?, for sessionID: String) {
+        guard repositories[sessionID] != repository else { return }
+        repositories[sessionID] = repository
+    }
+
+    func updateOpenCompanions(_ companions: [String: String]) {
+        guard openCompanions != companions else { return }
+        openCompanions = companions
+    }
+
+    func reset() {
+        if !repositories.isEmpty { repositories = [:] }
+        if !openCompanions.isEmpty { openCompanions = [:] }
+        updateAvailability(false)
+    }
+}
+
 @MainActor
 final class UnpeelStore: ObservableObject {
     /// Presentation state for the Controller window. Projects and Sessions
@@ -317,6 +358,14 @@ final class UnpeelStore: ObservableObject {
     @Published private(set) var nodes: [ProjectNode] = []
     let sessionSelection = SessionSelectionState()
     let titlebarBranchState = TitlebarBranchState()
+    let paneGitStatusState = PaneGitStatusState()
+    /// Live App companion Sessions (any App opened beside a Session through
+    /// `apps.open`), from the Host's `app_presentations`: their pane header
+    /// carries a close button. Changes only when a companion opens or closes.
+    @Published private(set) var appCompanionSessionIDs: Set<String> = []
+    /// Sessions with a Git status read on the wire; a slow Host never stacks
+    /// polls from one pane.
+    private var paneGitStatusInFlight: Set<String> = []
     var selectedSessionID: String? {
         get { sessionSelection.sessionID }
         set {
@@ -655,6 +704,18 @@ final class UnpeelStore: ObservableObject {
         didSet {
             guard oldValue != showSessionGallery else { return }
             AppDefaults.shared.set(showSessionGallery, forKey: Self.showSessionGalleryKey)
+        }
+    }
+
+    /// Whether terminal pane headers show the Git indicator (the working
+    /// tree's uncommitted `+N −M`, a toggle for the Git plugin beside the
+    /// pane; Appearance ▸ "Git status in title bar"). Off by default: it only means
+    /// something for coding, so it is opt-in. Off, no indicator renders and
+    /// nothing polls the Host. App companion close buttons are unaffected.
+    @Published var showPaneGitIndicator: Bool {
+        didSet {
+            guard oldValue != showPaneGitIndicator else { return }
+            AppDefaults.shared.set(showPaneGitIndicator, forKey: Self.showPaneGitIndicatorKey)
         }
     }
 
@@ -1581,7 +1642,11 @@ final class UnpeelStore: ObservableObject {
     /// The picker scopes the whole workspace. Local state remains loaded so
     /// switching back is instant, but every remote surface/verb must use the
     /// remote backend and the spawn boundary below refuses local execution.
-    @Published private(set) var selectedHostScope: SelectedHostScope = .local
+    @Published private(set) var selectedHostScope: SelectedHostScope = .local {
+        didSet {
+            if selectedHostScope != oldValue { paneGitStatusState.reset() }
+        }
+    }
     /// Display name of the selected non-local scope, nil for Local. Feeds
     /// the interim Settings scope labeling (Settings edits THIS instance's
     /// workspace regardless of the picker — see
@@ -1749,6 +1814,7 @@ final class UnpeelStore: ObservableObject {
     static let expandedProjectsKey = "unpeel.native.expandedProjects"
     static let menuAttentionDetectionKey = "unpeel.native.menuAttentionDetection"
     static let showSessionGalleryKey = "unpeel.native.showSessionGallery"
+    static let showPaneGitIndicatorKey = "unpeel.native.showPaneGitIndicator"
     /// Historical key spelling: the setting used to live on Settings ▸
     /// Workspaces as "Show agent workspaces". The UI is now Settings ▸
     /// Worktrees; the persisted key is load-bearing.
@@ -1805,6 +1871,7 @@ final class UnpeelStore: ObservableObject {
         sidebarCollapsed = AppDefaults.shared.bool(forKey: Self.sidebarCollapsedKey)
         menuAttentionDetectionEnabled = Self.resolveMenuAttentionDetection()
         showSessionGallery = AppDefaults.shared.bool(forKey: Self.showSessionGalleryKey)
+        showPaneGitIndicator = AppDefaults.shared.bool(forKey: Self.showPaneGitIndicatorKey)
         showAgentWorktrees = AppDefaults.shared.bool(forKey: Self.showAgentWorkspacesKey)
         commandTAction = CommandTAction(
             rawValue: AppDefaults.shared.string(forKey: Self.commandTActionKey) ?? ""
@@ -10914,6 +10981,136 @@ final class UnpeelStore: ObservableObject {
         }
     }
 
+    // MARK: - Pane Git indicator
+
+    private static let gitWorkingTreeResourceKind = "git.working-tree"
+
+    /// The Host's installed, active App for a Git working tree (the Git
+    /// plugin): its declared default first, else the only handler.
+    func gitWorkingTreeApp() -> RemoteAppSummary? {
+        let snapshot = remoteHostRuntime.snapshot
+        let kind = Self.gitWorkingTreeResourceKind
+        let installed = Set((snapshot?.installedApps ?? []).map(\.id))
+        let handlers = (snapshot?.availableApps ?? []).filter {
+            snapshot?.workspaceSettings?.pluginActivation?[$0.id] != false
+                && $0.resourceKinds.contains(kind)
+                && ($0.installed || installed.contains($0.id))
+        }
+        return handlers.first { $0.defaultFor.contains("resource:\(kind)") }
+            ?? (handlers.count == 1 ? handlers[0] : nil)
+    }
+
+    /// Whether this Session carries the Git indicator at all: the user turned
+    /// it on, and it is a live terminal, not an App pane. Host support is `paneGitStatusState
+    /// .isAvailable`, which the indicator observes itself.
+    func sessionSupportsPaneGitIndicator(_ entry: SessionEntry) -> Bool {
+        showPaneGitIndicator
+            && entry.isLive && entry.activeApp == nil && entry.role != "app-panel"
+    }
+
+    /// Why the Git indicator cannot show in this workspace, for the note
+    /// under its setting. Nil when it can, and before the Host's first
+    /// snapshot (no "unavailable" flash while connecting).
+    enum PaneGitIndicatorBlocker: Equatable {
+        /// The Host predates `session.git.status.read` or cannot open Apps.
+        case hostUnsupported
+        /// No installed, active App for `git.working-tree`.
+        case gitPluginInactive
+    }
+
+    func paneGitIndicatorBlocker() -> PaneGitIndicatorBlocker? {
+        guard remoteHostRuntime.snapshot != nil else { return nil }
+        guard remoteHostRuntime.supportsHostOperation(RemoteHostRuntime.HostOperation.gitStatusRead),
+              remoteHostRuntime.supportsHostOperation(RemoteHostRuntime.HostOperation.appsOpen)
+        else { return .hostUnsupported }
+        return gitWorkingTreeApp() == nil ? .gitPluginInactive : nil
+    }
+
+    private func paneGitIndicatorAvailable() -> Bool {
+        remoteHostRuntime.supportsHostOperation(RemoteHostRuntime.HostOperation.gitStatusRead)
+            && remoteHostRuntime.supportsHostOperation(RemoteHostRuntime.HostOperation.appsOpen)
+            && gitWorkingTreeApp() != nil
+    }
+
+    /// One Git status read for a visible pane. A failed read keeps the last
+    /// answer on screen (no flash on a reconnect); a scope switch mid-read
+    /// drops the stale result.
+    func refreshPaneGitStatus(sessionID: String) async {
+        guard paneGitStatusInFlight.insert(sessionID).inserted else { return }
+        defer { paneGitStatusInFlight.remove(sessionID) }
+        let scope = selectedHostScope
+        guard let status = try? await remoteHostRuntime.sessionGitStatus(sessionID: sessionID),
+              scope == selectedHostScope
+        else { return }
+        paneGitStatusState.update(status.repository, for: sessionID)
+    }
+
+    /// Live App companions per the Host's semantic bindings (the same
+    /// envelope that places the split): every companion gets a close button,
+    /// and each Session's Git companion drives its indicator's pressed state.
+    private func reconcilePaneGitCompanions(_ envelope: AppPresentationsFile?) {
+        paneGitStatusState.updateAvailability(paneGitIndicatorAvailable())
+        guard let envelope, envelope.version == 1 else {
+            paneGitStatusState.updateOpenCompanions([:])
+            if !appCompanionSessionIDs.isEmpty { appCompanionSessionIDs = [] }
+            return
+        }
+        let gitAppID = gitWorkingTreeApp()?.id
+        let instances = Dictionary(
+            envelope.instances.map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        var liveCompanions: Set<String> = []
+        var gitCompanions: [String: String] = [:]
+        for presentation in envelope.presentations where presentation.target == "panel" {
+            guard let instance = instances[presentation.instanceID],
+                  let companion = displaySessionsByID[instance.companionSessionID],
+                  companion.isLive,
+                  !removingSessionIDs.contains(companion.id),
+                  !isHiddenArchived(companion.id)
+            else { continue }
+            liveCompanions.insert(companion.id)
+            if let gitAppID,
+               instance.appID.caseInsensitiveCompare(gitAppID) == .orderedSame {
+                gitCompanions[presentation.callerSessionID] = companion.id
+            }
+        }
+        paneGitStatusState.updateOpenCompanions(gitCompanions)
+        if appCompanionSessionIDs != liveCompanions {
+            appCompanionSessionIDs = liveCompanions
+        }
+    }
+
+    /// The indicator is a toggle: open the Git App beside the Session, or
+    /// close the companion it already has (the same immediate remove ⌘W
+    /// gives a non-resumable App pane; reopening is one click). The pressed
+    /// state follows the Host's next snapshot, so a failed remove never
+    /// shows the companion as closed while it is still on screen.
+    func toggleGitChanges(for entry: SessionEntry) {
+        if let companionID = paneGitStatusState.openCompanions[entry.id] {
+            confirmRemoveSession(companionID)
+        } else {
+            openGitChanges(for: entry)
+        }
+    }
+
+    /// Open the Git App on the Session's repository, split beside it
+    /// (`apps.open`; `reconcileAppPresentations` places or reveals it).
+    func openGitChanges(for entry: SessionEntry) {
+        guard let app = gitWorkingTreeApp(),
+              let root = paneGitStatusState.repositories[entry.id]?.root
+        else { return }
+        performRemoteVerb("Couldn't open \(app.name)") { runtime in
+            try await runtime.openApp(
+                app.id,
+                resourceKind: Self.gitWorkingTreeResourceKind,
+                mediaType: nil,
+                resourceID: root,
+                callerSessionID: entry.id
+            )
+        }
+    }
+
     private func launchAppPane(
         _ app: RemoteAppSummary,
         mediaType: String,
@@ -16026,6 +16223,7 @@ extension UnpeelStore {
                 }
             ))
             reconcileAppPresentations(snapshot.appPresentations)
+            reconcilePaneGitCompanions(snapshot.appPresentations)
         }
         if projectsLocalHost {
             // Local approvals arrive through the platform adapter; drop any

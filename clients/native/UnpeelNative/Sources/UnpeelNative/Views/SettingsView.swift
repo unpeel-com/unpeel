@@ -2492,6 +2492,40 @@ private struct OpenResourcesSettingsRows: View {
 /// Native Appearance panel: the theme mode picker. The Svelte panel's
 /// second control (Ambience color schemes) has no native machinery yet, so
 /// it is omitted rather than faked.
+/// Under Appearance ▸ Git changes: why the turned-on indicator cannot show
+/// in this workspace. The switch stays usable either way, so the setting
+/// and the plugin can be turned on in any order; the note follows the Host
+/// snapshot (through `PaneGitStatusState`) and disappears once it can show.
+private struct PaneGitIndicatorBlockerNote: View {
+    let store: UnpeelStore
+    @ObservedObject var state: PaneGitStatusState
+
+    var body: some View {
+        // `isAvailable` is read so a snapshot that changes it redraws the note.
+        switch state.isAvailable ? nil : store.paneGitIndicatorBlocker() {
+        case .gitPluginInactive:
+            HStack(spacing: 6) {
+                Text("The Git plugin isn't active in this workspace.")
+                Button("Manage Plugins…") {
+                    store.openSettings(tab: .plugins)
+                }
+                .buttonStyle(.link)
+            }
+            .font(.system(size: 11))
+            .foregroundStyle(Theme.attention)
+            .padding(.top, 2)
+        case .hostUnsupported:
+            Text("This workspace's Host doesn't report Git changes. Update Unpeel on it to use this.")
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.attention)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 2)
+        case nil:
+            EmptyView()
+        }
+    }
+}
+
 struct AppearanceSettingsPanel: View {
     @ObservedObject var store: UnpeelStore
     @ObservedObject private var transparency = TransparencyModel.shared
@@ -2706,6 +2740,39 @@ struct AppearanceSettingsPanel: View {
                                 .font(.system(size: 11))
                                 .foregroundStyle(Theme.mutedForeground)
                                 .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+
+                    LabeledContent {
+                        Toggle(
+                            "",
+                            isOn: Binding(
+                                get: { store.showPaneGitIndicator },
+                                set: { store.showPaneGitIndicator = $0 }
+                            )
+                        )
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                        .controlSize(.small)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Git status in title bar")
+                                .font(.system(size: 13))
+                                .foregroundStyle(Theme.foreground)
+                            Text("Uncommitted +/− lines in the terminal title bar "
+                                + "when the session works in a Git repository. "
+                                + "Click it to open the Git plugin beside the "
+                                + "pane, and again to close it. Needs the Git "
+                                + "plugin.")
+                                .font(.system(size: 11))
+                                .foregroundStyle(Theme.mutedForeground)
+                                .fixedSize(horizontal: false, vertical: true)
+                            if store.showPaneGitIndicator {
+                                PaneGitIndicatorBlockerNote(
+                                    store: store,
+                                    state: store.paneGitStatusState
+                                )
+                            }
                         }
                     }
                 } header: {

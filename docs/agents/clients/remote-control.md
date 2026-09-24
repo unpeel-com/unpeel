@@ -95,7 +95,7 @@ shared Host router.
 The shared router lives in `unpeel-core::controller_api`. It defines the
 transport-neutral authenticated request/response envelope (including binary
 bodies), owns bootstrap protocol metadata, and owns read-only terminal metrics
-plus transcript Markdown, archived-session listing, raw terminal write/resize,
+plus per-Session Git change summaries (`session.git.status.read`), transcript Markdown, archived-session listing, raw terminal write/resize,
 typed screenshot requests, read receipts, and artifact
 list/read/resumable-upload/delete. It also owns the typed headless lifecycle
 effect boundary for shell-only Resume Agent, terminal/session restart, and

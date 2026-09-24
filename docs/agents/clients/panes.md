@@ -169,6 +169,59 @@ local-marker write the remote-scope purity rule forbids.) The menu-driven empty 
 choosing a preset creates a Session; remote preset creation needs its own
 Host-routed binding and must never fall back to a local spawn.
 
+The pane header's trailing controls are presence, the **Git indicator**, the
+hover-only split buttons, the more-menu, and, on an App companion pane, a
+close button. The Git indicator (`PaneGitChangesIndicator`) shows the
+Session's uncommitted `+N −M` lines from the Host's `session.git.status.read`
+(`GET /mobile/git-status`: the repository root, branch, changed-file count,
+and line totals for the Session's worktree, else its launch cwd; untracked
+text files count as added lines). It is opt-in: Settings ▸ Appearance ▸
+Terminal ▸ **Git status in title bar** (`showPaneGitIndicator`, a per-Mac `AppDefaults`
+preference, off by default, since the counter only means something for
+coding). Off, no indicator renders and nothing polls the Host. The switch
+never locks: turned on in a workspace that cannot show it, a note under it
+says why (`paneGitIndicatorBlocker`: the Host predates the capability, or the
+Git plugin is not installed and active, with a Manage Plugins link), so the
+setting and the plugin can be enabled in either order. No note before the
+Host's first snapshot. On, it is
+offered for a live terminal Session (not an App pane, not a project-sidebar
+pane) and gates on
+`PaneGitStatusState.isAvailable`, which the store recomputes on every Host
+snapshot: the Host advertises both `session.git.status.read` and `apps.open`
+and has an active, installed App for `git.working-tree`. The indicator
+observes that object itself (the runtime is not observed by views, so a
+header gated on the snapshot directly would not appear until something else
+redrew it), and it always renders a view, a zero-size one before the first
+answer, because SwiftUI does not start `.task` on an empty view and the poll
+lives in that task. Only panes on screen poll: every 3 s while Unpeel is
+frontmost, on appearing, on app activation, and when the Session flips
+busy/idle. Results live in `PaneGitStatusState`, not `UnpeelStore`, so a poll
+never invalidates the sidebar, and a failed read keeps the last answer (no
+flash on reconnect).
+
+The indicator is a toggle. Closed, a click (or **Show Git Changes** in the
+more-menu) calls `apps.open` with the returned root as the resource, and
+`reconcileAppPresentations` splits the Git App to the right of the pane or
+reveals the one already open. While the Host's `app_presentations` binds a
+live Git companion to the Session, the indicator shows pressed and a click
+(or **Hide Git Changes**) removes that companion. The pressed state follows
+the next snapshot, never an optimistic guess. Every live App companion (the
+Git indicator's, a clicked file's) also gets a header close button running
+the same `closePane` policy as ⌘W; the store derives the companion set
+(`appCompanionSessionIDs`) from the same envelope.
+
+Host side (`unpeel-core::git_status`), one 4 s budget covers the whole scan,
+under the Controller's 10 s read timeout (a timed-out read drops the
+connection generation). `git` runs with `GIT_OPTIONAL_LOCKS=0`,
+`core.fsmonitor=false`, `--no-textconv`, and `--no-ext-diff`; clean filters
+named by `.gitattributes` still run, as for any shell prompt showing Git
+status. The stdout reader returns over a channel with the same deadline, so
+a helper holding the pipe open cannot strand the request thread. Untracked
+reads are capped, a repository's answer is cached 2 s and a directory
+outside Git 30 s, and on macOS the `/usr/bin/git` stub of a Mac without
+developer tools (`xcode-select -p` fails) is never run, since each run opens
+the install dialog.
+
 Pane-layout operations do not mutate Host organization or lifecycle.
 **Detach Pane** and **Exit Multi-Pane View** must not move a Session between
 projects/groups, stop it, archive it, restart it, or close it. The Host-backed
