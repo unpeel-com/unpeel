@@ -1,0 +1,23 @@
+<h2>Unpeel 0.7.4</h2>
+<ul>
+  <li><b>⌘K opens in every workspace.</b> The command palette was reachable only in your main workspace. It now opens in every scope and leads with what is spinning or done across all of your workspaces &mdash; the same activity the Recent-activity dropdown shows &mdash; and jumping to one of those rows switches to its workspace.</li>
+  <li><b>Sessions stuck after a full disk can be removed.</b> When the disk filled up, a session could stay <i>running</i> forever with a dead child and no control socket, and "Couldn't remove the session". Such a session now ends cleanly, its exited state lands once space returns, and Remove works. A session whose host stopped answering can also be stopped and removed even when its child can't be verified.</li>
+  <li><b>Group renames stick.</b> Renaming a sidebar group through the Host survives relaunch instead of reverting.</li>
+  <li><b>See why a paired Mac is out of reach.</b> When a paired Mac is on another network, the reason now says to use Unpeel Link or set up Tailscale, rather than failing silently.</li>
+  <li><b>Pairing on iPad.</b> The pairing sheet now presents correctly on iPad.</li>
+</ul>
+<h3>Also in 0.7.3</h3>
+<ul>
+  <li><b>Approval prompts in every workspace.</b> When an agent in a workspace other than Personal asked to type into another session, the prompt never appeared: the request timed out after two minutes and the agent was told you had declined. Scoped workspaces now show the prompt within a couple of seconds, on the target session's pane, and a prompt nobody answers is reported to the agent as unanswered rather than declined.</li>
+  <li><b>Your workspace comes back on relaunch.</b> Quitting while scoped to another local workspace reopens in that workspace, the way a selected Host already did.</li>
+  <li><b>Folder colors in scoped workspaces.</b> Colors chosen on projects of another local workspace now show up (contributed by anilsenay).</li>
+</ul>
+<h3>Also in 0.7.2</h3>
+<ul>
+  <li><b>OpenCode no longer freezes the app on macOS 15.</b> Starting an <code>opencode</code> session pinned the main thread at 100 % while resolving the OpenCode theme (the config lookup walked past <code>/</code> forever on macOS 15 Foundation) and the app had to be force quit. The lookup is finite now.</li>
+  <li><b>A session whose host died can be stopped and removed again.</b> When a host stops answering its control socket while its shell is still alive, Stop and Remove now signal that exact child (verified by its recorded start time) instead of failing with an opaque 500, and the error a Controller sees now carries the Host's reason.</li>
+  <li><b>Paired devices report what they can reach.</b> <code>unpeel pair list</code> says <i>direct + link</i> only when this Host holds Link authority, and a phone's last-seen time advances while it is in use instead of freezing at pairing.</li>
+  <li><b>Settings &#9656; Workspaces lists every workspace</b> you have created, not only the one this instance runs, with or without a license.</li>
+  <li><b>Returning to Local keeps your selected session.</b> A session created after launch is no longer deselected when you switch back from another Host.</li>
+  <li><b>OMP (oh-my-pi).</b> The <code>omp</code> agent CLI is recognized with a launch preset, hooks, resume, transcripts, and the unpeel MCP server through Install integration.</li>
+</ul>
