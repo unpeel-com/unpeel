@@ -1256,7 +1256,9 @@ fn reap_child_for_teardown(
     reader: &mut (dyn Read + Send),
     ended_by_host: bool,
 ) -> Option<portable_pty::ExitStatus> {
-    let mut runtime = runtime.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut runtime = runtime
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Ok(Some(status)) = runtime.child.try_wait() {
         return Some(status);
     }

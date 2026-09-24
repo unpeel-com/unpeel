@@ -6432,10 +6432,9 @@ mod tests {
         process_exists, process_is_zombie, process_start_time_ms, read_input_stream_frame,
         read_output_chunk, read_output_stream_frame, recorded_pid_identity,
         refresh_manifest_health_from_manifest, retry_manifest_write,
-        run_batched_output_stream_forwarder,
-        run_batched_output_writer, run_host, runtime_generation_scoped_command,
-        safe_output_retention_boundary, save_manifest, shell_family,
-        strip_env_prefix_from_process_command, strip_env_prefix_from_pty_command,
+        run_batched_output_stream_forwarder, run_batched_output_writer, run_host,
+        runtime_generation_scoped_command, safe_output_retention_boundary, save_manifest,
+        shell_family, strip_env_prefix_from_process_command, strip_env_prefix_from_pty_command,
         update_manifest_session, write_output_stream_frame, HostAnsweredQuery,
         HostedSessionManifest, HostedSessionRuntime, HostedSessionState, OscTitleScanner,
         OutputBroadcaster, OutputQueryScanner, OutputStreamRead, PidIdentity, RetainedOutputWriter,
@@ -7441,10 +7440,16 @@ exit "${UNPEEL_FAKE_PROVIDER_STATUS:-0}"
     #[test]
     fn retry_manifest_write_gives_up_after_the_schedule() {
         let mut calls = 0;
-        let error = retry_manifest_write("s", "exited manifest", &[1, 2], |_| {}, || {
-            calls += 1;
-            Err("No space left on device".into())
-        })
+        let error = retry_manifest_write(
+            "s",
+            "exited manifest",
+            &[1, 2],
+            |_| {},
+            || {
+                calls += 1;
+                Err("No space left on device".into())
+            },
+        )
         .expect_err("never lands");
         assert_eq!(calls, 3, "one attempt per sleep plus the final one");
         assert_eq!(error, "No space left on device");
