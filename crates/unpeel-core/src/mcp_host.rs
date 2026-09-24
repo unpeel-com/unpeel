@@ -4221,6 +4221,7 @@ mod tests {
             runtime_launch_generation: 0,
             runtime_launch_pending: false,
             runtime_launched_at: None,
+            agent_returned_to_shell_at: None,
             runtime_launch_output_offset: 0,
             mcp_enabled: None,
             browser_mcp_enabled: None,
