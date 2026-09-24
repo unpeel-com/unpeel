@@ -3246,7 +3246,9 @@ final class RemoteHostRuntime: ObservableObject {
         }
     }
 
-    private func requestMarkReadIfNeeded(_ sessionID: String) {
+    /// Mark-read only while the Host still reports the row unread and no
+    /// earlier mark-read for it is awaiting its snapshot or has failed.
+    func requestMarkReadIfNeeded(_ sessionID: String) {
         guard snapshot?.sessions.first(where: { $0.id == sessionID })?.unread == true,
               !markReadAwaitingSnapshotClearSessionIDs.contains(sessionID),
               !failedAutomaticMarkReadSessionIDs.contains(sessionID)
