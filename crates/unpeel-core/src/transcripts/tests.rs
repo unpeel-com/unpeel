@@ -88,6 +88,7 @@ fn test_manifest(command: &str) -> HostedSessionManifest {
         runtime_launch_generation: u64::from(!command.trim().is_empty()),
         runtime_launch_pending: false,
         runtime_launched_at: (!command.trim().is_empty()).then_some(1),
+        agent_returned_to_shell_at: None,
         runtime_launch_output_offset: 0,
         mcp_enabled: None,
         browser_mcp_enabled: None,

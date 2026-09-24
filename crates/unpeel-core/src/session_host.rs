@@ -187,7 +187,10 @@ fn default_mcp_enabled() -> bool {
 
 /// Host-owned, live runtime state. This is deliberately separate from the
 /// session's launch command: a blank terminal may currently be running Claude,
-/// but restarting that session must still relaunch the original blank shell.
+/// and its launch command stays the blank shell. Replacement Resume brings a
+/// hand-typed agent back from its hook capture unless the Host proved it was
+/// quit to the shell (`agent_returned_to_shell_at`,
+/// `session_ops::resume_base_command`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HostedSessionRuntime {
@@ -315,6 +318,12 @@ pub struct HostedSessionManifest {
     /// Wall-clock timestamp for the current stable runtime launch generation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_launched_at: Option<u64>,
+    /// When the Host last proved a hand-typed or launched agent gave the
+    /// PTY back to the owned login shell (not a bare observation timeout).
+    /// Replacement Resume of a blank terminal compares it with the latest
+    /// hook event: an agent that was quit to the shell stays quit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_returned_to_shell_at: Option<u64>,
     /// Absolute output-stream offset at which this runtime generation began.
     /// In-place restarts retain output.bin, so resume-failure readers must
     /// scan from this boundary instead of the file head (which belongs to an
@@ -5722,6 +5731,10 @@ pub(crate) fn build_session_timer_jobs(inputs: SessionJobInputs) -> Vec<HostTime
                                     next.clone().map(|observation| HostedSessionRuntime {
                                         current_observation: Some(observation),
                                     });
+                                if next.is_none() && returned_to_owned_shell {
+                                    manifest.agent_returned_to_shell_at =
+                                        Some(current_timestamp_ms());
+                                }
                             } else if clear_pending && observed_expected_runtime {
                                 // If the first manifest write for this
                                 // observation raced/failed, the tracker already
@@ -6078,6 +6091,7 @@ pub(crate) fn start_host(
             runtime_launch_generation: u64::from(launches_stable_runtime),
             runtime_launch_pending: launches_resume_agent_runtime,
             runtime_launched_at: initial_runtime_launched_at,
+            agent_returned_to_shell_at: None,
             runtime_launch_output_offset: journal_start_offset,
             mcp_enabled: Some(launch.mcp_enabled),
             browser_mcp_enabled: Some(launch.browser_mcp_enabled),
@@ -7200,6 +7214,7 @@ exit "${UNPEEL_FAKE_PROVIDER_STATUS:-0}"
             runtime_launch_generation: 1,
             runtime_launch_pending: false,
             runtime_launched_at: Some(1),
+            agent_returned_to_shell_at: None,
             runtime_launch_output_offset: 0,
             mcp_enabled: None,
             browser_mcp_enabled: None,
@@ -7321,6 +7336,7 @@ exit "${UNPEEL_FAKE_PROVIDER_STATUS:-0}"
             runtime_launch_generation: u64::from(!command.trim().is_empty()),
             runtime_launch_pending: false,
             runtime_launched_at: (!command.trim().is_empty()).then_some(1),
+            agent_returned_to_shell_at: None,
             runtime_launch_output_offset: 0,
             mcp_enabled: None,
             browser_mcp_enabled: None,
