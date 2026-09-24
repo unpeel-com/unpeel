@@ -3455,6 +3455,7 @@ extension RemoteHostRuntime {
         static let appsOpen = RemoteControlProtocol.appsOpenCapability
         static let archiveList = "session.archive.list"
         static let transcriptMarkdown = "session.transcript.markdown"
+        static let gitStatusRead = "session.git.status.read"
         static let pairingInvitation = "pairing.invitation"
         static let artifactUpload = "artifact.upload"
         static let artifactUploadResumable = "artifact.upload.resumable"
@@ -4029,6 +4030,25 @@ extension RemoteHostRuntime {
             return transcript.markdown
         } catch {
             throw Self.verbError(from: error, operation: "copy transcript", isEffect: false)
+        }
+    }
+
+    /// One Session's uncommitted-change summary: a capability-gated read the
+    /// pane header polls for its Git indicator. Nil `repository` means the
+    /// Session's directory is not inside a Git working tree.
+    func sessionGitStatus(sessionID: String) async throws -> NativeRemoteSessionGitStatus {
+        let (connection, _) = try requireConnection(
+            capability: HostOperation.gitStatusRead,
+            operation: "read Git status"
+        )
+        do {
+            let status = try await connection.backend.sessionGitStatus(sessionID: sessionID)
+            guard isCurrent(connection), connectionBootstrapped else { throw CancellationError() }
+            return status
+        } catch let error as CancellationError {
+            throw error
+        } catch {
+            throw Self.verbError(from: error, operation: "read Git status", isEffect: false)
         }
     }
 

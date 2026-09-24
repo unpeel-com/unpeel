@@ -1444,6 +1444,18 @@ struct TerminalPaneContainer: View {
                             fittedGrid: isLocalMachineScope ? store.phoneResizeOverrides[entry.id] : nil,
                             onFitToDesktop: { store.clearPhoneResizeOverride(for: entry.id) }
                         )
+                        // Always visible (a status, not a hover control):
+                        // the working tree's uncommitted +/− lines, opening
+                        // the Git plugin beside this pane.
+                        if !isAuxiliaryRegion, store.sessionSupportsPaneGitIndicator(entry) {
+                            PaneGitChangesIndicator(
+                                sessionID: entry.id,
+                                isWorking: paneIsWorking(entry),
+                                state: store.paneGitStatusState,
+                                refresh: { await store.refreshPaneGitStatus(sessionID: entry.id) },
+                                toggle: { store.toggleGitChanges(for: entry) }
+                            )
+                        }
                     }
                     // Same verbs as Session ▸ Split Pane Right (⌘D) / Down
                     // (⌘⇧D): empty launcher splitting THIS pane. Hidden when
@@ -1491,6 +1503,15 @@ struct TerminalPaneContainer: View {
                     }
 
                     paneMoreMenu(for: pane, entry: entry)
+
+                    // An App opened beside a Session (the Git indicator, a
+                    // clicked file) is disposable: one click closes it with
+                    // the same policy as ⌘W on that pane.
+                    if let entry, store.appCompanionSessionIDs.contains(entry.id) {
+                        PaneCloseButton(label: "Close \(entry.label)") {
+                            closePane(pane)
+                        }
+                    }
                 }
                 .fixedSize(horizontal: true, vertical: false)
             }
@@ -1581,7 +1602,12 @@ struct TerminalPaneContainer: View {
         guard let pane = presentedPanes.first(where: {
             $0.paneID == effectiveActivePaneID
         }) else { return }
+        closePane(pane)
+    }
 
+    /// ⌘W's close policy for one pane (`terminalPaneCloseAction`), shared by
+    /// the App companion's header close button.
+    private func closePane(_ pane: PresentedPane) {
         let sessionID = pane.content.sessionID
         let action = terminalPaneCloseAction(
             for: pane.content,
@@ -1817,6 +1843,17 @@ struct TerminalPaneContainer: View {
                 menu.addItem(.separator())
                 menu.addItem(controller.item("Pin to global project sidebar") {
                     store.moveSessionToProjectSidebar(entry.id)
+                })
+            }
+
+            if !isAuxiliaryRegion,
+               store.sessionSupportsPaneGitIndicator(entry),
+               store.paneGitStatusState.isAvailable,
+               store.paneGitStatusState.repositories[entry.id] != nil {
+                let isOpen = store.paneGitStatusState.openCompanions[entry.id] != nil
+                menu.addItem(.separator())
+                menu.addItem(controller.item(isOpen ? "Hide Git Changes" : "Show Git Changes") {
+                    store.toggleGitChanges(for: entry)
                 })
             }
 
@@ -2193,6 +2230,163 @@ private struct PaneSplitButton: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .help(help)
+        .accessibilityLabel(label)
+        .animation(.easeInOut(duration: 0.12), value: hovering)
+    }
+}
+
+/// Pane-header Git indicator: the Session's uncommitted `+N −M` (Host
+/// `session.git.status.read`). A toggle: it opens the Git plugin split beside
+/// the pane, shows pressed while that companion lives, and closes it.
+/// It owns the poll, so only panes on screen ask the Host: every few seconds
+/// while Unpeel is frontmost, immediately on appearing, on returning to the
+/// app, and when the Session goes busy or idle (an agent turn just changed
+/// files). It waits for `state.isAvailable` (Host support plus an active Git
+/// App), so it appears as soon as the Host connects; nothing renders until
+/// the first answer, and nothing outside Git.
+private struct PaneGitChangesIndicator: View {
+    let sessionID: String
+    let isWorking: Bool
+    @ObservedObject var state: PaneGitStatusState
+    let refresh: @MainActor () async -> Void
+    let toggle: () -> Void
+
+    @State private var hovering = false
+
+    private static let pollInterval: Duration = .seconds(3)
+
+    private struct PollKey: Equatable {
+        let sessionID: String
+        let isWorking: Bool
+        let isAvailable: Bool
+    }
+
+    var body: some View {
+        content
+            .task(id: PollKey(
+                sessionID: sessionID,
+                isWorking: isWorking,
+                isAvailable: state.isAvailable
+            )) {
+                guard state.isAvailable else { return }
+                while !Task.isCancelled {
+                    if NSApp.isActive { await refresh() }
+                    try? await Task.sleep(for: Self.pollInterval)
+                }
+            }
+            .onReceive(
+                NotificationCenter.default.publisher(
+                    for: NSApplication.didBecomeActiveNotification
+                )
+            ) { _ in
+                guard state.isAvailable else { return }
+                Task { await refresh() }
+            }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if state.isAvailable, let repository = state.repositories[sessionID] {
+            let isOpen = state.openCompanions[sessionID] != nil
+            Button(action: toggle) {
+                label(repository, isOpen: isOpen)
+                    .padding(.horizontal, 6)
+                    .frame(height: Theme.sessionRowHeight)
+                    .background {
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(isOpen || hovering ? Theme.hoverRow : .clear)
+                    }
+                    .contentShape(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    )
+            }
+            .buttonStyle(.plain)
+            .onHover { hovering = $0 }
+            .help(Self.help(repository, isOpen: isOpen))
+            .accessibilityLabel(Self.accessibilityLabel(repository, isOpen: isOpen))
+            .accessibilityAddTraits(isOpen ? .isSelected : [])
+            .animation(.easeInOut(duration: 0.12), value: hovering)
+            .animation(.easeInOut(duration: 0.12), value: isOpen)
+            .padding(.trailing, 2)
+        } else {
+            // A zero-size stand-in, never an empty branch: SwiftUI does not
+            // start `.task` on a view with no content, and the poll that
+            // would produce the first answer lives in that task.
+            Color.clear.frame(width: 0, height: 0)
+        }
+    }
+
+    private func label(
+        _ repository: PaneGitStatusState.Repository,
+        isOpen: Bool
+    ) -> some View {
+        HStack(spacing: 4) {
+            ChromeIconView(icon: .branch, size: 12)
+                .foregroundStyle(
+                    isOpen || hovering ? Theme.foreground : Theme.foreground.opacity(0.75)
+                )
+            if repository.additions > 0 || repository.deletions > 0 {
+                HStack(spacing: 3) {
+                    Text("+\(repository.additions)")
+                        .foregroundStyle(Theme.accent)
+                    Text("\u{2212}\(repository.deletions)")
+                        .foregroundStyle(Theme.danger)
+                }
+                .font(.system(size: 11, weight: .medium).monospacedDigit())
+                .contentTransition(.numericText())
+                .animation(.easeInOut(duration: 0.2), value: repository)
+            }
+        }
+        .fixedSize()
+    }
+
+    private static func help(
+        _ repository: PaneGitStatusState.Repository,
+        isOpen: Bool
+    ) -> String {
+        let files = repository.files == 1 ? "1 file" : "\(repository.files) files"
+        let changes = repository.files == 0 ? "No uncommitted changes" : "\(files) changed"
+        let branch = repository.branch.map { " on \($0)" } ?? ""
+        return "\(changes)\(branch). \(isOpen ? "Hide" : "Show in") Git"
+    }
+
+    private static func accessibilityLabel(
+        _ repository: PaneGitStatusState.Repository,
+        isOpen: Bool
+    ) -> String {
+        "\(isOpen ? "Hide" : "Show") Git changes: \(repository.additions) added, \(repository.deletions) removed lines"
+    }
+}
+
+/// Header close button for an App companion pane; styled like
+/// `PaneSplitButton`, trailing the more-menu.
+private struct PaneCloseButton: View {
+    let label: String
+    let action: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "xmark")
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(
+                    hovering
+                        ? Theme.foreground
+                        : Theme.foreground.opacity(0.75)
+                )
+                .frame(width: 26, height: Theme.sessionRowHeight)
+                .background {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(hovering ? Theme.hoverRow : .clear)
+                }
+                .contentShape(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help("Close (⌘W)")
         .accessibilityLabel(label)
         .animation(.easeInOut(duration: 0.12), value: hovering)
     }

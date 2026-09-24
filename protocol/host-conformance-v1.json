@@ -63,6 +63,15 @@
       }
     },
     {
+      "id": "git-status.missing-session",
+      "method": "GET",
+      "path": "/mobile/git-status",
+      "expected": {
+        "native": 400,
+        "tui": 400
+      }
+    },
+    {
       "id": "write.missing-session",
       "method": "POST",
       "path": "/mobile/write",

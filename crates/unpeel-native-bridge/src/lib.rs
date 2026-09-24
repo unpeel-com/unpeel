@@ -29,8 +29,8 @@ use unpeel_core::remote_session_backend::{
     RemoteBootstrapSnapshot, RemoteCreatedSession, RemoteDesktopResize, RemoteEffectFailure,
     RemoteEffectFailureKind, RemoteOutputPage, RemoteOutputPollOptions, RemotePresetPatch,
     RemoteProjectOrganizationPatch, RemoteSessionBackend, RemoteSessionBackendError,
-    RemoteSessionCreateRequest, RemoteSessionMetrics, RemoteSessionSummary, RemoteTextSubmitMode,
-    RemoteTranscriptMarkdown, RemoteWorkspaceSettingsPatch,
+    RemoteSessionCreateRequest, RemoteSessionGitStatus, RemoteSessionMetrics, RemoteSessionSummary,
+    RemoteTextSubmitMode, RemoteTranscriptMarkdown, RemoteWorkspaceSettingsPatch,
 };
 use unpeel_core::ssh_connection::{
     install_unpeel_over_ssh, LocalProcessConnection, SshAskpass, SshConnectionOptions,
@@ -397,6 +397,10 @@ trait RegisteredRemoteBackend: Send + Sync {
         &self,
         session_id: &str,
     ) -> Result<RemoteSessionMetrics, NativeRemoteError>;
+    fn read_session_git_status(
+        &self,
+        session_id: &str,
+    ) -> Result<RemoteSessionGitStatus, NativeRemoteError>;
     fn disconnect(&self);
 }
 
@@ -782,6 +786,15 @@ impl RegisteredRemoteBackend for RegisteredCoreBackend {
         self.backend
             .read_session_metrics(session_id)
             .map_err(|error| native_remote_backend_error("session metrics read", error))
+    }
+
+    fn read_session_git_status(
+        &self,
+        session_id: &str,
+    ) -> Result<RemoteSessionGitStatus, NativeRemoteError> {
+        self.backend
+            .read_session_git_status(session_id)
+            .map_err(|error| native_remote_backend_error("session git status read", error))
     }
 
     fn disconnect(&self) {
@@ -1933,6 +1946,24 @@ struct NativeSessionMetricsWire<'a> {
     captured_at_unix_ms: i64,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeSessionGitStatusWire<'a> {
+    #[serde(rename = "sessionID")]
+    session_id: &'a str,
+    repository: Option<NativeGitRepositoryStatusWire<'a>>,
+    captured_at_unix_ms: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct NativeGitRepositoryStatusWire<'a> {
+    root: &'a str,
+    branch: Option<&'a str>,
+    files: u64,
+    additions: u64,
+    deletions: u64,
+}
+
 fn encode_remote_read<T: Serialize>(
     operation: &'static str,
     value: &T,
@@ -2470,6 +2501,29 @@ fn read_remote_session_metrics(
             rows: metrics.rows,
             output_offset: metrics.output_offset,
             captured_at_unix_ms: metrics.captured_at_unix_ms,
+        },
+    )
+}
+
+fn read_remote_session_git_status(
+    handle: RemoteHandle,
+    session_id: &str,
+) -> Result<Vec<u8>, NativeRemoteError> {
+    let status = remote_backend(handle)?.read_session_git_status(session_id)?;
+    encode_remote_read(
+        "session git status",
+        &NativeSessionGitStatusWire {
+            session_id: &status.session_id,
+            repository: status.repository.as_ref().map(|repository| {
+                NativeGitRepositoryStatusWire {
+                    root: &repository.root,
+                    branch: repository.branch.as_deref(),
+                    files: repository.files,
+                    additions: repository.additions,
+                    deletions: repository.deletions,
+                }
+            }),
+            captured_at_unix_ms: status.captured_at_unix_ms,
         },
     )
 }
@@ -4980,6 +5034,57 @@ pub unsafe extern "C" fn unpeel_native_bridge_remote_session_metrics(
     }
 }
 
+/// Read one remote Session's uncommitted-change summary
+/// (`session.git.status.read`): a capability-gated read, not an effect.
+/// Success returns owned JSON with `sessionID`, `repository` (null outside a
+/// Git working tree, else `root`, `branch`, `files`, `additions`,
+/// `deletions`), and `capturedAtUnixMs`.
+///
+/// # Safety
+///
+/// A non-empty Session id must point to readable UTF-8 bytes. Both output
+/// pointers must be non-null and writable.
+#[no_mangle]
+pub unsafe extern "C" fn unpeel_native_bridge_remote_session_git_status(
+    handle: RemoteHandle,
+    session_id_pointer: *const u8,
+    session_id_length: usize,
+    out_pointer: *mut *mut u8,
+    out_length: *mut usize,
+) -> i32 {
+    if out_pointer.is_null() || out_length.is_null() {
+        return ERROR_INVALID_INPUT;
+    }
+    *out_pointer = ptr::null_mut();
+    *out_length = 0;
+
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        let session_id = remote_utf8_input(
+            session_id_pointer,
+            session_id_length,
+            "invalid_session_id_buffer",
+            "invalid_session_id_utf8",
+            "Remote Session id",
+        )?;
+        read_remote_session_git_status(handle, session_id)
+    }));
+    match outcome {
+        Ok(Ok(bytes)) => {
+            return_bytes(bytes, out_pointer, out_length);
+            RESULT_OK
+        }
+        Ok(Err(error)) => {
+            let result = error.result;
+            return_bytes(encode_remote_error(error), out_pointer, out_length);
+            result
+        }
+        Err(_) => {
+            return_bytes(remote_panic_error(), out_pointer, out_length);
+            ERROR_PANIC
+        }
+    }
+}
+
 /// Read cached/pending plugin update availability from the selected Host.
 ///
 /// # Safety
@@ -5086,6 +5191,7 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use std::thread;
     use unpeel_core::controller_api::{ControllerPrincipal, ControllerResponse};
+    use unpeel_core::remote_session_backend::RemoteGitRepositoryStatus;
 
     #[test]
     fn platform_adapter_config_accepts_the_swift_id_spelling_and_stops_cleanly() {
@@ -5457,6 +5563,16 @@ mod tests {
             &self,
             _session_id: &str,
         ) -> Result<RemoteSessionMetrics, NativeRemoteError> {
+            Err(NativeRemoteError::remote(
+                "test_reads_unavailable",
+                "static test backend has no reads",
+            ))
+        }
+
+        fn read_session_git_status(
+            &self,
+            _session_id: &str,
+        ) -> Result<RemoteSessionGitStatus, NativeRemoteError> {
             Err(NativeRemoteError::remote(
                 "test_reads_unavailable",
                 "static test backend has no reads",
@@ -5878,6 +5994,27 @@ mod tests {
                 columns: 120,
                 rows: 34,
                 output_offset: Some(4096),
+                captured_at_unix_ms: 1234,
+            })
+        }
+
+        fn read_session_git_status(
+            &self,
+            session_id: &str,
+        ) -> Result<RemoteSessionGitStatus, NativeRemoteError> {
+            self.effects
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(format!("git-status:{session_id}"));
+            Ok(RemoteSessionGitStatus {
+                session_id: session_id.to_owned(),
+                repository: Some(RemoteGitRepositoryStatus {
+                    root: "/repo".to_owned(),
+                    branch: None,
+                    files: 1,
+                    additions: 170,
+                    deletions: 0,
+                }),
                 captured_at_unix_ms: 1234,
             })
         }
@@ -6341,6 +6478,8 @@ mod tests {
     #[test]
     fn handled_unhandled_and_invalid_inputs_are_distinct() {
         let (handled, _) = guarded_route(&request("/mobile/metrics"), None);
+        assert_eq!(handled, RESULT_HANDLED);
+        let (handled, _) = guarded_route(&request("/mobile/git-status"), None);
         assert_eq!(handled, RESULT_HANDLED);
         let (unhandled, bytes) = guarded_route(&request("/mobile/not-migrated"), None);
         assert_eq!(unhandled, RESULT_UNHANDLED);
@@ -7444,6 +7583,30 @@ mod tests {
             assert_eq!(metrics["rows"], 34);
             assert_eq!(metrics["outputOffset"], 4096);
             assert_eq!(metrics["capturedAtUnixMs"], 1234);
+
+            let mut pointer = ptr::null_mut();
+            let mut length = 0;
+            let code = unpeel_native_bridge_remote_session_git_status(
+                handle,
+                session_id.as_ptr(),
+                session_id.len(),
+                &mut pointer,
+                &mut length,
+            );
+            assert_eq!(code, RESULT_OK);
+            let status = take_owned_json(pointer, length);
+            assert_eq!(status["sessionID"], "s1");
+            assert_eq!(
+                status["repository"],
+                json!({
+                    "root": "/repo",
+                    "branch": null,
+                    "files": 1,
+                    "additions": 170,
+                    "deletions": 0,
+                })
+            );
+            assert_eq!(status["capturedAtUnixMs"], 1234);
         }
 
         assert_eq!(
@@ -7466,6 +7629,7 @@ mod tests {
                 "archived:project-1",
                 "transcript:s1:20",
                 "metrics:s1",
+                "git-status:s1",
             ]
         );
         assert_eq!(unsafe { close_ffi(handle) }.0, RESULT_OK);

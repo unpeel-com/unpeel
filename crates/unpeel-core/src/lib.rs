@@ -51,6 +51,8 @@ pub mod first_run;
 #[cfg(feature = "native-host")]
 mod ghostty_vt;
 #[cfg(feature = "native-host")]
+pub mod git_status;
+#[cfg(feature = "native-host")]
 pub mod hook_assets;
 #[cfg(feature = "native-host")]
 pub mod hook_cancellation;

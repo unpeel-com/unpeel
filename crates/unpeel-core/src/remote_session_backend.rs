@@ -75,6 +75,7 @@ const INTEGRATIONS_INSTALL_CAPABILITY: &str = "integrations.install";
 const ARCHIVE_LIST_CAPABILITY: &str = "session.archive.list";
 const TRANSCRIPT_MARKDOWN_CAPABILITY: &str = "session.transcript.markdown";
 const METRICS_CAPABILITY: &str = "session.metrics.read";
+const GIT_STATUS_CAPABILITY: &str = "session.git.status.read";
 const PAIRING_INVITATION_CAPABILITY: &str = "pairing.invitation";
 const UPLOAD_CAPABILITY: &str = "artifact.upload";
 pub const REMOTE_CAPABILITY_OUTPUT_READ: &str = OUTPUT_CAPABILITY;
@@ -104,6 +105,7 @@ pub const REMOTE_CAPABILITY_APPS_OPEN: &str = APPS_OPEN_CAPABILITY;
 pub const REMOTE_CAPABILITY_ARCHIVE_LIST: &str = ARCHIVE_LIST_CAPABILITY;
 pub const REMOTE_CAPABILITY_TRANSCRIPT_MARKDOWN: &str = TRANSCRIPT_MARKDOWN_CAPABILITY;
 pub const REMOTE_CAPABILITY_METRICS_READ: &str = METRICS_CAPABILITY;
+pub const REMOTE_CAPABILITY_GIT_STATUS_READ: &str = GIT_STATUS_CAPABILITY;
 pub const REMOTE_CAPABILITY_PAIRING_INVITATION: &str = PAIRING_INVITATION_CAPABILITY;
 const BOOTSTRAP_PATH: &str = "/mobile/bootstrap";
 const OUTPUT_PATH: &str = "/mobile/output";
@@ -126,6 +128,7 @@ const APPS_OPEN_PATH: &str = "/mobile/apps/open";
 const ARCHIVE_LIST_PATH: &str = "/mobile/archive";
 const TRANSCRIPT_MARKDOWN_PATH: &str = "/mobile/transcript-markdown";
 const METRICS_PATH: &str = "/mobile/metrics";
+const GIT_STATUS_PATH: &str = "/mobile/git-status";
 const PAIRING_INVITATION_PATH: &str = "/mobile/pairing-invitation";
 const UPLOAD_PATH: &str = "/mobile/upload";
 const MAX_SESSION_ID_BYTES: usize = 128;
@@ -1569,6 +1572,38 @@ pub struct RemoteSessionMetrics {
     pub columns: u16,
     pub rows: u16,
     pub output_offset: Option<u64>,
+    pub captured_at_unix_ms: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionGitStatusWire {
+    #[serde(rename = "sessionID")]
+    session_id: String,
+    #[serde(default)]
+    repository: Option<RemoteGitRepositoryStatus>,
+    captured_at_unix_ms: i64,
+}
+
+/// Uncommitted changes in the working tree a Session runs in.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteGitRepositoryStatus {
+    /// Absolute Host path of the repository toplevel.
+    pub root: String,
+    #[serde(default)]
+    pub branch: Option<String>,
+    pub files: u64,
+    pub additions: u64,
+    pub deletions: u64,
+}
+
+/// One Session's Git summary (`session.git.status.read`); `repository` is
+/// `None` when the Session's directory is not inside a Git working tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteSessionGitStatus {
+    pub session_id: String,
+    pub repository: Option<RemoteGitRepositoryStatus>,
     pub captured_at_unix_ms: i64,
 }
 
@@ -3081,6 +3116,39 @@ impl RemoteSessionBackend {
             columns: wire.columns,
             rows: wire.rows,
             output_offset: wire.output_offset,
+            captured_at_unix_ms: wire.captured_at_unix_ms,
+        })
+    }
+
+    /// Read one Session's uncommitted-change summary
+    /// (`session.git.status.read`): a capability-gated read, not an effect.
+    pub fn read_session_git_status(
+        &self,
+        session_id: &str,
+    ) -> Result<RemoteSessionGitStatus, RemoteSessionBackendError> {
+        const OPERATION: &str = "session git status";
+        validate_session_id(session_id)?;
+        let body = self.inner.perform_read(
+            OPERATION,
+            GIT_STATUS_CAPABILITY,
+            GIT_STATUS_PATH,
+            &[("session_id", session_id.to_owned())],
+        )?;
+        let wire: SessionGitStatusWire = serde_json::from_slice(&body).map_err(|error| {
+            RemoteSessionBackendError::InvalidResponse {
+                operation: OPERATION,
+                message: error.to_string(),
+            }
+        })?;
+        if wire.session_id != session_id {
+            return Err(RemoteSessionBackendError::InvalidResponse {
+                operation: OPERATION,
+                message: "response Session id does not match request".to_owned(),
+            });
+        }
+        Ok(RemoteSessionGitStatus {
+            session_id: wire.session_id,
+            repository: wire.repository,
             captured_at_unix_ms: wire.captured_at_unix_ms,
         })
     }
@@ -7088,6 +7156,11 @@ mod tests {
             RemoteSessionBackendError::MissingCapability(capability)
                 if capability == METRICS_CAPABILITY
         ));
+        assert!(matches!(
+            backend.read_session_git_status("s1").unwrap_err(),
+            RemoteSessionBackendError::MissingCapability(capability)
+                if capability == GIT_STATUS_CAPABILITY
+        ));
         assert_eq!(connection.calls().len(), 1, "a gated verb reached the Host");
         assert!(!backend.needs_bootstrap());
     }
@@ -7574,6 +7647,107 @@ mod tests {
             }
             assert_eq!(connection.remaining(), 0);
         }
+    }
+
+    #[test]
+    fn session_git_status_read_uses_the_v1_query_contract() {
+        let connection = ScriptedConnection::new();
+        let generation = connection.generation(1);
+        add_bootstrap(
+            &connection,
+            generation,
+            bootstrap_json(
+                Some("host-1"),
+                HOST_PROTOCOL_MAJOR,
+                Some(&[BOOTSTRAP_CAPABILITY, GIT_STATUS_CAPABILITY]),
+            ),
+        );
+        let read = || {
+            expected_read(
+                generation,
+                GIT_STATUS_PATH,
+                vec![("session_id".to_owned(), "s1".to_owned())],
+            )
+        };
+        connection.push(reply_step(
+            read(),
+            generation,
+            200,
+            serde_json::to_vec(&json!({
+                "sessionID": "s1",
+                "repository": {
+                    "root": "/repo",
+                    "branch": "main",
+                    "files": 2,
+                    "additions": 170,
+                    "deletions": 3,
+                },
+                "capturedAtUnixMs": 1234,
+            }))
+            .unwrap(),
+        ));
+        connection.push(reply_step(
+            read(),
+            generation,
+            200,
+            serde_json::to_vec(&json!({
+                "sessionID": "s1",
+                "repository": null,
+                "capturedAtUnixMs": 1235,
+            }))
+            .unwrap(),
+        ));
+        connection.push(reply_step(
+            read(),
+            generation,
+            200,
+            serde_json::to_vec(&json!({
+                "sessionID": "other",
+                "repository": null,
+                "capturedAtUnixMs": 1236,
+            }))
+            .unwrap(),
+        ));
+        connection.push(reply_step(
+            read(),
+            generation,
+            404,
+            br#"{"error":"unknown session"}"#.to_vec(),
+        ));
+        let backend = RemoteSessionBackend::new(connection.clone());
+        backend.bootstrap().unwrap();
+
+        assert_eq!(
+            backend.read_session_git_status("s1").unwrap(),
+            RemoteSessionGitStatus {
+                session_id: "s1".to_owned(),
+                repository: Some(RemoteGitRepositoryStatus {
+                    root: "/repo".to_owned(),
+                    branch: Some("main".to_owned()),
+                    files: 2,
+                    additions: 170,
+                    deletions: 3,
+                }),
+                captured_at_unix_ms: 1234,
+            }
+        );
+        assert_eq!(
+            backend.read_session_git_status("s1").unwrap().repository,
+            None
+        );
+        assert!(matches!(
+            backend.read_session_git_status("s1").unwrap_err(),
+            RemoteSessionBackendError::InvalidResponse {
+                operation: "session git status",
+                ..
+            }
+        ));
+        assert!(matches!(
+            backend.read_session_git_status("s1").unwrap_err(),
+            RemoteSessionBackendError::HostStatus { status: 404, .. }
+        ));
+        assert!(!backend.needs_bootstrap());
+        assert_eq!(connection.remaining(), 0);
     }
 
     #[test]

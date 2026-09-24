@@ -1217,6 +1217,53 @@ pub fn read_session_metrics(session_id: &str) -> Result<SessionMetrics, Controll
     })
 }
 
+/// Uncommitted changes in one Session's working tree
+/// (`session.git.status.read`). `repository` is `None` when the Session's
+/// directory is not inside a Git working tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionGitStatus {
+    pub session_id: String,
+    pub repository: Option<crate::git_status::GitWorkingTreeStatus>,
+    pub captured_at_unix_ms: u64,
+}
+
+/// Read a Session's Git summary from its worktree (else its launch cwd).
+/// Exited Sessions still answer: the directory outlives the process.
+pub fn read_session_git_status(session_id: &str) -> Result<SessionGitStatus, ControllerApiError> {
+    if !valid_session_id(session_id) {
+        return Err(ControllerApiError::new(400, "invalid session id"));
+    }
+    let Some(manifest) = session_host::load_manifest(session_id) else {
+        return Err(ControllerApiError::new(404, "unknown session"));
+    };
+    let directory = manifest
+        .session
+        .worktree_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .unwrap_or(manifest.cwd.as_str());
+    Ok(SessionGitStatus {
+        session_id: session_id.to_owned(),
+        repository: crate::git_status::working_tree_status(directory),
+        captured_at_unix_ms: current_timestamp_ms(),
+    })
+}
+
+fn session_git_status_body(status: &SessionGitStatus) -> Value {
+    json!({
+        "sessionID": status.session_id,
+        "repository": status.repository.as_ref().map(|repository| json!({
+            "root": repository.root,
+            "branch": repository.branch,
+            "files": repository.files,
+            "additions": repository.additions,
+            "deletions": repository.deletions,
+        })),
+        "capturedAtUnixMs": status.captured_at_unix_ms,
+    })
+}
+
 fn bootstrap_body(context: &HostBootstrapContext) -> Value {
     let mut envelope = json!({
         "protocolVersion": 1,
@@ -1610,6 +1657,20 @@ fn route_uncached(
                     "capturedAtUnixMs": metrics.captured_at_unix_ms,
                     "desktopViewing": false,
                 }),
+                Err(error) => {
+                    return Some(ControllerResponse {
+                        id: request.id.clone(),
+                        status: error.status,
+                        body: json!({ "error": error.message }),
+                    });
+                }
+            }
+        }
+        ("GET", "/mobile/git-status") => {
+            let status = query_session_id(&request.query)
+                .and_then(|session_id| read_session_git_status(&session_id));
+            match status {
+                Ok(status) => session_git_status_body(&status),
                 Err(error) => {
                     return Some(ControllerResponse {
                         id: request.id.clone(),
@@ -3150,6 +3211,52 @@ mod tests {
         let response = route(&request("GET", "/mobile/metrics"), None).unwrap();
         assert_eq!(response.status, 400);
         assert_eq!(response.body["error"], "invalid session id");
+    }
+
+    #[test]
+    fn git_status_validates_its_session_id() {
+        let response = route(&request("GET", "/mobile/git-status"), None).unwrap();
+        assert_eq!(response.status, 400);
+        assert_eq!(response.body["error"], "invalid session id");
+
+        let mut escape = request("GET", "/mobile/git-status");
+        escape.query.insert("session_id".into(), "../escape".into());
+        let response = route(&escape, None).unwrap();
+        assert_eq!(response.status, 400);
+    }
+
+    #[test]
+    fn git_status_body_is_the_v1_wire_shape() {
+        let dirty = SessionGitStatus {
+            session_id: "s1".into(),
+            repository: Some(crate::git_status::GitWorkingTreeStatus {
+                root: "/repo".into(),
+                branch: Some("main".into()),
+                files: 2,
+                additions: 170,
+                deletions: 3,
+            }),
+            captured_at_unix_ms: 7,
+        };
+        assert_eq!(
+            session_git_status_body(&dirty),
+            json!({
+                "sessionID": "s1",
+                "repository": {
+                    "root": "/repo",
+                    "branch": "main",
+                    "files": 2,
+                    "additions": 170,
+                    "deletions": 3,
+                },
+                "capturedAtUnixMs": 7,
+            })
+        );
+        let outside = SessionGitStatus {
+            repository: None,
+            ..dirty
+        };
+        assert_eq!(session_git_status_body(&outside)["repository"], Value::Null);
     }
 
     #[test]

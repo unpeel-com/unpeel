@@ -136,6 +136,23 @@ struct NativeRemoteSessionMetrics: Decodable, Equatable, Sendable {
     let capturedAtUnixMs: Int64
 }
 
+/// One Session's uncommitted-change summary (`session.git.status.read`).
+/// `repository` is nil when the Session's directory is not inside a Git
+/// working tree; `root` is the Host path the Git App opens.
+struct NativeRemoteSessionGitStatus: Decodable, Equatable, Sendable {
+    struct Repository: Decodable, Equatable, Sendable {
+        let root: String
+        let branch: String?
+        let files: Int
+        let additions: Int
+        let deletions: Int
+    }
+
+    let sessionID: String
+    let repository: Repository?
+    let capturedAtUnixMs: Int64
+}
+
 /// Receipt for a Controller-created Session. `session` is the optimistic
 /// summary newer Hosts return; headless Hosts may omit it and let the next
 /// bootstrap publish the row.
@@ -229,10 +246,21 @@ protocol NativeRemoteBackendProtocol: Sendable {
         entries: Int?
     ) async throws -> RemoteTranscriptMarkdown
     func sessionMetrics(sessionID: String) async throws -> NativeRemoteSessionMetrics
+    func sessionGitStatus(sessionID: String) async throws -> NativeRemoteSessionGitStatus
     func close() async
 }
 
 extension NativeRemoteBackendProtocol {
+    func sessionGitStatus(sessionID: String) async throws -> NativeRemoteSessionGitStatus {
+        throw NativeRemoteBackendError(
+            result: Int32(UNPEEL_NATIVE_BRIDGE_ERROR_REMOTE),
+            code: "git_status_unavailable",
+            message: "Git status is unavailable on this backend.",
+            kind: "notApplied",
+            operation: "session git status"
+        )
+    }
+
     func setOpener(
         selector: String,
         opener: String
@@ -1942,6 +1970,56 @@ final class NativeRemoteBackend: @unchecked Sendable {
                     result: Int32(UNPEEL_NATIVE_BRIDGE_ERROR_SERIALIZATION),
                     code: "invalid_remote_metrics",
                     message: "The Host returned an invalid terminal-metrics response."
+                )
+            }
+        }
+    }
+
+    func sessionGitStatus(sessionID: String) async throws -> NativeRemoteSessionGitStatus {
+        let handle = try currentIdentityValidatedHandle()
+        let session = Data(sessionID.utf8)
+        return try await Self.runBlocking(priority: .utility) {
+            try Task.checkCancellation()
+            var outputPointer: UnsafeMutablePointer<UInt8>?
+            var outputLength = 0
+            let result = session.withUnsafeBytes { bytes in
+                unpeel_native_bridge_remote_session_git_status(
+                    handle,
+                    bytes.bindMemory(to: UInt8.self).baseAddress,
+                    bytes.count,
+                    &outputPointer,
+                    &outputLength
+                )
+            }
+            let output = Self.takeOutput(outputPointer, length: outputLength)
+            guard result == UNPEEL_NATIVE_BRIDGE_OK else {
+                throw Self.bridgeError(
+                    result: result,
+                    output: output,
+                    fallbackCode: "remote_git_status_read_failed",
+                    fallbackMessage: "Could not read this Session's Git status."
+                )
+            }
+            do {
+                let status = try JSONDecoder().decode(
+                    NativeRemoteSessionGitStatus.self,
+                    from: output
+                )
+                guard status.sessionID == sessionID else {
+                    throw NativeRemoteBackendError(
+                        result: Int32(UNPEEL_NATIVE_BRIDGE_ERROR_SERIALIZATION),
+                        code: "remote_git_status_session_mismatch",
+                        message: "The Host returned Git status for the wrong Session."
+                    )
+                }
+                return status
+            } catch let error as NativeRemoteBackendError {
+                throw error
+            } catch {
+                throw NativeRemoteBackendError(
+                    result: Int32(UNPEEL_NATIVE_BRIDGE_ERROR_SERIALIZATION),
+                    code: "invalid_remote_git_status",
+                    message: "The Host returned an invalid Git status response."
                 )
             }
         }

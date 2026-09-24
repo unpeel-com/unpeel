@@ -2,13 +2,21 @@
   "schemaVersion": 1,
   "protocol": {
     "major": 1,
-    "minor": 21,
+    "minor": 22,
     "compatibility": {
       "major": "must-match",
       "minor": "additive",
       "unknownCapabilities": "ignore"
     },
     "history": [
+      {
+        "minor": 22,
+        "release": "0.7.5",
+        "summary": "session.git.status.read: a read-only summary of uncommitted changes (additions, deletions, file count, repository root, branch) in a Session's working tree, for a pane-header indicator that opens the Git App on the returned root.",
+        "capabilities": [
+          "session.git.status.read"
+        ]
+      },
       {
         "minor": 21,
         "release": "0.7.0",
@@ -219,6 +227,13 @@
       "id": "session.create",
       "method": "POST",
       "path": "/mobile/sessions",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "session.git.status.read",
+      "method": "GET",
+      "path": "/mobile/git-status",
       "native": true,
       "tui": true
     },
