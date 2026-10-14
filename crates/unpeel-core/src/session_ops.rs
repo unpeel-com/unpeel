@@ -288,7 +288,7 @@ fn provider_transcript_has_resume_data(path: Option<&str>) -> bool {
 /// transcript or a real lifecycle event, or populated managed per-Session
 /// storage recorded by an older launch. A launch alone never qualifies.
 pub fn can_archive_manifest(manifest: &HostedSessionManifest) -> bool {
-    if !can_archive_command(&manifest.session.command) {
+    if !can_archive_command(&resume_base_command(manifest)) {
         return false;
     }
     if managed_storage_has_resume_data(manifest) {
@@ -2252,14 +2252,72 @@ pub fn relaunch_command(session_id: &str, mode: RelaunchMode) -> Result<String, 
         .or(old.provider_session_id.clone());
     let relaunch = match mode {
         RelaunchMode::Restart { force_fresh } => {
-            if force_fresh || !old.has_been_written_to {
+            if force_fresh {
                 crate::resume::fresh(&old.session.command)
+            } else if !old.has_been_written_to {
+                // Nothing happened since this launch, so relaunch it exactly:
+                // a replacement that already resumes a conversation
+                // (`claude --resume <id>`) must keep it, and a plain launch
+                // must not pick up some other conversation's continue-last.
+                old.session.command.clone()
             } else {
-                crate::resume::resumed(&old.session.command, provider_id.as_deref())
+                crate::resume::resumed(&resume_base_command(&old), provider_id.as_deref())
             }
         }
     };
     Ok(relaunch)
+}
+
+/// The launch a replacement Resume works from. A preset Session resumes its
+/// own command. A blank terminal where the user hand-typed an agent resumes
+/// the runtime its integration's hooks captured (`provider_runtime`), unless
+/// the Host proved that agent handed the PTY back to the owned shell after
+/// its last hook event (`agent_returned_to_shell_at`): an agent the user quit
+/// stays quit, and the shell comes back. A different agent observed in the
+/// foreground never inherits the captured conversation.
+fn resume_base_command(manifest: &HostedSessionManifest) -> String {
+    resume_base_command_at(&session_dir(&manifest.session.id), manifest)
+}
+
+fn resume_base_command_at(dir: &Path, manifest: &HostedSessionManifest) -> String {
+    let command = &manifest.session.command;
+    if !command.trim().is_empty() {
+        return command.clone();
+    }
+    let Some(captured) = provider_session_runtime_at(dir)
+        .and_then(|captured| crate::integrations::runtime_for_dispatch(&captured))
+    else {
+        return String::new();
+    };
+    let foreground = manifest
+        .runtime
+        .as_ref()
+        .and_then(|runtime| runtime.current_observation.as_ref())
+        .map(|observation| crate::integrations::runtime_for_dispatch(&observation.runtime_id));
+    let agent_is_current = match foreground {
+        Some(foreground) => {
+            foreground.is_some_and(|foreground| foreground.legacy_slug == captured.legacy_slug)
+        }
+        None => manifest
+            .agent_returned_to_shell_at
+            .is_none_or(|returned_at| last_hook_event_at(dir).is_some_and(|at| at > returned_at)),
+    };
+    if !agent_is_current {
+        return String::new();
+    }
+    captured
+        .detection
+        .command_aliases
+        .first()
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn last_hook_event_at(dir: &Path) -> Option<u64> {
+    let modified = std::fs::metadata(dir.join("last-hook-event.json"))
+        .and_then(|metadata| metadata.modified())
+        .ok()?;
+    Some(modified.duration_since(UNIX_EPOCH).ok()?.as_millis() as u64)
 }
 
 /// Legacy spelling retained for local/API compatibility. Current protocol-v3
@@ -2606,6 +2664,58 @@ mod tests {
         assert!(can_archive_command("claude --model opus"));
         assert!(!can_archive_command("my-custom-agent --serve"));
         assert!(!can_archive_command("bash"));
+    }
+
+    #[test]
+    fn blank_terminal_resumes_a_hand_typed_agent_unless_it_was_quit_to_the_shell() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = |command: &str, foreground: Option<&str>, returned_at: Option<u64>| {
+            let mut value = serde_json::json!({
+                "session": {
+                    "id": "s1", "project_id": "p1", "label": "t",
+                    "command": command, "created_at": 1
+                },
+                "cwd": "/tmp", "state": "exited", "pid": null,
+                "created_at": 1, "heartbeat_at": 1, "updated_at": 1,
+                "agent_returned_to_shell_at": returned_at
+            });
+            if let Some(id) = foreground {
+                value["runtime"] = serde_json::json!({"currentObservation": {
+                    "id": id, "pid": 51, "processGroupId": 51, "processName": id
+                }});
+            }
+            serde_json::from_value::<super::HostedSessionManifest>(value).unwrap()
+        };
+        let base = |m: &super::HostedSessionManifest| super::resume_base_command_at(dir.path(), m);
+        let id = "86d3ddc7-fc7c-4202-bdd7-6fe747598ab6";
+        // No capture yet: a blank terminal stays a plain shell.
+        assert_eq!(base(&manifest("", Some("claude"), None)), "");
+        super::set_provider_session_at(dir.path(), Some(id), None, Some("claude")).unwrap();
+        std::fs::write(
+            dir.path().join("last-hook-event.json"),
+            br#"{"hook_event_name":"Stop"}"#,
+        )
+        .unwrap();
+        let hook_at = super::last_hook_event_at(dir.path()).unwrap();
+
+        // The Session died under a live Claude (the observation may already
+        // have timed out): resume the captured conversation.
+        for m in [manifest("", Some("claude"), None), manifest("", None, None)] {
+            let command = base(&m);
+            assert!(can_archive_command(&command), "{command:?}");
+            assert_eq!(
+                crate::resume::resumed(&command, Some(id)),
+                format!("claude --resume '{id}'")
+            );
+        }
+        // The user quit Claude back to the shell: the shell comes back...
+        assert_eq!(base(&manifest("", None, Some(hook_at + 1_000))), "");
+        // ...until Claude speaks again after that return.
+        assert_eq!(base(&manifest("", None, Some(hook_at - 1_000))), "claude");
+        // A different agent in the foreground never inherits Claude's id.
+        assert_eq!(base(&manifest("", Some("codex"), None)), "");
+        // A preset's own launch always wins over the capture.
+        assert_eq!(base(&manifest("codex --yolo", None, None)), "codex --yolo");
     }
 
     #[test]
