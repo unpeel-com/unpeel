@@ -73,6 +73,14 @@ SWIFT_PATH_REMAP_FLAGS=(
   -Xswiftc -file-prefix-map
   -Xswiftc "$REPO_ROOT=/unpeel/source"
 )
+# SwiftPM 6.4's default swiftbuild engine links with the deployment target
+# as the recorded SDK version (LC_BUILD_VERSION sdk 13.0). AppKit then runs
+# the app in its pre-26 compatibility mode: no Liquid Glass popovers or
+# menus. Keep the native engine while the toolchain still offers it; the
+# check after the build fails loudly if the SDK stamp regresses anyway.
+if swift build --help 2>/dev/null | grep -q 'native.*Native Build System'; then
+  SWIFT_PATH_REMAP_FLAGS+=(--build-system native)
+fi
 
 step() { echo "==> $*"; }
 is_adhoc_signing() { [ "$CODESIGN_IDENTITY" = "-" ]; }
@@ -247,6 +255,11 @@ done
 
 SWIFT_BIN_DIR="$(cd "$SWIFT_DIR" && swift build -c release --show-bin-path "${SWIFT_PATH_REMAP_FLAGS[@]}")"
 APP_BIN="$SWIFT_BIN_DIR/UnpeelNative"
+APP_SDK="$(vtool -show-build "$APP_BIN" 2>/dev/null | awk '$1 == "sdk" { print $2; exit }')"
+if [ "${APP_SDK%%.*}" -lt 26 ] 2>/dev/null; then
+  echo "FAIL: UnpeelNative records sdk $APP_SDK; AppKit would drop Liquid Glass (needs 26+)" >&2
+  exit 1
+fi
 HOST_BIN="$SERVER_BIN_DIR/unpeel-host"
 CLI_BIN="$SERVER_BIN_DIR/unpeel"
 ATTACH_BIN="$SERVER_BIN_DIR/unpeel-attach"
