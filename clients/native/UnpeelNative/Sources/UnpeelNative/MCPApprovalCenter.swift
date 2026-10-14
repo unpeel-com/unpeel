@@ -138,8 +138,14 @@ extension UnpeelStore {
         let incomingIDs = Set(presented.map(\.id))
         var owned = scoped ? scopedHostMcpApprovalIDs : hostOwnedMcpApprovalIDs
         let otherOwned = scoped ? hostOwnedMcpApprovalIDs : scopedHostMcpApprovalIDs
-        pendingMcpApprovals.removeAll { approval in
-            owned.contains(approval.id) && !incomingIDs.contains(approval.id)
+        // Assign only on a real removal: an in-place `removeAll` on the
+        // @Published array publishes (and wipes the sidebar list cache via
+        // didSet) even when nothing matched, and this runs per snapshot.
+        let kept = pendingMcpApprovals.filter { approval in
+            !(owned.contains(approval.id) && !incomingIDs.contains(approval.id))
+        }
+        if kept.count != pendingMcpApprovals.count {
+            pendingMcpApprovals = kept
         }
         owned.formIntersection(incomingIDs)
         let retained = incomingIDs.union(otherOwned)
@@ -251,6 +257,9 @@ extension UnpeelStore {
     }
 
     var mcpApprovalAttentionSessionIDs: Set<String> {
+        // Read many times per sidebar render (every displaySessionsByID /
+        // displayNodes access); skip building the known-id set when idle.
+        guard !pendingMcpApprovals.isEmpty else { return [] }
         let known = mcpApprovalKnownSessionIDs
         return Set(pendingMcpApprovals.map {
             $0.presentationSessionID(knownIDs: known)

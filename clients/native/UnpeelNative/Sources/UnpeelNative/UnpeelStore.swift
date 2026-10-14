@@ -1868,8 +1868,7 @@ final class UnpeelStore: ObservableObject {
                 self.projectRemoteScope(snapshot: snapshot)
                 // A remote Host's advertised tint (hostTintHue) arrives with
                 // its bootstrap, after the scope switch — repaint when it does.
-                self.applyScopeTint()
-                self.refreshScopeAppearance()
+                self.applyScopeAppearanceIfChanged()
             }
             .store(in: &remoteScopeCancellables)
         remoteHostRuntime.$selectedSessionID
@@ -4470,6 +4469,37 @@ final class UnpeelStore: ObservableObject {
         ) { [weak self] in
             self?.objectWillChange.send()
         }
+    }
+
+    /// What the snapshot-driven scope repaint resolves from. Snapshots land
+    /// every poll while agents work; repainting each time re-ran a 0.5s tint
+    /// animation, two full terminal-surface restyles, and an appearance-file
+    /// write even when nothing about the scope's look had changed.
+    private struct ScopeAppearanceInputs: Equatable {
+        let scope: SelectedHostScope
+        let tintHue: Double?
+        let theme: ThemePreference
+        let remoteAppearance: RemoteAppearanceSettings?
+    }
+
+    private var lastSnapshotScopeAppearance: ScopeAppearanceInputs?
+
+    private func applyScopeAppearanceIfChanged() {
+        var remoteAppearance: RemoteAppearanceSettings?
+        if case .remote = selectedHostScope {
+            remoteAppearance = remoteHostRuntime.snapshot?.workspaceSettings?
+                .appearanceSettings
+        }
+        let inputs = ScopeAppearanceInputs(
+            scope: selectedHostScope,
+            tintHue: effectiveScopeTintHue(),
+            theme: scopeThemePreference(),
+            remoteAppearance: remoteAppearance
+        )
+        guard inputs != lastSnapshotScopeAppearance else { return }
+        lastSnapshotScopeAppearance = inputs
+        applyScopeTint()
+        refreshScopeAppearance()
     }
 
     private func effectiveScopeTintHue() -> Double? {
