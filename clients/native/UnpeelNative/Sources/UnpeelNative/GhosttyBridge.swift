@@ -557,12 +557,16 @@ final class GhosttyTerminalPane: NSView {
     /// moving that surface's size. Copy stays
     /// `performable` (consumed only when a selection exists), matching
     /// ghostty's own default, so a bare ⌘C over an empty terminal still
-    /// reaches the Edit menu. Paste is `performable` too, again matching
-    /// ghostty: the clipboard read callback returns false when the
-    /// pasteboard holds no text (an image, say), the binding is then not
-    /// performed, and ⌘V is encoded as an ordinary key event — so an agent
-    /// that negotiated the kitty keyboard protocol receives super+v and
-    /// can run its own clipboard-image paste, exactly like Ctrl+V.
+    /// reaches the Edit menu. Paste is `performable` too, so text paste
+    /// still goes through ghostty's own clipboard-read callback exactly as
+    /// before. An image or file reference on the pasteboard (a screenshot,
+    /// say) never reaches that callback at all: `GhosttyTerminalPane` and
+    /// `RemoteGhosttyTerminalPane` intercept ⌘V a level up, in their own
+    /// `performKeyEquivalent`, ahead of libghostty's binding resolution,
+    /// and paste it through the same path a Finder/image drop uses
+    /// (`performDragOperation` / `pasteImageOrFileReferencesFromPasteboard`
+    /// / `handleDroppedOrPastedContent`) instead of falling through to a
+    /// raw super+v key event.
     fileprivate static func applySurfaceKeybinds(
         _ builder: inout TerminalConfiguration.Builder
     ) {
@@ -1120,6 +1124,38 @@ final class GhosttyTerminalPane: NSView {
         return insertDroppedText(text)
     }
 
+    /// ⌘V with an image or file reference on the pasteboard (and no text —
+    /// see `pastePayloadKind`) never reaches libghostty's binding
+    /// resolution: paste it the same way a Finder/image drop does, one
+    /// level above where that drop lands (`performDragOperation` above).
+    /// Returns false when there is nothing to paste this way, so plain
+    /// text paste and every other chord keep going through
+    /// `super.performKeyEquivalent`, unchanged.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if window?.firstResponder === terminalView,
+           Self.isPasteKeyEquivalent(event),
+           pasteImageOrFileReferencesFromPasteboard()
+        {
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    private func pasteImageOrFileReferencesFromPasteboard() -> Bool {
+        guard acceptsPlainTextDrops,
+              Self.pastePayloadKind(of: .general) == .dropReferences
+        else { return false }
+        let references = Self.dropReferences(from: .general)
+        guard !references.isEmpty else { return false }
+        let text = references.map {
+            Self.quoteDropReference(Self.conciseDropReference(
+                $0,
+                projectRoot: projectRootDirectory
+            ))
+        }.joined(separator: " ")
+        return insertDroppedText(text)
+    }
+
     private func appDropTargetCell(
         _ sender: NSDraggingInfo
     ) -> (row: Int, column: Int)? {
@@ -1226,6 +1262,40 @@ final class GhosttyTerminalPane: NSView {
             return true
         }
         return pasteboard.canReadObject(forClasses: [NSImage.self], options: nil)
+    }
+
+    /// What a paste trigger (⌘V) should do with the pasteboard's current
+    /// contents. Internal (not `fileprivate`) so both this pane and
+    /// `RemoteGhosttyTerminalPane` make the exact same call, and so the test
+    /// suite can exercise the decision directly against a scratch
+    /// pasteboard.
+    enum PastePayloadKind: Equatable {
+        /// A string is present: defer entirely to ghostty's own
+        /// clipboard-read callback, exactly as before.
+        case text
+        /// No string, but the same image/file content the drop path reads
+        /// (`canReadDropReferences`) is present.
+        case dropReferences
+        /// Nothing either path can paste.
+        case none
+    }
+
+    /// Checks `.string` first — the same check ghostty's own clipboard-read
+    /// callback makes — so a pasteboard carrying both a string and, say, a
+    /// file URL still resolves to `.text`: text paste must stay exactly as
+    /// it is today regardless of what else is on the pasteboard.
+    static func pastePayloadKind(of pasteboard: NSPasteboard) -> PastePayloadKind {
+        if pasteboard.string(forType: .string) != nil { return .text }
+        return canReadDropReferences(from: pasteboard) ? .dropReferences : .none
+    }
+
+    /// True for a bare ⌘V key-down — the chord `surfaceKeybinds` binds to
+    /// `paste_from_clipboard`. Any other modifier (⌘⇧V "Paste and Match
+    /// Style" elsewhere, ⌃⌘V, …) is left alone.
+    static func isPasteKeyEquivalent(_ event: NSEvent) -> Bool {
+        event.type == .keyDown
+            && event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command
+            && event.charactersIgnoringModifiers?.lowercased() == "v"
     }
 
     /// `home` picks whose `dropped-images` dir stabilizes volatile content —
@@ -2136,9 +2206,35 @@ final class RemoteGhosttyTerminalPane: NSView {
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        handleDroppedOrPastedContent(from: sender.draggingPasteboard)
+    }
+
+    /// ⌘V with an image or file reference on the pasteboard (and no text —
+    /// see `GhosttyTerminalPane.pastePayloadKind`) never reaches
+    /// libghostty's binding resolution: paste it through the exact same
+    /// path a Finder/image drop does, below. Returns false when there is
+    /// nothing to paste this way, so plain text paste and every other
+    /// chord keep going through `super.performKeyEquivalent`, unchanged.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if window?.firstResponder === terminalView,
+           GhosttyTerminalPane.isPasteKeyEquivalent(event),
+           GhosttyTerminalPane.pastePayloadKind(of: .general) == .dropReferences,
+           handleDroppedOrPastedContent(from: .general)
+        {
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    /// Shared by a Finder/image drop (`performDragOperation` above) and ⌘V
+    /// (`performKeyEquivalent` above): a scoped-workspace session pastes
+    /// the same quoted local paths the local surface does; a TRUE remote
+    /// Host uploads image/file content first and pastes the returned path
+    /// once that finishes.
+    private func handleDroppedOrPastedContent(from pasteboard: NSPasteboard) -> Bool {
         if fileDropsEnabled {
             let references = GhosttyTerminalPane.dropReferences(
-                from: sender.draggingPasteboard,
+                from: pasteboard,
                 home: dropStabilizeHome
             )
             guard !references.isEmpty else { return false }
@@ -2149,7 +2245,7 @@ final class RemoteGhosttyTerminalPane: NSView {
         let uploadImage = remoteUploader
         let uploadFile = remoteFileUploader
         let payloads = GhosttyTerminalPane.remoteDropPayloads(
-            from: sender.draggingPasteboard, filesSupported: uploadFile != nil)
+            from: pasteboard, filesSupported: uploadFile != nil)
         guard !payloads.isEmpty else { return false }
         let progress = NSProgressIndicator()
         progress.style = .spinning; progress.controlSize = .small

@@ -20,11 +20,14 @@ final class GhosttySurfaceKeybindTests: XCTestCase {
         XCTAssertTrue(keybinds.contains("super+end=scroll_to_bottom"))
     }
 
-    /// ⌘V must stay `performable`: when the pasteboard has no text (e.g. a
-    /// screenshot) the paste action is not performed and the key event
-    /// falls through to the session, so kitty-protocol agents receive
-    /// super+v and can paste the image themselves (orgs/unpeel-com
-    /// discussions #11). A non-performable bind silently eats it.
+    /// ⌘V must stay `performable`, matching ghostty's own default, so text
+    /// paste keeps consuming the chord only when it can actually perform
+    /// it. A pasteboard with no text (e.g. a screenshot) is now caught one
+    /// level up, in `GhosttyTerminalPane`/`RemoteGhosttyTerminalPane`'s own
+    /// `performKeyEquivalent`, before libghostty's binding resolution ever
+    /// sees the key event (orgs/unpeel-com discussions #11); a
+    /// non-performable bind would still be wrong, since it would silently
+    /// eat a bare ⌘V the surface cannot otherwise handle.
     func testPasteBindingIsPerformableSoImagePasteReachesAgents() {
         let keybinds = Set(GhosttyTerminalPane.surfaceKeybinds)
 
