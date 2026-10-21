@@ -280,3 +280,18 @@ both are small and generally useful).
     mailbox. Four hang reports on 2026-09-15 all show that exact stack
     (main in `becomeFirstResponder → __ulock_wait2`, one pane's `io` and
     `io-gather` threads in `__ulock_wait2`, its `renderer` idle at QoS 47).
+
+23. **Idle `selectedRange()` is a caret, not `NSNotFound`** (2026-10-21,
+    Swift wrapper only, no core rebuild, macOS) — Apple Dictation did
+    nothing in a terminal pane. `AppTerminalView.selectedRange()` returned
+    `{NSNotFound, 0}` whenever no IME composition was active (i.e. always,
+    for dictation), and macOS will not run a dictation session against a
+    text input client that reports no selection — the same stub broke
+    dictation in Emacs 30. Upstream Ghostty never returns `NSNotFound`
+    there. `TerminalTextInputHandler.selectedRange(for:)` now reports
+    `{0, 0}` while idle and keeps the caret inside the marked text while
+    composing; the nil-handler fallback uses the same `idleSelectedRange`.
+    `TerminalMarkedTextState` (shared with UIKit) and `markedRange()`
+    (`NSNotFound` when unmarked is Apple's contract) are unchanged. The
+    mic-indicator placement fix upstream Ghostty carries in `firstRect`
+    (ghostty #8493, zero-width rect for empty ranges) is not ported.
