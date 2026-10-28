@@ -169,6 +169,7 @@ impl LocalGatewayServer {
                                 });
                             if let Ok(worker) = worker {
                                 if let Ok(mut workers) = thread_workers.lock() {
+                                    reap_finished_workers(&mut workers);
                                     workers.push(worker);
                                 }
                             } else if let Ok(mut active) = thread_active.lock() {
@@ -215,6 +216,22 @@ impl LocalGatewayServer {
             }
         }
         let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// Join connection threads that already returned. Controllers reconnect
+/// constantly (the app alone opens tens of thousands of connections a day),
+/// and a finished thread that is never joined stays on libpthread's global
+/// thread list: `pthread_create`/`pthread_detach` walk that list under one
+/// lock, so an unreaped Vec eventually wedges every thread in the worker.
+fn reap_finished_workers(workers: &mut Vec<JoinHandle<()>>) {
+    let mut index = 0;
+    while index < workers.len() {
+        if workers[index].is_finished() {
+            let _ = workers.swap_remove(index).join();
+        } else {
+            index += 1;
+        }
     }
 }
 
@@ -728,4 +745,33 @@ pub fn set_device_relay_allowed(home: &Path, device_id: &str, allowed: bool) -> 
         }),
     )
     .map(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reap_finished_workers;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn finished_connection_threads_are_joined_and_live_ones_kept() {
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let mut workers = vec![std::thread::spawn(move || {
+            let _ = release_rx.recv();
+        })];
+        workers.extend((0..64).map(|_| std::thread::spawn(|| {})));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while workers.len() > 1 && Instant::now() < deadline {
+            reap_finished_workers(&mut workers);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(
+            workers.len(),
+            1,
+            "only the still-running connection remains"
+        );
+        assert!(!workers[0].is_finished());
+        release_tx.send(()).unwrap();
+        workers.pop().unwrap().join().unwrap();
+    }
 }
