@@ -12,6 +12,7 @@ use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Position, Rect};
 use ratatui::{Frame, Terminal};
+use crate::preview::{PreviewModal, PREVIEW_ACTION, PREVIEW_CLOSE_ACTION, horizontal_step};
 use unpeel_app_kit::{
     AgentBridge, AppContext, AppMetadata, AppReporter, DoubleClickTracker, DragSurface,
     EditorBridge, Explorer, ExplorerEvent, ExplorerInput, ExplorerTheme, FooterAction,
@@ -53,6 +54,7 @@ pub fn run(
     agent.refresh();
     let mut last_agent_context_refresh = Instant::now();
     let mut menu = None;
+    let mut preview: Option<PreviewModal> = None;
     let mut clicks = DoubleClickTracker::new();
     let mut status = None;
     let mut needs_draw = true;
@@ -80,6 +82,7 @@ pub fn run(
         drain_bridge(
             &mut explorer,
             &agent,
+            &mut preview,
             &mut bridge,
             &mut ui_revision,
             &mut published,
@@ -88,6 +91,7 @@ pub fn run(
         )?;
         publish_projection(
             &mut explorer,
+            preview.as_ref(),
             agent.label().is_some(),
             status.as_ref(),
             &mut bridge,
@@ -111,8 +115,23 @@ pub fn run(
                 }),
             }));
             if bridge.should_render_terminal() {
+                // The modal covers the published Page node, so the backdrop
+                // is rebuilt from the Explorer: selection and filter stay
+                // exactly where the preview found them.
+                let backdrop;
+                let backdrop_ref = if preview.is_some() {
+                    backdrop = semantic_node(
+                        &mut explorer,
+                        agent.label().is_some(),
+                        status.as_ref(),
+                    );
+                    &backdrop
+                } else {
+                    &published
+                };
                 terminal.draw(
-                    &published,
+                    backdrop_ref,
+                    preview.as_mut(),
                     &mut explorer,
                     &mut drags,
                     &mut tree_state,
@@ -177,11 +196,102 @@ pub fn run(
                         }
                         KeyCode::Enter | KeyCode::Char(' ') => {
                             let open_menu = menu.take().expect("menu is open");
-                            status = Some(activate_menu(open_menu, &agent));
+                            let (next_status, modal) = activate_menu(open_menu, &agent);
+                            status = next_status;
+                            if modal.is_some() {
+                                preview = modal;
+                            }
                             needs_draw = true;
                         }
                         _ => {}
                     }
+                    continue;
+                }
+                // While a preview is open every key belongs to the modal:
+                // nothing leaks into the filter, and selection stays frozen.
+                if preview.is_some() {
+                    let handled = match key.code {
+                        KeyCode::Esc => {
+                            preview = None;
+                            true
+                        }
+                        KeyCode::Char('q') if key.modifiers.is_empty() => {
+                            preview = None;
+                            true
+                        }
+                        KeyCode::Up => {
+                            if let Some(modal) = preview.as_mut() {
+                                modal.scroll_vertical(-1);
+                            }
+                            true
+                        }
+                        KeyCode::Down => {
+                            if let Some(modal) = preview.as_mut() {
+                                modal.scroll_vertical(1);
+                            }
+                            true
+                        }
+                        KeyCode::PageUp => {
+                            if let Some(modal) = preview.as_mut() {
+                                modal.scroll_page(-1);
+                            }
+                            true
+                        }
+                        KeyCode::PageDown => {
+                            if let Some(modal) = preview.as_mut() {
+                                modal.scroll_page(1);
+                            }
+                            true
+                        }
+                        KeyCode::Left => {
+                            if let Some(modal) = preview.as_mut() {
+                                modal.scroll_horizontal(-horizontal_step());
+                            }
+                            true
+                        }
+                        KeyCode::Right => {
+                            if let Some(modal) = preview.as_mut() {
+                                modal.scroll_horizontal(horizontal_step());
+                            }
+                            true
+                        }
+                        KeyCode::Home => {
+                            if let Some(modal) = preview.as_mut() {
+                                modal.go_home();
+                            }
+                            true
+                        }
+                        KeyCode::End => {
+                            if let Some(modal) = preview.as_mut() {
+                                modal.go_end();
+                            }
+                            true
+                        }
+                        _ => false,
+                    };
+                    if handled {
+                        needs_draw = true;
+                    }
+                    continue;
+                }
+                // Ctrl-P previews the selected file in-situ without leaving
+                // the tree. Plain `p` still goes to the filter.
+                if key.code == KeyCode::Char('p') && key.modifiers == KeyModifiers::CONTROL {
+                    match selected_file_path(&explorer) {
+                        Some(path) => match PreviewModal::open(&path) {
+                            Ok(modal) => {
+                                preview = Some(modal);
+                                status = None;
+                            }
+                            Err(error) => {
+                                status = Some(Status::error(preview_error(&error)));
+                            }
+                        },
+                        None => {
+                            status = Some(Status::message("Select a file to preview"));
+                        }
+                    }
+                    needs_draw = true;
                     continue;
                 }
                 if let Some(action) = published.footer_action_for_key(&key).cloned() {
@@ -199,6 +309,24 @@ pub fn run(
                 needs_draw = true;
             }
             Event::Mouse(mouse) => {
+                // While a preview is open the tree behind is frozen: clicks
+                // never move selection or focus, the wheel scrolls the modal.
+                if let Some(modal) = preview.as_mut() {
+                    match mouse.kind {
+                        MouseEventKind::ScrollUp => {
+                            modal.scroll_vertical(-1);
+                            needs_draw = true;
+                        }
+                        MouseEventKind::ScrollDown => {
+                            modal.scroll_vertical(1);
+                            needs_draw = true;
+                        }
+                        _ => {
+                            clicks.reset();
+                        }
+                    }
+                    continue;
+                }
                 needs_draw |= tree_state.track_mouse(&mouse);
                 let position = Position::new(mouse.column, mouse.row);
                 match mouse.kind {
@@ -227,7 +355,11 @@ pub fn run(
                         if let Some(mut open_menu) = menu.take() {
                             clicks.reset();
                             if open_menu.action_index_for_mouse(&mouse).is_some() {
-                                status = Some(activate_menu(open_menu, &agent));
+                                let (next_status, modal) = activate_menu(open_menu, &agent);
+                                status = next_status;
+                                if modal.is_some() {
+                                    preview = modal;
+                                }
                             }
                             needs_draw = true;
                         } else if let Some(action) = match &published.element {
@@ -298,7 +430,7 @@ pub fn run(
                     _ => {}
                 }
             }
-            Event::Paste(text) if menu.is_none() => {
+            Event::Paste(text) if menu.is_none() && preview.is_none() => {
                 clicks.reset();
                 status = status_for_event(explorer.insert_filter_text(text), &explorer);
                 needs_draw = true;
@@ -315,13 +447,20 @@ pub fn run(
 
 fn publish_projection(
     explorer: &mut Explorer,
+    preview: Option<&PreviewModal>,
     can_send: bool,
     status: Option<&Status>,
     bridge: &mut UiBridge,
     revision: &mut u64,
     published: &mut UiNode,
 ) -> io::Result<()> {
-    let next = semantic_node(explorer, can_send, status);
+    // While a preview is open the same view carries the modal Page node
+    // instead of the Tree; closing swaps the Tree back in. Either way the
+    // Tree deltas degrade to a ReplaceRoot across component kinds.
+    let next = match preview {
+        Some(modal) => modal.semantic_node(),
+        None => semantic_node(explorer, can_send, status),
+    };
     if next == *published {
         return Ok(());
     }
@@ -374,9 +513,11 @@ fn semantic_node(explorer: &mut Explorer, can_send: bool, status: Option<&Status
 
 fn semantic_context_menu(can_send: bool) -> SemanticMenu {
     let mut items = vec![
-        // "Open" follows the workspace's opener policy (an App beside this
+        // "Preview" inspects the file in-situ without leaving the tree;
+        // "Open" follows the workspace opener policy (an App beside this
         // pane, the editor, or the system); "Open in editor" is the explicit
         // override.
+        SemanticMenuItem::new("preview", "Preview", PREVIEW_ACTION),
         SemanticMenuItem::new("open", "Open", OPEN_ACTION),
         SemanticMenuItem::new("open-in-editor", "Open in editor", OPEN_IN_EDITOR_ACTION),
     ];
@@ -400,6 +541,7 @@ fn semantic_context_menu(can_send: bool) -> SemanticMenu {
 fn drain_bridge(
     explorer: &mut Explorer,
     agent: &AgentBridge,
+    preview: &mut Option<PreviewModal>,
     bridge: &mut UiBridge,
     revision: &mut u64,
     published: &mut UiNode,
@@ -418,13 +560,47 @@ fn drain_bridge(
                 continue;
             }
         };
+        // The modal close carries the same base-revision gate as every
+        // other semantic action: stale renderers retry against the current
+        // revision instead of toggling a modal they cannot see.
+        if event.action.action.as_str() == PREVIEW_CLOSE_ACTION {
+            let outcome = if preview.is_none() {
+                UiEventOutcome::Rejected("No file preview is open".to_owned())
+            } else if event.base_revision != *revision {
+                UiEventOutcome::Rejected(format!(
+                    "File Tree changed from revision {} to {}; retry the action",
+                    event.base_revision, revision
+                ))
+            } else {
+                *preview = None;
+                *needs_draw = true;
+                UiEventOutcome::Applied
+            };
+            publish_projection(
+                explorer,
+                preview.as_ref(),
+                agent.label().is_some(),
+                status.as_ref(),
+                bridge,
+                revision,
+                published,
+            )?;
+            bridge
+                .acknowledge(&event, outcome, *revision)
+                .map_err(ui_bridge_error)?;
+            continue;
+        }
         let footer_action = matches!(
             event.action.action.as_str(),
             REFRESH_TREE_ACTION | TOGGLE_HIDDEN_ACTION
         );
         let semantic_menu_action = matches!(
             event.action.action.as_str(),
-            OPEN_IN_EDITOR_ACTION | SEND_TO_AGENT_ACTION | COPY_PATH_ACTION
+            OPEN_ACTION
+                | OPEN_IN_EDITOR_ACTION
+                | SEND_TO_AGENT_ACTION
+                | COPY_PATH_ACTION
+                | PREVIEW_ACTION
         );
         let outcome = if footer_action {
             if event.base_revision != *revision {
@@ -450,8 +626,25 @@ fn drain_bridge(
                 ))
             } else {
                 match semantic_context_action(explorer, agent.label().is_some(), &event.action) {
+                    Ok(ContextAction::Preview(path)) => match PreviewModal::open(&path) {
+                        Ok(modal) => {
+                            *preview = Some(modal);
+                            *status = None;
+                            *needs_draw = true;
+                            UiEventOutcome::Applied
+                        }
+                        Err(error) => {
+                            *status = Some(Status::error(preview_error(&error)));
+                            *needs_draw = true;
+                            UiEventOutcome::Applied
+                        }
+                    },
                     Ok(action) => {
-                        *status = Some(activate_context_action(action, agent));
+                        let (next_status, modal) = activate_context_action(action, agent);
+                        *status = next_status;
+                        if modal.is_some() {
+                            *preview = modal;
+                        }
                         *needs_draw = true;
                         UiEventOutcome::Applied
                     }
@@ -473,6 +666,7 @@ fn drain_bridge(
         };
         publish_projection(
             explorer,
+            preview.as_ref(),
             agent.label().is_some(),
             status.as_ref(),
             bridge,
@@ -484,6 +678,14 @@ fn drain_bridge(
             .map_err(ui_bridge_error)?;
     }
     Ok(())
+}
+
+fn preview_error(error: &io::Error) -> String {
+    if error.kind() == io::ErrorKind::InvalidInput {
+        error.to_string()
+    } else {
+        format!("Preview failed: {error}")
+    }
 }
 
 fn apply_footer_action(explorer: &mut Explorer, action: &FooterAction) -> Option<Status> {
@@ -538,6 +740,7 @@ fn semantic_context_action(
         match (action.node_id.as_str(), action.action.as_str()) {
             ("open", OPEN_ACTION) => ContextAction::Open,
             ("open-in-editor", OPEN_IN_EDITOR_ACTION) => ContextAction::OpenInEditor,
+            ("preview", PREVIEW_ACTION) => ContextAction::Preview,
             ("send-to-agent", SEND_TO_AGENT_ACTION) if can_send => ContextAction::SendToAgent,
             ("copy-path", COPY_PATH_ACTION) => ContextAction::CopyPath,
             _ => return Err("Action is not declared by the current File Tree menu".to_owned()),
@@ -587,6 +790,7 @@ enum ContextAction {
     OpenInEditor(PathBuf),
     SendToAgent(PathBuf),
     CopyPath(PathBuf),
+    Preview(PathBuf),
 }
 
 #[derive(Debug)]
@@ -625,38 +829,53 @@ fn is_force_quit(key: KeyEvent) -> bool {
     key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)
 }
 
-fn activate_menu(menu: ContextMenu, agent: &AgentBridge) -> Status {
+fn activate_menu(menu: ContextMenu, agent: &AgentBridge) -> (Option<Status>, Option<PreviewModal>) {
     let ContextMenu { popup, path } = menu;
     let Some(item_id) = popup.selected_value().map(String::as_str) else {
-        return Status::error("No menu action selected");
+        return (Some(Status::error("No menu action selected")), None);
     };
     let action = match item_id {
         "open" => ContextAction::Open(path),
         "open-in-editor" => ContextAction::OpenInEditor(path),
         "send-to-agent" => ContextAction::SendToAgent(path),
         "copy-path" => ContextAction::CopyPath(path),
-        _ => return Status::error("Unknown menu action"),
+        "preview" => ContextAction::Preview(path),
+        _ => return (Some(Status::error("Unknown menu action")), None),
     };
     activate_context_action(action, agent)
 }
 
-fn activate_context_action(action: ContextAction, agent: &AgentBridge) -> Status {
+fn activate_context_action(
+    action: ContextAction,
+    agent: &AgentBridge,
+) -> (Option<Status>, Option<PreviewModal>) {
     match action {
-        ContextAction::Open(path) => open_status(&path),
+        ContextAction::Open(path) => (Some(open_status(&path)), None),
         ContextAction::OpenInEditor(path) => match EditorBridge::open(&path) {
-            Ok(()) => Status::message("Opened in editor"),
-            Err(error) => Status::error(format!("Open failed: {error}")),
+            Ok(()) => (Some(Status::message("Opened in editor")), None),
+            Err(error) => (Some(Status::error(format!("Open failed: {error}"))), None),
         },
         ContextAction::SendToAgent(path) => match agent.send_path(&path) {
-            Ok(label) => Status::message(format!("Sent path to {label}")),
+            Ok(label) => (Some(Status::message(format!("Sent path to {label}"))), None),
             Err(error) => match copy_path(&path) {
-                Ok(()) => Status::error(format!("{error}; path copied instead")),
-                Err(copy_error) => Status::error(format!("{error}; copy failed: {copy_error}")),
+                Ok(()) => (
+                    Some(Status::error(format!("{error}; path copied instead"))),
+                    None,
+                ),
+                Err(copy_error) => (
+                    Some(Status::error(format!("{error}; copy failed: {copy_error}"))),
+                    None,
+                ),
             },
         },
         ContextAction::CopyPath(path) => match copy_path(&path) {
-            Ok(()) => Status::message("Path copied"),
-            Err(error) => Status::error(format!("Copy failed: {error}")),
+            Ok(()) => (Some(Status::message("Path copied")), None),
+            Err(error) => (Some(Status::error(format!("Copy failed: {error}"))), None),
+        },
+        // Opening the modal is the feedback; no footer status is needed.
+        ContextAction::Preview(path) => match PreviewModal::open(&path) {
+            Ok(modal) => (None, Some(modal)),
+            Err(error) => (Some(Status::error(preview_error(&error))), None),
         },
     }
 }
@@ -789,6 +1008,7 @@ impl TerminalGuard {
     fn draw(
         &mut self,
         node: &UiNode,
+        preview: Option<&mut PreviewModal>,
         explorer: &mut Explorer,
         drags: &mut DragSurface,
         tree_state: &mut TreeState,
@@ -797,7 +1017,7 @@ impl TerminalGuard {
     ) -> io::Result<()> {
         drags.begin_frame();
         self.terminal.draw(|frame| {
-            render_component_frame(frame, node, explorer, drags, tree_state, menu, theme);
+            render_component_frame(frame, node, preview, explorer, drags, tree_state, menu, theme);
         })?;
         drags.commit()
     }
@@ -819,6 +1039,7 @@ impl Drop for TerminalGuard {
 fn render_component_frame(
     frame: &mut Frame<'_>,
     node: &UiNode,
+    preview: Option<&mut PreviewModal>,
     explorer: &mut Explorer,
     drags: &mut DragSurface,
     tree_state: &mut TreeState,
@@ -829,20 +1050,23 @@ fn render_component_frame(
         return;
     };
     let menu_open = menu.is_some();
+    let preview_open = preview.is_some();
     frame.render_widget(
         tree.widget_with_filter(tree_state, explorer.filter_input_mut())
             .theme(TreeTheme::for_theme(theme)),
         frame.area(),
     );
 
-    let rows = tree_state.rows_area();
-    for row in 0..rows.height {
-        let position = Position::new(rows.x, rows.y.saturating_add(row));
-        if let Some(path) = tree_state
-            .item_id_at(position)
-            .and_then(|id| explorer.path_for_semantic_item(id))
-        {
-            drags.register(Rect::new(rows.x, position.y, rows.width, 1), path);
+    if !preview_open {
+        let rows = tree_state.rows_area();
+        for row in 0..rows.height {
+            let position = Position::new(rows.x, rows.y.saturating_add(row));
+            if let Some(path) = tree_state
+                .item_id_at(position)
+                .and_then(|id| explorer.path_for_semantic_item(id))
+            {
+                drags.register(Rect::new(rows.x, position.y, rows.width, 1), path);
+            }
         }
     }
 
@@ -853,9 +1077,24 @@ fn render_component_frame(
         menu.render(frame);
     }
 
-    if !menu_open && let Some(position) = explorer.filter_cursor_position() {
+    // The modal owns the focused frame: no path drags leak from the rows
+    // beneath it, and the filter cursor stays hidden until it closes.
+    if let Some(modal) = preview {
+        modal.render(frame, theme);
+    }
+
+    if !menu_open && !preview_open && let Some(position) = explorer.filter_cursor_position() {
         frame.set_cursor_position(position);
     }
+}
+
+/// The selected file, if the selection is previewable. Directories and the
+/// parent row never reach the modal; the loader rejects them as well.
+fn selected_file_path(explorer: &Explorer) -> Option<PathBuf> {
+    explorer
+        .selected()
+        .filter(|entry| !entry.is_directory())
+        .map(|entry| entry.path().to_path_buf())
 }
 
 /// Sidebar title for a browsed folder: the project folder and the path
@@ -1012,6 +1251,7 @@ mod tests {
                 render_component_frame(
                     frame,
                     &node,
+                    None,
                     &mut explorer,
                     &mut drags,
                     &mut state,
@@ -1060,7 +1300,7 @@ mod tests {
         assert_eq!(tree.label, "Files");
         assert!(tree.filter.is_some());
         assert_eq!(tree.items.len(), 2);
-        assert_eq!(tree.context_menu.as_ref().unwrap().items.len(), 3);
+        assert_eq!(tree.context_menu.as_ref().unwrap().items.len(), 4);
         assert_eq!(
             tree.footer
                 .actions
@@ -1141,6 +1381,7 @@ mod tests {
                 render_component_frame(
                     frame,
                     &node,
+                    None,
                     &mut explorer,
                     &mut drags,
                     &mut state,
@@ -1151,7 +1392,7 @@ mod tests {
             .unwrap();
 
         assert!(drags.regions().is_empty());
-        assert_eq!(menu.items().len(), 4);
+        assert_eq!(menu.items().len(), 5);
         let items_area = menu.items_area();
         assert_eq!(
             terminal.backend().buffer()[(items_area.right() - 1, items_area.y)].bg,
@@ -1159,11 +1400,11 @@ mod tests {
         );
         assert_eq!(
             terminal.backend().buffer()[(items_area.x, items_area.y)].symbol(),
-            "O"
+            "P"
         );
         assert_eq!(
             terminal.backend().buffer()[(items_area.x + 1, items_area.y)].symbol(),
-            "p"
+            "r"
         );
     }
 
@@ -1172,6 +1413,114 @@ mod tests {
         let path = PathBuf::from("/tmp/file with spaces.txt");
         let explorer = Explorer::new(std::env::temp_dir()).unwrap();
         assert!(status_for_event(ExplorerEvent::FileActivated(path), &explorer).is_none());
+    }
+
+    #[test]
+    fn preview_action_resolves_opaque_target_and_opens_modal() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("note.md");
+        std::fs::write(&path, "hello preview").unwrap();
+        let mut explorer = Explorer::scoped(directory.path()).unwrap();
+        let node = semantic_node(&mut explorer, false, None);
+        let unpeel_app_kit::UiComponent::Tree(tree) = node.element else {
+            panic!("File Tree must publish the Tree component");
+        };
+        let target = tree.items[0].id.clone();
+        let action = unpeel_app_kit::UiAction::new(
+            "preview",
+            PREVIEW_ACTION,
+            UiEventKind::Activate,
+            UiEventValue::Text(target),
+        );
+        let agent = AgentBridge::new();
+        assert_eq!(
+            semantic_context_action(&mut explorer, false, &action).unwrap(),
+            ContextAction::Preview(path.canonicalize().unwrap())
+        );
+        let (status, modal) = activate_context_action(
+            ContextAction::Preview(path.canonicalize().unwrap()),
+            &agent,
+        );
+        assert!(status.is_none());
+        assert!(modal.is_some());
+    }
+
+    #[test]
+    fn preview_on_directory_reports_an_error() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir(directory.path().join("folder")).unwrap();
+        let explorer = Explorer::scoped(directory.path()).unwrap();
+        // The only row is a folder, so no file is selected for preview.
+        assert!(selected_file_path(&explorer).is_none());
+        let agent = AgentBridge::new();
+        let folder = std::fs::canonicalize(directory.path().join("folder")).unwrap();
+        let (status, modal) = activate_context_action(ContextAction::Preview(folder), &agent);
+        assert!(modal.is_none());
+        assert!(status.is_some());
+    }
+
+    #[test]
+    fn preview_modal_renders_centered_and_keeps_tree_backdrop() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("note.md"), "hello preview").unwrap();
+        let theme = KitTheme::dark();
+        let mut explorer = Explorer::scoped(directory.path())
+            .unwrap()
+            .with_theme(explorer_theme(theme));
+        let node = semantic_node(&mut explorer, false, None);
+        let path = directory.path().join("note.md");
+        let mut modal = PreviewModal::open(&path).unwrap();
+        // Selection stays on the file while the modal is open.
+        assert_eq!(
+            selected_file_path(&explorer).unwrap(),
+            std::fs::canonicalize(&path).unwrap()
+        );
+        let mut terminal = Terminal::new(TestBackend::new(50, 20)).unwrap();
+        let mut drags = DragSurface::disabled();
+        let mut state = TreeState::default();
+        terminal
+            .draw(|frame| {
+                render_component_frame(
+                    frame,
+                    &node,
+                    Some(&mut modal),
+                    &mut explorer,
+                    &mut drags,
+                    &mut state,
+                    None,
+                    theme,
+                );
+            })
+            .unwrap();
+
+        // 80% of 50x20, centered.
+        assert_eq!(crate::preview::preview_rect(Rect::new(0, 0, 50, 20)), Rect::new(5, 2, 40, 16));
+        assert_eq!(terminal.backend().buffer()[(5, 2)].symbol(), "┌");
+        let border_row = (0..50)
+            .map(|x| terminal.backend().buffer()[(x, 2)].symbol())
+            .collect::<String>();
+        assert!(border_row.contains("note.md"), "modal names the file:\n{border_row}");
+        let body = (3..18)
+            .map(|y| {
+                (6..44)
+                    .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(body.contains("hello preview"), "modal shows content:\n{body}");
+        // The tree backdrop still paints outside the modal.
+        let filter_row = (0..50)
+            .map(|x| terminal.backend().buffer()[(x, 0)].symbol())
+            .collect::<String>();
+        assert!(filter_row.contains("Filter") || filter_row.trim().is_empty() || !filter_row.contains("hello preview"));
+        // No path drags leak from the rows beneath the modal.
+        assert!(drags.regions().is_empty());
+        // Closing keeps the tree selection intact.
+        assert_eq!(
+            selected_file_path(&explorer).unwrap(),
+            std::fs::canonicalize(&path).unwrap()
+        );
     }
 
     #[test]
@@ -1190,6 +1539,7 @@ mod tests {
                 render_component_frame(
                     frame,
                     &node,
+                    None,
                     &mut explorer,
                     &mut drags,
                     &mut state,

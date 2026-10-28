@@ -70,6 +70,7 @@ Keyboard controls:
 
 - `↑` / `↓`: move; `↑` from the first row focuses the filter
 - `→` or `Enter`: enter the selected directory
+- `Ctrl-P`: preview the selected file in-situ without leaving the tree
 - `Home` / `End`: first / last item
 - `Page Up` / `Page Down`: move by one viewport
 - start typing anywhere in the Explorer to focus and write into the filter;
@@ -85,15 +86,26 @@ Keyboard controls:
 - `Ctrl-R`: refresh
 - `Ctrl-C`: quit
 
+While a file preview is open, the tree behind stays frozen: `↑` / `↓`
+scroll one line, `Page Up` / `Page Down` scroll a viewport, `←` / `→`
+scroll horizontally, `Home` / `End` jump to the first / last line, and
+`Esc` or `q` closes the modal with selection and filter intact. The
+mouse wheel scrolls the modal; other clicks are ignored until it closes.
+
 One click selects a file or folder. Double-click a folder (including `../`) to
 enter it, or a file to activate it. In the filter, click to place the native
 text cursor, drag to select text, Shift-click to extend a selection, and
 double-click to select a word. Right-click for the shared gray
-`PopupMenu`: it offers **Open in editor**, **Send to agent** when a same-group
-Unpeel agent is available, and **Copy path**. The shared editor action follows
-Unpeel's configured editor when hosted and the platform opener when standalone.
-Sending pastes a safe absolute path reference into the agent's input without
-pressing Enter.
+`PopupMenu`: it offers **Preview** (in-situ modal at 80% of the viewport
+with vertical and horizontal scroll), **Open in editor**, **Send to agent**
+when a same-group Unpeel agent is available, and **Copy path**. The shared
+editor action follows Unpeel's configured editor when hosted and the platform
+opener when standalone. Preview shows text files up to 512 KiB and 5,000
+lines (longer files truncate with a marker); binary, oversized, or unreadable
+files show a notice with the size and an "Open in editor" hint instead of
+hanging. Tabs expand to 4-column stops and control characters render as
+spaces. Sending pastes a safe absolute path reference into the agent's input
+without pressing Enter.
 
 The App enables mouse reporting in ordinary terminals as well as hosted panes.
 Inside Unpeel, the native terminal wrapper intercepts a mapped left-button
