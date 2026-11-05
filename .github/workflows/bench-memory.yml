@@ -11,6 +11,9 @@
 # with its own ceilings (linux_core_off / linux_core_on in the thresholds
 # file). `unpeel-attach` waits with epoll + inotify on Linux, so the
 # per-client row runs there too.
+# Keep the Linux runner on Ubuntu 24: its PSS ceilings were last passing
+# there. The ubuntu-latest move to 26 changed the OS/library baseline and
+# made both Linux startup rows fail even on the already-shipped 0.7.6.
 name: Memory benchmark
 
 on:
@@ -50,11 +53,11 @@ jobs:
             profile: core_on
             pty_core: '1'
             clients: '10'
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             profile: linux_core_off
             pty_core: '0'
             clients: '10'
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             profile: linux_core_on
             pty_core: '1'
             clients: '10'
