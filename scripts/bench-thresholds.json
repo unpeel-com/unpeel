@@ -21,7 +21,8 @@
   },
   "linux_core_off": {
     "_comment": "Linux rows are PSS from /proc/<pid>/smaps_rollup (shared library pages count proportionally, so (a) is ~14 MiB where macOS phys_footprint says ~5); seeded 2026-09-03 (Round 4, Lane 3) at 20% above the first real run: rust:1.88-bullseye arm64 container on Apple silicon, release binaries, small-page libghostty-vt Linux slices, unpeel-attach via epoll+inotify.",
-    "serve_plus_first_session_kib": 16900,
+    "_startup_baseline_077": "2026-11-05: the 0.7.7 libghostty update has a larger fixed Linux startup footprint despite smaller per-terminal grids. Pinned Ubuntu 24.04 x86_64 measured 17426 KiB (CI run 42039135890); 21000 is the same approximately 20% headroom used for the original seed. The already-shipped 0.7.6 also exceeded the old startup ceiling after ubuntu-latest moved to 26; benchmark runners are now pinned to 24. This is an explicit startup-cost tradeoff; per-session and exact reclamation limits remain separate guards.",
+    "serve_plus_first_session_kib": 21000,
     "per_empty_session_kib": 1270,
     "per_filled_session_kib": 1050,
     "per_client_kib": 34,
@@ -32,7 +33,8 @@
   },
   "linux_core_on": {
     "_comment": "Linux rows are PSS from /proc/<pid>/smaps_rollup (shared library pages count proportionally, so (a) is ~14 MiB where macOS phys_footprint says ~5); seeded 2026-09-03 (Round 4, Lane 3) at 20% above the first real run: rust:1.88-bullseye arm64 container on Apple silicon, release binaries, small-page libghostty-vt Linux slices, unpeel-attach via epoll+inotify. 2026-09-03 evening: core_after_teardown 10000\u219213500 after the first clean ubuntu-latest run settled at 10.99 MiB (container seed was 8.13 MiB); every other Linux row was inside its ceiling (per empty 0.04 MiB, per filled 0.42, per client 20 KiB). 2026-09-04: core_after_teardown 13500\u219218000 \u2014 ubuntu-latest settles anywhere from 9.3 to 15.1 MiB run to run on the same commit (glibc trim on a 2-core runner), so this row is a leak guard, not a precision gate; the per-session rows carry the precision.",
-    "serve_plus_first_session_kib": 16750,
+    "_startup_baseline_077": "2026-11-05: pinned Ubuntu 24.04 x86_64 measured 17893 KiB for 0.7.7 (CI run 42039135890); 21500 retains approximately 20% headroom for the larger fixed startup footprint after the libghostty update. The VT grid itself measured 9 KiB empty / 201 KiB filled, and its ceilings plus the per-session and exact reclamation limits are not reseeded.",
+    "serve_plus_first_session_kib": 21500,
     "per_empty_session_kib": 300,
     "per_filled_session_kib": 630,
     "per_client_kib": 31,

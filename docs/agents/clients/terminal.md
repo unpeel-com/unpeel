@@ -10,7 +10,9 @@ The native terminal is a **libghostty** surface (GhosttyKit), Metal-rendered, no
     sends the additive `{"type":"snapshot"}` control command; the Host renders
     its resident libghostty-vt state (cells, styles, wide chars, scrollback,
     every non-default mode, scroll region, tabstops, charsets, pen, cursor)
-    with the library's own VT formatter (`terminal_viewport::snapshot_vt`)
+    with the library's own VT formatter (`terminal_viewport::snapshot_vt`),
+    retaining blank bottom rows so replaying scrollback cannot shift the
+    restored viewport,
     and answers one JSON header line `{journal_offset, cols, rows,
     bytes_len}` followed by the raw bytes — offset capture and render happen
     under one viewport lock, so the offset is exactly where the snapshot's

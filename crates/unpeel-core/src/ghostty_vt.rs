@@ -181,7 +181,9 @@ impl GhosttyFormatterTerminalOptions {
             size: std::mem::size_of::<Self>(),
             emit: GHOSTTY_FORMATTER_FORMAT_VT,
             unwrap: true,
-            trim: true,
+            // Blank bottom rows position the viewport after scrollback.
+            // Trimming them pulls old history into a reattached screen.
+            trim: false,
             extra: GhosttyFormatterTerminalExtra {
                 size: std::mem::size_of::<GhosttyFormatterTerminalExtra>(),
                 palette: false,
