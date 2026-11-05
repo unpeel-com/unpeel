@@ -482,7 +482,9 @@ impl VtTerminal {
     /// reports; one of these tracking modes must be active for the child to
     /// own button gestures.
     fn mouse_reporting(&self) -> bool {
-        [9, 1000, 1002, 1003].into_iter().any(|mode| self.mode(mode))
+        [9, 1000, 1002, 1003]
+            .into_iter()
+            .any(|mode| self.mode(mode))
     }
 
     /// A DEC private mode by its raw number; unknown-mode errors read as

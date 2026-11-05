@@ -28,6 +28,13 @@ runtime never writes, fits, or pumps output for it. `SurfaceCache` records the
 `app-sessions` directory per pane and prunes only the displayed scope's dead
 sessions, so hopping between workspaces re-shows the same retained surface.
 
+Lifecycle and organization actions wait up to five seconds for the current
+Host connection to accept a bootstrap during recovery, before sending the
+request once. Switching or disconnecting the Host cancels that unsent intent;
+a timeout reports that nothing was sent. An effect with a lost receipt is
+never replayed. Cancelled bootstrap refreshes cannot publish a snapshot or
+mark their replacement refresh disconnected.
+
 Creating a local workspace registers it and immediately selects it in the
 current window through the loopback Host gateway. It does **not** implicitly
 launch another app instance. The workspace dots and Settings scope picker are

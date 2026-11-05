@@ -92,6 +92,7 @@ printed only when the check fails.
 | `pairing` | QR + pairing against the **shipped Swift crypto**, `unpeel pair` through the worker |
 | `approvals` | MCP approvals owned by the Host, answerable from a phone |
 | `host_launch_conformance` | native and headless launchers enter the same canonical Host runtime (71 conformance cases) |
+| `host_gateway_churn` | closed Controller connections release thread stacks while an existing Controller stays connected and can create sessions |
 | `cli` | headless verbs, including live agent-only restart vs stopped terminal Resume |
 | `browser_spawn` | Browser MCP engine launch from a Session |
 | `ctrlc_fallback` | Ctrl-C into a fresh preset Session lands in the fallback shell |

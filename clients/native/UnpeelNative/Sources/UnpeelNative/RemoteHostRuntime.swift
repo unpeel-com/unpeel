@@ -475,6 +475,7 @@ final class RemoteHostRuntime: ObservableObject {
     private var pinnedHostID: String?
     private var paneHostKey: String?
     private var connectionBootstrapped = false
+    private let organizationConnectionWait: Duration
     private var pairedPlan: PairedHostConnectionPlan?
     private var successfulLinkRefreshes = 0
     /// A transport may fail while an effect worker is unwinding. Retain every
@@ -642,6 +643,7 @@ final class RemoteHostRuntime: ObservableObject {
         fitSettleNanoseconds: UInt64 = 300_000_000,
         fitClearDelayNanoseconds: UInt64 = 20_000_000_000,
         optimisticCreatedSessionLifetime: Duration = .seconds(30),
+        organizationConnectionWait: Duration = .seconds(5),
         backendFactory: @escaping BackendFactory = { transport in
             switch transport {
             case let .ssh(target, expectedHostID, mode, secret):
@@ -699,6 +701,7 @@ final class RemoteHostRuntime: ObservableObject {
         fitSettleInterval = Double(fitSettleNanoseconds) / 1_000_000_000
         self.fitClearDelayNanoseconds = fitClearDelayNanoseconds
         self.optimisticCreatedSessionLifetime = optimisticCreatedSessionLifetime
+        self.organizationConnectionWait = organizationConnectionWait
         self.backendFactory = backendFactory
         self.paneCache = paneCache
         self.paneAttachmentProbe = paneAttachmentProbe
@@ -1354,7 +1357,7 @@ final class RemoteHostRuntime: ObservableObject {
             let attemptRecoveryEpoch = recoveryEpoch
             do {
                 let next = try await candidate.backend.bootstrap()
-                guard isCurrent(candidate) else { return }
+                guard isCurrent(candidate), !Task.isCancelled else { return }
                 // A terminal/output/effect failure may have happened while
                 // this health poll was in flight. Only a bootstrap that began
                 // afterward is allowed to reopen remote I/O.
@@ -1384,7 +1387,7 @@ final class RemoteHostRuntime: ObservableObject {
             } catch is CancellationError {
                 return
             } catch {
-                guard isCurrent(candidate) else { return }
+                guard isCurrent(candidate), !Task.isCancelled else { return }
                 if retireForTerminalError(error, matching: candidate) {
                     return
                 }
@@ -4064,21 +4067,44 @@ extension RemoteHostRuntime {
         operation: String,
         _ body: (any NativeRemoteBackendProtocol) async throws -> Void
     ) async throws {
-        let (connection, _) = try requireConnection(
-            capability: capability,
-            operation: operation
-        )
+        guard let connection else {
+            throw RemoteHostVerbError(
+                operation: operation,
+                message: "This Host is not connected.",
+                outcomeIsUnknown: false
+            )
+        }
         // A predecessor connection to the same Host may still be unwinding
         // its effect tail; organization effects respect the same start
         // barrier as terminal effects so they cannot overtake it.
         await connection.effectStartBarrier?.value
-        guard isCurrent(connection), connectionBootstrapped else {
+        // The terminal can remain visible through a temporary control-plane
+        // outage. Wait for the normal bootstrap loop before the FIRST send;
+        // never replay an effect or carry it into another connection/scope.
+        let deadline = ContinuousClock.now + organizationConnectionWait
+        if isCurrent(connection), !connectionBootstrapped {
+            requestImmediateRefresh()
+        }
+        while isCurrent(connection), !connectionBootstrapped,
+              ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        try Task.checkCancellation()
+        guard isCurrent(connection) else {
             throw RemoteHostVerbError(
                 operation: operation,
                 message: "The Host connection changed before \(operation) was sent.",
                 outcomeIsUnknown: false
             )
         }
+        guard connectionBootstrapped else {
+            throw RemoteHostVerbError(
+                operation: operation,
+                message: "This Host is still reconnecting. The request was not sent. Try again when it reconnects.",
+                outcomeIsUnknown: false
+            )
+        }
+        _ = try requireConnection(capability: capability, operation: operation)
         do {
             try await body(connection.backend)
             refreshAfterOrganizationVerb(connection)

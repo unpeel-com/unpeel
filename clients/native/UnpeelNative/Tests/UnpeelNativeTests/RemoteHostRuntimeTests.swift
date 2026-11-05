@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import Testing
 import XCTest
 import UnpeelShared
 @testable import UnpeelNative
@@ -3234,6 +3235,7 @@ private actor ControlledRemoteBackend: NativeRemoteBackendProtocol {
     private(set) var effectCalls: [ControlledEffectCall] = []
     private(set) var resetSessionIDs: [String] = []
     private(set) var organizationCalls: [String] = []
+    private var removalError: NativeRemoteBackendError?
     private(set) var projectOrganizationPatches: [RemoteProjectOrganizationPatch] = []
 
     init(
@@ -3265,6 +3267,14 @@ private actor ControlledRemoteBackend: NativeRemoteBackendProtocol {
             pendingBootstraps.append(result)
         } else {
             bootstrapContinuations.removeFirst().resume(with: result)
+        }
+    }
+
+    func cancelPendingBootstraps() {
+        let continuations = bootstrapContinuations
+        bootstrapContinuations.removeAll()
+        for continuation in continuations {
+            continuation.resume(throwing: CancellationError())
         }
     }
 
@@ -3440,7 +3450,12 @@ private actor ControlledRemoteBackend: NativeRemoteBackendProtocol {
 
     func removeSession(sessionID: String) async throws -> NativeRemoteEffectReceipt {
         organizationCalls.append("remove:\(sessionID)")
+        if let removalError { throw removalError }
         return NativeRemoteEffectReceipt(requestID: 905)
+    }
+
+    func failRemovals(with error: NativeRemoteBackendError) {
+        removalError = error
     }
 
     func restartSession(sessionID: String) async throws -> NativeRemoteEffectReceipt {
@@ -3558,4 +3573,261 @@ private enum ControlledEffectCall: Equatable, Sendable {
 
 private enum ControlledRemoteBackendError: Error {
     case pageAlreadyResolved
+}
+
+@MainActor
+struct RemoteHostRemovalRecoveryTests {
+    enum Action: CaseIterable, Sendable {
+        case remove, create
+
+        var expectedCall: String {
+            switch self {
+            case .remove: "remove:session"
+            case .create: "create:project:preset"
+            }
+        }
+
+        @MainActor
+        func perform(on runtime: RemoteHostRuntime) async throws {
+            switch self {
+            case .remove: try await runtime.removeSession("session")
+            case .create: _ = try await runtime.createSession(projectID: "project", presetID: "preset")
+            }
+        }
+    }
+
+    enum Route: CaseIterable, Sendable {
+        case localService, localWorkspace, ssh
+
+        @MainActor
+        func connect(_ runtime: RemoteHostRuntime, hostID: String = "host") {
+            switch self {
+            case .localService:
+                runtime.connectLocalService(home: "/tmp/removal", name: "Host", expectedHostID: hostID)
+            case .localWorkspace:
+                runtime.connectLocalWorkspace(home: "/tmp/removal", name: "Host", expectedHostID: hostID)
+            case .ssh:
+                runtime.connectSSH(target: "ssh://host", expectedHostID: hostID)
+            }
+        }
+    }
+
+    @Test(arguments: Route.allCases, Action.allCases)
+    func sessionActionWaitsForInitialBootstrap(route: Route, action: Action) async throws {
+        let backend = ControlledRemoteBackend()
+        let runtime = makeRuntime(backend)
+        defer { runtime.disconnect() }
+        route.connect(runtime)
+        try await waitUntil { await backend.bootstrapCount == 1 }
+        runtime.seedSnapshot(snapshot())
+
+        var started = false
+        let removal = Task {
+            started = true
+            try await action.perform(on: runtime)
+        }
+        try await waitUntil { started }
+        #expect(await backend.organizationCalls.isEmpty)
+        await backend.resolveBootstrap(.success(snapshot()))
+        try await removal.value
+        #expect(await backend.organizationCalls == [action.expectedCall])
+        runtime.disconnect()
+        await backend.cancelPendingBootstraps()
+    }
+
+    @Test(arguments: Route.allCases, Action.allCases)
+    func sessionActionWaitsForTransientRecovery(route: Route, action: Action) async throws {
+        let backend = ControlledRemoteBackend()
+        let runtime = makeRuntime(backend)
+        defer { runtime.disconnect() }
+        route.connect(runtime)
+        try await waitUntil { await backend.bootstrapCount == 1 }
+        await backend.resolveBootstrap(.success(snapshot()))
+        try await waitUntil { runtime.connectionState == .connected(name: "Host") }
+        runtime.requestImmediateRefresh()
+        try await waitUntil { await backend.bootstrapCount == 2 }
+        await backend.resolveBootstrap(.failure(unreachable()))
+        try await waitUntil {
+            if case .reconnecting = runtime.connectionState { return true }
+            return false
+        }
+
+        let removal = Task { try await action.perform(on: runtime) }
+        try await waitUntil { await backend.bootstrapCount == 3 }
+        #expect(await backend.organizationCalls.isEmpty)
+        await backend.resolveBootstrap(.success(snapshot()))
+        try await removal.value
+        #expect(await backend.organizationCalls == [action.expectedCall])
+        runtime.disconnect()
+        await backend.cancelPendingBootstraps()
+    }
+
+    @Test
+    func unavailableHostTimesOutWithoutRemovingAnything() async throws {
+        let backend = ControlledRemoteBackend()
+        let runtime = makeRuntime(backend, wait: .milliseconds(30))
+        defer { runtime.disconnect() }
+        Route.localService.connect(runtime)
+        try await waitUntil { await backend.bootstrapCount == 1 }
+        runtime.seedSnapshot(snapshot())
+        do {
+            try await runtime.removeSession("session")
+            Issue.record("An unavailable Host must not receive Remove")
+        } catch let error as RemoteHostVerbError {
+            #expect(!error.outcomeIsUnknown)
+            #expect(error.message.contains("not sent"))
+        }
+        #expect(await backend.organizationCalls.isEmpty)
+        #expect(runtime.snapshot?.macID == "host")
+        runtime.disconnect()
+        await backend.cancelPendingBootstraps()
+    }
+
+    @Test
+    func hostSwitchCancelsUnsentRemoval() async throws {
+        let backend = ControlledRemoteBackend()
+        let runtime = makeRuntime(backend)
+        defer { runtime.disconnect() }
+        Route.localService.connect(runtime)
+        try await waitUntil { await backend.bootstrapCount == 1 }
+        var started = false
+        let removal = Task {
+            started = true
+            try await runtime.removeSession("session")
+        }
+        try await waitUntil { started }
+        runtime.disconnect()
+        await backend.cancelPendingBootstraps()
+        Route.localWorkspace.connect(runtime, hostID: "other-host")
+        try await waitUntil { await backend.bootstrapCount == 2 }
+        await backend.resolveBootstrap(.success(snapshot(hostID: "other-host")))
+        try await waitUntil { runtime.connectionState == .connected(name: "Host") }
+        do {
+            try await removal.value
+            Issue.record("Remove must not follow a Host switch")
+        } catch let error as RemoteHostVerbError {
+            #expect(!error.outcomeIsUnknown)
+        }
+        #expect(await backend.organizationCalls.isEmpty)
+        runtime.disconnect()
+        await backend.cancelPendingBootstraps()
+    }
+
+    @Test
+    func cancelledRemovalIsNeverSentAfterRecovery() async throws {
+        let backend = ControlledRemoteBackend()
+        let runtime = makeRuntime(backend)
+        defer { runtime.disconnect() }
+        Route.localService.connect(runtime)
+        try await waitUntil { await backend.bootstrapCount == 1 }
+        var started = false
+        let removal = Task {
+            started = true
+            try await runtime.removeSession("session")
+        }
+        try await waitUntil { started }
+        removal.cancel()
+        await backend.resolveBootstrap(.success(snapshot()))
+        try await waitUntil { runtime.connectionState == .connected(name: "Host") }
+        do {
+            try await removal.value
+            Issue.record("A cancelled Remove must not be sent")
+        } catch is CancellationError {}
+        #expect(await backend.organizationCalls.isEmpty)
+        runtime.disconnect()
+        await backend.cancelPendingBootstraps()
+    }
+
+    @Test(arguments: ["notApplied", "outcomeUnknown"])
+    func dispatchedRemovalIsNotRetried(kind: String) async throws {
+        let backend = ControlledRemoteBackend()
+        let runtime = makeRuntime(backend)
+        defer { runtime.disconnect() }
+        Route.localService.connect(runtime)
+        try await waitUntil { await backend.bootstrapCount == 1 }
+        await backend.resolveBootstrap(.success(snapshot()))
+        try await waitUntil { runtime.connectionState == .connected(name: "Host") }
+        await backend.failRemovals(with: NativeRemoteBackendError(
+            result: -1, code: "host_connection_disconnected", message: "Receipt lost",
+            kind: kind, operation: "remove"
+        ))
+        do {
+            try await runtime.removeSession("session")
+            Issue.record("The delivery failure must reach the caller")
+        } catch let error as RemoteHostVerbError {
+            #expect(error.outcomeIsUnknown == (kind == "outcomeUnknown"))
+        }
+        if kind == "outcomeUnknown" {
+            try await waitUntil { await backend.bootstrapCount == 2 }
+            await backend.resolveBootstrap(.success(snapshot()))
+        }
+        #expect(await backend.organizationCalls == ["remove:session"])
+        runtime.disconnect()
+        await backend.cancelPendingBootstraps()
+    }
+
+    @Test
+    func cancelledRefreshFailureCannotDisconnectCurrentHost() async throws {
+        let backend = ControlledRemoteBackend()
+        let runtime = makeRuntime(backend)
+        defer { runtime.disconnect() }
+        Route.localService.connect(runtime)
+        try await waitUntil { await backend.bootstrapCount == 1 }
+        await backend.resolveBootstrap(.success(snapshot()))
+        try await waitUntil { runtime.connectionState == .connected(name: "Host") }
+        runtime.requestImmediateRefresh()
+        try await waitUntil { await backend.bootstrapCount == 2 }
+        try await runtime.renameSession("session", to: "Renamed")
+        try await waitUntil { await backend.bootstrapCount == 3 }
+        var disconnected = false
+        let observer = runtime.$connectionState.sink {
+            if case .reconnecting = $0 { disconnected = true }
+        }
+        await backend.resolveBootstrap(.failure(unreachable()))
+        try await Task.sleep(for: .milliseconds(20))
+        await backend.resolveBootstrap(.success(snapshot()))
+        try await runtime.removeSession("session")
+        #expect(!disconnected)
+        observer.cancel()
+        runtime.disconnect()
+        await backend.cancelPendingBootstraps()
+    }
+
+    private func makeRuntime(
+        _ backend: ControlledRemoteBackend,
+        wait: Duration = .seconds(1)
+    ) -> RemoteHostRuntime {
+        RemoteHostRuntime(
+            refreshIntervalNanoseconds: 60_000_000_000,
+            organizationConnectionWait: wait,
+            backendFactory: { _ in backend }
+        )
+    }
+
+    private func snapshot(hostID: String = "host") -> RemoteBootstrapSnapshot {
+        RemoteBootstrapSnapshot(
+            hostProtocol: RemoteHostProtocolDescriptor(capabilities: [
+                "host.bootstrap", "session.output.read",
+                RemoteHostRuntime.HostOperation.remove,
+                RemoteHostRuntime.HostOperation.create,
+                RemoteHostRuntime.HostOperation.titleSet,
+            ]),
+            macID: hostID, macName: "Host", folders: [], projects: [], presets: [],
+            sessions: [], capturedAtUnixMs: 1
+        )
+    }
+
+    private func unreachable() -> NativeRemoteBackendError {
+        NativeRemoteBackendError(
+            result: -1, code: "host_connection_disconnected", message: "Gateway temporarily unavailable"
+        )
+    }
+
+    private func waitUntil(_ predicate: () async -> Bool) async throws {
+        for _ in 0..<1_000 {
+            if await predicate() { return }
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        try #require(await predicate(), "Timed out waiting for asynchronous state")
+    }
 }

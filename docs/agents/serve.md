@@ -97,6 +97,14 @@ restart/resume, rename, pin, move, and project/Session ordering. Once the
 Local client starts, semantic effects fail closed during worker recovery;
 an unavailable socket cannot silently reactivate the duplicate Swift engine.
 
+The local gateway reaps completed connection workers on every accept-loop
+iteration, including while idle. Only finished threads are joined; live
+Controllers keep their existing sockets. Retaining completed `JoinHandle`s
+until shutdown retained pthread stacks on macOS, so a Host running for days
+could accumulate gigabytes of stack memory and time out new connections.
+`host_gateway_churn.py` exercises 200 short-lived connections while keeping
+one Controller connected and verifies stack reclamation on macOS.
+
 Pairing and paired-device administration also use the live worker's reserved
 local control route: begin/status/cancel, list sanitized devices, revoke, and
 toggle per-device Link allowance. The app never constructs
