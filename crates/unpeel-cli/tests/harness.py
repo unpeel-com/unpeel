@@ -1524,6 +1524,13 @@ class Case:
         # be bound to this home. A stray one is a leak: fail the case, then
         # kill it so it cannot poison the next case's home.
         leftovers = leftover_host_processes(self.home.root)
+        # A detached Host may finish between the ownership probe and ps,
+        # briefly appearing as <defunct> while its parent reaps it. Give
+        # teardown a bounded grace period; a persistent leftover still fails.
+        deadline = time.monotonic() + 3
+        while leftovers and time.monotonic() < deadline:
+            time.sleep(0.05)
+            leftovers = leftover_host_processes(self.home.root)
         self.check(
             "no leftover session hosts / mcp sidecars under the home",
             not leftovers,
