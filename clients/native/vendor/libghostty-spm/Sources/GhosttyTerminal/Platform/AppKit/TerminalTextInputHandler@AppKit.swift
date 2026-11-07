@@ -89,8 +89,23 @@
             syncPreedit()
         }
 
+        /// The caret a terminal reports while nothing is being composed.
+        nonisolated static let idleSelectedRange = NSRange(location: 0, length: 0)
+
         func currentSelectedRange() -> NSRange {
-            markedTextState.currentSelectedRange
+            Self.selectedRange(for: markedTextState)
+        }
+
+        /// `NSTextInputClient.selectedRange()` must stay a real range: macOS
+        /// dictation will not start in a client that reports
+        /// `{NSNotFound, 0}` (Emacs 30 lost dictation the same way). While
+        /// composing, the caret inside the marked text still wins so IME
+        /// candidate placement is unchanged.
+        nonisolated static func selectedRange(
+            for state: TerminalMarkedTextState
+        ) -> NSRange {
+            guard state.hasMarkedText else { return idleSelectedRange }
+            return state.currentSelectedRange
         }
 
         func markedRange() -> NSRange {
