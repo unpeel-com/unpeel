@@ -62,155 +62,65 @@ pub struct GhosttyColorRgb {
     pub b: u8,
 }
 
-// GhosttyStyleColor (tagged union, 8-byte aligned union payload).
-pub const GHOSTTY_STYLE_COLOR_NONE: c_int = 0;
-pub const GHOSTTY_STYLE_COLOR_PALETTE: c_int = 1;
-pub const GHOSTTY_STYLE_COLOR_RGB: c_int = 2;
+// GhosttyStyleColor: a byte tag and a three-byte color payload.
+pub const GHOSTTY_STYLE_COLOR_NONE: u8 = 0;
+pub const GHOSTTY_STYLE_COLOR_PALETTE: u8 = 1;
+pub const GHOSTTY_STYLE_COLOR_RGB: u8 = 2;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub union GhosttyStyleColorValue {
     pub palette: u8,
     pub rgb: GhosttyColorRgb,
-    pub _padding: u64,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct GhosttyStyleColor {
-    pub tag: c_int,
+    pub tag: u8,
     pub value: GhosttyStyleColorValue,
 }
 
+/// Fixed 16-byte style in the stable 1.0 C ABI.
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub struct GhosttyStyle {
-    pub size: usize,
     pub fg_color: GhosttyStyleColor,
     pub bg_color: GhosttyStyleColor,
     pub underline_color: GhosttyStyleColor,
-    pub bold: bool,
-    pub italic: bool,
-    pub faint: bool,
-    pub blink: bool,
-    pub inverse: bool,
-    pub invisible: bool,
-    pub strikethrough: bool,
-    pub overline: bool,
-    pub underline: c_int,
+    pub flags: u16,
+    pub reserved: u16,
 }
 
-impl GhosttyStyle {
-    pub fn zeroed_sized() -> Self {
-        let mut style: Self = unsafe { std::mem::zeroed() };
-        style.size = std::mem::size_of::<Self>();
-        style
-    }
-}
-
-// GhosttyFormatterFormat.
-pub const GHOSTTY_FORMATTER_FORMAT_PLAIN: c_int = 0;
-pub const GHOSTTY_FORMATTER_FORMAT_VT: c_int = 1;
-pub const GHOSTTY_FORMATTER_FORMAT_HTML: c_int = 2;
-
-/// Screen-level extras the VT formatter emits after the screen content
-/// (`GhosttyFormatterScreenExtra`); every flag is only honoured for
-/// `GHOSTTY_FORMATTER_FORMAT_VT`.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct GhosttyFormatterScreenExtra {
-    pub size: usize,
-    /// Cursor position via CUP.
-    pub cursor: bool,
-    /// The cursor's active SGR pen.
-    pub style: bool,
-    /// Active OSC 8 hyperlink.
-    pub hyperlink: bool,
-    /// DECSCA protection.
-    pub protection: bool,
-    /// Kitty keyboard protocol flags.
-    pub kitty_keyboard: bool,
-    /// Charset designations and invocations.
-    pub charsets: bool,
-}
-
-/// Terminal-level extras (`GhosttyFormatterTerminalExtra`): modes and the
-/// palette are emitted BEFORE the content, scrolling region / tabstops /
-/// keyboard / pwd after it.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct GhosttyFormatterTerminalExtra {
-    pub size: usize,
-    /// OSC 4 palette entries.
-    pub palette: bool,
-    /// Every mode that differs from its default, as CSI h/l.
-    pub modes: bool,
-    /// DECSTBM / DECSLRM.
-    pub scrolling_region: bool,
-    /// Clear all tabs then HTS each configured stop.
-    pub tabstops: bool,
-    /// OSC 7.
-    pub pwd: bool,
-    /// ModifyOtherKeys.
-    pub keyboard: bool,
-    pub screen: GhosttyFormatterScreenExtra,
-}
-
-/// `GhosttyFormatterTerminalOptions`. `selection` NULL formats the whole
-/// active screen (scrollback included).
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct GhosttyFormatterTerminalOptions {
-    pub size: usize,
-    pub emit: c_int,
-    pub unwrap: bool,
-    pub trim: bool,
-    pub extra: GhosttyFormatterTerminalExtra,
-    pub selection: *const std::ffi::c_void,
-}
-
-impl GhosttyFormatterTerminalOptions {
-    /// Options that reconstruct the active screen as VT bytes on a fresh
-    /// terminal: content with per-cell styles plus modes, scrolling region,
-    /// tabstops, keyboard flags, charsets, the cursor pen, and the cursor
-    /// (the formatter owns the ordering; the cursor always comes last).
-    /// The palette and OSC 7 are deliberately NOT emitted — the client
-    /// terminal's theme and cwd are its own.
-    pub fn vt_state_snapshot() -> Self {
+impl Default for GhosttyStyleColor {
+    fn default() -> Self {
         Self {
-            size: std::mem::size_of::<Self>(),
-            emit: GHOSTTY_FORMATTER_FORMAT_VT,
-            unwrap: true,
-            // Blank bottom rows position the viewport after scrollback.
-            // Trimming them pulls old history into a reattached screen.
-            trim: false,
-            extra: GhosttyFormatterTerminalExtra {
-                size: std::mem::size_of::<GhosttyFormatterTerminalExtra>(),
-                palette: false,
-                modes: true,
-                scrolling_region: true,
-                tabstops: true,
-                pwd: false,
-                keyboard: true,
-                screen: GhosttyFormatterScreenExtra {
-                    size: std::mem::size_of::<GhosttyFormatterScreenExtra>(),
-                    cursor: true,
-                    style: true,
-                    hyperlink: true,
-                    protection: true,
-                    kitty_keyboard: true,
-                    charsets: true,
-                },
+            tag: GHOSTTY_STYLE_COLOR_NONE,
+            value: GhosttyStyleColorValue {
+                rgb: GhosttyColorRgb::default(),
             },
-            selection: std::ptr::null(),
         }
     }
 }
 
+pub const GHOSTTY_STYLE_FLAG_BOLD: u16 = 1 << 0;
+pub const GHOSTTY_STYLE_FLAG_INVERSE: u16 = 1 << 4;
+
+// GhosttyFormatterOption. Values are copied by ghostty_formatter_set.
+pub const GHOSTTY_FORMATTER_OPT_EMIT: c_int = 1;
+pub const GHOSTTY_FORMATTER_OPT_UNWRAP: c_int = 2;
+pub const GHOSTTY_FORMATTER_OPT_TRIM: c_int = 3;
+pub const GHOSTTY_FORMATTER_OPT_EXTRAS: c_int = 5;
+pub const GHOSTTY_FORMATTER_FORMAT_VT: c_int = 1;
+
+/// Restore modes, margins, tabs, keyboard, cursor, pen, hyperlink,
+/// protection and charsets. Leave palette and cwd to the Controller.
+pub const GHOSTTY_FORMATTER_EXTRAS_SNAPSHOT: u32 = 0xFFF & !((1 << 0) | (1 << 4));
+
 // GhosttyTerminalOption (ghostty_terminal_set keys).
 /// Scrollback page-storage budget in bytes (`size_t*`); pruned at page
 /// granularity. Zero disables scrollback.
-pub const GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES: c_int = 27;
+pub const GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES: c_int = 28;
 
 /// Packed mode id (`typedef uint16_t GhosttyMode`): the numeric value in the
 /// low 15 bits, the ANSI flag in the top bit (clear for DEC private modes).
@@ -340,7 +250,7 @@ extern "C" {
     pub fn ghostty_terminal_scroll_viewport(
         terminal: GhosttyTerminal,
         behavior: GhosttyTerminalScrollViewport,
-    );
+    ) -> GhosttyResult;
     pub fn ghostty_terminal_get(
         terminal: GhosttyTerminal,
         data: c_int,
@@ -398,13 +308,19 @@ extern "C" {
 
     pub fn ghostty_type_json() -> *const c_char;
 
-    /// Formatter over a terminal's active screen. `options` is passed by
-    /// value (the C signature takes the struct, not a pointer).
+    pub fn ghostty_version() -> *const c_char;
+    pub fn ghostty_build_info(data: c_int, out: *mut std::ffi::c_void) -> GhosttyResult;
+
+    /// Formatter over a terminal's active screen; configure it with set().
     pub fn ghostty_formatter_terminal_new(
         allocator: *const std::ffi::c_void,
         formatter: *mut GhosttyFormatter,
         terminal: GhosttyTerminal,
-        options: GhosttyFormatterTerminalOptions,
+    ) -> GhosttyResult;
+    pub fn ghostty_formatter_set(
+        formatter: GhosttyFormatter,
+        option: c_int,
+        value: *const std::ffi::c_void,
     ) -> GhosttyResult;
     /// Format into a caller buffer. `GHOSTTY_OUT_OF_SPACE` reports the
     /// required size in `out_written` (a NULL/zero buffer is a size query).
@@ -421,12 +337,230 @@ extern "C" {
 mod tests {
     use super::*;
 
+    #[test]
+    fn stable_release_and_required_features() {
+        let version = unsafe { std::ffi::CStr::from_ptr(ghostty_version()) };
+        assert_eq!(version.to_str().unwrap(), "1.0.0");
+        // SIMD, snapshot, formatter, render-state and grid introspection.
+        for feature in [1, 11, 12, 15, 18] {
+            let mut enabled = false;
+            assert_eq!(
+                unsafe { ghostty_build_info(feature, &mut enabled as *mut _ as *mut _) },
+                GHOSTTY_SUCCESS
+            );
+            assert!(enabled, "required libghostty feature {feature}");
+        }
+    }
+
     fn layout(json: &serde_json::Value, name: &str) -> (usize, usize) {
         let entry = &json["types"][name];
         (
             entry["size"].as_u64().expect("size") as usize,
             entry["align"].as_u64().expect("align") as usize,
         )
+    }
+
+    #[test]
+    fn enum_values_match_type_json() {
+        let raw = unsafe { std::ffi::CStr::from_ptr(ghostty_type_json()) };
+        let json: serde_json::Value = serde_json::from_str(raw.to_str().unwrap()).unwrap();
+        for (flag, field) in [
+            (GHOSTTY_STYLE_FLAG_BOLD, "bold"),
+            (GHOSTTY_STYLE_FLAG_INVERSE, "inverse"),
+        ] {
+            let bit = json["types"]["GhosttyStyleFlags"]["bits"][field]["lsb"]
+                .as_u64()
+                .unwrap();
+            assert_eq!(u64::from(flag), 1 << bit, "style flag {field}");
+        }
+        for (ty, key, value) in [
+            (
+                "GhosttyTerminalScrollViewportTag",
+                "TOP",
+                GHOSTTY_SCROLL_VIEWPORT_TOP as i64,
+            ),
+            (
+                "GhosttyTerminalScrollViewportTag",
+                "BOTTOM",
+                GHOSTTY_SCROLL_VIEWPORT_BOTTOM as i64,
+            ),
+            (
+                "GhosttyTerminalScrollViewportTag",
+                "DELTA",
+                GHOSTTY_SCROLL_VIEWPORT_DELTA as i64,
+            ),
+            (
+                "GhosttyTerminalScrollViewportTag",
+                "ROW",
+                GHOSTTY_SCROLL_VIEWPORT_ROW as i64,
+            ),
+            ("GhosttyResult", "SUCCESS", GHOSTTY_SUCCESS as i64),
+            ("GhosttyResult", "OUT_OF_SPACE", GHOSTTY_OUT_OF_SPACE as i64),
+            ("GhosttyResult", "NO_VALUE", GHOSTTY_NO_VALUE as i64),
+            (
+                "GhosttyStyleColorTag",
+                "NONE",
+                GHOSTTY_STYLE_COLOR_NONE as i64,
+            ),
+            (
+                "GhosttyStyleColorTag",
+                "PALETTE",
+                GHOSTTY_STYLE_COLOR_PALETTE as i64,
+            ),
+            (
+                "GhosttyStyleColorTag",
+                "RGB",
+                GHOSTTY_STYLE_COLOR_RGB as i64,
+            ),
+            (
+                "GhosttyFormatterOption",
+                "EMIT",
+                GHOSTTY_FORMATTER_OPT_EMIT as i64,
+            ),
+            (
+                "GhosttyFormatterOption",
+                "UNWRAP",
+                GHOSTTY_FORMATTER_OPT_UNWRAP as i64,
+            ),
+            (
+                "GhosttyFormatterOption",
+                "TRIM",
+                GHOSTTY_FORMATTER_OPT_TRIM as i64,
+            ),
+            (
+                "GhosttyFormatterOption",
+                "EXTRAS",
+                GHOSTTY_FORMATTER_OPT_EXTRAS as i64,
+            ),
+            (
+                "GhosttyFormatterFormat",
+                "VT",
+                GHOSTTY_FORMATTER_FORMAT_VT as i64,
+            ),
+            (
+                "GhosttyTerminalOption",
+                "SCROLLBACK_MAX_BYTES",
+                GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES as i64,
+            ),
+            (
+                "GhosttyTerminalData",
+                "COLS",
+                GHOSTTY_TERMINAL_DATA_COLS as i64,
+            ),
+            (
+                "GhosttyTerminalData",
+                "ROWS",
+                GHOSTTY_TERMINAL_DATA_ROWS as i64,
+            ),
+            (
+                "GhosttyTerminalData",
+                "CURSOR_X",
+                GHOSTTY_TERMINAL_DATA_CURSOR_X as i64,
+            ),
+            (
+                "GhosttyTerminalData",
+                "CURSOR_Y",
+                GHOSTTY_TERMINAL_DATA_CURSOR_Y as i64,
+            ),
+            (
+                "GhosttyTerminalData",
+                "CURSOR_PENDING_WRAP",
+                GHOSTTY_TERMINAL_DATA_CURSOR_PENDING_WRAP as i64,
+            ),
+            (
+                "GhosttyTerminalData",
+                "ACTIVE_SCREEN",
+                GHOSTTY_TERMINAL_DATA_ACTIVE_SCREEN as i64,
+            ),
+            (
+                "GhosttyTerminalData",
+                "CURSOR_VISIBLE",
+                GHOSTTY_TERMINAL_DATA_CURSOR_VISIBLE as i64,
+            ),
+            (
+                "GhosttyTerminalData",
+                "TOTAL_ROWS",
+                GHOSTTY_TERMINAL_DATA_TOTAL_ROWS as i64,
+            ),
+            (
+                "GhosttyTerminalData",
+                "SCROLLBACK_ROWS",
+                GHOSTTY_TERMINAL_DATA_SCROLLBACK_ROWS as i64,
+            ),
+            (
+                "GhosttyTerminalData",
+                "MODE",
+                GHOSTTY_TERMINAL_DATA_MODE as i64,
+            ),
+            (
+                "GhosttyTerminalScreen",
+                "PRIMARY",
+                GHOSTTY_TERMINAL_SCREEN_PRIMARY as i64,
+            ),
+            (
+                "GhosttyTerminalScreen",
+                "ALTERNATE",
+                GHOSTTY_TERMINAL_SCREEN_ALTERNATE as i64,
+            ),
+            (
+                "GhosttyRenderStateData",
+                "ROW_ITERATOR",
+                GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR as i64,
+            ),
+            (
+                "GhosttyRenderStateRowData",
+                "RAW",
+                GHOSTTY_RENDER_STATE_ROW_DATA_RAW as i64,
+            ),
+            (
+                "GhosttyRenderStateRowData",
+                "CELLS",
+                GHOSTTY_RENDER_STATE_ROW_DATA_CELLS as i64,
+            ),
+            ("GhosttyRowData", "WRAP", GHOSTTY_ROW_DATA_WRAP as i64),
+            (
+                "GhosttyRenderStateRowCellsData",
+                "RAW",
+                GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW as i64,
+            ),
+            (
+                "GhosttyRenderStateRowCellsData",
+                "STYLE",
+                GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE as i64,
+            ),
+            (
+                "GhosttyRenderStateRowCellsData",
+                "BG_COLOR",
+                GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_BG_COLOR as i64,
+            ),
+            (
+                "GhosttyRenderStateRowCellsData",
+                "HAS_STYLING",
+                GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_HAS_STYLING as i64,
+            ),
+            (
+                "GhosttyRenderStateRowCellsData",
+                "GRAPHEMES_UTF8",
+                GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_UTF8 as i64,
+            ),
+            ("GhosttyCellData", "WIDE", GHOSTTY_CELL_DATA_WIDE as i64),
+            (
+                "GhosttyCellWide",
+                "SPACER_TAIL",
+                GHOSTTY_CELL_WIDE_SPACER_TAIL as i64,
+            ),
+            (
+                "GhosttyCellWide",
+                "SPACER_HEAD",
+                GHOSTTY_CELL_WIDE_SPACER_HEAD as i64,
+            ),
+        ] {
+            assert_eq!(
+                json["types"][ty]["values"][key].as_i64(),
+                Some(value),
+                "{ty}.{key}"
+            );
+        }
     }
 
     /// Cross-check the hand-written struct declarations against the
@@ -437,6 +571,45 @@ mod tests {
         let raw = unsafe { std::ffi::CStr::from_ptr(ghostty_type_json()) };
         let json: serde_json::Value =
             serde_json::from_str(raw.to_str().expect("utf8")).expect("type json parses");
+
+        for (ty, field, offset) in [
+            (
+                "GhosttyStyleColor",
+                "value",
+                std::mem::offset_of!(GhosttyStyleColor, value),
+            ),
+            (
+                "GhosttyStyle",
+                "fg_color",
+                std::mem::offset_of!(GhosttyStyle, fg_color),
+            ),
+            (
+                "GhosttyStyle",
+                "bg_color",
+                std::mem::offset_of!(GhosttyStyle, bg_color),
+            ),
+            (
+                "GhosttyStyle",
+                "underline_color",
+                std::mem::offset_of!(GhosttyStyle, underline_color),
+            ),
+            (
+                "GhosttyStyle",
+                "flags",
+                std::mem::offset_of!(GhosttyStyle, flags),
+            ),
+            (
+                "GhosttyStyle",
+                "reserved",
+                std::mem::offset_of!(GhosttyStyle, reserved),
+            ),
+        ] {
+            assert_eq!(
+                json["types"][ty]["fields"][field]["offset"].as_u64(),
+                Some(offset as u64),
+                "{ty}.{field}"
+            );
+        }
 
         for (name, size, align) in [
             (
@@ -468,21 +641,6 @@ mod tests {
                 "GhosttyColorRgb",
                 std::mem::size_of::<GhosttyColorRgb>(),
                 std::mem::align_of::<GhosttyColorRgb>(),
-            ),
-            (
-                "GhosttyFormatterScreenExtra",
-                std::mem::size_of::<GhosttyFormatterScreenExtra>(),
-                std::mem::align_of::<GhosttyFormatterScreenExtra>(),
-            ),
-            (
-                "GhosttyFormatterTerminalExtra",
-                std::mem::size_of::<GhosttyFormatterTerminalExtra>(),
-                std::mem::align_of::<GhosttyFormatterTerminalExtra>(),
-            ),
-            (
-                "GhosttyFormatterTerminalOptions",
-                std::mem::size_of::<GhosttyFormatterTerminalOptions>(),
-                std::mem::align_of::<GhosttyFormatterTerminalOptions>(),
             ),
         ] {
             let (expected_size, expected_align) = layout(&json, name);

@@ -27,14 +27,16 @@ cargo run --quiet --locked --manifest-path crates/Cargo.toml -p unpeel-license-n
 
 ## Vendored: libghostty-vt (MIT)
 
-`crates/unpeel-core/vendor/ghostty-vt/` carries prebuilt static slices of
-libghostty-vt, the standalone terminal-emulation library from
-[Ghostty](https://github.com/ghostty-org/ghostty) (MIT; the license text is
-`crates/unpeel-core/vendor/ghostty-vt/LICENSE`). Built from ghostty commit
-`6ba144158577d033ccb6ed4b574e4013957c9161` with one small Unpeel patch
-applied at build time (`patches/0001-unpeel-small-pages.patch`; rationale
-and the rebuild recipe in the directory's `README.md`). The Host uses it to parse PTY output
-with the exact engine that renders terminals on desktop and phone.
+`crates/unpeel-core/vendor/ghostty-vt/` carries libghostty-vt **1.0.0**
+from [Ghostty](https://github.com/ghostty-org/ghostty), signed tag `vt-1.0.0`,
+commit `0fa3d577a5614150ff8e2c152de5fb9d5c6d2dec`, with the small-page
+Unpeel patch in `patches/0001-unpeel-small-pages.patch`. Its MIT license
+is in `LICENSE` in that directory; `THIRD_PARTY_NOTICES.txt` there also
+contains the bundled highway, simdutf, translate-c, uucode/Unicode, and
+Wuffs licenses. The Rust notice generator includes those texts in CLI
+archives and Mac bundles. Rebuild instructions are in the vendor README.
+The Host uses this library for terminal emulation; the Apple renderer is a
+separate GhosttyKit build.
 
 ## Fetched at runtime: agent-browser (Apache-2.0)
 
@@ -46,11 +48,12 @@ resolves it from the pinned version in `protocol/browser-engine-v1.json`
 LICENSE travels with the engine package. The Node-based "full engine" mode is
 never used or required.
 
-## Not in this repository: Ghostty / GhosttyKit
+## Apple renderer: Ghostty / GhosttyKit
 
-The Mac app renders terminals with GhosttyKit (Ghostty, MIT). That framework,
-its Unpeel patch, and its license live with the Apple client repository, not
-here; this repository only consumes libghostty-vt as described above.
+The Apple apps render terminals with GhosttyKit (Ghostty, MIT). The patched
+package, binary reference, and licenses live under
+`clients/native/vendor/libghostty-spm/`. Its release cycle is independent
+of the Host library above.
 
 ## Runtime marks
 

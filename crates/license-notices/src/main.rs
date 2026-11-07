@@ -221,7 +221,7 @@ fn collect_metadata(
     request: &MetadataRequest,
     target: &str,
     collected: &mut BTreeMap<String, Package>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let cargo = env::var_os("CARGO").unwrap_or_else(|| OsStr::new("cargo").to_owned());
     let output = Command::new(cargo)
         .args([
@@ -323,6 +323,7 @@ fn collect_metadata(
 
     let mut pending = roots;
     let mut visited = BTreeSet::new();
+    let mut includes_ghostty = false;
     while let Some(id) = pending.pop() {
         if !visited.insert(id) {
             continue;
@@ -330,6 +331,7 @@ fn collect_metadata(
         let package = by_id
             .get(id)
             .ok_or_else(|| format!("resolve node references unknown package {id}"))?;
+        includes_ghostty |= package.name == "unpeel-core";
         if !workspace_members.contains(id) {
             collected
                 .entry(package.stable_key())
@@ -340,7 +342,7 @@ fn collect_metadata(
         }
     }
 
-    Ok(())
+    Ok(includes_ghostty)
 }
 
 fn is_license_name(name: &str) -> bool {
@@ -593,9 +595,10 @@ fn render(notices: &[Notice]) -> Vec<u8> {
 fn run() -> Result<(), String> {
     let args = parse_args()?;
     let mut packages = BTreeMap::new();
+    let mut includes_ghostty = false;
     for request in &args.requests {
         for target in &args.targets {
-            collect_metadata(request, target, &mut packages)?;
+            includes_ghostty |= collect_metadata(request, target, &mut packages)?;
         }
     }
     if packages.is_empty() {
@@ -606,7 +609,14 @@ fn run() -> Result<(), String> {
         fs::create_dir_all(parent)
             .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
     }
-    fs::write(&args.output, render(&notices))
+    let mut rendered = render(&notices);
+    if includes_ghostty {
+        rendered.extend_from_slice(b"\n================================================================================\n\n");
+        rendered.extend_from_slice(include_bytes!(
+            "../../unpeel-core/vendor/ghostty-vt/THIRD_PARTY_NOTICES.txt"
+        ));
+    }
+    fs::write(&args.output, rendered)
         .map_err(|error| format!("cannot write {}: {error}", args.output.display()))?;
     println!(
         "Wrote {} deduplicated Rust license texts to {}",

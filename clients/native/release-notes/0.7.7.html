@@ -3,5 +3,5 @@
   <li><b>The Host stays responsive during long runs.</b> Closed Controller connections now release their finished threads. Previously, those threads retained stack memory until the Host restarted, eventually making session controls time out.</li>
   <li><b>Starting and removing sessions works through brief Host reconnects.</b> Terminal controls wait for the selected Host to reconnect before sending the request, instead of immediately reporting "This Host is not connected." Cancelled background refreshes can no longer mark the current connection offline.</li>
   <li><b>Reattaching preserves the screen layout.</b> Blank rows at the bottom of a terminal snapshot are retained, so older scrollback cannot shift a partially drawn screen when you reconnect.</li>
-  <li><b>Lighter, faster Host terminals.</b> The Host's terminal engine moves to libghostty from October 27 on macOS and Linux. Terminal-engine benchmarks show about two-thirds less memory for an empty screen, a fifth less for a filled screen, and roughly twice the output-processing speed.</li>
+  <li><b>libghostty-vt 1.0.</b> The Host now uses the stable terminal-emulation library on macOS and Linux, with compact terminal storage and no C++ runtime dependency.</li>
 </ul>

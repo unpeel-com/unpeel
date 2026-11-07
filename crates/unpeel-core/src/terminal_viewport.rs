@@ -522,22 +522,42 @@ impl VtTerminal {
     /// libghostty-vt's own formatter. See [`SnapshotVt`] for what is and is
     /// not reproduced.
     fn render_snapshot_vt(&self) -> Vec<u8> {
-        let mut options = vt::GhosttyFormatterTerminalOptions::vt_state_snapshot();
-        // Soft-wrapped rows are re-joined so the receiving terminal re-wraps
-        // them itself and keeps the wrap flags — but only while autowrap is
-        // on there; with DECAWM off (emitted before the content) a joined
-        // row would be clipped at the last column instead.
-        options.unwrap = self.mode(7);
         unsafe {
             let mut formatter: vt::GhosttyFormatter = std::ptr::null_mut();
-            if vt::ghostty_formatter_terminal_new(
-                std::ptr::null(),
-                &mut formatter,
-                self.term,
-                options,
-            ) != vt::GHOSTTY_SUCCESS
+            if vt::ghostty_formatter_terminal_new(std::ptr::null(), &mut formatter, self.term)
+                != vt::GHOSTTY_SUCCESS
             {
                 return Vec::new();
+            }
+            // Rejoin soft wraps only with DECAWM on; otherwise replay would
+            // clip the joined text at the last column. Keep blank bottom
+            // rows so scrollback does not move into the restored viewport.
+            let emit = vt::GHOSTTY_FORMATTER_FORMAT_VT;
+            let unwrap = self.mode(7);
+            let trim = false;
+            let extras = vt::GHOSTTY_FORMATTER_EXTRAS_SNAPSHOT;
+            for (option, value) in [
+                (
+                    vt::GHOSTTY_FORMATTER_OPT_EMIT,
+                    &emit as *const _ as *const std::ffi::c_void,
+                ),
+                (
+                    vt::GHOSTTY_FORMATTER_OPT_UNWRAP,
+                    &unwrap as *const _ as *const _,
+                ),
+                (
+                    vt::GHOSTTY_FORMATTER_OPT_TRIM,
+                    &trim as *const _ as *const _,
+                ),
+                (
+                    vt::GHOSTTY_FORMATTER_OPT_EXTRAS,
+                    &extras as *const _ as *const _,
+                ),
+            ] {
+                if vt::ghostty_formatter_set(formatter, option, value) != vt::GHOSTTY_SUCCESS {
+                    vt::ghostty_formatter_free(formatter);
+                    return Vec::new();
+                }
             }
             let mut needed: usize = 0;
             let rc =
@@ -734,7 +754,7 @@ fn read_cell(
         ) == vt::GHOSTTY_SUCCESS
             && has_styling
         {
-            let mut style = vt::GhosttyStyle::zeroed_sized();
+            let mut style = vt::GhosttyStyle::default();
             if vt::ghostty_render_state_row_cells_get(
                 cells,
                 vt::GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE,
@@ -744,8 +764,8 @@ fn read_cell(
                 cell_style = CellStyle {
                     fg: style_color_string(&style.fg_color),
                     bg: style_color_string(&style.bg_color),
-                    bold: style.bold,
-                    inverse: style.inverse,
+                    bold: style.flags & vt::GHOSTTY_STYLE_FLAG_BOLD != 0,
+                    inverse: style.flags & vt::GHOSTTY_STYLE_FLAG_INVERSE != 0,
                 };
             }
         }
@@ -2653,19 +2673,11 @@ mod snapshot_vt_tests {
 
     fn style_key(style: &vt::GhosttyStyle) -> String {
         format!(
-            "fg={} bg={} ul={} b={} i={} f={} bl={} inv={} inv2={} s={} o={} u={}",
+            "fg={} bg={} ul={} flags={}",
             color_key(&style.fg_color),
             color_key(&style.bg_color),
             color_key(&style.underline_color),
-            style.bold,
-            style.italic,
-            style.faint,
-            style.blink,
-            style.inverse,
-            style.invisible,
-            style.strikethrough,
-            style.overline,
-            style.underline
+            style.flags,
         )
     }
 
@@ -2697,7 +2709,7 @@ mod snapshot_vt_tests {
                 while vt::ghostty_render_state_row_cells_next(scratch.cells) {
                     let (text, _) = read_cell(scratch.cells, true, &previous);
                     previous = CellStyle::default();
-                    let mut style = vt::GhosttyStyle::zeroed_sized();
+                    let mut style = vt::GhosttyStyle::default();
                     let mut has_styling = false;
                     let _ = vt::ghostty_render_state_row_cells_get(
                         scratch.cells,

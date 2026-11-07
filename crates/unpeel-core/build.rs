@@ -50,9 +50,8 @@ fn main() {
     });
 
     // Link the vendored libghostty-vt static archive (see vendor/ghostty-vt/
-    // README.md) so every host parses PTY output with the same VT engine the
-    // desktop and phone render with. Catalog generation deliberately happens
-    // before target selection: unsupported targets still need the generated
+    // README.md) so every Host uses the same pinned terminal-emulation engine.
+    // Catalog generation deliberately happens before target selection: unsupported targets still need the generated
     // Rust source in order to compile the provider-neutral catalog.
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
@@ -70,12 +69,7 @@ fn main() {
         manifest_dir.display()
     );
     println!("cargo:rustc-link-lib=static=ghostty-vt");
-    // simdutf/highway (bundled in the archive) are C++.
-    if target_os == "macos" {
-        println!("cargo:rustc-link-lib=c++");
-    } else {
-        println!("cargo:rustc-link-lib=stdc++");
-    }
+    // libghostty-vt 1.0 bundles SIMD code without a C++ runtime dependency.
     println!(
         "cargo:rerun-if-changed={}/vendor/ghostty-vt/{slice}/libghostty-vt.a",
         manifest_dir.display()

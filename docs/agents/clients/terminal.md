@@ -4,6 +4,11 @@
 
 The native terminal is a **libghostty** surface (GhosttyKit), Metal-rendered, not xterm.js.
 
+The Host parses output with **libghostty-vt 1.0.0** on macOS and Linux
+(`crates/unpeel-core/vendor/ghostty-vt/`). That stable C library and the
+Apple GhosttyKit renderer have independent release cycles; snapshots cross
+the boundary as VT bytes, not shared library structs.
+
 - The Swift app embeds a Ghostty terminal surface per visible session.
 - The surface runs `unpeel-attach <session-id>` (see `crates/unpeel-attach`), which:
   - **snapshot attach (2026-09-02, Round 2):** after the startup resize it

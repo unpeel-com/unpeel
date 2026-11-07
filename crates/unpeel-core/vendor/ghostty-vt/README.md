@@ -1,81 +1,82 @@
-# Vendored libghostty-vt
+# Vendored libghostty-vt 1.0.0
 
-Three slices, one per host platform — `macos-universal/` (fat arm64 +
-x86_64), `linux-aarch64/`, and `linux-x86_64/`. `build.rs` picks the slice
-from the target triple, so a headless Linux host parses PTY output with the
-exact same VT engine as the Mac app and the phone. The Linux slices are
-cross-compiled from macOS by zig (`build.sh` builds all three); they come
-from the generic static path in ghostty's `build.zig`, not the xcframework,
-and link against `libstdc++` rather than `libc++`.
+The Host's terminal-emulation engine is pinned to the signed upstream
+[`vt-1.0.0`](https://github.com/ghostty-org/ghostty/tree/vt-1.0.0)
+tag, commit `0fa3d577a5614150ff8e2c152de5fb9d5c6d2dec` (November 6,
+2026). This is the stable C library described in the
+[1.0 announcement](https://mitchellh.com/writing/libghostty-1-0).
 
-`macos-universal/libghostty-vt.a` is the standalone terminal-emulation C
-library from ghostty (https://libghostty.tip.ghostty.org), used by
-`src/terminal_viewport.rs` so the host parses PTY output with the exact same
-VT engine that renders it on desktop and phone (GhosttyKit). The archive is
-a fat arm64 + x86_64 static lib with the vendored SIMD deps (simdutf,
-highway) combined in, so it links with no extra dependencies beyond libc++.
+`macos-universal/` contains arm64 and x86_64; `linux-aarch64/` and
+`linux-x86_64/` contain the two headless Host slices. All three are built
+together with Zig 0.17.0, ReleaseFast, baseline CPUs, stripped debug
+information, SIMD enabled, and the small-page patch below. macOS targets
+13.0; Linux targets GLIBC 2.31. SIMD dependencies are bundled in the static
+archives and require only libc at runtime, without a C++ standard library.
+`build.rs` selects the archive for the Rust target.
 
-Built from ghostty commit `6ba144158577d033ccb6ed4b574e4013957c9161` (tip,
-2026-10-27). The Mac app's GhosttyKit.xcframework is still built from the
-older `2da015cd6` (2026-07-06; its own vendor tree under
-`clients/native/vendor/libghostty-spm/`), so Host and renderer are on
-different ghostty commits until that build is moved too. The Host only
-emits standard VT to the renderer (snapshots, replay), so the skew is
-safe. Rebuild with:
+This release is **libghostty-vt**, not the Apple Metal renderer. The Mac
+and iOS apps use the separately patched GhosttyKit build in
+`clients/native/vendor/libghostty-spm/` (Ghostty commit `2da015cd6`).
+The Host communicates terminal snapshots and replay as standard VT bytes;
+the libraries do not share a C ABI or need matching source revisions.
+
+## Rebuild
+
+Requirements: macOS with Xcode command-line tools (`lipo`) and Python 3,
+and Zig **0.17.x**. No Metal Toolchain is needed. The build fetches upstream
+hash-pinned Zig dependencies into the checkout's package cache.
 
 ```sh
-git clone https://github.com/ghostty-org/ghostty /tmp/ghostty && \
-  git -C /tmp/ghostty checkout 6ba144158577d033ccb6ed4b574e4013957c9161
-ZIG=/path/to/zig-0.17.0/zig ./build.sh --ghostty /tmp/ghostty   # or GHOSTTY_SRC=…
+git clone --depth 1 --branch vt-1.0.0 https://github.com/ghostty-org/ghostty /tmp/ghostty-vt
+ZIG=/path/to/zig-0.17.0/zig ./build.sh --ghostty /tmp/ghostty-vt
 ```
 
-Requirements:
+`GHOSTTY_SRC` can replace `--ghostty`. The script checks the exact source
+commit and a clean checkout, applies the patch for the duration of the build, and reverses only
+patches it applied on exit. All requested outputs are staged before
+replacing the vendored archives. `SLICES=macos` rebuilds only the universal
+Mac archive; a release update must rebuild all three.
 
-- zig 0.17.0 (ghostty's `build.zig.zon` enforces the minimum). The
-  ziglang.org release tarball links fine on macOS 26; Homebrew's `zig`
-  works once it is on 0.17.
-- Xcode Metal Toolchain is NOT needed for lib-vt (no renderer).
+`licenses.py` collects the linked dependencies' license texts from
+upstream's `deps/libghostty-vt-third-party.json` and fetched packages into
+`THIRD_PARTY_NOTICES.txt`. The uucode package omits the two files under its
+`licenses/` directory; our copies in `licenses/uucode/` are from the same
+pinned uucode commit, `1fb73433bba5d93366c57f23ff2e9d7939746500`.
+`crates/license-notices` includes these notices whenever the selected Rust
+graph contains `unpeel-core`, so CLI archives and Mac bundles carry them.
 
-The C API is declared by hand in `src/ghostty_vt.rs` (no bindgen). If you
-bump the vendored archive, diff `include/ghostty/vt/*.h` in the ghostty
-checkout against the declarations there — the `layout_matches_type_json`
-test cross-checks struct sizes against `ghostty_type_json()` (its `types`
-map) at runtime. The 2026-10 bump crossed two ABI breaks: scrollback moved
-from `GhosttyTerminalOptions.max_scrollback` to
-`ghostty_terminal_set(GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES)`, and
-`ghostty_terminal_mode_get` became `ghostty_terminal_get(…DATA_MODE…)` with
-a `GhosttyTerminalModeConfig`.
+The hand-written C bindings in `src/ghostty_vt.rs` cover only the Host's
+needs. When upgrading, audit signatures against `include/ghostty/vt/*.h`.
+Tests check the actual library version and required features, enum values,
+struct sizes/alignment, and style field offsets against
+`ghostty_type_json()`. The 1.0 migration replaces formatter option structs
+with `ghostty_formatter_set` and uses compact, fixed-layout style flags.
+Snapshot replay tests cover full cell styles, modes, cursor, margins,
+scrollback, and blank bottom rows.
 
-## Unpeel source patches (`patches/`)
+## Unpeel source patch
 
-`build.sh` applies every `patches/*.patch` to the checkout before `zig build`
-and reverts them on exit (even on failure), so the checkout is never left
-modified. Today there is one:
+`0001-unpeel-small-pages.patch` changes standard pages from 215×215 to
+215×32 cells and grapheme storage from 8 KiB to 2 KiB. Upstream's minimum
+of two pages otherwise raises a small scrollback budget to roughly 1 MiB.
+The patch keeps the Host's 256 KiB budget effective without changing the C
+ABI; pages that need more space still grow normally. It affects the Host
+only, not GhosttyKit.
 
-- `0001-unpeel-small-pages.patch` — `std_capacity` 215×215 → 215×32 cells
-  and 8 KiB → 2 KiB grapheme bytes. Why: `PageList.minMaxSize` forces at
-  least two standard pages, so upstream's page size silently raises any
-  scrollback byte budget under ~1 MiB to that floor (the Host's
-  filled-terminal footprint). Rationale and the measurement recipe: the
-  private "pty-core" design record "Round 3, Lane 3". The patched constants
-  do not change any C API type, so `layout_matches_type_json` still
-  applies.
+Historical measurements on an 80×24 Host terminal with that budget:
 
-Dropped in the 2026-10 bump because upstream now covers them: the
-`page_preheat = 0` half of 0001 (the page pool is demand-paged, so preheat
-costs address space only) and `0002-unpeel-pack-page-metadata.patch`
-(pages initialize from zeroed memory). `vt_footprint_per_terminal` on an
-80×24 Host terminal with the 256 KiB budget, before → after:
-
-| | 2da015cd + 0001/0002 | 6ba144158 unpatched | 6ba144158 + 0001 |
+| | July `2da015cd` + old patches | October `6ba144158` unpatched | October `6ba144158` + small pages |
 | --- | --- | --- | --- |
-| per empty terminal | 61 KiB | 20 KiB | 20 KiB |
-| per filled terminal (10k lines) | 286 KiB | 778 KiB | 225 KiB |
-| feed throughput | 357 MiB/s | 493 MiB/s | 735 MiB/s |
+| Empty terminal | 61 KiB | 20 KiB | 20 KiB |
+| Filled terminal (10k lines) | 286 KiB | 778 KiB | 225 KiB |
+| Feed throughput | 357 MiB/s | 493 MiB/s | 735 MiB/s |
 
-`GHOSTTY_SRC=/path` builds from another copy of the checkout. `SLICES=macos`
-rebuilds only the universal macOS archive; the default rebuilds all three.
-All three slices were last rebuilt together on 2026-10-28 from ghostty
-`6ba144158577d033ccb6ed4b574e4013957c9161` with
-`0001-unpeel-small-pages.patch` applied (`build.sh`, default `SLICES`, zig
-0.17.0 cross-building the Linux slices from macOS).
+These are measurements of the earlier builds. On November 7, the patched
+1.0.0 build measured 225 KiB per filled terminal with the Host's 256 KiB
+budget and journal, and about 1,000 MiB/s feed throughput on macOS arm64.
+Throughput and allocator residency vary by machine and run. Re-measure:
+
+```sh
+UNPEEL_HOME=$(mktemp -d /tmp/up-vt.XXXXXX) cargo test --manifest-path crates/Cargo.toml \
+  --release -p unpeel-core --lib vt_footprint -- --ignored --nocapture
+```
