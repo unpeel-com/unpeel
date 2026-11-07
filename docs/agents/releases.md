@@ -139,7 +139,11 @@ curl -fsSL https://unpeel.com/install.sh | sh
   uploads versioned + `-latest` tarballs, sha256 sidecars, and
   `<channel>/cli/latest.json` via wrangler. Linux tarballs are built on a
   Linux box/CI with `scripts/build-cli-linux.sh` and attached with
-  `--linux-x86_64 <tar.gz>` / `--linux-aarch64 <tar.gz>`. Every archive
+  `--linux-x86_64 <tar.gz>` / `--linux-aarch64 <tar.gz>`.
+  `.github/workflows/linux-cli.yml` produces both artifacts on native x86_64
+  and ARM runners, runs workspace tests on each, and smoke-tests the
+  Bullseye-built archives on Ubuntu 20.04. Download `unpeel-linux-x86_64`
+  and `unpeel-linux-aarch64` from the same workflow run. Every archive
   includes the three binaries (`unpeel`, `unpeel-host`, `unpeel-attach` —
   the last built from the standalone `crates/unpeel-attach` manifest and
   lipo'd the same way; `CLI_BINARIES` in `release-cli.mjs` is the one list),
