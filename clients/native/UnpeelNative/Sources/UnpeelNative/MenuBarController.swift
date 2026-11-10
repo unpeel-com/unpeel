@@ -82,13 +82,18 @@ final class MenuBarController: NSObject {
         guard let button = statusItem.button else { return }
         button.target = self
         button.action = #selector(togglePopover)
-        if let tag = Self.workspaceTag {
-            button.toolTip = "Unpeel sessions — \(tag)"
-        } else {
-            button.toolTip = "Unpeel sessions"
-        }
+        refreshLocalizedToolTip()
         // Bigger, bold braille so the spinner reads clearly in the menu bar.
         button.font = NSFont.monospacedSystemFont(ofSize: 15, weight: .bold)
+    }
+
+    func refreshLocalizedToolTip() {
+        guard let button = statusItem.button else { return }
+        if let tag = Self.workspaceTag {
+            button.toolTip = L10n.format("Unpeel sessions — %@", tag)
+        } else {
+            button.toolTip = L10n.t("Unpeel sessions")
+        }
     }
 
     private func configurePopover() {

@@ -1566,7 +1566,7 @@ struct ProjectNodeView: View {
             // the inactive-preview window still reads as empty here.
             if pinnedItems.isEmpty && mixedItems.isEmpty {
                 EmptySessionsPlaceholderRow(
-                    label: node.sessions.isEmpty ? "No sessions yet." : "No active sessions.",
+                    label: node.sessions.isEmpty ? L10n.t("No sessions yet.") : L10n.t("No active sessions."),
                     depth: depth,
                     indentBase: 28,
                     menuPresets: store.displayAvailablePresets,
@@ -2196,34 +2196,34 @@ struct ProjectRowView: View {
                     }
                 }
                 if node.project.acceptsSessionDrop, canPin {
-                    Button(isPinned ? "Unpin" : "Pin") {
+                    Button(isPinned ? L10n.t("Unpin") : L10n.t("Pin")) {
                         onSetPinned(!isPinned)
                     }
                 }
                 Divider()
             }
-            Menu("New session") {
+            Menu(L10n.t("New session")) {
                 let split = splitPresetsForNewSessionMenu(menuPresets)
-                Button("Terminal") { onLaunchPreset(.newTerminal) }
+                Button(L10n.t("Terminal")) { onLaunchPreset(.newTerminal) }
                 if !split.agents.isEmpty || showsLocalProjectVerbs {
                     Divider()
-                    Section("Agents") {
+                    Section(L10n.t("Agents")) {
                         ForEach(split.agents) { preset in
                             Button(preset.label) { onLaunchPreset(preset) }
                         }
                         if showsLocalProjectVerbs {
-                            Button("Manage Agents…") { onManagePresets() }
+                            Button(L10n.t("Manage Agents…")) { onManagePresets() }
                         }
                     }
                 }
                 if !split.plugins.isEmpty || showsLocalProjectVerbs {
                     Divider()
-                    Section("Plugins") {
+                    Section(L10n.t("Plugins")) {
                         ForEach(split.plugins) { preset in
                             Button(preset.label) { onLaunchPreset(preset) }
                         }
                         if showsLocalProjectVerbs {
-                            Button("Manage Plugins…") { onManagePlugins() }
+                            Button(L10n.t("Manage Plugins…")) { onManagePlugins() }
                         }
                     }
                 }
@@ -2232,12 +2232,12 @@ struct ProjectRowView: View {
             // neutral so nesting reads by indent, not tint (decided
             // 2026-08-13 after a group picked up a color by accident).
             if node.project.parentProjectID == nil, showsOrganizationVerbs {
-                Menu("Folder color") {
+                Menu(L10n.t("Folder color")) {
                     Button {
                         onSetFolderColor(nil)
                     } label: {
                         FolderColorMenuRow(
-                            title: "Default",
+                            title: L10n.t("Default"),
                             color: nil,
                             isSelected: folderColor == nil
                         )
@@ -2262,25 +2262,25 @@ struct ProjectRowView: View {
             // order survives a switch back. Scoped local workspaces flip it
             // through the Host `project.organization.set` carrier.
             if showsOrganizationVerbs {
-            Menu("Sort sessions") {
-                Picker("Sort sessions", selection: Binding(
+            Menu(L10n.t("Sort sessions")) {
+                Picker(L10n.t("Sort sessions"), selection: Binding(
                     get: { isDateSorted },
                     set: { onSetSessionDateSorted($0) }
                 )) {
-                    Text("Custom order").tag(false)
-                    Text("Recently updated").tag(true)
+                    Text(L10n.t("Custom order")).tag(false)
+                    Text(L10n.t("Recently updated")).tag(true)
                 }
                 .pickerStyle(.inline)
                 .labelsHidden()
             }
             }
             if showsWorktreeCreate {
-                Button("New worktree…") {
+                Button(L10n.t("New worktree…")) {
                     onCreateWorktree()
                 }
             }
             if node.project.parentProjectID == nil, showsOrganizationVerbs {
-                Button("New group…") {
+                Button(L10n.t("New group…")) {
                     onCreateGroup()
                 }
             }
@@ -2627,7 +2627,7 @@ func newSessionMenuContent(
     // Agents, with their manage entry at the bottom of the same list.
     if !split.agents.isEmpty || showsManagePresets {
         Divider()
-        Section("Agents") {
+        Section(L10n.t("Agents")) {
             ForEach(split.agents) { preset in
                 PresetMenuButton(preset: preset) {
                     onLaunch(preset)
@@ -2637,7 +2637,7 @@ func newSessionMenuContent(
                 Button {
                     onManagePresets()
                 } label: {
-                    Text("Manage Agents…")
+                    Text(L10n.t("Manage Agents…"))
                 }
             }
         }
@@ -2645,7 +2645,7 @@ func newSessionMenuContent(
     // Plugins, likewise.
     if !split.plugins.isEmpty || (showsManagePresets && onManagePlugins != nil) {
         Divider()
-        Section("Plugins") {
+        Section(L10n.t("Plugins")) {
             ForEach(split.plugins) { preset in
                 PresetMenuButton(preset: preset) {
                     onLaunch(preset)
@@ -2655,7 +2655,7 @@ func newSessionMenuContent(
                 Button {
                     onManagePlugins()
                 } label: {
-                    Text("Manage Plugins…")
+                    Text(L10n.t("Manage Plugins…"))
                 }
             }
         }
@@ -4077,7 +4077,7 @@ struct SidebarFooter: View {
                 // One "+" for both create verbs. Add Project is a
                 // Controller-local filesystem verb, so its row hides while a
                 // remote Host is scoped; Add Workspace always applies.
-                FooterButton(icon: .addProjectPlus, help: "Add project or workspace") {
+                FooterButton(icon: .addProjectPlus, help: L10n.t("Add project or workspace")) {
                     addMenuPresented = true
                 }
                 // arrowEdge .top = the arrow sits on the button's top edge,
@@ -4087,7 +4087,7 @@ struct SidebarFooter: View {
                         if localVerbsVisible {
                             FooterAddMenuRow(
                                 icon: "folder.badge.plus",
-                                label: "Add Project…"
+                                label: L10n.t("Add Project…")
                             ) {
                                 addMenuPresented = false
                                 onAddProject()
@@ -4095,7 +4095,7 @@ struct SidebarFooter: View {
                         }
                         FooterAddMenuRow(
                             icon: "rectangle.stack.badge.plus",
-                            label: "Add Workspace…"
+                            label: L10n.t("Add Workspace…")
                         ) {
                             addMenuPresented = false
                             onAddWorkspace()
@@ -4107,12 +4107,12 @@ struct SidebarFooter: View {
             } else if localVerbsVisible {
                 // Release builds (no Host picker, no dots): the plain
                 // Add Project verb.
-                FooterButton(icon: .addProjectPlus, help: "Add Project", action: onAddProject)
+                FooterButton(icon: .addProjectPlus, help: L10n.t("Add Project"), action: onAddProject)
             }
             Spacer()
             // Collapse-all moved to the menu bar (Session ▸ Collapse All
             // Folders, ⌥⌘B) — the footer keeps only "+" / dots / settings.
-            FooterButton(icon: .settings, help: "Settings (⌘,)", action: onOpenSettings)
+            FooterButton(icon: .settings, help: L10n.t("Settings (⌘,)"), action: onOpenSettings)
         }
         .padding(EdgeInsets(top: 0, leading: 13, bottom: 9.5, trailing: 13))
     }

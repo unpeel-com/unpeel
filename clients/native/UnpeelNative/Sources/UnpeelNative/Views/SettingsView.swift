@@ -129,20 +129,20 @@ enum SettingsTab: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .appearance: return "Appearance"
-        case .agents: return "Agents"
-        case .plugins: return "Plugins"
-        case .git: return "Git"
-        case .agentAccess: return "Agent access"
-        case .presets: return "Agents"
-        case .mobile: return "Remote Control"
-        case .workspaces: return "Workspaces"
-        case .transcripts: return "Transcripts"
-        case .notifications: return "Notifications"
-        case .computer: return "Computer use"
-        case .worktrees: return "Worktrees"
-        case .features: return "Features"
-        case .advanced: return "Advanced"
+        case .appearance: return L10n.t("Appearance")
+        case .agents: return L10n.t("Agents")
+        case .plugins: return L10n.t("Plugins")
+        case .git: return L10n.t("Git")
+        case .agentAccess: return L10n.t("Agent access")
+        case .presets: return L10n.t("Agents")
+        case .mobile: return L10n.t("Remote Control")
+        case .workspaces: return L10n.t("Workspaces")
+        case .transcripts: return L10n.t("Transcripts")
+        case .notifications: return L10n.t("Notifications")
+        case .computer: return L10n.t("Computer use")
+        case .worktrees: return L10n.t("Worktrees")
+        case .features: return L10n.t("Features")
+        case .advanced: return L10n.t("Advanced")
         }
     }
 
@@ -177,6 +177,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
 /// `calc(titlebar + 2px) 8px 12px`, gap 2 (SettingsView.svelte:173-179).
 struct SettingsSidebarPanel: View {
     @ObservedObject var store: UnpeelStore
+    @ObservedObject private var localization = LocalizationStore.shared
 
     private static let feedbackURL = URL(string: "https://github.com/orgs/unpeel-com/discussions")!
 
@@ -188,7 +189,7 @@ struct SettingsSidebarPanel: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
                     SettingsNavRow(
-                        title: "Back",
+                        title: L10n.t("Back"),
                         leadingIcon: .back,
                         isActive: false,
                         action: { store.closeSettings() }
@@ -251,7 +252,7 @@ struct SettingsSidebarPanel: View {
                 HStack(spacing: 8) {
                     Image(systemName: "exclamationmark.bubble")
                         .font(.system(size: 12, weight: .medium))
-                    Text("Feedback & bugs")
+                    Text(L10n.t("Feedback & bugs"))
                         .font(.system(size: 12.5, weight: .medium))
                     Spacer(minLength: 4)
                     Image(systemName: "arrow.up.right")
@@ -2254,6 +2255,7 @@ func resolvedSettingsTab(_ store: UnpeelStore) -> SettingsTab {
 /// the workspace title; the strip drags the window.
 struct SettingsTitleStrip: View {
     @ObservedObject var store: UnpeelStore
+    @ObservedObject private var localization = LocalizationStore.shared
     /// Cached for the title: the registry read behind it is disk IO, and
     /// this body re-runs on every store publish — never read files in a body
     /// evaluation (same rule as SidebarWorkspaceSelector). Refreshed on
@@ -2263,7 +2265,7 @@ struct SettingsTitleStrip: View {
     var body: some View {
         TitleBarView(
             segments: [
-                titlebarScopeName.map { "Settings — \($0)" } ?? "Settings",
+                titlebarScopeName.map { L10n.format("Settings — %@", $0) } ?? L10n.t("Settings"),
                 selectedTab.title,
             ],
             height: Theme.titleStripHeight,
@@ -2506,6 +2508,7 @@ struct AppearanceSettingsPanel: View {
     @ObservedObject var store: UnpeelStore
     @ObservedObject private var transparency = TransparencyModel.shared
     @ObservedObject private var terminalFont = TerminalFontModel.shared
+    @ObservedObject private var localization = LocalizationStore.shared
 
     /// The same editor set the titlebar "open" dropdown offers, limited to
     /// installed apps — plus the current selection even if it isn't installed,
@@ -2528,8 +2531,8 @@ struct AppearanceSettingsPanel: View {
                 // unlike grouped-Form rows which always grow a card.
                 Section {} header: {
                     SettingsPaneHeader(
-                        title: "Appearance",
-                        description: "How Unpeel looks. System follows your macOS appearance."
+                        title: L10n.t("Appearance"),
+                        description: L10n.t("How Unpeel looks. System follows your macOS appearance.")
                     )
                     .padding(.bottom, 4)
                 }
@@ -2556,7 +2559,7 @@ struct AppearanceSettingsPanel: View {
                 }
 
                 Section {
-                    Picker("Mode", selection: Binding(
+                    Picker(L10n.t("Mode"), selection: Binding(
                         get: { store.themePreference },
                         set: { store.setThemePreference($0) }
                     )) {
@@ -2569,10 +2572,31 @@ struct AppearanceSettingsPanel: View {
                     .foregroundStyle(Theme.foreground)
                 } header: {
                     SettingsSectionHeader(
-                        title: "Mode",
-                        description: "Applies to the window, sidebar and terminal colors. "
-                            + "Claude Code has its own theme setting — run /config inside "
-                            + "Claude Code and change Theme to match."
+                        title: L10n.t("Mode"),
+                        description: L10n.t(
+                            "Applies to the window, sidebar and terminal colors. Claude Code has its own theme setting — run /config inside Claude Code and change Theme to match."
+                        )
+                    )
+                }
+
+                Section {
+                    Picker(L10n.t("Language"), selection: Binding(
+                        get: { localization.preference },
+                        set: { localization.setPreference($0) }
+                    )) {
+                        ForEach(AppLanguage.allCases) { language in
+                            Text(language.displayName).tag(language)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.foreground)
+                } header: {
+                    SettingsSectionHeader(
+                        title: L10n.t("Language"),
+                        description: L10n.t(
+                            "Language for the Unpeel interface. System follows macOS."
+                        )
                     )
                 }
 
@@ -2587,16 +2611,15 @@ struct AppearanceSettingsPanel: View {
                     }
                 } header: {
                     SettingsSectionHeader(
-                        title: "App color",
-                        description: "Washes this workspace's window chrome — sidebar, "
-                            + "content, and terminal canvas. Each workspace keeps its "
-                            + "own color (also editable per workspace in Settings ▸ "
-                            + "Workspaces)."
+                        title: L10n.t("App color"),
+                        description: L10n.t(
+                            "Washes this workspace's window chrome — sidebar, content, and terminal canvas. Each workspace keeps its own color (also editable per workspace in Settings ▸ Workspaces)."
+                        )
                     )
                 }
 
                 Section {
-                    Picker("Session titles", selection: Binding(
+                    Picker(L10n.t("Session titles"), selection: Binding(
                         get: { store.sessionTitleMode },
                         set: { store.setSessionTitleMode($0) }
                     )) {
@@ -2609,28 +2632,25 @@ struct AppearanceSettingsPanel: View {
                     .foregroundStyle(Theme.foreground)
                 } header: {
                     SettingsSectionHeader(
-                        title: "Session titles",
-                        description: "What names a session in the sidebar until you "
-                            + "rename it. First prompt titles it once from your first "
-                            + "message. Live from agent follows the agent's own task "
-                            + "summary as it works (agents that publish one — Claude "
-                            + "today), falling back to the first prompt until it "
-                            + "appears. Renaming a session always wins."
+                        title: L10n.t("Session titles"),
+                        description: L10n.t(
+                            "What names a session in the sidebar until you rename it. First prompt titles it once from your first message. Live from agent follows the agent's own task summary as it works (agents that publish one — Claude today), falling back to the first prompt until it appears. Renaming a session always wins."
+                        )
                     )
                 }
 
                 Section {
                     TransparencySliderRow(
-                        title: "Background",
+                        title: L10n.t("Background"),
                         value: $transparency.backgroundOpacity
                     )
                     TransparencySliderRow(
-                        title: "Surface",
+                        title: L10n.t("Surface"),
                         value: $transparency.surfaceOpacity
                     )
                     HStack {
                         Spacer()
-                        Button("Revert to default") {
+                        Button(L10n.t("Revert to default")) {
                             transparency.resetToDefaults()
                         }
                         .controlSize(.small)
@@ -2638,13 +2658,10 @@ struct AppearanceSettingsPanel: View {
                     }
                 } header: {
                     SettingsSectionHeader(
-                        title: "Transparency",
-                        description: "Background is the window backdrop — the sidebar "
-                            + "and everything behind the content; below 100% the "
-                            + "desktop shows through it, natively blurred. Surface "
-                            + "covers the terminal canvas, settings, and the other "
-                            + "pages on top of it. 100% is fully opaque. Terminal "
-                            + "text always stays fully opaque."
+                        title: L10n.t("Transparency"),
+                        description: L10n.t(
+                            "Background is the window backdrop — the sidebar and everything behind the content; below 100% the desktop shows through it, natively blurred. Surface covers the terminal canvas, settings, and the other pages on top of it. 100% is fully opaque. Terminal text always stays fully opaque."
+                        )
                     )
                 }
 
@@ -2656,7 +2673,7 @@ struct AppearanceSettingsPanel: View {
                 )
 
                 Section {
-                    Picker("Editor", selection: Binding(
+                    Picker(L10n.t("Editor"), selection: Binding(
                         get: { store.codeEditor },
                         set: { store.setCodeEditor($0) }
                     )) {
@@ -2676,9 +2693,10 @@ struct AppearanceSettingsPanel: View {
                     OpenResourcesSettingsRows(runtime: store.remoteHostRuntime)
                 } header: {
                     SettingsSectionHeader(
-                        title: "Open resources",
-                        description: "Choose what opens each supported type in this workspace. The editor is "
-                            + "also used by \"Open in editor\" and the titlebar open button."
+                        title: L10n.t("Open resources"),
+                        description: L10n.t(
+                            "Choose what opens each supported type in this workspace. The editor is also used by \"Open in editor\" and the titlebar open button."
+                        )
                     )
                 }
 

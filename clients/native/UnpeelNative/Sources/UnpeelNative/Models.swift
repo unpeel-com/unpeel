@@ -19,8 +19,8 @@ enum CommandTAction: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .newTerminal: return "New terminal"
-        case .presetPicker: return "Preset screen"
+        case .newTerminal: return L10n.t("New terminal")
+        case .presetPicker: return L10n.t("Preset screen")
         }
     }
 }
@@ -344,9 +344,9 @@ enum SessionTitleMode: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .firstPrompt: return "First prompt"
-        case .agent: return "Live from agent"
-        case .off: return "Off"
+        case .firstPrompt: return L10n.t("First prompt")
+        case .agent: return L10n.t("Live from agent")
+        case .off: return L10n.t("Off")
         }
     }
 }

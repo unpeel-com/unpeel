@@ -19,6 +19,7 @@ import SwiftUI
 struct RootView: View {
     @ObservedObject var store: UnpeelStore
     @ObservedObject var cache: SurfaceCache
+    @ObservedObject private var localization = LocalizationStore.shared
 
     @AppStorage("unpeel.sidebar.width") private var savedSidebarWidth: Double = Double(Theme.sidebarDefaultWidth)
     /// Live value during a resizer drag — plain @State so each drag frame
@@ -116,6 +117,11 @@ struct RootView: View {
             // as sidebar rows, so they can sort the split or land at an exact
             // sidebar insertion gap with one continuous gesture.
             .environment(\.sidebarSessionDragController, sessionDragController)
+            .environment(\.locale, localization.effectiveLocale)
+            .environmentObject(localization)
+            // Force chrome that reads L10n at body-eval time to rebuild when
+            // Settings ▸ Appearance ▸ Language changes.
+            .id(localization.revision)
             // Layout measures from the window top (DESIGN.md: 38px custom
             // titlebar inside the content), not from the AppKit titlebar
             // inset. Applied after the overlays so the toggle button lands
@@ -328,7 +334,7 @@ struct RootView: View {
         HStack(spacing: 4) {
             TitlebarIconButton(
                 icon: .sidebarToggle,
-                help: store.sidebarCollapsed ? "Show sidebar (⌘B)" : "Hide sidebar (⌘B)"
+                help: store.sidebarCollapsed ? L10n.t("Show sidebar (⌘B)") : L10n.t("Hide sidebar (⌘B)")
             ) {
                 store.sidebarCollapsed.toggle()
             }
@@ -366,7 +372,7 @@ struct RootView: View {
                 // While a full-content page covers the workspace, "+" (new
                 // session) is the wrong verb — offer the way back instead.
                 if store.settingsVisible || store.recentActivityVisible {
-                    TitlebarIconButton(icon: .back, help: "Back to workspace") {
+                    TitlebarIconButton(icon: .back, help: L10n.t("Back to workspace")) {
                         if store.settingsVisible { store.closeSettings() }
                         store.recentActivityVisible = false
                     }
@@ -854,7 +860,7 @@ struct ActivityMenuList: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     if rowCount == 0 {
-                        Text("No active sessions")
+                        Text(L10n.t("No active sessions"))
                             .font(.system(size: 13))
                             .foregroundStyle(Theme.mutedForeground.opacity(0.72))
                             .padding(.horizontal, 14)
@@ -923,7 +929,7 @@ private struct AllRecentMenuRow: View {
     var body: some View {
         Button(action: onSelect) {
             HStack(spacing: 8) {
-                Text("All recent")
+                Text(L10n.t("All recent"))
                     .font(.system(size: 13))
                     .foregroundStyle(hovering ? Theme.foreground : Theme.mutedForeground)
                 Spacer(minLength: 0)

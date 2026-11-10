@@ -80,9 +80,9 @@ enum ThemePreference: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .system: return "System"
-        case .light: return "Light"
-        case .dark: return "Dark"
+        case .system: return L10n.t("System")
+        case .light: return L10n.t("Light")
+        case .dark: return L10n.t("Dark")
         }
     }
 
@@ -112,14 +112,14 @@ enum ProjectFolderColor: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .sky: return "Sky"
-        case .blue: return "Blue"
-        case .violet: return "Violet"
-        case .rose: return "Rose"
-        case .amber: return "Amber"
-        case .moss: return "Moss"
-        case .teal: return "Teal"
-        case .graphite: return "Graphite"
+        case .sky: return L10n.t("Sky")
+        case .blue: return L10n.t("Blue")
+        case .violet: return L10n.t("Violet")
+        case .rose: return L10n.t("Rose")
+        case .amber: return L10n.t("Amber")
+        case .moss: return L10n.t("Moss")
+        case .teal: return L10n.t("Teal")
+        case .graphite: return L10n.t("Graphite")
         }
     }
 

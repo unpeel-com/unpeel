@@ -24,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, SPUU
     private let paneLayoutController = PaneLayoutController(windowID: "main")
     private var updaterController: SPUStandardUpdaterController?
     private var licenseLoadObserver: NSObjectProtocol?
+    private var languageChangeObserver: NSObjectProtocol?
     private var menuBar: MenuBarController?
 
     func applicationDidFinishLaunching(_: Notification) {
@@ -34,15 +35,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, SPUU
         // first Ghostty pane resolves its style, so a custom font never
         // flashes the default for one config apply.
         _ = TerminalFontModel.shared
+        _ = LocalizationStore.shared
 
         // One instance per UNPEEL_HOME: two processes on the same state dir
         // would fight over sessions, ports, and pairing. Identity-verified
         // pidfile, so a stale file never blocks a launch.
         if UnpeelWorkspaceLauncher.otherInstanceOwnsCurrentHome() {
             let alert = NSAlert()
-            alert.messageText = "This workspace is already running"
-            alert.informativeText =
+            alert.messageText = L10n.t("This workspace is already running")
+            alert.informativeText = L10n.t(
                 "Another Unpeel instance is already using this workspace's data. Switch to it instead."
+            )
             alert.runModal()
             NSApp.terminate(nil)
             return
@@ -129,6 +132,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, SPUU
         )
 
         installMainMenu()
+        languageChangeObserver = NotificationCenter.default.addObserver(
+            forName: LocalizationStore.languageDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.installMainMenu()
+                self?.menuBar?.refreshLocalizedToolTip()
+            }
+        }
         // A service launch (UNPEEL_LAUNCH_HIDDEN=1 — a peer instance started
         // this workspace to serve pairing) begins windowless, exactly like
         // the closed-window menu-bar agent state; the workspace switcher's
@@ -289,14 +302,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, SPUU
         // below a silent no-op button.
         appMenu.autoenablesItems = false
         let aboutItem = NSMenuItem(
-            title: "About Unpeel",
+            title: L10n.t("About Unpeel"),
             action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
             keyEquivalent: ""
         )
         aboutItem.target = NSApp
         appMenu.addItem(aboutItem)
         let updatesItem = NSMenuItem(
-            title: "Check for Updates…",
+            title: L10n.t("Check for Updates…"),
             action: #selector(checkForUpdates(_:)),
             keyEquivalent: ""
         )
@@ -308,28 +321,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, SPUU
         appMenu.addItem(updatesItem)
         appMenu.addItem(.separator())
         let settingsItem = NSMenuItem(
-            title: "Settings…",
+            title: L10n.t("Settings…"),
             action: #selector(openSettingsFromMenu),
             keyEquivalent: ","
         )
         settingsItem.target = self
         appMenu.addItem(settingsItem)
         appMenu.addItem(.separator())
-        let servicesItem = NSMenuItem(title: "Services", action: nil, keyEquivalent: "")
-        let servicesMenu = NSMenu(title: "Services")
+        let servicesItem = NSMenuItem(title: L10n.t("Services"), action: nil, keyEquivalent: "")
+        let servicesMenu = NSMenu(title: L10n.t("Services"))
         servicesItem.submenu = servicesMenu
         appMenu.addItem(servicesItem)
         NSApp.servicesMenu = servicesMenu
         appMenu.addItem(.separator())
         let hideItem = NSMenuItem(
-            title: "Hide Unpeel",
+            title: L10n.t("Hide Unpeel"),
             action: #selector(NSApplication.hide(_:)),
             keyEquivalent: "h"
         )
         hideItem.target = NSApp
         appMenu.addItem(hideItem)
         let hideOthersItem = NSMenuItem(
-            title: "Hide Others",
+            title: L10n.t("Hide Others"),
             action: #selector(NSApplication.hideOtherApplications(_:)),
             keyEquivalent: "h"
         )
@@ -337,7 +350,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, SPUU
         hideOthersItem.target = NSApp
         appMenu.addItem(hideOthersItem)
         let showAllItem = NSMenuItem(
-            title: "Show All",
+            title: L10n.t("Show All"),
             action: #selector(NSApplication.unhideAllApplications(_:)),
             keyEquivalent: ""
         )
@@ -345,7 +358,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, SPUU
         appMenu.addItem(showAllItem)
         appMenu.addItem(.separator())
         appMenu.addItem(NSMenuItem(
-            title: "Quit Unpeel",
+            title: L10n.t("Quit Unpeel"),
             action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: "q"
         ))
@@ -356,9 +369,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, SPUU
         // current project (UnpeelStore.launchDefaultSession). Deliberately no
         // tabs/panes items — the sidebar (one row per session) is the model.
         let sessionItem = NSMenuItem()
-        let sessionMenu = NSMenu(title: "Session")
+        let sessionMenu = NSMenu(title: L10n.t("Session"))
         let newSessionItem = NSMenuItem(
-            title: "New Session",
+            title: L10n.t("New Session"),
             action: #selector(newSessionFromMenu),
             keyEquivalent: "n"
         )
@@ -367,21 +380,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, SPUU
         // ⌘T follows the user's Appearance preference: immediate shell or
         // the preset screen. Validation refreshes this item's visible title.
         let newTerminalItem = NSMenuItem(
-            title: "New Terminal",
+            title: L10n.t("New Terminal"),
             action: #selector(newTerminalFromMenu),
             keyEquivalent: "t"
         )
         newTerminalItem.target = self
         sessionMenu.addItem(newTerminalItem)
         let splitPaneItem = NSMenuItem(
-            title: "Split Pane Right",
+            title: L10n.t("Split Pane Right"),
             action: #selector(splitPaneFromMenu),
             keyEquivalent: "d"
         )
         splitPaneItem.target = self
         sessionMenu.addItem(splitPaneItem)
         let splitPaneDownItem = NSMenuItem(
-            title: "Split Pane Down",
+            title: L10n.t("Split Pane Down"),
             action: #selector(splitPaneDownFromMenu),
             keyEquivalent: "d"
         )
@@ -390,7 +403,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, SPUU
         sessionMenu.addItem(splitPaneDownItem)
         // ⇧⌘↩ (Ghostty parity): temporarily maximize the active pane.
         let zoomPaneItem = NSMenuItem(
-            title: "Zoom Pane",
+            title: L10n.t("Zoom Pane"),
             action: #selector(zoomPaneFromMenu),
             keyEquivalent: "\r"
         )
@@ -398,7 +411,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, SPUU
         zoomPaneItem.target = self
         sessionMenu.addItem(zoomPaneItem)
         let equalizeItem = NSMenuItem(
-            title: "Equalize Splits",
+            title: L10n.t("Equalize Splits"),
             action: #selector(equalizeSplitsFromMenu),
             keyEquivalent: ""
         )
@@ -413,7 +426,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, SPUU
         ]
         for (title, action, key) in focusDirections {
             let item = NSMenuItem(
-                title: title,
+                title: L10n.t(title),
                 action: action,
                 keyEquivalent: String(
                     utf16CodeUnits: [unichar(key)], count: 1
@@ -427,7 +440,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, SPUU
         // ⌥⌘B — the sidebar chord family (⌘B toggles the sidebar). Replaces
         // the old footer collapse-all button.
         let collapseAllItem = NSMenuItem(
-            title: "Collapse All Folders",
+            title: L10n.t("Collapse All Folders"),
             action: #selector(collapseAllFoldersFromMenu),
             keyEquivalent: "b"
         )
@@ -438,7 +451,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, SPUU
         // The palette is the discoverable home for "jump to anything";
         // the key equivalent works app-wide, including over the terminal.
         let paletteItem = NSMenuItem(
-            title: "Command Palette",
+            title: L10n.t("Command Palette"),
             action: #selector(toggleCommandPaletteFromMenu),
             keyEquivalent: "k"
         )
@@ -449,7 +462,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, SPUU
         // intercepted before apps see them). Routed via notification to the
         // displayed session's gallery chip, which owns the capture flow.
         let screenshotItem = NSMenuItem(
-            title: "Take Screenshot…",
+            title: L10n.t("Take Screenshot…"),
             action: #selector(takeScreenshotFromMenu),
             keyEquivalent: "s"
         )
@@ -460,25 +473,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, SPUU
         mainMenu.addItem(sessionItem)
 
         let editItem = NSMenuItem()
-        let editMenu = NSMenu(title: "Edit")
+        let editMenu = NSMenu(title: L10n.t("Edit"))
         editMenu.addItem(NSMenuItem(
-            title: "Undo", action: Selector(("undo:")), keyEquivalent: "z"
+            title: L10n.t("Undo"), action: Selector(("undo:")), keyEquivalent: "z"
         ))
         editMenu.addItem(NSMenuItem(
-            title: "Redo", action: Selector(("redo:")), keyEquivalent: "Z"
+            title: L10n.t("Redo"), action: Selector(("redo:")), keyEquivalent: "Z"
         ))
         editMenu.addItem(.separator())
         editMenu.addItem(NSMenuItem(
-            title: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x"
+            title: L10n.t("Cut"), action: #selector(NSText.cut(_:)), keyEquivalent: "x"
         ))
         editMenu.addItem(NSMenuItem(
-            title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c"
+            title: L10n.t("Copy"), action: #selector(NSText.copy(_:)), keyEquivalent: "c"
         ))
         editMenu.addItem(NSMenuItem(
-            title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v"
+            title: L10n.t("Paste"), action: #selector(NSText.paste(_:)), keyEquivalent: "v"
         ))
         editMenu.addItem(NSMenuItem(
-            title: "Select All",
+            title: L10n.t("Select All"),
             action: #selector(NSText.selectAll(_:)),
             keyEquivalent: "a"
         ))
@@ -489,21 +502,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, SPUU
         // keybinds are cleared (applySurfaceKeybinds) — a focused surface
         // consumes any chord it has a binding for before NSMenu runs.
         let findItem = NSMenuItem(
-            title: "Find…",
+            title: L10n.t("Find…"),
             action: #selector(findInTerminalFromMenu),
             keyEquivalent: "f"
         )
         findItem.target = self
         editMenu.addItem(findItem)
         let findNextItem = NSMenuItem(
-            title: "Find Next",
+            title: L10n.t("Find Next"),
             action: #selector(findNextInTerminalFromMenu),
             keyEquivalent: "g"
         )
         findNextItem.target = self
         editMenu.addItem(findNextItem)
         let findPreviousItem = NSMenuItem(
-            title: "Find Previous",
+            title: L10n.t("Find Previous"),
             action: #selector(findPreviousInTerminalFromMenu),
             keyEquivalent: "G"
         )
@@ -519,16 +532,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, SPUU
         // survives a restart. ⌘+ is ⌘⇧= on US layouts, so a hidden ⌘= twin
         // keeps the unshifted chord working (allowsKeyEquivalentWhenHidden).
         let viewItem = NSMenuItem()
-        let viewMenu = NSMenu(title: "View")
+        let viewMenu = NSMenu(title: L10n.t("View"))
         let increaseFontItem = NSMenuItem(
-            title: "Increase Font Size",
+            title: L10n.t("Increase Font Size"),
             action: #selector(increaseTerminalFontSizeFromMenu),
             keyEquivalent: "+"
         )
         increaseFontItem.target = self
         viewMenu.addItem(increaseFontItem)
         let increaseFontEqualsItem = NSMenuItem(
-            title: "Increase Font Size",
+            title: L10n.t("Increase Font Size"),
             action: #selector(increaseTerminalFontSizeFromMenu),
             keyEquivalent: "="
         )
@@ -537,14 +550,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, SPUU
         increaseFontEqualsItem.allowsKeyEquivalentWhenHidden = true
         viewMenu.addItem(increaseFontEqualsItem)
         let decreaseFontItem = NSMenuItem(
-            title: "Decrease Font Size",
+            title: L10n.t("Decrease Font Size"),
             action: #selector(decreaseTerminalFontSizeFromMenu),
             keyEquivalent: "-"
         )
         decreaseFontItem.target = self
         viewMenu.addItem(decreaseFontItem)
         let resetFontItem = NSMenuItem(
-            title: "Reset Font Size",
+            title: L10n.t("Reset Font Size"),
             action: #selector(resetTerminalFontSizeFromMenu),
             keyEquivalent: "0"
         )
@@ -557,27 +570,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, SPUU
         // a terminal is shown, then falls back to closing the window on
         // settings/library/empty screens. Validation keeps the label honest.
         let windowItem = NSMenuItem()
-        let windowMenu = NSMenu(title: "Window")
+        let windowMenu = NSMenu(title: L10n.t("Window"))
         let closeItem = NSMenuItem(
-            title: "Close Window",
+            title: L10n.t("Close Window"),
             action: #selector(closePaneOrWindowFromMenu),
             keyEquivalent: "w"
         )
         closeItem.target = self
         windowMenu.addItem(closeItem)
         windowMenu.addItem(NSMenuItem(
-            title: "Minimize",
+            title: L10n.t("Minimize"),
             action: #selector(NSWindow.performMiniaturize(_:)),
             keyEquivalent: "m"
         ))
         windowMenu.addItem(NSMenuItem(
-            title: "Zoom",
+            title: L10n.t("Zoom"),
             action: #selector(NSWindow.performZoom(_:)),
             keyEquivalent: ""
         ))
         windowMenu.addItem(.separator())
         windowMenu.addItem(NSMenuItem(
-            title: "Bring All to Front",
+            title: L10n.t("Bring All to Front"),
             action: #selector(NSApplication.arrangeInFront(_:)),
             keyEquivalent: ""
         ))
@@ -586,9 +599,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, SPUU
         NSApp.windowsMenu = windowMenu
 
         let helpItem = NSMenuItem()
-        let helpMenu = NSMenu(title: "Help")
+        let helpMenu = NSMenu(title: L10n.t("Help"))
         let helpDocsItem = NSMenuItem(
-            title: "Unpeel Help",
+            title: L10n.t("Unpeel Help"),
             action: #selector(openHelpFromMenu),
             keyEquivalent: ""
         )
@@ -734,8 +747,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, SPUU
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(closePaneOrWindowFromMenu) {
             menuItem.title = store?.canCloseActiveTerminalPane == true
-                ? "Close Pane"
-                : "Close Window"
+                ? L10n.t("Close Pane")
+                : L10n.t("Close Window")
             return window != nil
         }
         if menuItem.action == #selector(takeScreenshotFromMenu) {
@@ -754,8 +767,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, SPUU
         {
             if menuItem.action == #selector(newTerminalFromMenu) {
                 menuItem.title = store?.commandTAction == .presetPicker
-                    ? "Choose Preset…"
-                    : "New Terminal"
+                    ? L10n.t("Choose Preset…")
+                    : L10n.t("New Terminal")
             }
             return store?.selectedHostScope == .local
         }
