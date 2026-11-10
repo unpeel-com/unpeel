@@ -134,6 +134,9 @@ step "building native Rust bridge (release)"
 # so it is always built from the same tree as the server binaries below.
 "$NATIVE_DIR/build-rust-bridge.sh" release
 
+step "syncing String Catalog → zh-Hans.lproj"
+"$NATIVE_DIR/sync-localizations.sh"
+
 step "building UnpeelNative (release)"
 # SwiftPM's generated Bundle.module accessor bakes its absolute .build path
 # into executable targets. Packaged resources must go through
@@ -406,6 +409,12 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleIdentifier</key>      <string>com.unpeel.native</string>
     <key>CFBundleIconName</key>        <string>AppIcon</string>
     <key>CFBundlePackageType</key>     <string>APPL</string>
+    <key>CFBundleDevelopmentRegion</key> <string>en</string>
+    <key>CFBundleLocalizations</key>
+    <array>
+        <string>en</string>
+        <string>zh-Hans</string>
+    </array>
     <key>CFBundleShortVersionString</key> <string>$VERSION</string>
     <key>CFBundleVersion</key>         <string>$BUILD</string>
     <key>NSHumanReadableCopyright</key> <string>© $(date +%Y) UX Themes AS</string>

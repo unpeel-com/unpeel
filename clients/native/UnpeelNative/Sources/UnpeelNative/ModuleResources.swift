@@ -12,14 +12,20 @@ import Foundation
 enum ModuleResources {
     private static let bundleName = "UnpeelNative_UnpeelNative.bundle"
 
-    static func url(forResource name: String, withExtension ext: String) -> URL? {
-        var dirs: [URL] = []
-        if let resources = Bundle.main.resourceURL {
-            dirs.append(resources) // packaged app: Contents/Resources/
+    /// The SwiftPM resource bundle that holds copied PNGs and compiled
+    /// String Catalog `.lproj` folders. Prefer this over `Bundle.module`.
+    static var bundle: Bundle? {
+        for dir in searchDirectories {
+            let url = dir.appendingPathComponent(bundleName)
+            if let bundle = Bundle(url: url) {
+                return bundle
+            }
         }
-        dirs.append(Bundle.main.bundleURL) // bare executable: next to the binary in .build/
+        return nil
+    }
 
-        for dir in dirs {
+    static func url(forResource name: String, withExtension ext: String) -> URL? {
+        for dir in searchDirectories {
             let url = dir
                 .appendingPathComponent(bundleName)
                 .appendingPathComponent("\(name).\(ext)")
@@ -28,5 +34,14 @@ enum ModuleResources {
             }
         }
         return nil
+    }
+
+    private static var searchDirectories: [URL] {
+        var dirs: [URL] = []
+        if let resources = Bundle.main.resourceURL {
+            dirs.append(resources) // packaged app: Contents/Resources/
+        }
+        dirs.append(Bundle.main.bundleURL) // bare executable: next to the binary in .build/
+        return dirs
     }
 }
