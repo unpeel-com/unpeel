@@ -203,7 +203,10 @@ Detail lives in `docs/agents/clients/` (`dev-builds.md`, `terminal.md`,
   the Sparkle feed baked in — rebuild before testing. `bun run
   dev:native:blank` runs against a throwaway `UNPEEL_HOME` (isolates
   UserDefaults too). Ghostty surfaces cannot initialize headless: verify
-  Metal rendering interactively only.
+  Metal rendering interactively only. UI language strings: edit
+  `clients/native/UnpeelNative/Localization/Localizable.xcstrings`, then
+  `clients/native/sync-localizations.sh` (also run by `build-app.sh`) before
+  packaging; detail in `docs/agents/clients/terminal.md`.
 - Tests: `clients/native/test-native.sh` (debug bridge + `swift test`; the
   conformance tests read this checkout's `protocol/`, `UNPEEL_PROTOCOL_DIR`
   overrides); `swift test --package-path clients/shared/UnpeelShared`;
