@@ -1787,17 +1787,17 @@ struct TerminalPaneContainer: View {
         if let entry {
             if entry.supportsTranscriptCopy {
                 let transcriptMenu = controller.makeMenu()
-                transcriptMenu.addItem(controller.item("Last 20 entries") {
+                transcriptMenu.addItem(controller.item(L10n.t("Last 20 entries")) {
                     store.copyTranscriptMarkdown(entry.id, entries: 20)
                 })
-                transcriptMenu.addItem(controller.item("Last 50 entries") {
+                transcriptMenu.addItem(controller.item(L10n.t("Last 50 entries")) {
                     store.copyTranscriptMarkdown(entry.id, entries: 50)
                 })
-                transcriptMenu.addItem(controller.item("Whole conversation") {
+                transcriptMenu.addItem(controller.item(L10n.t("Whole conversation")) {
                     store.copyTranscriptMarkdown(entry.id, entries: 0)
                 })
                 let transcriptItem = NSMenuItem(
-                    title: "Copy transcript",
+                    title: L10n.t("Copy transcript"),
                     action: nil,
                     keyEquivalent: ""
                 )
@@ -1805,7 +1805,7 @@ struct TerminalPaneContainer: View {
                 menu.addItem(transcriptItem)
             }
 
-            menu.addItem(controller.item("Copy session ID") {
+            menu.addItem(controller.item(L10n.t("Copy session ID")) {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(
                     "Unpeel Session ID: \(entry.id)", forType: .string
@@ -1818,13 +1818,13 @@ struct TerminalPaneContainer: View {
             // (detaching from its split first); a panel pane the way out.
             if isAuxiliaryRegion, store.sessionIsInProjectSidebar(entry.id) {
                 menu.addItem(.separator())
-                menu.addItem(controller.item("Unpin from global project sidebar") {
+                menu.addItem(controller.item(L10n.t("Unpin from global project sidebar")) {
                     store.moveSessionToMainArea(entry.id)
                 })
             } else if !isAuxiliaryRegion,
                       store.canMoveSessionToProjectSidebar(entry.id) {
                 menu.addItem(.separator())
-                menu.addItem(controller.item("Pin to global project sidebar") {
+                menu.addItem(controller.item(L10n.t("Pin to global project sidebar")) {
                     store.moveSessionToProjectSidebar(entry.id)
                 })
             }
@@ -1841,9 +1841,9 @@ struct TerminalPaneContainer: View {
             // Agents, with their manage entry at the bottom of the list.
             menu.addItem(.separator())
             if #available(macOS 14, *) {
-                menu.addItem(.sectionHeader(title: "Agents"))
+                menu.addItem(.sectionHeader(title: L10n.t("Agents")))
             } else {
-                let header = NSMenuItem(title: "Agents", action: nil, keyEquivalent: "")
+                let header = NSMenuItem(title: L10n.t("Agents"), action: nil, keyEquivalent: "")
                 header.isEnabled = false
                 menu.addItem(header)
             }
@@ -1854,15 +1854,15 @@ struct TerminalPaneContainer: View {
                     action: { launch(preset, into: pane) }
                 ))
             }
-            menu.addItem(controller.item("Manage Agents…") {
+            menu.addItem(controller.item(L10n.t("Manage Agents…")) {
                 store.openSettings(tab: .agents)
             })
             // Plugins, likewise.
             menu.addItem(.separator())
             if #available(macOS 14, *) {
-                menu.addItem(.sectionHeader(title: "Plugins"))
+                menu.addItem(.sectionHeader(title: L10n.t("Plugins")))
             } else {
-                let header = NSMenuItem(title: "Plugins", action: nil, keyEquivalent: "")
+                let header = NSMenuItem(title: L10n.t("Plugins"), action: nil, keyEquivalent: "")
                 header.isEnabled = false
                 menu.addItem(header)
             }
@@ -1873,15 +1873,15 @@ struct TerminalPaneContainer: View {
                     action: { launch(preset, into: pane) }
                 ))
             }
-            menu.addItem(controller.item("Manage Plugins…") {
+            menu.addItem(controller.item(L10n.t("Manage Plugins…")) {
                 store.openSettings(tab: .plugins)
             })
         }
 
         if let group {
             if !menu.items.isEmpty { menu.addItem(.separator()) }
-            menu.addItem(controller.item("Detach Pane") { detachPane(pane) })
-            menu.addItem(controller.item("Exit Multi-Pane View") {
+            menu.addItem(controller.item(L10n.t("Detach Pane")) { detachPane(pane) })
+            menu.addItem(controller.item(L10n.t("Exit Multi-Pane View")) {
                 store.closeTerminalPaneGroup(group.id)
             })
         }
@@ -1895,16 +1895,16 @@ struct TerminalPaneContainer: View {
         controller: PaneMoreMenuController
     ) {
         if store.sessionCanResumeAgent(entry.id) {
-            menu.addItem(controller.item("Resume Agent") {
+            menu.addItem(controller.item(L10n.t("Resume Agent")) {
                 store.resumeAgentOrSession(entry.id)
             })
         } else if store.sessionCanRestart(entry.id) {
-            menu.addItem(controller.item("Resume") {
+            menu.addItem(controller.item(L10n.t("Resume")) {
                 store.resumeAgentOrSession(entry.id)
             })
         }
         if store.sessionCanRestartApp(entry.id) {
-            menu.addItem(controller.item("Restart App") {
+            menu.addItem(controller.item(L10n.t("Restart App")) {
                 store.restartApp(entry.id)
             })
         }
@@ -1912,7 +1912,7 @@ struct TerminalPaneContainer: View {
         if store.sessionCanNotifyWhenDone(entry.id) {
             let enabled = store.notifyWhenDoneSessionIDs.contains(entry.id)
             menu.addItem(controller.item(
-                "Notify when done",
+                L10n.t("Notify when done"),
                 state: enabled ? .on : .off
             ) {
                 store.setNotifyWhenDone(entry.id, enabled: !enabled)
@@ -1921,7 +1921,7 @@ struct TerminalPaneContainer: View {
 
         if entry.status == .attention,
            store.sessionCanClearAttention(entry.id) {
-            menu.addItem(controller.item("Clear attention") {
+            menu.addItem(controller.item(L10n.t("Clear attention")) {
                 store.clearAttention(entry.id)
             })
         }
@@ -1929,12 +1929,12 @@ struct TerminalPaneContainer: View {
         menu.addItem(.separator())
 
         if store.sessionCanStop(entry.id) {
-            menu.addItem(controller.item("Stop") {
+            menu.addItem(controller.item(L10n.t("Stop")) {
                 requestPaneStop(entry)
             })
         }
         menu.addItem(controller.item(
-            entry.isLive ? "Remove session" : "Remove from list"
+            entry.isLive ? L10n.t("Remove session") : L10n.t("Remove from list")
         ) {
             // For a non-resumable launch this is the pane's counterpart to
             // the sidebar X: there is nothing to resume, so remove it in

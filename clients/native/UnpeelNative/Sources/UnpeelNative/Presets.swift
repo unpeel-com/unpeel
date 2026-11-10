@@ -43,13 +43,15 @@ struct Preset: Identifiable, Hashable, Codable {
 extension Preset {
     /// Blank-terminal pseudo-preset (stores/presets.ts:14-23).
     static let newTerminalID = "__new_terminal__"
-    static let newTerminal = Preset(
-        id: newTerminalID,
-        label: "Terminal",
-        command: "",
-        enabled: true,
-        quickLaunch: false
-    )
+    static var newTerminal: Preset {
+        Preset(
+            id: newTerminalID,
+            label: L10n.t("Terminal"),
+            command: "",
+            enabled: true,
+            quickLaunch: false
+        )
+    }
 
     var isNewTerminal: Bool { id == Preset.newTerminalID }
 

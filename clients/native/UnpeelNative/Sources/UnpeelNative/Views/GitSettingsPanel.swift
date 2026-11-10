@@ -26,13 +26,16 @@ struct GitSettingsPanel: View {
     private var canRead: Bool { runtime.supportsHostOperation(RemoteControlProtocol.gitSettingsReadCapability) }
     private var canWrite: Bool { runtime.supportsHostOperation(RemoteControlProtocol.gitSettingsSetCapability) }
     private var busy: Bool { submitting || settings?.checking == true || settings?.operation?.isRunning == true }
-    private var hostName: String { store.selectedScopeDisplayName ?? "This Mac" }
+    private var hostName: String { store.selectedScopeDisplayName ?? L10n.t("This Mac") }
 
     var body: some View {
         VStack(spacing: 0) {
             Form {
                 Section {} header: {
-                    SettingsPaneHeader(title: "Git", description: "GitHub access and Git identity on \(hostName).")
+                    SettingsPaneHeader(
+                        title: L10n.t("Git"),
+                        description: L10n.format("GitHub access and Git identity on %@.", hostName)
+                    )
                         .padding(.bottom, 4)
                 }
                 if canRead {
@@ -40,17 +43,17 @@ struct GitSettingsPanel: View {
                         githubSection(settings)
                         identitySection(settings)
                         Section {
-                            Text("These settings use this Host’s user account. Workspaces running under the same user share Git identity and GitHub sign-in.")
+                            Text(L10n.t("These settings use this Host’s user account. Workspaces running under the same user share Git identity and GitHub sign-in."))
                                 .font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
-                            Button("Refresh status") { perform(.init(action: "refresh")) }
+                            Button(L10n.t("Refresh status")) { perform(.init(action: "refresh")) }
                                 .disabled(busy || !canWrite)
                         }
                     } else {
-                        Section { ProgressView("Checking Git on this Host…").controlSize(.small) }
+                        Section { ProgressView(L10n.t("Checking Git on this Host…")).controlSize(.small) }
                     }
                 } else {
                     Section {
-                        Text("Connect to this workspace and update Unpeel on its Host to use Git settings.")
+                        Text(L10n.t("Connect to this workspace and update Unpeel on its Host to use Git settings."))
                             .foregroundStyle(Theme.mutedForeground)
                     }
                 }
@@ -64,17 +67,17 @@ struct GitSettingsPanel: View {
             if let sessionID = installerSessionID {
                 VStack(spacing: 0) {
                     HStack {
-                        Text("Install GitHub CLI on \(hostName)")
+                        Text(L10n.format("Install GitHub CLI on %@", hostName))
                         Spacer()
-                        Button("Check installation") { perform(.init(action: "refresh")) }.disabled(busy)
+                        Button(L10n.t("Check installation")) { perform(.init(action: "refresh")) }.disabled(busy)
                         Button { installerSessionID = nil; updateTerminal() } label: { Image(systemName: "xmark") }
-                            .accessibilityLabel("Hide setup terminal")
+                            .accessibilityLabel(L10n.t("Hide setup terminal"))
                     }.font(.system(size: 12)).padding(12)
                     if let pane = runtime.terminalPane(for: sessionID) {
                         RemoteTerminalPaneHostView(pane: pane, backgroundColor: Theme.terminalBackgroundNSColor, isActive: true)
                             .id(sessionID).frame(height: 230)
                     } else {
-                        RemoteTerminalPreparingView(sessionTitle: "GitHub CLI setup", state: runtime.connectionState)
+                        RemoteTerminalPreparingView(sessionTitle: L10n.t("GitHub CLI setup"), state: runtime.connectionState)
                             .frame(height: 230)
                     }
                 }.background(Theme.terminalBackground)
@@ -85,79 +88,85 @@ struct GitSettingsPanel: View {
             actionTask?.cancel()
             runtime.setAuxiliaryTerminalSessions([], owner: terminalOwner)
         }
-        .confirmationDialog("Disconnect GitHub on \(hostName)?", isPresented: Binding(
+        .confirmationDialog(L10n.format("Disconnect GitHub on %@?", hostName), isPresented: Binding(
             get: { disconnectAccount != nil }, set: { if !$0 { disconnectAccount = nil } }
         ), titleVisibility: .visible) {
             if let account = disconnectAccount {
-                Button("Disconnect @\(account)", role: .destructive) {
+                Button(L10n.format("Disconnect @%@", account), role: .destructive) {
                     disconnectAccount = nil
                     perform(.init(action: "disconnectGithub", login: account))
                 }
             }
-            Button("Cancel", role: .cancel) { disconnectAccount = nil }
+            Button(L10n.t("Cancel"), role: .cancel) { disconnectAccount = nil }
         } message: {
-            Text("Removes this account from GitHub CLI on this Host. Other workspaces using the same server user are affected. It does not revoke the authorization on GitHub.")
+            Text(L10n.t("Removes this account from GitHub CLI on this Host. Other workspaces using the same server user are affected. It does not revoke the authorization on GitHub."))
         }
     }
 
     @ViewBuilder
     private func githubSection(_ settings: RemoteGitSettings) -> some View {
-        Section("GitHub") {
+        Section(L10n.t("GitHub")) {
             if !settings.githubCliInstalled {
-                Text("GitHub CLI is not installed on this Host.")
+                Text(L10n.t("GitHub CLI is not installed on this Host."))
                 if let command = settings.githubCliInstallCommand {
                     Text(command).font(.system(size: 12, design: .monospaced)).textSelection(.enabled)
-                    Button("Install GitHub CLI…") { install(command) }
+                    Button(L10n.t("Install GitHub CLI…")) { install(command) }
                         .disabled(submitting || runtime.snapshot?.projects.isEmpty != false)
                     if runtime.snapshot?.projects.isEmpty != false {
-                        Text("Add a folder to this workspace to open a setup terminal.")
+                        Text(L10n.t("Add a folder to this workspace to open a setup terminal."))
                             .font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
                     }
                 }
-                Link("GitHub CLI installation instructions", destination: URL(string: "https://cli.github.com/")!)
+                Link(L10n.t("GitHub CLI installation instructions"), destination: URL(string: "https://cli.github.com/")!)
             } else {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(settings.github.state == "connected" ? "Connected as @\(settings.github.login ?? "")" : settings.github.state == "error" ? "GitHub connection needs attention" : "Not connected")
+                        Text(
+                            settings.github.state == "connected"
+                                ? L10n.format("Connected as @%@", settings.github.login ?? "")
+                                : settings.github.state == "error"
+                                    ? L10n.t("GitHub connection needs attention")
+                                    : L10n.t("Not connected")
+                        )
                         if settings.github.environmentToken {
-                            Text("Authentication comes from an environment token on this Host.")
+                            Text(L10n.t("Authentication comes from an environment token on this Host."))
                                 .font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
                         }
                     }
                     Spacer()
                     if busy { ProgressView().controlSize(.small) }
                     if let login = settings.github.login, !settings.github.environmentToken {
-                        Button("Disconnect…") { disconnectAccount = login }.disabled(busy || !canWrite)
+                        Button(L10n.t("Disconnect…")) { disconnectAccount = login }.disabled(busy || !canWrite)
                     }
                     if settings.github.state != "connected", !settings.github.environmentToken {
-                        Button("Sign in with GitHub") {
+                        Button(L10n.t("Sign in with GitHub")) {
                             let action = RemoteGitSettingsAction(action: "connectGithub")
                             initiatedLoginID = action.requestID
                             perform(action)
                         }.disabled(busy || !canWrite)
                     }
                 }
-                Text("GitHub credentials stay on this Host. This sign-in flow does not send them to Unpeel’s service.")
+                Text(L10n.t("GitHub credentials stay on this Host. This sign-in flow does not send them to Unpeel’s service."))
                     .font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
                 if settings.github.state == "connected", !settings.github.environmentToken {
                     switch settings.github.credentialStorage {
                     case "keyring":
-                        Text("Stored in this Host’s system credential store.")
+                        Text(L10n.t("Stored in this Host’s system credential store."))
                             .font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
                     case "file":
-                        Text("GitHub CLI is storing the token in a plain-text file on this Host. Configure a system credential store and sign in again to use it.")
+                        Text(L10n.t("GitHub CLI is storing the token in a plain-text file on this Host. Configure a system credential store and sign in again to use it."))
                             .font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
                     default:
-                        Text("This GitHub CLI version does not report credential storage. Check it on the Host with gh auth status.")
+                        Text(L10n.t("This GitHub CLI version does not report credential storage. Check it on the Host with gh auth status."))
                             .font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
                     }
                 }
                 if settings.github.state == "connected" {
                     if settings.github.gitConfigured {
-                        Label("Git HTTPS access configured", systemImage: "checkmark.circle")
+                        Label(L10n.t("Git HTTPS access configured"), systemImage: "checkmark.circle")
                             .foregroundStyle(Theme.mutedForeground)
                     } else {
-                        Button("Configure Git access") { perform(.init(action: "setupGit")) }
+                        Button(L10n.t("Configure Git access")) { perform(.init(action: "setupGit")) }
                             .disabled(busy || !canWrite || !settings.gitInstalled)
                     }
                 }
@@ -165,14 +174,14 @@ struct GitSettingsPanel: View {
                     if let code = operation.userCode, operation.githubAuthorizationURL != nil {
                         VStack(alignment: .leading, spacing: 8) {
                             Text(code).font(.system(size: 24, weight: .semibold, design: .monospaced)).textSelection(.enabled)
-                            Text("Paste this code into GitHub in your browser to authorize \(hostName).")
+                            Text(L10n.format("Paste this code into GitHub in your browser to authorize %@.", hostName))
                                 .font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
-                            Button("Copy Code and Open GitHub") { openAuthorization(operation) }
+                            Button(L10n.t("Copy Code and Open GitHub")) { openAuthorization(operation) }
                         }
                     } else {
-                        Text("Starting GitHub sign-in…").foregroundStyle(Theme.mutedForeground)
+                        Text(L10n.t("Starting GitHub sign-in…")).foregroundStyle(Theme.mutedForeground)
                     }
-                    Button("Cancel sign-in") { perform(.init(action: "cancelGithub", operationID: operation.id)) }
+                    Button(L10n.t("Cancel sign-in")) { perform(.init(action: "cancelGithub", operationID: operation.id)) }
                         .disabled(submitting || !canWrite)
                 }
             }
@@ -180,16 +189,16 @@ struct GitSettingsPanel: View {
     }
 
     private func identitySection(_ settings: RemoteGitSettings) -> some View {
-        Section("Git identity") {
+        Section(L10n.t("Git identity")) {
             if settings.gitInstalled {
-                TextField("Name", text: Binding(get: { name }, set: { name = $0; identityEdited = true }))
-                TextField("Email", text: Binding(get: { email }, set: { email = $0; identityEdited = true }))
-                Text("Used for new commits. Repository-specific Git configuration can override these defaults.")
+                TextField(L10n.t("Name"), text: Binding(get: { name }, set: { name = $0; identityEdited = true }))
+                TextField(L10n.t("Email"), text: Binding(get: { email }, set: { email = $0; identityEdited = true }))
+                Text(L10n.t("Used for new commits. Repository-specific Git configuration can override these defaults."))
                     .font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
-                Button("Save identity") { perform(.init(action: "setIdentity", name: name, email: email)) }
+                Button(L10n.t("Save identity")) { perform(.init(action: "setIdentity", name: name, email: email)) }
                     .disabled(busy || !canWrite || (name == settings.name && email == settings.email))
             } else {
-                Text("Git is not installed on this Host.").foregroundStyle(Theme.mutedForeground)
+                Text(L10n.t("Git is not installed on this Host.")).foregroundStyle(Theme.mutedForeground)
             }
         }
     }
@@ -230,7 +239,9 @@ struct GitSettingsPanel: View {
         guard let url = operation.githubAuthorizationURL, let code = operation.userCode else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(code, forType: .string)
-        if !NSWorkspace.shared.open(url) { errorMessage = "Could not open GitHub. Open github.com/login/device and enter the code above." }
+        if !NSWorkspace.shared.open(url) {
+            errorMessage = L10n.t("Could not open GitHub. Open github.com/login/device and enter the code above.")
+        }
     }
 
     @MainActor private func perform(_ action: RemoteGitSettingsAction) {

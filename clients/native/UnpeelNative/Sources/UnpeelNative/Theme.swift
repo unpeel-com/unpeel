@@ -208,14 +208,14 @@ enum AppTint: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .none: return "Default"
-        case .peel: return "Peel"
-        case .amber: return "Amber"
-        case .green: return "Green"
-        case .teal: return "Teal"
-        case .blue: return "Blue"
-        case .indigo: return "Indigo"
-        case .violet: return "Violet"
+        case .none: return L10n.t("Default")
+        case .peel: return L10n.t("Peel")
+        case .amber: return L10n.t("Amber")
+        case .green: return L10n.t("Green")
+        case .teal: return L10n.t("Teal")
+        case .blue: return L10n.t("Blue")
+        case .indigo: return L10n.t("Indigo")
+        case .violet: return L10n.t("Violet")
         }
     }
 

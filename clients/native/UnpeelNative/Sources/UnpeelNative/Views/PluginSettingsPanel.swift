@@ -38,6 +38,7 @@ struct PluginSettingsPanel: View {
     @State private var showManualSetup = false
     @State private var bannerDismissed = UserDefaults.standard.bool(forKey: PluginSettingsPanel.bannerDismissedKey)
     @ObservedObject private var terminalFont = TerminalFontModel.shared
+    @ObservedObject private var localization = LocalizationStore.shared
 
     /// Per-viewer convenience only: the "install these integrations?" banner
     /// stays dismissed on this Mac; the row-level buttons never hide.
@@ -73,19 +74,25 @@ struct PluginSettingsPanel: View {
             switch self { case .header(let title): "header:\(title)"; case .item(let item): item.id }
         }
     }
-    private var title: String { scope == .agents ? "Agents" : "Plugins" }
+    private var title: String { scope == .agents ? L10n.t("Agents") : L10n.t("Plugins") }
     private var description: String {
         switch scope {
         case .agents:
-            return "Install agent CLIs on this Host, install their Unpeel integrations, and choose what each one launches."
+            return L10n.t(
+                "Install agent CLIs on this Host, install their Unpeel integrations, and choose what each one launches.")
         case .plugins:
-            return "Unpeel Apps that open files and resources in a pane beside your agents. "
-                + "Install and update them here; develop your own with `unpeel apps link`."
+            return L10n.t(
+                "Unpeel Apps that open files and resources in a pane beside your agents. "
+                    + "Install and update them here; develop your own with `unpeel apps link`.")
         }
     }
-    private var searchPrompt: String { scope == .agents ? "Search agents" : "Search plugins" }
+    private var searchPrompt: String {
+        scope == .agents ? L10n.t("Search agents") : L10n.t("Search plugins")
+    }
     private var emptyText: String {
-        scope == .agents ? "No agents match your search." : "No plugins match your search."
+        scope == .agents
+            ? L10n.t("No agents match your search.")
+            : L10n.t("No plugins match your search.")
     }
     private var canConnect: Bool {
         runtime.supportsHostOperation(RemoteHostRuntime.HostOperation.integrationsInstall)
@@ -155,9 +162,9 @@ struct PluginSettingsPanel: View {
                 .padding(8)
                 .background(Theme.foreground.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
                 HStack(spacing: 8) {
-                    Text("Show").fixedSize()
-                    Picker("Show", selection: $filter) {
-                        ForEach(PluginFilter.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    Text(L10n.t("Show")).fixedSize()
+                    Picker(L10n.t("Show"), selection: $filter) {
+                        ForEach(PluginFilter.allCases, id: \.self) { Text(L10n.t($0.rawValue)).tag($0) }
                     }.pickerStyle(.segmented).labelsHidden().frame(width: 280)
                 }
             }
@@ -168,12 +175,15 @@ struct PluginSettingsPanel: View {
                     .padding(.horizontal, 20).padding(.bottom, 12)
             }
             if runtime.snapshot == nil {
-                ProgressView("Connecting to workspace…").frame(maxWidth: .infinity, maxHeight: .infinity)
+                ProgressView(L10n.t("Connecting to workspace…"))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 5) {
                         if !canReorder {
-                            Label("Update Unpeel on this Host to reorder \(title.lowercased()).", systemImage: "info.circle")
+                            Label(
+                                L10n.format("Update Unpeel on this Host to reorder %@.", title.lowercased()),
+                                systemImage: "info.circle")
                                 .font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
                         }
                         if !unconnectedAgents.isEmpty, canConnect, !bannerDismissed, search.isEmpty {
@@ -184,7 +194,7 @@ struct PluginSettingsPanel: View {
                         ForEach(entries) { entry in
                             switch entry {
                             case .header(let title):
-                                Text(title).font(.system(size: 13)).foregroundStyle(Theme.mutedForeground)
+                                Text(L10n.t(title)).font(.system(size: 13)).foregroundStyle(Theme.mutedForeground)
                                     .padding(.top, entry.id == entries.first?.id ? 0 : 12)
                                     .padding(.bottom, 5).padding(.horizontal, 4)
                             case .item(let item):
@@ -192,8 +202,8 @@ struct PluginSettingsPanel: View {
                                     .background(PluginDragAnchor(controller: drag, id: item.id))
                                     .modifier(PluginRowDragEffects(controller: drag, id: item.id))
                                     .transition(.opacity)
-                                    .accessibilityAction(named: "Move up") { moveItem(item.id, by: -1) }
-                                    .accessibilityAction(named: "Move down") { moveItem(item.id, by: 1) }
+                                    .accessibilityAction(named: L10n.t("Move up")) { moveItem(item.id, by: -1) }
+                                    .accessibilityAction(named: L10n.t("Move down")) { moveItem(item.id, by: 1) }
                             }
                         }
                         if visibleItems.isEmpty {
@@ -274,7 +284,10 @@ struct PluginSettingsPanel: View {
             guard environment["UNPEEL_SNAPSHOT"] != nil,
                   let command = environment["UNPEEL_TEST_SETTINGS_COMMAND"], !command.isEmpty else { return }
             for _ in 0..<100 {
-                if canRunInstaller { runInstaller(id: "snapshot", title: "Installation terminal", command: command); return }
+                if canRunInstaller {
+                    runInstaller(id: "snapshot", title: L10n.t("Installation terminal"), command: command)
+                    return
+                }
                 do { try await Task.sleep(nanoseconds: 100_000_000) } catch { return }
             }
         }
@@ -330,7 +343,7 @@ struct PluginSettingsPanel: View {
                     .font(.system(size: 11)).monospacedDigit()
                     .foregroundStyle(Theme.mutedForeground)
                     .fixedSize().frame(height: 24)
-                    .help(item.installed ? "Installed version" : "Available version")
+                    .help(item.installed ? L10n.t("Installed version") : L10n.t("Available version"))
             }
             HStack(spacing: 10) {
                 integrationControl(item)
@@ -340,7 +353,7 @@ struct PluginSettingsPanel: View {
                         if !item.commands.isEmpty { quickButton(item) }
                         else { Color.clear }
                     }.frame(width: 22, height: 24)
-                    Toggle("Activate \(item.name)", isOn: Binding(get: { isActive(item) }, set: { value in
+                    Toggle(L10n.format("Activate %@", item.name), isOn: Binding(get: { isActive(item) }, set: { value in
                         withAnimation(motion) { activationOverrides[item.id] = value }
                         perform(id: item.id) {
                             do { try await runtime.setPluginActive(id: item.id, active: value) }
@@ -359,8 +372,14 @@ struct PluginSettingsPanel: View {
                             .frame(width: 18, height: 24)
                     }
                     .buttonStyle(.plain).foregroundStyle(Theme.mutedForeground)
-                    .accessibilityLabel(expanded.contains(item.id) ? "Hide \(item.name) details" : "Show \(item.name) details")
-                    .help(expanded.contains(item.id) ? "Hide details" : "Integration, capabilities, and manual setup")
+                    .accessibilityLabel(
+                        expanded.contains(item.id)
+                            ? L10n.format("Hide %@ details", item.name)
+                            : L10n.format("Show %@ details", item.name))
+                    .help(
+                        expanded.contains(item.id)
+                            ? L10n.t("Hide details")
+                            : L10n.t("Integration, capabilities, and manual setup"))
                     .background(PluginDragExclusion(controller: drag))
                 }
             }
@@ -379,19 +398,21 @@ struct PluginSettingsPanel: View {
             if pendingIntegrations.contains(item.id) {
                 ProgressView().controlSize(.small).frame(width: 22, height: 24)
             } else if item.integrationInstalled {
-                Label("Integration installed", systemImage: "checkmark.circle")
+                Label(L10n.t("Integration installed"), systemImage: "checkmark.circle")
                     .labelStyle(.iconOnly)
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.mutedForeground)
                     .frame(width: 22, height: 24)
-                    .help("Integration installed: Unpeel's hooks and MCP server are registered in \(item.name)'s own config.")
+                    .help(L10n.format(
+                        "Integration installed: Unpeel's hooks and MCP server are registered in %@'s own config.",
+                        item.name))
             } else {
-                Button("Install integration") { connect(item) }
+                Button(L10n.t("Install integration")) { connect(item) }
                     .buttonStyle(.bordered).controlSize(.small)
                     .disabled(!canConnect)
                     .help(canConnect
-                        ? "Register Unpeel's hooks and MCP server in \(item.name)'s own config"
-                        : "This Host does not support installing integrations")
+                        ? L10n.format("Register Unpeel's hooks and MCP server in %@'s own config", item.name)
+                        : L10n.t("This Host does not support installing integrations"))
                     .background(PluginDragExclusion(controller: drag))
             }
         }
@@ -431,24 +452,27 @@ struct PluginSettingsPanel: View {
                 .frame(width: 22, height: 24)
             VStack(alignment: .leading, spacing: 2) {
                 Text(count == 1
-                    ? "\(unconnectedAgents[0].name) is installed without its Unpeel integration"
-                    : "\(count) agents are installed without their Unpeel integration")
+                    ? L10n.format(
+                        "%@ is installed without its Unpeel integration",
+                        unconnectedAgents[0].name)
+                    : L10n.format("%d agents are installed without their Unpeel integration", count))
                     .font(.system(size: 12, weight: .semibold))
-                Text("Install it for exact busy and idle, done notifications, transcripts, precise resume, "
-                    + "and Unpeel's tools inside each agent. Each integration registers Unpeel's hooks and "
-                    + "MCP server in that agent's own configuration once.")
+                Text(L10n.t(
+                    "Install it for exact busy and idle, done notifications, transcripts, precise resume, "
+                        + "and Unpeel's tools inside each agent. Each integration registers Unpeel's hooks and "
+                        + "MCP server in that agent's own configuration once."))
                     .font(.system(size: 11)).foregroundStyle(Theme.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
-            Button(count == 1 ? "Install integration" : "Install all") { connectAll() }
+            Button(count == 1 ? L10n.t("Install integration") : L10n.t("Install all")) { connectAll() }
                 .buttonStyle(.borderedProminent).controlSize(.small)
                 .disabled(!pendingIntegrations.isEmpty)
             Button { dismissBanner() } label: {
                 Image(systemName: "xmark").font(.system(size: 10, weight: .semibold)).frame(width: 18, height: 24)
             }
             .buttonStyle(.plain).foregroundStyle(Theme.mutedForeground)
-            .accessibilityLabel("Dismiss")
+            .accessibilityLabel(L10n.t("Dismiss"))
         }
         .padding(.horizontal, 12).padding(.vertical, 10)
         .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
@@ -476,13 +500,13 @@ struct PluginSettingsPanel: View {
                     if pendingIntegrations.contains(item.id) {
                         ProgressView().controlSize(.small)
                     } else if item.integrationInstalled {
-                        Button("Reinstall") { connect(item) }
+                        Button(L10n.t("Reinstall")) { connect(item) }
                             .buttonStyle(.plain).font(.system(size: 11))
                             .foregroundStyle(Theme.mutedForeground)
                             .disabled(!canConnect)
-                            .help("Rewrite the hook script and MCP registration for this Host build")
+                            .help(L10n.t("Rewrite the hook script and MCP registration for this Host build"))
                     } else {
-                        Button("Install integration") { connect(item) }
+                        Button(L10n.t("Install integration")) { connect(item) }
                             .buttonStyle(.bordered).controlSize(.small)
                             .disabled(!canConnect)
                     }
@@ -490,7 +514,7 @@ struct PluginSettingsPanel: View {
             }
             if let manual = item.integrationManualCommand, !manual.isEmpty {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("MCP only, by hand (no hooks):")
+                    Text(L10n.t("MCP only, by hand (no hooks):"))
                         .font(.system(size: 11)).foregroundStyle(Theme.mutedForeground)
                     Text(manual)
                         .font(.system(size: 11, design: .monospaced))
@@ -507,50 +531,65 @@ struct PluginSettingsPanel: View {
     }
 
     private func integrationTitle(_ item: PluginSettingsItem) -> String {
-        guard item.integrationInstallable else { return "No Unpeel integration" }
-        return item.integrationInstalled ? "Unpeel integration installed" : "Unpeel integration not installed"
+        guard item.integrationInstallable else { return L10n.t("No Unpeel integration") }
+        return item.integrationInstalled
+            ? L10n.t("Unpeel integration installed")
+            : L10n.t("Unpeel integration not installed")
     }
     private func integrationSummary(_ item: PluginSettingsItem) -> String {
         guard item.integrationInstallable else {
-            return "\(item.name) has no hooks or MCP configuration Unpeel can register; Unpeel still recognizes it by name."
+            return L10n.format(
+                "%@ has no hooks or MCP configuration Unpeel can register; Unpeel still recognizes it by name.",
+                item.name)
         }
         return item.integrationSummary
-            ?? "Registers Unpeel's hooks and the unpeel MCP server in \(item.name)'s own configuration."
+            ?? L10n.format(
+                "Registers Unpeel's hooks and the unpeel MCP server in %@'s own configuration.",
+                item.name)
     }
     /// Capability honesty per state: hooks are the busy/idle authority, the
     /// screen tier is the declared fallback, detection alone grants identity.
     private func capabilitiesLine(_ item: PluginSettingsItem, meta: UnpeelRuntimeMetadata?) -> String {
         if item.integrationInstallable && item.integrationInstalled {
-            return "Exact busy and idle from hooks, done notifications, transcripts, precise resume, "
-                + "and Unpeel's tools inside \(item.name)."
+            return L10n.format(
+                "Exact busy and idle from hooks, done notifications, transcripts, precise resume, "
+                    + "and Unpeel's tools inside %@.",
+                item.name)
         }
         if item.integrationInstallable {
             return meta?.lifecycleFallback == "screen"
-                ? "Without it: busy and idle are read from the screen; no done notifications, "
-                    + "transcripts, precise resume, or Unpeel tools."
-                : "Without it: identity and tint only; no busy and idle, done notifications, "
-                    + "transcripts, precise resume, or Unpeel tools."
+                ? L10n.t(
+                    "Without it: busy and idle are read from the screen; no done notifications, "
+                        + "transcripts, precise resume, or Unpeel tools.")
+                : L10n.t(
+                    "Without it: identity and tint only; no busy and idle, done notifications, "
+                        + "transcripts, precise resume, or Unpeel tools.")
         }
         return meta?.lifecycleFallback == "screen"
-            ? "Identity and tint from detection; busy and idle from the screen; Resume uses \(item.name)'s own continue-last."
-            : "Identity and tint from detection; Resume uses \(item.name)'s own continue-last."
+            ? L10n.format(
+                "Identity and tint from detection; busy and idle from the screen; Resume uses %@'s own continue-last.",
+                item.name)
+            : L10n.format(
+                "Identity and tint from detection; Resume uses %@'s own continue-last.",
+                item.name)
     }
 
     /// The transparent alternative at the bottom of the Agents page: the one
     /// shim every integration registers, and the CLI verb. Per-agent
     /// commands sit in each row's details.
     private var manualSetup: some View {
-        DisclosureGroup("Manual setup", isExpanded: $showManualSetup) {
+        DisclosureGroup(L10n.t("Manual setup"), isExpanded: $showManualSetup) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Every integration points the agent's MCP config at one launcher on this Host. "
-                    + "Register it with an agent's own command (in the agent's details above) to "
-                    + "get Unpeel's tools without the hooks; Install integration does both.")
+                Text(L10n.t(
+                    "Every integration points the agent's MCP config at one launcher on this Host. "
+                        + "Register it with an agent's own command (in the agent's details above) to "
+                        + "get Unpeel's tools without the hooks; Install integration does both."))
                     .font(.system(size: 11)).foregroundStyle(Theme.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
                 if let shim = runtime.snapshot?.workspaceSettings?.mcpShimPath {
                     Text(shim).font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
                 }
-                Text("Or from any terminal: unpeel integrations install <agent>")
+                Text(L10n.t("Or from any terminal: unpeel integrations install <agent>"))
                     .font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.mutedForeground)
                     .textSelection(.enabled)
             }
@@ -564,10 +603,10 @@ struct PluginSettingsPanel: View {
     private var openersRow: some View {
         HStack(spacing: 8) {
             Image(systemName: "arrow.up.forward.app").foregroundStyle(Theme.mutedForeground)
-            Text("Choose which plugin opens each file type under Appearance ▸ Open resources.")
+            Text(L10n.t("Choose which plugin opens each file type under Appearance ▸ Open resources."))
                 .foregroundStyle(Theme.mutedForeground)
             Spacer(minLength: 8)
-            Button("Open resources…") { store.settingsTab = .appearance }
+            Button(L10n.t("Open resources…")) { store.settingsTab = .appearance }
                 .buttonStyle(.bordered).controlSize(.small)
         }
         .font(.system(size: 12)).padding(10)
@@ -578,25 +617,33 @@ struct PluginSettingsPanel: View {
         if isPending(item.id) { ProgressView().controlSize(.small) }
         else if let command = item.installCommand,
                 !item.installed || updates[item.id]?.updateAvailable == true {
-            Button(item.installed ? "Update" : "Install") {
-                runInstaller(id: item.id, title: "\(item.installed ? "Update" : "Install") \(item.name)", command: command)
+            Button(item.installed ? L10n.t("Update") : L10n.t("Install")) {
+                runInstaller(
+                    id: item.id,
+                    title: item.installed
+                        ? L10n.format("Update %@", item.name)
+                        : L10n.format("Install %@", item.name),
+                    command: command)
             }
             .buttonStyle(.bordered).controlSize(.small).disabled(!canRunInstaller)
             .help(updateHelp(item))
             .background(PluginDragExclusion(controller: drag))
         } else if !item.installed, let url = item.websiteURL.flatMap(URL.init(string:)) {
-            Link("Install", destination: url).font(.system(size: 11))
-                .help("View installation instructions for \(item.name)")
+            Link(L10n.t("Install"), destination: url).font(.system(size: 11))
+                .help(L10n.format("View installation instructions for %@", item.name))
                 .background(PluginDragExclusion(controller: drag))
         }
     }
 
     private func updateHelp(_ item: PluginSettingsItem) -> String {
         if let update = updates[item.id], let current = update.installedVersion {
-            if let latest = update.latestVersion { return "Update \(current) to \(latest)" }
-            return "Installed: \(current)"
+            if let latest = update.latestVersion {
+                return L10n.format("Update %@ to %@", current, latest)
+            }
+            return L10n.format("Installed: %@", current)
         }
-        return item.installedVersion.map { "Installed: \($0)" } ?? "Run the installer on this Host"
+        return item.installedVersion.map { L10n.format("Installed: %@", $0) }
+            ?? L10n.t("Run the installer on this Host")
     }
 
     private func commandEditor(item: PluginSettingsItem, command: RemotePresetSummary, preview: Bool) -> some View {
@@ -605,7 +652,7 @@ struct PluginSettingsPanel: View {
                             onCancel: {}) { isHovering in
             Button { addCommand(to: item, after: command) } label: {
                 Image(systemName: "plus").font(.system(size: 10, weight: .medium)).frame(width: 18, height: 18)
-            }.help("Add another command below").disabled(!canEdit)
+            }.help(L10n.t("Add another command below")).disabled(!canEdit)
                 .opacity(isHovering ? 1 : 0)
                 .allowsHitTesting(isHovering)
                 .animation(SidebarMotion.reduceMotion ? nil : .easeOut(duration: 0.12), value: isHovering)
@@ -613,10 +660,10 @@ struct PluginSettingsPanel: View {
         .background(PluginDragExclusion(controller: drag))
         .contextMenu {
             if command.id != item.commands.first?.id {
-                Button("Make Default") { makeDefault(command, item: item) }
+                Button(L10n.t("Make Default")) { makeDefault(command, item: item) }
             }
             if !command.id.hasPrefix("__agent_default__:") && !command.id.hasPrefix("__app__:") {
-                Button("Remove Command", role: .destructive) {
+                Button(L10n.t("Remove Command"), role: .destructive) {
                     save(RemotePresetPatch(presetID: command.id, removed: true), itemID: item.id)
                 }
             }
@@ -643,7 +690,7 @@ struct PluginSettingsPanel: View {
             }, onCancel: { withAnimation(motion) { drafts.removeAll { $0.id == draft.id } } }) { _ in
                 Button { withAnimation(motion) { drafts.removeAll { $0.id == draft.id } } } label: {
                     Image(systemName: "xmark").font(.system(size: 10)).frame(width: 18, height: 18)
-                }.help("Cancel new command")
+                }.help(L10n.t("Cancel new command"))
             }
             .background(PluginDragExclusion(controller: drag))
     }
@@ -661,8 +708,11 @@ struct PluginSettingsPanel: View {
                 .frame(width: 22, height: 22)
         }
         .buttonStyle(.plain).disabled(!canEdit || isPending(item.id))
-        .accessibilityLabel(quickValue(item) ? "Remove \(item.name) from Quick Launch" : "Add \(item.name) to Quick Launch")
-        .help(quickValue(item) ? "Remove from Quick Launch" : "Add to Quick Launch")
+        .accessibilityLabel(
+            quickValue(item)
+                ? L10n.format("Remove %@ from Quick Launch", item.name)
+                : L10n.format("Add %@ to Quick Launch", item.name))
+        .help(quickValue(item) ? L10n.t("Remove from Quick Launch") : L10n.t("Add to Quick Launch"))
         .background(PluginDragExclusion(controller: drag))
     }
     private func toggleQuick(_ item: PluginSettingsItem) {
@@ -687,8 +737,8 @@ struct PluginSettingsPanel: View {
     private var customCommandRow: some View {
         HStack(spacing: 8) {
             Image(systemName: "terminal").foregroundStyle(Theme.mutedForeground)
-            TextField("Add custom command…", text: $customCommand).textFieldStyle(.plain).onSubmit(addCustomCommand)
-            Button("Add", action: addCustomCommand).buttonStyle(.bordered).controlSize(.small)
+            TextField(L10n.t("Add custom command…"), text: $customCommand).textFieldStyle(.plain).onSubmit(addCustomCommand)
+            Button(L10n.t("Add"), action: addCustomCommand).buttonStyle(.bordered).controlSize(.small)
                 .disabled(customCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isPending("custom"))
         }.font(.system(size: 12)).padding(10)
     }
@@ -751,7 +801,7 @@ struct PluginSettingsPanel: View {
                     Text(startingInstallation).fontWeight(.medium)
                     ProgressView().controlSize(.small)
                 } else if installations.count > 1 {
-                    Picker("Installation terminal", selection: $selectedInstallationID) {
+                    Picker(L10n.t("Installation terminal"), selection: $selectedInstallationID) {
                         ForEach(installations) { item in
                             Text(item.title).tag(Optional(item.id))
                         }
@@ -765,13 +815,13 @@ struct PluginSettingsPanel: View {
                 Button {
                     runtime.requestImmediateRefresh()
                 } label: { Image(systemName: "arrow.clockwise") }
-                .help("Refresh installed \(title.lowercased())")
+                .help(L10n.format("Refresh installed %@", title.lowercased()))
                 Button {
                     selectedInstallationID = nil
                 } label: { Image(systemName: "xmark") }
                 .disabled(startingInstallation != nil)
-                .help("Hide terminal — the session stays in your workspace")
-                .accessibilityLabel("Hide installation terminal")
+                .help(L10n.t("Hide terminal — the session stays in your workspace"))
+                .accessibilityLabel(L10n.t("Hide installation terminal"))
             }
             .buttonStyle(.plain)
             .font(.system(size: 12))
@@ -801,7 +851,7 @@ struct PluginSettingsPanel: View {
                     .frame(height: 230)
                 }
             } else {
-                ProgressView("Starting terminal on this Host…")
+                ProgressView(L10n.t("Starting terminal on this Host…"))
                     .frame(maxWidth: .infinity)
                     .frame(height: 230)
             }
@@ -819,6 +869,7 @@ private struct PluginCommandEditor<Actions: View>: View {
     let onSave: (String) -> Void
     let onCancel: () -> Void
     @ViewBuilder let actions: (Bool) -> Actions
+    @ObservedObject private var localization = LocalizationStore.shared
     @State private var text = ""
     @State private var submitted: String?
     @State private var hovering = false
@@ -827,7 +878,7 @@ private struct PluginCommandEditor<Actions: View>: View {
     var body: some View {
         GeometryReader { geometry in
             HStack(spacing: 4) {
-                TextField("Launch command", text: $text)
+                TextField(L10n.t("Launch command"), text: $text)
                     .textFieldStyle(.plain).font(.system(size: 13))
                     .foregroundStyle(Theme.mutedForeground)
                     .focused($focused).onSubmit(commit).onExitCommand(perform: onCancel)

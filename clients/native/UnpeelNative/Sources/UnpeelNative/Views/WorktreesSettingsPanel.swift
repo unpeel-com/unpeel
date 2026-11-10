@@ -21,11 +21,13 @@ struct WorktreesSettingsPanel: View {
             Form {
                 Section {} header: {
                     SettingsPaneHeader(
-                        title: "Worktrees",
-                        description: "Isolated git checkouts so several agents can "
-                            + "work the same repo without touching each other's files. "
-                            + "Create one from a git project, or show the worktrees "
-                            + "agents make for themselves."
+                        title: L10n.t("Worktrees"),
+                        description: L10n.t(
+                            "Isolated git checkouts so several agents can "
+                                + "work the same repo without touching each other's files. "
+                                + "Create one from a git project, or show the worktrees "
+                                + "agents make for themselves."
+                        )
                     )
                     .padding(.bottom, 4)
                 }
@@ -53,12 +55,14 @@ struct WorktreesSettingsPanel: View {
                     .labelsHidden()
             } label: {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Show agent worktrees")
+                    Text(L10n.t("Show agent worktrees"))
                         .font(.system(size: 13))
                         .foregroundStyle(Theme.foreground)
-                    Text("Show the working copies agents create for themselves "
-                        + "(Claude Code and similar) as folders under their "
-                        + "project in the sidebar.")
+                    Text(L10n.t(
+                        "Show the working copies agents create for themselves "
+                            + "(Claude Code and similar) as folders under their "
+                            + "project in the sidebar."
+                    ))
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
@@ -66,11 +70,13 @@ struct WorktreesSettingsPanel: View {
             }
         } header: {
             SettingsSectionHeader(
-                title: "Agent worktrees",
-                description: "Some agents make their own git worktree of a "
-                    + "project to work in. Turn this on to see those worktrees "
-                    + "in the sidebar; turning it off hides them again without "
-                    + "deleting anything."
+                title: L10n.t("Agent worktrees"),
+                description: L10n.t(
+                    "Some agents make their own git worktree of a "
+                        + "project to work in. Turn this on to see those worktrees "
+                        + "in the sidebar; turning it off hides them again without "
+                        + "deleting anything."
+                )
             )
         }
     }
@@ -91,12 +97,14 @@ struct WorktreesSettingsPanel: View {
                 .labelsHidden()
             } label: {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Let sessions create worktrees")
+                    Text(L10n.t("Let sessions create worktrees"))
                         .font(.system(size: 13))
                         .foregroundStyle(Theme.foreground)
-                    Text("Agents can prepare isolated git worktrees as child "
-                        + "projects in the sidebar. Launching sessions into "
-                        + "them is still up to you. Applies immediately.")
+                    Text(L10n.t(
+                        "Agents can prepare isolated git worktrees as child "
+                            + "projects in the sidebar. Launching sessions into "
+                            + "them is still up to you. Applies immediately."
+                    ))
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
@@ -104,9 +112,11 @@ struct WorktreesSettingsPanel: View {
             }
         } header: {
             SettingsSectionHeader(
-                title: "Session access",
-                description: "Whether sessions may prepare worktrees through "
-                    + "Unpeel MCP. They still cannot launch sessions themselves."
+                title: L10n.t("Session access"),
+                description: L10n.t(
+                    "Whether sessions may prepare worktrees through "
+                        + "Unpeel MCP. They still cannot launch sessions themselves."
+                )
             )
         }
     }
@@ -129,21 +139,23 @@ struct WorktreesSettingsPanel: View {
             }
         } header: {
             SettingsSectionHeader(
-                title: "This workspace",
+                title: L10n.t("This workspace"),
                 description: worktreeRows.isEmpty
-                    ? "Worktrees registered under this workspace's projects."
-                    : "Each worktree is a child folder of its project in the sidebar."
+                    ? L10n.t("Worktrees registered under this workspace's projects.")
+                    : L10n.t("Each worktree is a child folder of its project in the sidebar.")
             )
         }
     }
 
     private var emptyListCopy: String {
         if isLocalScope, !store.showAgentWorktrees {
-            return "No worktrees in this workspace. Create one from a git "
-                + "project, or turn on Show agent worktrees to adopt copies "
-                + "agents make for themselves."
+            return L10n.t(
+                "No worktrees in this workspace. Create one from a git "
+                    + "project, or turn on Show agent worktrees to adopt copies "
+                    + "agents make for themselves."
+            )
         }
-        return "No worktrees in this workspace."
+        return L10n.t("No worktrees in this workspace.")
     }
 
     @ViewBuilder
@@ -153,7 +165,7 @@ struct WorktreesSettingsPanel: View {
             Button {
                 store.promptCreateWorktree(projectID: parent.id)
             } label: {
-                Label("New worktree…", systemImage: "plus")
+                Label(L10n.t("New worktree…"), systemImage: "plus")
             }
         } else {
             Menu {
@@ -163,7 +175,7 @@ struct WorktreesSettingsPanel: View {
                     }
                 }
             } label: {
-                Label("New worktree…", systemImage: "plus")
+                Label(L10n.t("New worktree…"), systemImage: "plus")
             }
         }
     }
@@ -181,7 +193,7 @@ struct WorktreesSettingsPanel: View {
                         .foregroundStyle(Theme.foreground)
                         .lineLimit(1)
                     if row.isAgentCreated {
-                        Text("Agent")
+                        Text(L10n.t("Agent"))
                             .font(.system(size: 10, weight: .medium))
                             .foregroundStyle(Theme.mutedForeground)
                             .padding(.horizontal, 6)
@@ -200,7 +212,11 @@ struct WorktreesSettingsPanel: View {
             Spacer(minLength: 8)
 
             if row.sessionCount > 0 {
-                Text(row.sessionCount == 1 ? "1 session" : "\(row.sessionCount) sessions")
+                Text(
+                    row.sessionCount == 1
+                        ? L10n.t("1 session")
+                        : L10n.format("%d sessions", row.sessionCount)
+                )
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.mutedForeground)
             }
@@ -208,13 +224,13 @@ struct WorktreesSettingsPanel: View {
             if isLocalMachine || isLocalScope {
                 Menu {
                     if isLocalMachine {
-                        Button("Reveal in Finder") {
+                        Button(L10n.t("Reveal in Finder")) {
                             store.revealInFinder(path: row.project.path)
                         }
                     }
                     if isLocalScope {
                         if isLocalMachine { Divider() }
-                        Button("Remove worktree", role: .destructive) {
+                        Button(L10n.t("Remove worktree"), role: .destructive) {
                             store.removeWorktreeProject(row.project.id)
                         }
                     }
@@ -228,18 +244,18 @@ struct WorktreesSettingsPanel: View {
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
-                .help("More…")
+                .help(L10n.t("More…"))
             }
         }
         .padding(.vertical, 2)
         .contextMenu {
             if isLocalMachine {
-                Button("Reveal in Finder") {
+                Button(L10n.t("Reveal in Finder")) {
                     store.revealInFinder(path: row.project.path)
                 }
             }
             if isLocalScope {
-                Button("Remove worktree", role: .destructive) {
+                Button(L10n.t("Remove worktree"), role: .destructive) {
                     store.removeWorktreeProject(row.project.id)
                 }
             }
@@ -277,7 +293,7 @@ struct WorktreesSettingsPanel: View {
             .filter(\.isWorktree)
             .map { project in
                 let parentName = project.parentProjectID
-                    .flatMap { projects[$0]?.name } ?? "Project"
+                    .flatMap { projects[$0]?.name } ?? L10n.t("Project")
                 let sessionCount = store.findDisplayNode(project.id)?.sessions.count ?? 0
                 return WorktreeRow(
                     project: project,

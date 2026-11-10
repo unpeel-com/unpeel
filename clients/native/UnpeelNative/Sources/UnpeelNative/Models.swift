@@ -182,16 +182,16 @@ enum OrchestratorReach: String, CaseIterable, Identifiable {
     /// Short legacy label.
     var label: String {
         switch self {
-        case .project: return "Project"
-        case .global: return "Global"
+        case .project: return L10n.t("Project")
+        case .global: return L10n.t("Global")
         }
     }
 
     /// One-line legacy description.
     var reachDescription: String {
         switch self {
-        case .project: return "Manages sessions in this project"
-        case .global: return "Manages all sessions"
+        case .project: return L10n.t("Manages sessions in this project")
+        case .global: return L10n.t("Manages all sessions")
         }
     }
 }
@@ -219,9 +219,9 @@ enum McpRole: String, CaseIterable, Identifiable {
     /// Menu label.
     var label: String {
         switch self {
-        case .read: return "Read"
-        case .write: return "Write"
-        case .manage: return "Create & remove"
+        case .read: return L10n.t("Read")
+        case .write: return L10n.t("Write")
+        case .manage: return L10n.t("Create & remove")
         }
     }
 
@@ -231,11 +231,11 @@ enum McpRole: String, CaseIterable, Identifiable {
     var detail: String {
         switch self {
         case .read:
-            return "Reads any session; writes follow Settings."
+            return L10n.t("Reads any session; writes follow Settings.")
         case .write:
-            return "Also writes to other sessions."
+            return L10n.t("Also writes to other sessions.")
         case .manage:
-            return "Also starts and removes its own sessions."
+            return L10n.t("Also starts and removes its own sessions.")
         }
     }
 }
@@ -280,9 +280,9 @@ enum McpNonChildWriteAccess: String, CaseIterable, Identifiable {
     /// Picker label.
     var label: String {
         switch self {
-        case .ask: return "Ask for approval"
-        case .deny: return "Never allow"
-        case .allow: return "Always allow"
+        case .ask: return L10n.t("Ask for approval")
+        case .deny: return L10n.t("Never allow")
+        case .allow: return L10n.t("Always allow")
         }
     }
 
@@ -290,12 +290,13 @@ enum McpNonChildWriteAccess: String, CaseIterable, Identifiable {
     var detail: String {
         switch self {
         case .ask:
-            return "Show an approval dialog the first time a session writes to one "
-                + "of your other sessions. Approvals are remembered per pair."
+            return L10n.t(
+                "Show an approval dialog the first time a session writes to one "
+                    + "of your other sessions. Approvals are remembered per pair.")
         case .deny:
-            return "Sessions cannot write to other sessions."
+            return L10n.t("Sessions cannot write to other sessions.")
         case .allow:
-            return "Any session can write to any other session without asking."
+            return L10n.t("Any session can write to any other session without asking.")
         }
     }
 }
@@ -710,17 +711,17 @@ enum BrowserAccess: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .off: return "Off"
-        case .ask: return "Ask each session"
-        case .on: return "Allow"
+        case .off: return L10n.t("Off")
+        case .ask: return L10n.t("Ask each session")
+        case .on: return L10n.t("Allow")
         }
     }
 
     var detail: String {
         switch self {
-        case .off: return "No browser tools for any session."
-        case .ask: return "Each session's first browser action asks you once."
-        case .on: return "Every session can drive its own pinned browser tab."
+        case .off: return L10n.t("No browser tools for any session.")
+        case .ask: return L10n.t("Each session's first browser action asks you once.")
+        case .on: return L10n.t("Every session can drive its own pinned browser tab.")
         }
     }
 
@@ -748,17 +749,17 @@ enum ComputerAccess: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .off: return "Off"
-        case .ask: return "Ask each session"
-        case .allow: return "Allow"
+        case .off: return L10n.t("Off")
+        case .ask: return L10n.t("Ask each session")
+        case .allow: return L10n.t("Allow")
         }
     }
 
     var detail: String {
         switch self {
-        case .off: return "No computer control for any session."
-        case .ask: return "Each session's first computer action asks you once."
-        case .allow: return "All sessions can control this Mac without asking."
+        case .off: return L10n.t("No computer control for any session.")
+        case .ask: return L10n.t("Each session's first computer action asks you once.")
+        case .allow: return L10n.t("All sessions can control this Mac without asking.")
         }
     }
 

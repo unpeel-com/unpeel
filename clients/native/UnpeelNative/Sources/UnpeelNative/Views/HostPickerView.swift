@@ -32,21 +32,21 @@ struct RemoteHostPairingSheet: View {
     private var expiresInText: String {
         guard let expiry else { return "" }
         let remaining = max(0, Int(expiry.timeIntervalSince(now).rounded(.down)))
-        return String(format: "Expires in %d:%02d", remaining / 60, remaining % 60)
+        return L10n.format("Expires in %d:%02d", remaining / 60, remaining % 60)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Add an iPhone or iPad to \(hostName)")
+                    Text(L10n.format("Add an iPhone or iPad to %@", hostName))
                         .font(.system(size: 20, weight: .semibold))
-                    Text("This Mac forwards a one-time sealed exchange to the remote workspace.")
+                    Text(L10n.t("This Mac forwards a one-time sealed exchange to the remote workspace."))
                         .font(.system(size: 12))
                         .foregroundStyle(Theme.mutedForeground)
                 }
                 Spacer()
-                Button("Done") { dismiss() }
+                Button(L10n.t("Done")) { dismiss() }
                     .keyboardShortcut(.cancelAction)
             }
 
@@ -63,12 +63,15 @@ struct RemoteHostPairingSheet: View {
                         .font(.system(size: 34))
                         .foregroundStyle(.green)
                     VStack(alignment: .leading, spacing: 5) {
-                        Text("Device added to \(hostName)")
+                        Text(L10n.format("Device added to %@", hostName))
                             .font(.system(size: 13, weight: .semibold))
-                        Text("The phone now has its own revocable Direct and Link credentials for \(hostName).")
+                        Text(L10n.format(
+                            "The phone now has its own revocable Direct and Link credentials for %@.",
+                            hostName
+                        ))
                             .font(.system(size: 12))
                             .foregroundStyle(Theme.mutedForeground)
-                        Button("Add Another iPhone or iPad") {
+                        Button(L10n.t("Add Another iPhone or iPad")) {
                             store.beginRemoteHostPairing()
                         }
                         .controlSize(.small)
@@ -82,12 +85,12 @@ struct RemoteHostPairingSheet: View {
                         .frame(width: 184, height: 184)
 
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("Scan this code in Unpeel on the phone.")
+                        Text(L10n.t("Scan this code in Unpeel on the phone."))
                             .font(.system(size: 13, weight: .semibold))
-                        Text(
+                        Text(L10n.t(
                             "The phone only needs to reach this Mac for the one-time sealed exchange. "
                                 + "The remote workspace creates the credentials; this Mac forwards the sealed response without opening it."
-                        )
+                        ))
                             .font(.system(size: 12))
                             .foregroundStyle(Theme.mutedForeground)
                             .fixedSize(horizontal: false, vertical: true)
@@ -98,21 +101,22 @@ struct RemoteHostPairingSheet: View {
                                 .monospacedDigit()
                                 .foregroundStyle(Theme.mutedForeground)
                         } else if store.remoteHostPairingError == nil {
-                            ProgressView("Creating invitation…")
+                            ProgressView(L10n.t("Creating invitation…"))
                                 .controlSize(.small)
                         }
 
                         HStack(spacing: 8) {
                             Button(
                                 store.remoteHostPairingPayload == nil
-                                    ? "Generate QR Code" : "Refresh QR Code"
+                                    ? L10n.t("Generate QR Code")
+                                    : L10n.t("Refresh QR Code")
                             ) {
                                 store.beginRemoteHostPairing()
                             }
                             .controlSize(.small)
 
                             if let code = store.remoteHostPairingCode {
-                                Button("Copy Pairing Code") {
+                                Button(L10n.t("Copy Pairing Code")) {
                                     NSPasteboard.general.clearContents()
                                     NSPasteboard.general.setString(code, forType: .string)
                                 }
@@ -124,7 +128,10 @@ struct RemoteHostPairingSheet: View {
                 }
             }
 
-            Text("After pairing, the phone connects to \(hostName) itself—Direct when reachable, otherwise through Unpeel Link if enabled.")
+            Text(L10n.format(
+                "After pairing, the phone connects to %@ itself—Direct when reachable, otherwise through Unpeel Link if enabled.",
+                hostName
+            ))
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.mutedForeground)
         }
@@ -162,6 +169,8 @@ struct AddWorkspaceSheet: View {
         case ssh = "SSH"
 
         var id: String { rawValue }
+
+        var title: String { L10n.t(rawValue) }
     }
 
     @ObservedObject var store: UnpeelStore
@@ -198,23 +207,29 @@ struct AddWorkspaceSheet: View {
         VStack(alignment: .leading, spacing: 18) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(RemoteHostFeature.pickerEnabled ? "Add Workspace" : "New Workspace")
+                    Text(
+                        RemoteHostFeature.pickerEnabled
+                            ? L10n.t("Add Workspace")
+                            : L10n.t("New Workspace")
+                    )
                         .font(.system(size: 20, weight: .semibold))
-                    Text(RemoteHostFeature.pickerEnabled
-                        ? "A new workspace on this Mac, or one on another machine you control."
-                        : "A new, separate workspace on this Mac.")
+                    Text(
+                        RemoteHostFeature.pickerEnabled
+                            ? L10n.t("A new workspace on this Mac, or one on another machine you control.")
+                            : L10n.t("A new, separate workspace on this Mac.")
+                    )
                         .font(.system(size: 12))
                         .foregroundStyle(Theme.mutedForeground)
                 }
                 Spacer()
-                Button("Cancel") { cancelAndDismiss() }
+                Button(L10n.t("Cancel")) { cancelAndDismiss() }
                     .keyboardShortcut(.cancelAction)
             }
 
             if RemoteHostFeature.pickerEnabled {
-                Picker("Kind", selection: $method) {
+                Picker(L10n.t("Kind"), selection: $method) {
                     ForEach(Method.allCases) { method in
-                        Text(method.rawValue).tag(method)
+                        Text(method.title).tag(method)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -263,23 +278,23 @@ struct AddWorkspaceSheet: View {
     @ViewBuilder
     private var thisMacContent: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Workspace name")
+            Text(L10n.t("Workspace name"))
                 .font(.system(size: 12, weight: .semibold))
-            TextField("Work", text: $workspaceName)
+            TextField(L10n.t("Work"), text: $workspaceName)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit(createLocalWorkspace)
-            Text(
+            Text(L10n.t(
                 "Starts blank, fully separate from this workspace: its own "
                     + "sessions, projects, presets, and settings, and it pairs "
                     + "with your phone as its own Mac."
-            )
+            ))
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.mutedForeground)
                 .fixedSize(horizontal: false, vertical: true)
         }
 
         VStack(alignment: .leading, spacing: 8) {
-            Text("Color")
+            Text(L10n.t("Color"))
                 .font(.system(size: 12, weight: .semibold))
             HStack(spacing: 12) {
                 ForEach(AppTint.allCases) { tint in
@@ -294,13 +309,13 @@ struct AddWorkspaceSheet: View {
         errorView
 
         HStack {
-            Text(
+            Text(L10n.t(
                 "Created workspaces appear in the workspace switcher; renaming never moves their data."
-            )
+            ))
                 .font(.system(size: 10))
                 .foregroundStyle(Theme.mutedForeground)
             Spacer()
-            actionButton(title: "Create", action: createLocalWorkspace)
+            actionButton(title: L10n.t("Create"), action: createLocalWorkspace)
                 .disabled(
                     working
                         || workspaceName
@@ -313,16 +328,16 @@ struct AddWorkspaceSheet: View {
     @ViewBuilder
     private var pairingContent: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Nearby")
+            Text(L10n.t("Nearby"))
                 .font(.system(size: 12, weight: .semibold))
             if case .unavailable(let message) = browser.state {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("Nearby discovery is unavailable")
+                    Text(L10n.t("Nearby discovery is unavailable"))
                         .font(.system(size: 11, weight: .medium))
                     Text(message)
                         .font(.system(size: 10))
                         .foregroundStyle(Theme.mutedForeground)
-                    Text("You can still paste the pairing code below.")
+                    Text(L10n.t("You can still paste the pairing code below."))
                         .font(.system(size: 10))
                         .foregroundStyle(Theme.mutedForeground)
                 }
@@ -330,17 +345,17 @@ struct AddWorkspaceSheet: View {
             } else if browser.candidates.isEmpty {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text(
+                    Text(L10n.t(
                         "Workspaces on your network appear here. On the other machine, "
                             + "run `unpeel serve` (or open Unpeel)."
-                    )
+                    ))
                         .foregroundStyle(Theme.mutedForeground)
                 }
                 .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
             } else {
                 VStack(spacing: 4) {
                     candidateRow(
-                        name: "Use pairing code only",
+                        name: L10n.t("Use pairing code only"),
                         detail: nil,
                         icon: "qrcode",
                         selected: selectedCandidateID == nil
@@ -358,14 +373,14 @@ struct AddWorkspaceSheet: View {
         }
 
         VStack(alignment: .leading, spacing: 8) {
-            Text("Pairing code")
+            Text(L10n.t("Pairing code"))
                 .font(.system(size: 12, weight: .semibold))
-            Text(
+            Text(L10n.t(
                 "On the other machine, run `unpeel pair` — or `unpeel pair --serve` "
                     + "to start serving at the same time — then enter the code it shows here. "
                     + "For another Mac running the Unpeel app, its code is in "
                     + "Settings ▸ Remote Control."
-            )
+            ))
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.mutedForeground)
             TextField("UNPEEL:1:…", text: $pairingCode)
@@ -376,11 +391,11 @@ struct AddWorkspaceSheet: View {
         errorView
 
         HStack {
-            Text("Codes work once and expire after 5 minutes.")
+            Text(L10n.t("Codes work once and expire after 5 minutes."))
                 .font(.system(size: 10))
                 .foregroundStyle(Theme.mutedForeground)
             Spacer()
-            actionButton(title: "Pair", action: completePairing)
+            actionButton(title: L10n.t("Pair"), action: completePairing)
                 .disabled(
                     working
                         || pairingCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -391,33 +406,33 @@ struct AddWorkspaceSheet: View {
     @ViewBuilder
     private var sshContent: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("SSH destination")
+            Text(L10n.t("SSH destination"))
                 .font(.system(size: 12, weight: .semibold))
-            TextField("user@host or SSH config alias", text: $sshTarget)
+            TextField(L10n.t("user@host or SSH config alias"), text: $sshTarget)
                 .textFieldStyle(.roundedBorder)
                 .font(.system(size: 12, design: .monospaced))
-            Text("Unpeel uses your system SSH configuration, keys, agent, host-key policy, ProxyJump, and VPN. Put ports and identity files in ~/.ssh/config.")
+            Text(L10n.t("Unpeel uses your system SSH configuration, keys, agent, host-key policy, ProxyJump, and VPN. Put ports and identity files in ~/.ssh/config."))
                 .font(.system(size: 10))
                 .foregroundStyle(Theme.mutedForeground)
                 .fixedSize(horizontal: false, vertical: true)
         }
 
         VStack(alignment: .leading, spacing: 8) {
-            Text("Password or API key (optional)")
+            Text(L10n.t("Password or API key (optional)"))
                 .font(.system(size: 12, weight: .semibold))
-            SecureField("Leave empty for SSH keys or agent", text: $sshSecret)
+            SecureField(L10n.t("Leave empty for SSH keys or agent"), text: $sshSecret)
                 .textFieldStyle(.roundedBorder)
-            Text("Saved in this Mac’s Keychain so Unpeel can reopen this workspace. It is never stored on the remote machine or passed in command arguments.")
+            Text(L10n.t("Saved in this Mac’s Keychain so Unpeel can reopen this workspace. It is never stored on the remote machine or passed in command arguments."))
                 .font(.system(size: 10))
                 .foregroundStyle(Theme.mutedForeground)
         }
 
         VStack(alignment: .leading, spacing: 7) {
-            Text("On the remote machine")
+            Text(L10n.t("On the remote machine"))
                 .font(.system(size: 11, weight: .semibold))
             Text(sshInstallSuggested
-                ? "Unpeel could not be started. Install it with the same SSH connection, or copy the command as a fallback:"
-                : "If Unpeel is missing, Connect will offer to install it. Manual fallback:")
+                ? L10n.t("Unpeel could not be started. Install it with the same SSH connection, or copy the command as a fallback:")
+                : L10n.t("If Unpeel is missing, Connect will offer to install it. Manual fallback:"))
                 .font(.system(size: 10))
                 .foregroundStyle(Theme.mutedForeground)
             HStack {
@@ -425,7 +440,7 @@ struct AddWorkspaceSheet: View {
                     .font(.system(size: 10, design: .monospaced))
                     .textSelection(.enabled)
                 Spacer()
-                Button("Copy") {
+                Button(L10n.t("Copy")) {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(
                         "curl -fsSL https://unpeel.com/install.sh | sh",
@@ -444,17 +459,17 @@ struct AddWorkspaceSheet: View {
         errorView
 
         HStack {
-            Text(
+            Text(L10n.t(
                 "Supports ordinary SSH and interactive-only managed shells automatically.\n"
                     + "No service needs to run on the box — Unpeel connects over SSH on demand. "
                     + "For phone access and notifications while disconnected, also run "
                     + "`unpeel serve` there."
-            )
+            ))
                 .font(.system(size: 10))
                 .foregroundStyle(Theme.mutedForeground)
             Spacer()
             actionButton(
-                title: sshInstallSuggested ? "Install & Connect" : "Connect",
+                title: sshInstallSuggested ? L10n.t("Install & Connect") : L10n.t("Connect"),
                 action: completeSSH
             )
                 .disabled(
@@ -604,7 +619,9 @@ struct AddWorkspaceSheet: View {
             } catch let error as SSHHostSetupError {
                 if case .connection = error {
                     sshInstallSuggested = true
-                    errorMessage = "Unpeel is not available on this SSH Host yet, or could not be started. Install it and connect again."
+                    errorMessage = L10n.t(
+                        "Unpeel is not available on this SSH Host yet, or could not be started. Install it and connect again."
+                    )
                 } else {
                     errorMessage = error.localizedDescription
                 }

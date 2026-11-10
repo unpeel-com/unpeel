@@ -308,6 +308,7 @@ struct SettingsSidebarPanel: View {
 /// preview in this window immediately because its chrome follows the scope;
 /// transparency renders in the workspace's own windows.
 private struct HostAppearanceSettingsPanel: View {
+    @ObservedObject private var localization = LocalizationStore.shared
     @ObservedObject var store: UnpeelStore
     let home: String
     let name: String
@@ -332,32 +333,32 @@ private struct HostAppearanceSettingsPanel: View {
             Form {
                 Section {} header: {
                     SettingsPaneHeader(
-                        title: "Appearance",
-                        description: "\(name)'s appearance, edited from this "
-                            + "window. Mode and color preview here while "
-                            + "\(name) is active; transparency renders in "
-                            + "\(name)'s own windows."
+                        title: L10n.t("Appearance"),
+                        description: L10n.format(
+                            "%@'s appearance, edited from this window. Mode and color preview here while %@ is active; transparency renders in %@'s own windows.",
+                            name, name, name
+                        )
                     )
                     .padding(.bottom, 4)
                 }
 
                 Section {
-                    Button("Use \(defaultWorkspaceLabel)'s appearance") {
+                    Button(L10n.format("Use %@'s appearance", defaultWorkspaceLabel)) {
                         revertToDefault()
                     }
                     .disabled(!hasOverrides)
                 } header: {
                     SettingsSectionHeader(
-                        title: "Inherits from \(defaultWorkspaceLabel)",
-                        description: "\(name) uses \(defaultWorkspaceLabel)'s "
-                            + "appearance until a setting below is changed. "
-                            + "Revert drops \(name)'s own mode, transparency "
-                            + "and font; its color stays."
+                        title: L10n.format("Inherits from %@", defaultWorkspaceLabel),
+                        description: L10n.format(
+                            "%1$@ uses %2$@'s appearance until a setting below is changed. Revert drops %1$@'s own mode, transparency and font; its color stays.",
+                            name, defaultWorkspaceLabel, name
+                        )
                     )
                 }
 
                 Section {
-                    Picker("Mode", selection: $mode) {
+                    Picker(L10n.t("Mode"), selection: $mode) {
                         ForEach(ThemePreference.allCases) { preference in
                             Text(preference.title).tag(preference)
                         }
@@ -367,9 +368,8 @@ private struct HostAppearanceSettingsPanel: View {
                     .foregroundStyle(Theme.foreground)
                 } header: {
                     SettingsSectionHeader(
-                        title: "Mode",
-                        description: "Applies to \(name)'s window, sidebar and "
-                            + "terminal colors."
+                        title: L10n.t("Mode"),
+                        description: L10n.format("Applies to %@'s window, sidebar and terminal colors.", name)
                     )
                 }
 
@@ -384,26 +384,24 @@ private struct HostAppearanceSettingsPanel: View {
                     }
                 } header: {
                     SettingsSectionHeader(
-                        title: "App color",
-                        description: "Washes \(name)'s window chrome — and its "
-                            + "dot in the workspace pickers."
+                        title: L10n.t("App color"),
+                        description: L10n.format("Washes %@'s window chrome — and its dot in the workspace pickers.", name)
                     )
                 }
 
                 Section {
                     TransparencySliderRow(
-                        title: "Background",
+                        title: L10n.t("Background"),
                         value: $backgroundOpacity
                     )
                     TransparencySliderRow(
-                        title: "Surface",
+                        title: L10n.t("Surface"),
                         value: $surfaceOpacity
                     )
                 } header: {
                     SettingsSectionHeader(
-                        title: "Transparency",
-                        description: "Applies to \(name)'s own windows — a "
-                            + "running instance updates live."
+                        title: L10n.t("Transparency"),
+                        description: L10n.format("Applies to %@'s own windows — a running instance updates live.", name)
                     )
                 }
 
@@ -411,9 +409,7 @@ private struct HostAppearanceSettingsPanel: View {
                     family: $fontFamily,
                     size: $fontSize,
                     lineHeight: $fontLineHeight,
-                    description: "Family and size for \(name)'s terminals — a "
-                        + "running instance updates live. ⌘+ / ⌘− / ⌘0 in "
-                        + "\(name)'s own windows edit the same value."
+                    description: L10n.format("%1$@'s terminals — family and size; a running instance updates live. ⌘+ / ⌘− / ⌘0 in %2$@'s own windows edit the same value.", name, name)
                 )
             }
             .formStyle(.grouped)
@@ -524,6 +520,7 @@ private struct HostAppearanceSettingsPanel: View {
 /// each change is one generation-bound effect and the post-effect snapshot
 /// refresh reconciles the controls to what the Host actually holds.
 private struct HostAdvancedSettingsPanel: View {
+    @ObservedObject private var localization = LocalizationStore.shared
     @ObservedObject var store: UnpeelStore
     @ObservedObject var runtime: RemoteHostRuntime
 
@@ -533,7 +530,7 @@ private struct HostAdvancedSettingsPanel: View {
     @State private var draftLimit: Int?
 
     private var scopeName: String {
-        store.selectedScopeDisplayName ?? "the selected workspace"
+        store.selectedScopeDisplayName ?? L10n.t("the selected workspace")
     }
 
     private var settings: RemoteWorkspaceSettings? {
@@ -545,13 +542,11 @@ private struct HostAdvancedSettingsPanel: View {
             Form {
                 Section {} header: {
                     SettingsPaneHeader(
-                        title: "Advanced",
-                        description: "\(scopeName)'s cleanup behavior, applied "
-                            + "over the Host connection — the Host's own "
-                            + "auto-stop sweep uses these; the app never "
-                            + "stops sessions on its own. Memory diagnostics are "
-                            + "per-instance and live in each workspace's own "
-                            + "window."
+                        title: L10n.t("Advanced"),
+                        description: L10n.format(
+                            "%@'s cleanup behavior, applied over the Host connection — the Host's own auto-stop sweep uses these; the app never stops sessions on its own. Memory diagnostics are per-instance and live in each workspace's own window.",
+                            scopeName
+                        )
                     )
                     .padding(.bottom, 4)
                 }
@@ -559,7 +554,7 @@ private struct HostAdvancedSettingsPanel: View {
                 if let settings {
                     Section {
                         Picker(
-                            "Auto-stop inactive terminals",
+                            L10n.t("Auto-stop inactive terminals"),
                             selection: Binding(
                                 get: { draftMinutes ?? settings.autoStopArchiveMinutes },
                                 set: { minutes in
@@ -576,7 +571,7 @@ private struct HostAdvancedSettingsPanel: View {
                         }
 
                         Picker(
-                            "Stopped sessions to keep",
+                            L10n.t("Stopped sessions to keep"),
                             selection: Binding(
                                 get: { draftLimit ?? settings.sidebarStoppedLimit },
                                 set: { limit in
@@ -593,17 +588,16 @@ private struct HostAdvancedSettingsPanel: View {
                         }
                     } header: {
                         SettingsSectionHeader(
-                            title: "Cleanup",
-                            description: "Idle sessions on \(scopeName) get the "
-                                + "same treatment as Stop: the row stays, ready "
-                                + "to Resume. Each project keeps its newest "
-                                + "stopped sessions up to the limit; older ones "
-                                + "are removed (pinned and unread ones are kept)."
+                            title: L10n.t("Cleanup"),
+                            description: L10n.format(
+                                "Idle sessions on %@ get the same treatment as Stop: the row stays, ready to Resume. Each project keeps its newest stopped sessions up to the limit; older ones are removed (pinned and unread ones are kept).",
+                                scopeName
+                            )
                         )
                     }
                 } else {
                     Section {
-                        Text("Waiting for \(scopeName)'s settings…")
+                        Text(L10n.format("Waiting for %@'s settings…", scopeName))
                             .font(.system(size: 13))
                             .foregroundStyle(Theme.mutedForeground)
                     }
@@ -645,6 +639,7 @@ private struct HostAdvancedSettingsPanel: View {
 /// siblings and SSH/headless Hosts. Engine status, approvals lists, and
 /// site rules remain in each workspace's own richer local panel for now.
 private struct HostAccessSettingsPanel: View {
+    @ObservedObject private var localization = LocalizationStore.shared
     @ObservedObject var store: UnpeelStore
     @ObservedObject var runtime: RemoteHostRuntime
     let tab: SettingsTab
@@ -656,7 +651,7 @@ private struct HostAccessSettingsPanel: View {
     @State private var boolOverrides: [String: Bool] = [:]
 
     private var scopeName: String {
-        store.selectedScopeDisplayName ?? "the selected workspace"
+        store.selectedScopeDisplayName ?? L10n.t("the selected workspace")
     }
 
     private var settings: RemoteWorkspaceSettings? {
@@ -669,11 +664,10 @@ private struct HostAccessSettingsPanel: View {
                 Section {} header: {
                     SettingsPaneHeader(
                         title: tab.title,
-                        description: "\(scopeName)'s \(tab.title) policy, applied "
-                            + "over the Host connection — its sessions read these "
-                            + "per call, so changes apply live. Engine status, "
-                            + "approvals, and site rules live in \(scopeName)'s "
-                            + "own window for now."
+                        description: L10n.format(
+                            "%1$@'s %2$@ policy, applied over the Host connection — its sessions read these per call, so changes apply live. Engine status, approvals, and site rules live in %1$@'s own window for now.",
+                            scopeName, tab.title, scopeName
+                        )
                     )
                     .padding(.bottom, 4)
                 }
@@ -682,35 +676,35 @@ private struct HostAccessSettingsPanel: View {
                     if UnpeelFeatureFlags.isEnabled(.sessionsMcp) {
                         Section {
                             accessPicker(
-                                "Writes to other sessions",
+                                L10n.t("Writes to other sessions"),
                                 key: "write",
                                 value: settings.mcpNonchildWriteAccess,
-                                options: [("ask", "Ask"), ("allow", "Allow"), ("deny", "Deny")]
+                                options: [("ask", L10n.t("Ask")), ("allow", L10n.t("Allow")), ("deny", L10n.t("Deny"))]
                             ) { value in
                                 RemoteWorkspaceSettingsPatch(mcpNonchildWriteAccess: value)
                             }
                             Toggle(
-                                "Agents may create worktrees",
+                                L10n.t("Agents may create worktrees"),
                                 isOn: boolBinding(key: "worktrees", settings.mcpWorktreeAccess) { value in
                                     RemoteWorkspaceSettingsPatch(mcpWorktreeAccess: value)
                                 }
                             )
                         } header: {
-                            SettingsSectionHeader(title: "Sessions")
+                            SettingsSectionHeader(title: L10n.t("Sessions"))
                         }
                     }
                     if UnpeelFeatureFlags.isEnabled(.browserMcp) {
                         Section {
                             accessPicker(
-                                "Browser access",
+                                L10n.t("Browser access"),
                                 key: "browser",
                                 value: settings.browserDefaultAccess,
-                                options: [("on", "On"), ("ask", "Ask"), ("off", "Off")]
+                                options: [("on", L10n.t("On")), ("ask", L10n.t("Ask")), ("off", L10n.t("Off"))]
                             ) { value in
                                 RemoteWorkspaceSettingsPatch(browserDefaultAccess: value)
                             }
                             Toggle(
-                                "Browser screenshots go to gallery",
+                                L10n.t("Browser screenshots go to gallery"),
                                 isOn: boolBinding(
                                     key: "screenshots",
                                     settings.mcpAutoAddBrowserScreenshots
@@ -721,12 +715,12 @@ private struct HostAccessSettingsPanel: View {
                                 }
                             )
                         } header: {
-                            SettingsSectionHeader(title: "Browser")
+                            SettingsSectionHeader(title: L10n.t("Browser"))
                         }
                     }
                 } else {
                     Section {
-                        Text("Waiting for \(scopeName)'s settings…")
+                        Text(L10n.format("Waiting for %@'s settings…", scopeName))
                             .font(.system(size: 13))
                             .foregroundStyle(Theme.mutedForeground)
                     }
@@ -805,6 +799,7 @@ private struct HostAccessSettingsPanel: View {
 /// `transcript_settings` per Markdown build, so changes apply to the next
 /// copy or MCP read. Identical for loopback siblings and SSH Hosts.
 private struct HostTranscriptsSettingsPanel: View {
+    @ObservedObject private var localization = LocalizationStore.shared
     @ObservedObject var store: UnpeelStore
     @ObservedObject var runtime: RemoteHostRuntime
 
@@ -816,7 +811,7 @@ private struct HostTranscriptsSettingsPanel: View {
     @State private var maxEntriesOverride: Int?
 
     private var scopeName: String {
-        store.selectedScopeDisplayName ?? "the selected workspace"
+        store.selectedScopeDisplayName ?? L10n.t("the selected workspace")
     }
 
     private var settings: RemoteTranscriptSettings? {
@@ -831,9 +826,10 @@ private struct HostTranscriptsSettingsPanel: View {
             Form {
                 Section {} header: {
                     SettingsPaneHeader(
-                        title: "Transcripts",
-                        description: "A session's conversation, rendered as Markdown — "
-                            + "what \"Copy transcript\" copies and what agents read."
+                        title: L10n.t("Transcripts"),
+                        description: L10n.t(
+                            "A session's conversation, rendered as Markdown — what \"Copy transcript\" copies and what agents read."
+                        )
                     )
                     .padding(.bottom, 4)
                 }
@@ -842,7 +838,7 @@ private struct HostTranscriptsSettingsPanel: View {
                     transcriptSection(settings)
                 } else {
                     Section {
-                        Text("Waiting for \(scopeName)'s settings…")
+                        Text(L10n.format("Waiting for %@'s settings…", scopeName))
                             .font(.system(size: 13))
                             .foregroundStyle(Theme.mutedForeground)
                     }
@@ -869,42 +865,42 @@ private struct HostTranscriptsSettingsPanel: View {
     private func transcriptSection(_ settings: RemoteTranscriptSettings) -> some View {
         Section {
             transcriptToggle(
-                title: "Session info header",
-                subtitle: "Start with the session's title, ID, CLI, and model. "
-                    + "The ID lets another agent target this session with the "
-                    + "Sessions MCP tools.",
+                title: L10n.t("Session info header"),
+                subtitle: L10n.t(
+                    "Start with the session's title, ID, CLI, and model. The ID lets another agent target this session with the Sessions MCP tools."
+                ),
                 key: "sessionInfo",
                 on: settings.includeSessionInfo
             ) { RemoteTranscriptSettingsUpdate(includeSessionInfo: $0) }
             transcriptToggle(
-                title: "User messages",
+                title: L10n.t("User messages"),
                 key: "user",
                 on: settings.includeUser
             ) { RemoteTranscriptSettingsUpdate(includeUser: $0) }
             transcriptToggle(
-                title: "Assistant messages",
+                title: L10n.t("Assistant messages"),
                 key: "assistant",
                 on: settings.includeAssistant
             ) { RemoteTranscriptSettingsUpdate(includeAssistant: $0) }
             transcriptToggle(
-                title: "Reasoning",
-                subtitle: "The agent's thinking blocks.",
+                title: L10n.t("Reasoning"),
+                subtitle: L10n.t("The agent's thinking blocks."),
                 key: "reasoning",
                 on: settings.includeReasoning
             ) { RemoteTranscriptSettingsUpdate(includeReasoning: $0) }
             transcriptToggle(
-                title: "Tool calls & results",
-                subtitle: "Commands the agent ran and their output.",
+                title: L10n.t("Tool calls & results"),
+                subtitle: L10n.t("Commands the agent ran and their output."),
                 key: "tools",
                 on: settings.includeTools
             ) { RemoteTranscriptSettingsUpdate(includeTools: $0) }
             transcriptToggle(
-                title: "File changes & diffs",
+                title: L10n.t("File changes & diffs"),
                 key: "fileChanges",
                 on: settings.includeFileChanges
             ) { RemoteTranscriptSettingsUpdate(includeFileChanges: $0) }
             transcriptToggle(
-                title: "Plan updates",
+                title: L10n.t("Plan updates"),
                 key: "planUpdates",
                 on: settings.includePlanUpdates
             ) { RemoteTranscriptSettingsUpdate(includePlanUpdates: $0) }
@@ -924,20 +920,20 @@ private struct HostTranscriptsSettingsPanel: View {
                         }
                     )
                 ) {
-                    Text("Whole conversation").tag(0)
-                    Text("Last 20 entries").tag(20)
-                    Text("Last 50 entries").tag(50)
-                    Text("Last 100 entries").tag(100)
+                    Text(L10n.t("Whole conversation")).tag(0)
+                    Text(L10n.t("Last 20 entries")).tag(20)
+                    Text(L10n.t("Last 50 entries")).tag(50)
+                    Text(L10n.t("Last 100 entries")).tag(100)
                 }
                 .labelsHidden()
                 .pickerStyle(.menu)
                 .fixedSize()
             } label: {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Range")
+                    Text(L10n.t("Range"))
                         .font(.system(size: 13))
                         .foregroundStyle(Theme.foreground)
-                    Text("How much of the conversation to include.")
+                    Text(L10n.t("How much of the conversation to include."))
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
@@ -945,11 +941,10 @@ private struct HostTranscriptsSettingsPanel: View {
             }
         } header: {
             SettingsSectionHeader(
-                title: "Transcript content",
-                description: "What \"Copy transcript\" (right-click a session) puts on "
-                    + "the clipboard as Markdown. These options also drive the defaults "
-                    + "for agents reading a session's transcript. Range is the default "
-                    + "for agent reads; the Copy transcript menu picks its own range."
+                title: L10n.t("Transcript content"),
+                description: L10n.t(
+                    "What \"Copy transcript\" (right-click a session) puts on the clipboard as Markdown. These options also drive the defaults for agents reading a session's transcript. Range is the default for agent reads; the Copy transcript menu picks its own range."
+                )
             )
         }
     }
@@ -1007,6 +1002,7 @@ private struct HostTranscriptsSettingsPanel: View {
 /// the default workspace's setting (Decision 4 generalized) — the revert
 /// section drops the override.
 private struct HostNotificationsSettingsPanel: View {
+    @ObservedObject private var localization = LocalizationStore.shared
     @ObservedObject var store: UnpeelStore
     let home: String
     let name: String
@@ -1026,25 +1022,27 @@ private struct HostNotificationsSettingsPanel: View {
             Form {
                 Section {} header: {
                     SettingsPaneHeader(
-                        title: "Notifications",
-                        description: "How \(name) flags sessions that need you. "
-                            + "Applies to \(name)'s own instance — live if it "
-                            + "is running, otherwise from its next launch."
+                        title: L10n.t("Notifications"),
+                        description: L10n.format(
+                            "How %1$@ flags sessions that need you. Applies to %2$@'s own instance — live if it is running, otherwise from its next launch.",
+                            name, name
+                        )
                     )
                     .padding(.bottom, 4)
                 }
 
                 Section {
-                    Button("Use \(defaultWorkspaceLabel)'s notifications") {
+                    Button(L10n.format("Use %@'s notifications", defaultWorkspaceLabel)) {
                         revertToDefault()
                     }
                     .disabled(!hasOverride)
                 } header: {
                     SettingsSectionHeader(
-                        title: "Inherits from \(defaultWorkspaceLabel)",
-                        description: "\(name) uses \(defaultWorkspaceLabel)'s "
-                            + "notification settings until a setting below is "
-                            + "changed. Revert drops \(name)'s own values."
+                        title: L10n.format("Inherits from %@", defaultWorkspaceLabel),
+                        description: L10n.format(
+                            "%1$@ uses %2$@'s notification settings until a setting below is changed. Revert drops %1$@'s own values.",
+                            name, defaultWorkspaceLabel, name
+                        )
                     )
                 }
 
@@ -1073,12 +1071,10 @@ private struct HostNotificationsSettingsPanel: View {
                         .controlSize(.small)
                     } label: {
                         VStack(alignment: .leading, spacing: 1) {
-                            Text("Flag menus waiting for a choice")
+                            Text(L10n.t("Flag menus waiting for a choice"))
                                 .font(.system(size: 13))
                                 .foregroundStyle(Theme.foreground)
-                            Text("Show the yellow attention dot when an agent draws a "
-                                + "pick-an-option menu. These prompts send no signal on "
-                                + "their own, so Unpeel reads them off the screen.")
+Text(L10n.t("Show the yellow attention dot when an agent draws a pick-an-option menu. These prompts send no signal on their own, so Unpeel reads them off the screen."))
                                 .font(.system(size: 11))
                                 .foregroundStyle(Theme.mutedForeground)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -1086,9 +1082,8 @@ private struct HostNotificationsSettingsPanel: View {
                     }
                 } header: {
                     SettingsSectionHeader(
-                        title: "Attention",
-                        description: "When a session is waiting for you to answer an "
-                            + "on-screen menu."
+                        title: L10n.t("Attention"),
+                        description: L10n.t("When a session is waiting for you to answer an on-screen menu.")
                     )
                 }
             }
@@ -1124,6 +1119,7 @@ private struct HostNotificationsSettingsPanel: View {
 /// flags, written cross-suite. A running instance applies most flags on its
 /// next UI evaluation; some fully land on its next launch.
 private struct HostFeaturesSettingsPanel: View {
+    @ObservedObject private var localization = LocalizationStore.shared
     @ObservedObject var store: UnpeelStore
     let home: String
     let name: String
@@ -1147,24 +1143,27 @@ private struct HostFeaturesSettingsPanel: View {
             Form {
                 Section {} header: {
                     SettingsPaneHeader(
-                        title: "Features",
-                        description: "\(name)'s optional features. Some "
-                            + "changes fully apply when \(name) next launches."
+                        title: L10n.t("Features"),
+                        description: L10n.format(
+                            "%@'s optional features. Some changes fully apply when %@ next launches.",
+                            name, name
+                        )
                     )
                     .padding(.bottom, 4)
                 }
 
                 Section {
-                    Button("Use \(defaultWorkspaceLabel)'s features") {
+                    Button(L10n.format("Use %@'s features", defaultWorkspaceLabel)) {
                         revertToDefault()
                     }
                     .disabled(!hasOverride)
                 } header: {
                     SettingsSectionHeader(
-                        title: "Inherits from \(defaultWorkspaceLabel)",
-                        description: "\(name) uses \(defaultWorkspaceLabel)'s "
-                            + "features until a toggle below is "
-                            + "changed. Revert drops \(name)'s own values."
+                        title: L10n.format("Inherits from %@", defaultWorkspaceLabel),
+                        description: L10n.format(
+                            "%1$@ uses %2$@'s features until a toggle below is changed. Revert drops %1$@'s own values.",
+                            name, defaultWorkspaceLabel, name
+                        )
                     )
                 }
 
@@ -1181,8 +1180,8 @@ private struct HostFeaturesSettingsPanel: View {
                         }
                     } header: {
                         SettingsSectionHeader(
-                            title: "Experimental",
-                            description: AppFeature.experimentalSectionDescription
+                            title: L10n.t("Experimental"),
+                            description: AppFeature.localizedExperimentalSectionDescription
                         )
                     }
                 }
@@ -1256,10 +1255,10 @@ private struct HostFeaturesSettingsPanel: View {
             .toggleStyle(.switch)
         } label: {
             VStack(alignment: .leading, spacing: 2) {
-                Text(feature.title)
+                Text(feature.localizedTitle)
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.foreground)
-                Text(feature.summary)
+                Text(feature.localizedSummary)
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.mutedForeground)
                     .lineSpacing(2)
@@ -1274,6 +1273,7 @@ private struct HostFeaturesSettingsPanel: View {
 /// every Controller renders it while scoped there. Changes ride the same
 /// generation-bound workspace-settings effect as the behavior panels.
 private struct RemoteAppearanceSettingsPanel: View {
+    @ObservedObject private var localization = LocalizationStore.shared
     @ObservedObject var store: UnpeelStore
     @ObservedObject var runtime: RemoteHostRuntime
     /// The terminal font is never Host state — it is this Mac's display
@@ -1291,7 +1291,7 @@ private struct RemoteAppearanceSettingsPanel: View {
     @State private var errorMessage: String?
 
     private var scopeName: String {
-        store.selectedScopeDisplayName ?? "the selected Host"
+        store.selectedScopeDisplayName ?? L10n.t("the selected Host")
     }
 
     private var settings: RemoteAppearanceSettings? {
@@ -1303,10 +1303,11 @@ private struct RemoteAppearanceSettingsPanel: View {
             Form {
                 Section {} header: {
                     SettingsPaneHeader(
-                        title: "Appearance",
-                        description: "How Controllers look while scoped to \(scopeName). "
-                            + "The Host stores these values, so another Mac or phone "
-                            + "uses the same workspace appearance."
+                        title: L10n.t("Appearance"),
+                        description: L10n.format(
+                            "How Controllers look while scoped to %@. The Host stores these values, so another Mac or phone uses the same workspace appearance.",
+                            scopeName
+                        )
                     )
                     .padding(.bottom, 4)
                 }
@@ -1314,7 +1315,7 @@ private struct RemoteAppearanceSettingsPanel: View {
                 if let settings {
                     Section {
                         Picker(
-                            "Mode",
+                            L10n.t("Mode"),
                             selection: Binding(
                                 get: {
                                     modeOverride
@@ -1336,9 +1337,11 @@ private struct RemoteAppearanceSettingsPanel: View {
                         .pickerStyle(.segmented)
                     } header: {
                         SettingsSectionHeader(
-                            title: "Mode",
-                            description: "Applies to this Controller's window, sidebar "
-                                + "and terminal colors while \(scopeName) is active."
+                            title: L10n.t("Mode"),
+                            description: L10n.format(
+                                "Applies to this Controller's window, sidebar and terminal colors while %@ is active.",
+                                scopeName
+                            )
                         )
                     }
 
@@ -1361,15 +1364,17 @@ private struct RemoteAppearanceSettingsPanel: View {
                         }
                     } header: {
                         SettingsSectionHeader(
-                            title: "App color",
-                            description: "Washes the Controller chrome and identifies "
-                                + "\(scopeName) in workspace pickers."
+                            title: L10n.t("App color"),
+                            description: L10n.format(
+                                "Washes the Controller chrome and identifies %@ in workspace pickers.",
+                                scopeName
+                            )
                         )
                     }
 
                     Section {
                         Picker(
-                            "Session titles",
+                            L10n.t("Session titles"),
                             selection: Binding(
                                 get: {
                                     titleModeOverride
@@ -1393,9 +1398,10 @@ private struct RemoteAppearanceSettingsPanel: View {
                         .pickerStyle(.menu)
                     } header: {
                         SettingsSectionHeader(
-                            title: "Session titles",
-                            description: "What names new sessions on the Host until you "
-                                + "rename them. Running session hosts read this live."
+                            title: L10n.t("Session titles"),
+                            description: L10n.t(
+                                "What names new sessions on the Host until you rename them. Running session hosts read this live."
+                            )
                         )
                     }
 
@@ -1403,14 +1409,14 @@ private struct RemoteAppearanceSettingsPanel: View {
                         OpenResourcesSettingsRows(runtime: runtime)
                     } header: {
                         SettingsSectionHeader(
-                            title: "Open resources",
-                            description: "Choose which Host-side App opens each supported type in this workspace."
+                            title: L10n.t("Open resources"),
+                            description: L10n.t("Choose which Host-side App opens each supported type in this workspace.")
                         )
                     }
 
                     Section {
                         TransparencySliderRow(
-                            title: "Background",
+                            title: L10n.t("Background"),
                             value: Binding(
                                 get: { backgroundOverride ?? settings.backgroundOpacity },
                                 set: { value in
@@ -1420,7 +1426,7 @@ private struct RemoteAppearanceSettingsPanel: View {
                             )
                         )
                         TransparencySliderRow(
-                            title: "Surface",
+                            title: L10n.t("Surface"),
                             value: Binding(
                                 get: { surfaceOverride ?? settings.surfaceOpacity },
                                 set: { value in
@@ -1431,16 +1437,18 @@ private struct RemoteAppearanceSettingsPanel: View {
                         )
                         HStack {
                             Spacer()
-                            Button("Revert to default") {
+                            Button(L10n.t("Revert to default")) {
                                 resetTransparency()
                             }
                             .controlSize(.small)
                         }
                     } header: {
                         SettingsSectionHeader(
-                            title: "Transparency",
-                            description: "Controls this Controller's background and "
-                                + "terminal surface whenever \(scopeName) is selected."
+                            title: L10n.t("Transparency"),
+                            description: L10n.format(
+                                "Controls this Controller's background and terminal surface whenever %@ is selected.",
+                                scopeName
+                            )
                         )
                     }
 
@@ -1448,15 +1456,14 @@ private struct RemoteAppearanceSettingsPanel: View {
                         family: $terminalFont.family,
                         size: $terminalFont.size,
                         lineHeight: $terminalFont.lineHeight,
-                        description: "Fonts render on this Mac, so this is this "
-                            + "Controller's own setting: it applies to \(scopeName)'s "
-                            + "terminals and every other workspace alike. ⌘+ and ⌘− "
-                            + "zoom all panes; ⌘0 returns to "
-                            + "\(Int(TerminalFontModel.defaultSize)) pt."
+                        description: L10n.format(
+                            "Fonts render on this Mac, so this is this Controller's own setting: it applies to %@'s terminals and every other workspace alike. ⌘+ and ⌘− zoom all panes; ⌘0 returns to %d pt.",
+                            scopeName, Int(TerminalFontModel.defaultSize)
+                        )
                     )
                 } else {
                     Section {
-                        Text("Waiting for \(scopeName)'s appearance…")
+                        Text(L10n.format("Waiting for %@'s appearance…", scopeName))
                             .font(.system(size: 13))
                             .foregroundStyle(Theme.mutedForeground)
                     }
@@ -1566,6 +1573,7 @@ private struct RemoteAppearanceSettingsPanel: View {
 /// Push delivery is capability-advertised; unsupported headless Hosts never
 /// receive a fake local test action.
 private struct RemoteNotificationsSettingsPanel: View {
+    @ObservedObject private var localization = LocalizationStore.shared
     @ObservedObject var store: UnpeelStore
     @ObservedObject var runtime: RemoteHostRuntime
     @ObservedObject private var notifier = DesktopNotifier.shared
@@ -1574,7 +1582,7 @@ private struct RemoteNotificationsSettingsPanel: View {
     @State private var errorMessage: String?
 
     private var scopeName: String {
-        store.selectedScopeDisplayName ?? "the selected Host"
+        store.selectedScopeDisplayName ?? L10n.t("the selected Host")
     }
 
     private var settings: RemoteNotificationSettings? {
@@ -1586,9 +1594,11 @@ private struct RemoteNotificationsSettingsPanel: View {
             Form {
                 Section {} header: {
                     SettingsPaneHeader(
-                        title: "Notifications",
-                        description: "How \(scopeName) flags sessions that need you, "
-                            + "plus delivery diagnostics for this Controller Mac."
+                        title: L10n.t("Notifications"),
+                        description: L10n.format(
+                            "How %@ flags sessions that need you, plus delivery diagnostics for this Controller Mac.",
+                            scopeName
+                        )
                     )
                     .padding(.bottom, 4)
                 }
@@ -1616,11 +1626,10 @@ private struct RemoteNotificationsSettingsPanel: View {
                             .controlSize(.small)
                         } label: {
                             VStack(alignment: .leading, spacing: 1) {
-                                Text("Flag menus waiting for a choice")
+                                Text(L10n.t("Flag menus waiting for a choice"))
                                     .font(.system(size: 13))
                                     .foregroundStyle(Theme.foreground)
-                                Text("Show the yellow attention dot when an agent draws "
-                                    + "a pick-an-option menu on the Host.")
+                                Text(L10n.t("Show the yellow attention dot when an agent draws a pick-an-option menu on the Host."))
                                     .font(.system(size: 11))
                                     .foregroundStyle(Theme.mutedForeground)
                                     .fixedSize(horizontal: false, vertical: true)
@@ -1628,29 +1637,30 @@ private struct RemoteNotificationsSettingsPanel: View {
                         }
                     } header: {
                         SettingsSectionHeader(
-                            title: "Attention",
-                            description: "Applied by the Host to its session activity "
-                                + "before every Controller receives it."
+                            title: L10n.t("Attention"),
+                            description: L10n.t(
+                                "Applied by the Host to its session activity before every Controller receives it."
+                            )
                         )
                     }
                 }
 
                 Section {
                     Button(notifier.lastTestDiagnostic.isChecking
-                        ? "Sending…"
-                        : "Send a test notification on this Mac"
+                        ? L10n.t("Sending…")
+                        : L10n.t("Send a test notification on this Mac")
                     ) {
                         notifier.sendTestNotification()
                     }
                     .disabled(notifier.lastTestDiagnostic.isChecking)
 
                     SettingsValueRow(
-                        label: "Last Mac test",
+                        label: L10n.t("Last Mac test"),
                         value: notifier.lastTestDiagnostic.label
                     )
 
                     if notifier.lastTestDiagnostic.needsSystemSettings {
-                        Button("Open Mac Notification Settings…") {
+                        Button(L10n.t("Open Mac Notification Settings…")) {
                             if let url = URL(
                                 string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension"
                             ) {
@@ -1660,31 +1670,33 @@ private struct RemoteNotificationsSettingsPanel: View {
                     }
                 } header: {
                     SettingsSectionHeader(
-                        title: "This Mac",
-                        description: "Tests the notification banner on the Controller "
-                            + "you are using now; it does not run anything on \(scopeName)."
+                        title: L10n.t("This Mac"),
+                        description: L10n.format(
+                            "Tests the notification banner on the Controller you are using now; it does not run anything on %@.",
+                            scopeName
+                        )
                     )
                 }
 
                 Section {
                     SettingsValueRow(
-                        label: "Phone registration",
+                        label: L10n.t("Phone registration"),
                         value: runtime.supportsHostOperation(
                             RemoteHostRuntime.HostOperation.pushRegister
                         ) ? "Supported" : "Not advertised by this Host"
                     )
                     SettingsValueRow(
-                        label: "Notify when done",
+                        label: L10n.t("Notify when done"),
                         value: runtime.supportsHostOperation(
                             RemoteHostRuntime.HostOperation.notifyWhenDoneSet
                         ) ? "Available per session" : "Not advertised by this Host"
                     )
                 } header: {
                     SettingsSectionHeader(
-                        title: "Host delivery",
-                        description: "Phone delivery is shown only when the Host "
-                            + "advertises it. Upstash/Linux Hosts can still surface "
-                            + "attention here without pretending to own an APNs path."
+                        title: L10n.t("Host delivery"),
+                        description: L10n.t(
+                            "Phone delivery is shown only when the Host advertises it. Upstash/Linux Hosts can still surface attention here without pretending to own an APNs path."
+                        )
                     )
                 }
 
@@ -1722,6 +1734,7 @@ private struct RemoteNotificationsSettingsPanel: View {
 /// (still spelled `experimentalSettings`) so unknown future additions remain
 /// additive.
 private struct RemoteFeaturesSettingsPanel: View {
+    @ObservedObject private var localization = LocalizationStore.shared
     @ObservedObject var store: UnpeelStore
     @ObservedObject var runtime: RemoteHostRuntime
 
@@ -1729,7 +1742,7 @@ private struct RemoteFeaturesSettingsPanel: View {
     @State private var errorMessage: String?
 
     private var scopeName: String {
-        store.selectedScopeDisplayName ?? "the selected Host"
+        store.selectedScopeDisplayName ?? L10n.t("the selected Host")
     }
 
     private var settings: RemoteExperimentalSettings? {
@@ -1745,9 +1758,11 @@ private struct RemoteFeaturesSettingsPanel: View {
             Form {
                 Section {} header: {
                     SettingsPaneHeader(
-                        title: "Features",
-                        description: "Optional features owned by \(scopeName). Session-tool "
-                            + "changes apply to sessions started after the toggle."
+                        title: L10n.t("Features"),
+                        description: L10n.format(
+                            "Optional features owned by %@. Session-tool changes apply to sessions started after the toggle.",
+                            scopeName
+                        )
                     )
                     .padding(.bottom, 4)
                 }
@@ -1755,7 +1770,7 @@ private struct RemoteFeaturesSettingsPanel: View {
                 if let settings {
                     if features.isEmpty {
                         Section {
-                            Text("No optional features are available in this build.")
+                            Text(L10n.t("No optional features are available in this build."))
                                 .font(.system(size: 12))
                                 .foregroundStyle(Theme.mutedForeground)
                         }
@@ -1772,15 +1787,15 @@ private struct RemoteFeaturesSettingsPanel: View {
                                 }
                             } header: {
                                 SettingsSectionHeader(
-                                    title: "Experimental",
-                                    description: AppFeature.experimentalSectionDescription
+                                    title: L10n.t("Experimental"),
+                                    description: AppFeature.localizedExperimentalSectionDescription
                                 )
                             }
                         }
                     }
                 } else {
                     Section {
-                        Text("Waiting for \(scopeName)'s feature settings…")
+                        Text(L10n.format("Waiting for %@'s feature settings…", scopeName))
                             .font(.system(size: 13))
                             .foregroundStyle(Theme.mutedForeground)
                     }
@@ -1819,10 +1834,10 @@ private struct RemoteFeaturesSettingsPanel: View {
             .toggleStyle(.switch)
         } label: {
             VStack(alignment: .leading, spacing: 2) {
-                Text(feature.title)
+                Text(feature.localizedTitle)
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.foreground)
-                Text(feature.summary)
+                Text(feature.localizedSummary)
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.mutedForeground)
                 .lineSpacing(2)
@@ -1891,7 +1906,7 @@ private struct HostSettingsUpdateRequiredPanel: View {
     let tab: SettingsTab
 
     private var scopeName: String {
-        store.selectedScopeDisplayName ?? "the selected workspace"
+        store.selectedScopeDisplayName ?? L10n.t("the selected workspace")
     }
 
     private var protocolLabel: String? {
@@ -1914,16 +1929,17 @@ private struct HostSettingsUpdateRequiredPanel: View {
                 HStack(spacing: 8) {
                     ProgressView()
                         .controlSize(.small)
-                    Text("Reconnecting to \(scopeName)…")
+                    Text(L10n.format("Reconnecting to %@…", scopeName))
                 }
                 .font(.system(size: 13))
                 .foregroundStyle(Theme.mutedForeground)
                 .padding(.horizontal, 20)
             } else {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Update Unpeel on \(scopeName), then reconnect this "
-                        + "workspace. Its settings stay unchanged until the "
-                        + "Host advertises the required capability.")
+                    Text(L10n.format(
+                        "Update Unpeel on %@, then reconnect this workspace. Its settings stay unchanged until the Host advertises the required capability.",
+                        scopeName
+                    ))
                     if let protocolLabel {
                         Text("\(protocolLabel) · needs "
                             + RemoteHostRuntime.HostOperation.workspaceSettingsSet)
@@ -1996,7 +2012,7 @@ private struct SettingsScopePickerControl: View {
         .onReceive(
             NotificationCenter.default.publisher(for: .unpeelWorkspaceListChanged)
         ) { _ in refreshActiveRow() }
-        .help("The active workspace — the workspace settings above the This Mac divider follow it")
+        .help(L10n.t("The active workspace — the workspace settings above the This Mac divider follow it"))
     }
 
     private var activeName: String {
@@ -2336,6 +2352,7 @@ struct SettingsMainBackground: View {
 // MARK: - Appearance panel (settings/AppearancePanel.svelte, mode only)
 
 private struct OpenResourcesSettingsRows: View {
+    @ObservedObject private var localization = LocalizationStore.shared
     @ObservedObject var runtime: RemoteHostRuntime
     @State private var overrides: [String: String] = [:]
     @State private var installing: Set<String> = []
@@ -2368,13 +2385,13 @@ private struct OpenResourcesSettingsRows: View {
                 HStack(spacing: 10) {
                     Picker("", selection: selection(for: selector)) {
                         ForEach(apps.filter { $0.handles(selector: selector) }) { app in
-                            Text(app.name + (installedIDs.contains(app.id) ? "" : " (Not installed)"))
+                            Text(app.name + (installedIDs.contains(app.id) ? "" : L10n.t(" (Not installed)")))
                                 .tag("app:\(app.id)")
                         }
                         if selector.hasPrefix("file:") {
                             Divider()
-                            Text("Default Editor").tag("editor")
-                            Text("System Default").tag("system")
+                            Text(L10n.t("Default Editor")).tag("editor")
+                            Text(L10n.t("System Default")).tag("system")
                         }
                     }
                     .labelsHidden()
@@ -2390,7 +2407,7 @@ private struct OpenResourcesSettingsRows: View {
                             if installing.contains(app.id) {
                                 ProgressView().controlSize(.small)
                             } else {
-                                Text("Install")
+                                Text(L10n.t("Install"))
                             }
                         }
                         .controlSize(.small)
@@ -2404,12 +2421,12 @@ private struct OpenResourcesSettingsRows: View {
                         if installing.contains(app.id) {
                             ProgressView().controlSize(.small)
                         } else {
-                            Text(app.version.map { "Update to \($0)" } ?? "Update")
+                            Text(app.version.map { L10n.format("Update to %@", $0) } ?? L10n.t("Update"))
                         }
                     }
                     .controlSize(.small)
                     .disabled(installing.contains(app.id))
-                    .help(app.installedVersion.map { "Installed: \($0)" } ?? "Installed version unknown")
+                    .help(app.installedVersion.map { L10n.format("Installed: %@", $0) } ?? L10n.t("Installed version unknown"))
                 }
                 }
             }
@@ -2488,11 +2505,11 @@ private struct OpenResourcesSettingsRows: View {
 
     private func selectorTitle(_ selector: String) -> String {
         switch selector {
-        case "file:text/markdown": "Markdown"
-        case "file:text/csv": "CSV"
-        case "resource:folder": "Folders"
-        case "resource:git.working-tree": "Git changes"
-        case "resource:github.repository": "GitHub repositories"
+        case "file:text/markdown": L10n.t("Markdown")
+        case "file:text/csv": L10n.t("CSV")
+        case "resource:folder": L10n.t("Folders")
+        case "resource:git.working-tree": L10n.t("Git changes")
+        case "resource:github.repository": L10n.t("GitHub repositories")
         default:
             selector
                 .replacingOccurrences(of: "file:", with: "")
@@ -2543,17 +2560,17 @@ struct AppearanceSettingsPanel: View {
                 if !UnpeelWorkspaceContext.isDefaultInstance {
                     Section {
                         Button(
-                            "Use \(UnpeelWorkspaceContext.defaultWorkspaceName ?? "Personal")'s appearance"
+                            L10n.format(
+                                "Use %@'s appearance",
+                                UnpeelWorkspaceContext.defaultWorkspaceName ?? L10n.t("Personal")
+                            )
                         ) {
                             store.revertAppearanceToInheritedBaseline()
                         }
                     } header: {
                         SettingsSectionHeader(
-                            title: "Inherits from \(UnpeelWorkspaceContext.defaultWorkspaceName ?? "Personal")",
-                            description: "This workspace uses the default "
-                                + "workspace's appearance until a setting "
-                                + "below is changed. Revert drops its own "
-                                + "mode, transparency and font; its color stays."
+                            title: L10n.format("Inherits from %@", UnpeelWorkspaceContext.defaultWorkspaceName ?? L10n.t("Personal")),
+                            description: L10n.t("This workspace uses the default workspace's appearance until a setting below is changed. Revert drops its own mode, transparency and font; its color stays.")
                         )
                     }
                 }
@@ -2701,7 +2718,7 @@ struct AppearanceSettingsPanel: View {
                 }
 
                 Section {
-                    Picker("⌘T", selection: $store.commandTAction) {
+                    Picker(L10n.t("⌘T"), selection: $store.commandTAction) {
                         ForEach(CommandTAction.allCases) { action in
                             Text(action.title).tag(action)
                         }
@@ -2723,14 +2740,10 @@ struct AppearanceSettingsPanel: View {
                         .controlSize(.small)
                     } label: {
                         VStack(alignment: .leading, spacing: 1) {
-                            Text("Session gallery")
+                            Text(L10n.t("Session gallery"))
                                 .font(.system(size: 13))
                                 .foregroundStyle(Theme.foreground)
-                            Text("Photo chip in the terminal title bar with the "
-                                + "session's captures, plus Take Screenshot (⇧⌘S) "
-                                + "to shoot into the session and attach it to the "
-                                + "prompt. Turn off if you use your own screenshot "
-                                + "tools.")
+                            Text(L10n.t("Photo chip in the terminal title bar with the session's captures, plus Take Screenshot (⇧⌘S) to shoot into the session and attach it to the prompt. Turn off if you use your own screenshot tools."))
                                 .font(.system(size: 11))
                                 .foregroundStyle(Theme.mutedForeground)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -2738,9 +2751,8 @@ struct AppearanceSettingsPanel: View {
                     }
                 } header: {
                     SettingsSectionHeader(
-                        title: "Terminal",
-                        description: "Choose what ⌘T opens and configure extras around "
-                            + "the terminal view."
+                        title: L10n.t("Terminal"),
+                        description: L10n.t("Choose what ⌘T opens and configure extras around the terminal view.")
                     )
                 }
             }
@@ -2757,6 +2769,7 @@ struct AppearanceSettingsPanel: View {
 /// it is not installed, so a choice never silently disappears); the size
 /// stepper shares its range with the ⌘+ / ⌘− / ⌘0 View-menu chords.
 struct TerminalFontSection: View {
+    @ObservedObject private var localization = LocalizationStore.shared
     /// nil = the shipped stack.
     @Binding var family: String?
     @Binding var size: Double
@@ -2782,14 +2795,14 @@ struct TerminalFontSection: View {
 
     private var lineHeightLabel: String {
         let value = Int(lineHeight.rounded())
-        if value == 0 { return "Default" }
+        if value == 0 { return L10n.t("Default") }
         return value > 0 ? "+\(value) %" : "\(value) %"
     }
 
     var body: some View {
         Section {
             Picker(
-                "Font",
+                L10n.t("Font"),
                 selection: Binding(
                     get: { family ?? "" },
                     set: { family = $0.isEmpty ? nil : $0 }
@@ -2818,7 +2831,7 @@ struct TerminalFontSection: View {
                     .controlSize(.small)
                 }
             } label: {
-                Text("Size")
+                Text(L10n.t("Size"))
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.foreground)
             }
@@ -2839,10 +2852,10 @@ struct TerminalFontSection: View {
                 }
             } label: {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Line height")
+                    Text(L10n.t("Line height"))
                         .font(.system(size: 13))
                         .foregroundStyle(Theme.foreground)
-                    Text("Extra space between rows, as a percentage of the font's own cell height.")
+                    Text(L10n.t("Extra space between rows, as a percentage of the font's own cell height."))
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.mutedForeground)
                 }
@@ -2850,7 +2863,7 @@ struct TerminalFontSection: View {
 
             HStack {
                 Spacer()
-                Button("Revert to default") {
+                Button(L10n.t("Revert to default")) {
                     family = nil
                     size = TerminalFontModel.defaultSize
                     lineHeight = TerminalFontModel.defaultLineHeight
@@ -2859,7 +2872,7 @@ struct TerminalFontSection: View {
                 .disabled(isDefault)
             }
         } header: {
-            SettingsSectionHeader(title: "Terminal font", description: description)
+            SettingsSectionHeader(title: L10n.t("Terminal font"), description: description)
         }
         .onAppear {
             if families.isEmpty {
@@ -2878,26 +2891,31 @@ struct TerminalFontSection: View {
     @ViewBuilder
     private func familyLabel(_ option: String) -> some View {
         if option.isEmpty {
-            Text("Default (\(TerminalFontModel.shippedFamilyDescription))")
+            Text(L10n.format("Default (%@)", TerminalFontModel.shippedFamilyDescription))
         } else if families.contains(option) {
             Text(option).font(.custom(option, size: 13))
         } else {
-            Text("\(option) (not installed)")
+            Text(L10n.format("%@ (not installed)", option))
         }
     }
 
     /// Shared copy for the local panels: the chords are the same everywhere.
-    static let localDescription =
-        "Family and size for every terminal on this Mac. ⌘+ and ⌘− zoom all "
-        + "panes together; ⌘0 returns to \(Int(TerminalFontModel.defaultSize)) pt. "
-        + "Ghostty falls back to other installed faces for glyphs the chosen "
-        + "font lacks."
+    static var localDescription: String {
+        L10n.format(
+            "Family and size for every terminal on this Mac. ⌘+ and ⌘− zoom all "
+                + "panes together; ⌘0 returns to %d pt. "
+                + "Ghostty falls back to other installed faces for glyphs the chosen "
+                + "font lacks.",
+            Int(TerminalFontModel.defaultSize)
+        )
+    }
 }
 
 /// One opacity/tone slider row: label, slider, and a fixed-width live
 /// percentage so the row doesn't wiggle while dragging. When the value sits
 /// on `autoValue` (a design detent) the readout says "Auto" instead.
 struct TransparencySliderRow: View {
+    @ObservedObject private var localization = LocalizationStore.shared
     let title: String
     @Binding var value: Double
     var range = TransparencyModel.opacityRange
@@ -2915,7 +2933,7 @@ struct TransparencySliderRow: View {
                 Slider(value: $value, in: range, step: step)
                     .controlSize(.small)
                     .frame(width: 180)
-                Text(isAuto ? "Auto" : "\(Int((value * 100).rounded()))%")
+                Text(isAuto ? L10n.t("Auto") : "\(Int((value * 100).rounded()))%")
                     .font(.system(size: 12).monospacedDigit())
                     .foregroundStyle(Theme.mutedForeground)
                     .frame(width: 38, alignment: .trailing)
@@ -2960,6 +2978,7 @@ struct AppTintSwatch: View {
 struct RemoteSettingsPanel: View {
     @ObservedObject var store: UnpeelStore
     @ObservedObject private var management: HostManagementState
+    @ObservedObject private var localization = LocalizationStore.shared
 
     init(store: UnpeelStore) {
         self.store = store
@@ -2988,19 +3007,21 @@ struct RemoteSettingsPanel: View {
     /// capability.
     private var remoteDescription: String {
         if let scope = scopedLocalWorkspace {
-            return "Let another Unpeel device control \(scope.name). Devices "
-                + "you pair here reach \(scope.name) only — each workspace "
-                + "pairs its own devices."
+            return L10n.format(
+                "Let another Unpeel device control %1$@. Devices you pair here reach %2$@ only — each workspace pairs its own devices.",
+                scope.name, scope.name
+            )
         }
         if let scopeName = store.selectedScopeDisplayName {
-            return "Let another Unpeel device control \(scopeName). "
-                + "\(scopeName) mints the credentials; this Mac only forwards "
-                + "the one-time sealed exchange."
+            return L10n.format(
+                "Let another Unpeel device control %1$@. %2$@ mints the credentials; this Mac only forwards the one-time sealed exchange.",
+                scopeName, scopeName
+            )
         }
         if hasMultipleLocalWorkspaces {
-            return "Let another Unpeel device control this workspace."
+            return L10n.t("Let another Unpeel device control this workspace.")
         }
-        return "Let another Unpeel device control this Mac."
+        return L10n.t("Let another Unpeel device control this Mac.")
     }
 
     /// The selected LOCAL workspace scope, if any — the target of the
@@ -3022,7 +3043,7 @@ struct RemoteSettingsPanel: View {
             Form {
                 Section {} header: {
                     SettingsPaneHeader(
-                        title: "Remote Control",
+                        title: L10n.t("Remote Control"),
                         description: remoteDescription
                     )
                     .padding(.bottom, 4)
@@ -3097,7 +3118,7 @@ struct RemoteSettingsPanel: View {
     private func scopedWorkspaceSection(_ scope: (home: String, name: String)) -> some View {
         Section {
             if scopedDevices.isEmpty {
-                Text("No devices are paired with \(scope.name).")
+                Text(L10n.format("No devices are paired with %@.", scope.name))
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.mutedForeground)
             } else {
@@ -3121,7 +3142,7 @@ struct RemoteSettingsPanel: View {
                 store.beginScopedWorkspacePairing()
                 workspaceSharePresented = true
             } label: {
-                Label("Pair a Device with \(scope.name)…", systemImage: "plus")
+                Label(L10n.format("Pair a Device with %@…", scope.name), systemImage: "plus")
             }
             .sheet(isPresented: $workspaceSharePresented, onDismiss: {
                 store.cancelScopedWorkspacePairing()
@@ -3131,10 +3152,11 @@ struct RemoteSettingsPanel: View {
             }
         } header: {
             SettingsSectionHeader(
-                title: "Controls \(scope.name)",
-                description: "Each workspace pairs its own devices — a device "
-                    + "paired here reaches only \(scope.name). Revoke devices "
-                    + "from \(scope.name)'s own Remote Control settings."
+                title: L10n.format("Controls %@", scope.name),
+                description: L10n.format(
+                    "Each workspace pairs its own devices — a device paired here reaches only %1$@. Revoke devices from %1$@'s own Remote Control settings.",
+                    scope.name
+                )
             )
         }
     }
@@ -3143,10 +3165,10 @@ struct RemoteSettingsPanel: View {
     /// where, instead of silently hiding them for a scoped workspace.
     private func scopedLinkFootnote(_ scope: (home: String, name: String)) -> some View {
         Section {
-            Text("Unpeel Link enrollment for \(scope.name)'s devices lives in "
-                + "\(scope.name)'s own Remote Control settings; the license "
-                + "covers every workspace on this Mac and is managed from "
-                + "\(UnpeelWorkspaceContext.advertisedHostName)'s scope.")
+            Text(L10n.format(
+                "Unpeel Link enrollment for %1$@'s devices lives in %1$@'s own Remote Control settings; the license covers every workspace on this Mac and is managed from %2$@'s scope.",
+                scope.name, UnpeelWorkspaceContext.advertisedHostName
+            ))
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.mutedForeground)
                 .fixedSize(horizontal: false, vertical: true)
@@ -3158,7 +3180,7 @@ struct RemoteSettingsPanel: View {
     /// otherwise say where pairing happens instead of guessing.
     @ViewBuilder
     private var remoteHostSection: some View {
-        let scopeName = store.selectedScopeDisplayName ?? "this Host"
+        let scopeName = store.selectedScopeDisplayName ?? L10n.t("this Host")
         Section {
             if store.remoteHostRuntime.supportsHostOperation(
                 RemoteHostRuntime.HostOperation.pairingInvitation
@@ -3166,26 +3188,27 @@ struct RemoteSettingsPanel: View {
                 Button {
                     remoteHostSharePresented = true
                 } label: {
-                    Label("Pair a Device with \(scopeName)…", systemImage: "plus")
+                    Label(L10n.format("Pair a Device with %@…", scopeName), systemImage: "plus")
                 }
                 .sheet(isPresented: $remoteHostSharePresented) {
                     RemoteHostPairingSheet(store: store, hostName: scopeName)
                 }
             } else {
-                Text("\(scopeName) cannot mint pairing invitations over this "
-                    + "connection. Pair devices from its own running Unpeel "
-                    + "instead — the terminal UI's Settings ▸ Remote, or "
-                    + "`unpeel pair`.")
+                Text(L10n.format(
+                    "%@ cannot mint pairing invitations over this connection. Pair devices from its own running Unpeel instead — the terminal UI's Settings ▸ Remote, or `unpeel pair`.",
+                    scopeName
+                ))
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
             }
         } header: {
             SettingsSectionHeader(
-                title: "Controls \(scopeName)",
-                description: "Each workspace pairs its own devices — a device "
-                    + "paired here reaches only \(scopeName), and its entry is "
-                    + "revocable on \(scopeName) itself."
+                title: L10n.format("Controls %@", scopeName),
+                description: L10n.format(
+                    "Each workspace pairs its own devices — a device paired here reaches only %1$@, and its entry is revocable on %1$@ itself.",
+                    scopeName
+                )
             )
         }
     }
@@ -3200,19 +3223,19 @@ struct RemoteSettingsPanel: View {
                     .frame(width: 84, height: 84)
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Unpeel for iPhone is in beta")
+                    Text(L10n.t("Unpeel for iPhone is in beta"))
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Theme.foreground)
                     Text(
                         hasMultipleLocalWorkspaces
-                            ? "Join the TestFlight beta to control this workspace from your phone. Open the invite link on your iPhone to install it with TestFlight."
-                            : "Join the TestFlight beta to control this Mac from your phone. Open the invite link on your iPhone to install it with TestFlight."
+                            ? L10n.t("Join the TestFlight beta to control this workspace from your phone. Open the invite link on your iPhone to install it with TestFlight.")
+                            : L10n.t("Join the TestFlight beta to control this Mac from your phone. Open the invite link on your iPhone to install it with TestFlight.")
                     )
                         .font(.system(size: 12))
                         .foregroundStyle(Theme.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    Button("Join the Beta") {
+                    Button(L10n.t("Join the Beta")) {
                         NSWorkspace.shared.open(Self.iosAppURL)
                     }
                     .controlSize(.small)
@@ -3242,12 +3265,14 @@ struct RemoteSettingsPanel: View {
             }
 
             SettingsValueRow(
-                label: "Local access",
-                value: management.value.endpoint == nil ? "Unavailable" : "Serving on this network"
+                label: L10n.t("Local access"),
+                value: management.value.endpoint == nil
+                    ? L10n.t("Unavailable")
+                    : L10n.t("Serving on this network")
             )
 
             if management.value.devices.isEmpty {
-                Text("No paired devices.")
+                Text(L10n.t("No paired devices."))
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.mutedForeground)
             } else {
@@ -3257,11 +3282,11 @@ struct RemoteSettingsPanel: View {
                             // Link scope is managed in the Unpeel Link
                             // section below; this is just a reminder of the
                             // device's current reach.
-                            Text(device.relayAllowed != false ? "Link" : "Direct only")
+                            Text(device.relayAllowed != false ? L10n.t("Link") : L10n.t("Direct only"))
                                 .font(.system(size: 11))
                                 .foregroundStyle(Theme.mutedForeground)
 
-                            Button("Revoke", role: .destructive) {
+                            Button(L10n.t("Revoke"), role: .destructive) {
                                 store.revokeMobileDevice(device.id)
                             }
                             .buttonStyle(.borderless)
@@ -3287,8 +3312,8 @@ struct RemoteSettingsPanel: View {
             } label: {
                 Label(
                     hasMultipleLocalWorkspaces
-                        ? "Share This Workspace…"
-                        : "Share This Mac…",
+                        ? L10n.t("Share This Workspace…")
+                        : L10n.t("Share This Mac…"),
                     systemImage: "plus"
                 )
             }
@@ -3300,7 +3325,7 @@ struct RemoteSettingsPanel: View {
             }
 
             if hasMultipleLocalWorkspaces {
-                Text("Each workspace on this Mac is shared separately.")
+                Text(L10n.t("Each workspace on this Mac is shared separately."))
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
@@ -3308,22 +3333,22 @@ struct RemoteSettingsPanel: View {
         } header: {
             SettingsSectionHeader(
                 title: hasMultipleLocalWorkspaces
-                    ? "Controls This Workspace"
-                    : "Controls This Mac",
-                description: "Devices pair directly over your network and receive their own revocable credential. Revoking one immediately invalidates it."
+                    ? L10n.t("Controls This Workspace")
+                    : L10n.t("Controls This Mac"),
+                description: L10n.t("Devices pair directly over your network and receive their own revocable credential. Revoking one immediately invalidates it.")
             )
         }
     }
 
     private var securitySection: some View {
         Section {
-            SettingsValueRow(label: "Authentication", value: "Per-device bearer token")
-            SettingsValueRow(label: "Pairing code", value: "One-time, 5 minutes")
-            SettingsValueRow(label: "Stored token", value: "SHA-256 hash")
+            SettingsValueRow(label: L10n.t("Authentication"), value: "Per-device bearer token")
+            SettingsValueRow(label: L10n.t("Pairing code"), value: "One-time, 5 minutes")
+            SettingsValueRow(label: L10n.t("Stored token"), value: "SHA-256 hash")
         } header: {
             SettingsSectionHeader(
-                title: "Security",
-                description: "The hook and MCP servers stay localhost-only. Remote Controllers use a separate LAN server."
+                title: L10n.t("Security"),
+                description: L10n.t("The hook and MCP servers stay localhost-only. Remote Controllers use a separate LAN server.")
             )
         }
     }
@@ -3358,6 +3383,7 @@ private func deviceDetail(_ device: RemotePairedDeviceSummary) -> String {
 struct ShareThisMacSheet: View {
     @ObservedObject var store: UnpeelStore
     @ObservedObject private var management: HostManagementState
+    @ObservedObject private var localization = LocalizationStore.shared
     var usesWorkspaceLanguage: Bool = false
     @Environment(\.dismiss) private var dismiss
     @State private var now = Date()
@@ -3370,13 +3396,13 @@ struct ShareThisMacSheet: View {
     }
 
     private var shareTitle: String {
-        usesWorkspaceLanguage ? "Share This Workspace" : "Share This Mac"
+        usesWorkspaceLanguage ? L10n.t("Share This Workspace") : L10n.t("Share This Mac")
     }
 
     private var shareSubtitle: String {
         usesWorkspaceLanguage
-            ? "Let another Unpeel device control this workspace."
-            : "Let another Unpeel device control this Mac."
+            ? L10n.t("Let another Unpeel device control this workspace.")
+            : L10n.t("Let another Unpeel device control this Mac.")
     }
 
     /// This Mac's Bonjour/DNS name, ready to paste into an SSH target from
@@ -3399,7 +3425,7 @@ struct ShareThisMacSheet: View {
     private var expiresInText: String {
         guard let expiry else { return "" }
         let remaining = max(0, Int(expiry.timeIntervalSince(now).rounded(.down)))
-        return String(format: "Expires in %d:%02d", remaining / 60, remaining % 60)
+        return L10n.format("Expires in %d:%02d", remaining / 60, remaining % 60)
     }
 
     var body: some View {
@@ -3413,7 +3439,7 @@ struct ShareThisMacSheet: View {
                         .foregroundStyle(Theme.mutedForeground)
                 }
                 Spacer()
-                Button("Done") { dismiss() }
+                Button(L10n.t("Done")) { dismiss() }
                     .keyboardShortcut(.cancelAction)
             }
 
@@ -3430,12 +3456,12 @@ struct ShareThisMacSheet: View {
                         .font(.system(size: 34))
                         .foregroundStyle(.green)
                     VStack(alignment: .leading, spacing: 5) {
-                        Text("Controller paired")
+                        Text(L10n.t("Controller paired"))
                             .font(.system(size: 13, weight: .semibold))
-                        Text("The displayed one-time code has been consumed.")
+                        Text(L10n.t("The displayed one-time code has been consumed."))
                             .font(.system(size: 12))
                             .foregroundStyle(Theme.mutedForeground)
-                        Button("Pair Another Controller") {
+                        Button(L10n.t("Pair Another Controller")) {
                             store.beginHostPairing()
                         }
                         .controlSize(.small)
@@ -3449,10 +3475,10 @@ struct ShareThisMacSheet: View {
                         .frame(width: 184, height: 184)
 
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("Scan or paste this code into another Unpeel device.")
+                        Text(L10n.t("Scan or paste this code into another Unpeel device."))
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(Theme.foreground)
-                        Text("The code expires in five minutes and can be used once. After pairing, that Controller receives its own revocable device token.")
+                        Text(L10n.t("The code expires in five minutes and can be used once. After pairing, that Controller receives its own revocable device token."))
                             .font(.system(size: 12))
                             .foregroundStyle(Theme.mutedForeground)
                             .fixedSize(horizontal: false, vertical: true)
@@ -3465,13 +3491,13 @@ struct ShareThisMacSheet: View {
                         }
 
                         HStack(spacing: 8) {
-                            Button(store.hostPairingPayload == nil ? "Generate QR Code" : "Refresh QR Code") {
+                            Button(store.hostPairingPayload == nil ? L10n.t("Generate QR Code") : L10n.t("Refresh QR Code")) {
                                 store.beginHostPairing()
                             }
                             .controlSize(.small)
 
                             if store.hostPairingPayload != nil {
-                                Button("Copy Pairing Code") {
+                                Button(L10n.t("Copy Pairing Code")) {
                                     guard let code = store.hostPairingCode else { return }
                                     NSPasteboard.general.clearContents()
                                     NSPasteboard.general.setString(code, forType: .string)
@@ -3488,7 +3514,7 @@ struct ShareThisMacSheet: View {
 
             // The CLI route: same Host, driven over SSH from any terminal.
             VStack(alignment: .leading, spacing: 6) {
-                Text("Or connect from a terminal")
+                Text(L10n.t("Or connect from a terminal"))
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Theme.foreground)
 
@@ -3505,7 +3531,7 @@ struct ShareThisMacSheet: View {
                                 .fill(Theme.foreground.opacity(0.06))
                         )
 
-                    Button(cliCommandCopied ? "Copied" : "Copy") {
+                    Button(cliCommandCopied ? L10n.t("Copied") : L10n.t("Copy")) {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(cliCommand, forType: .string)
                         cliCommandCopied = true
@@ -3513,12 +3539,9 @@ struct ShareThisMacSheet: View {
                     .controlSize(.small)
                 }
 
-                Text("Run this on another machine with the Unpeel CLI installed "
-                    + "(curl -fsSL https://unpeel.com/install.sh | sh). It rides your "
-                    + "normal SSH access instead of a pairing code, so this Mac needs "
-                    + "Remote Login on (System Settings ▸ General ▸ Sharing) and your "
-                    + "SSH config must reach it — over a VPN or Tailscale too, but "
-                    + "never through Unpeel Link.")
+                Text(L10n.t(
+                    "Run this on another machine with the Unpeel CLI installed (curl -fsSL https://unpeel.com/install.sh | sh). It rides your normal SSH access instead of a pairing code, so this Mac needs Remote Login on (System Settings ▸ General ▸ Sharing) and your SSH config must reach it — over a VPN or Tailscale too, but never through Unpeel Link."
+                ))
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
@@ -3545,6 +3568,7 @@ struct ShareThisMacSheet: View {
 /// watches the workspace's device list to confirm the pairing landed.
 struct ShareWorkspaceSheet: View {
     @ObservedObject var store: UnpeelStore
+    @ObservedObject private var localization = LocalizationStore.shared
     let home: String
     let workspaceName: String
     @Environment(\.dismiss) private var dismiss
@@ -3563,21 +3587,21 @@ struct ShareWorkspaceSheet: View {
     private var expiresInText: String {
         guard let expiry else { return "" }
         let remaining = max(0, Int(expiry.timeIntervalSince(now).rounded(.down)))
-        return String(format: "Expires in %d:%02d", remaining / 60, remaining % 60)
+        return L10n.format("Expires in %d:%02d", remaining / 60, remaining % 60)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Pair a Device with \(workspaceName)")
+                    Text(L10n.format("Pair a Device with %@", workspaceName))
                         .font(.system(size: 20, weight: .semibold))
-                    Text("The device pairs with \(workspaceName) only — each workspace pairs its own devices.")
+                    Text(L10n.format("The device pairs with %@ only — each workspace pairs its own devices.", workspaceName))
                         .font(.system(size: 12))
                         .foregroundStyle(Theme.mutedForeground)
                 }
                 Spacer()
-                Button("Done") { dismiss() }
+                Button(L10n.t("Done")) { dismiss() }
                     .keyboardShortcut(.cancelAction)
             }
 
@@ -3587,7 +3611,7 @@ struct ShareWorkspaceSheet: View {
                         .font(.system(size: 13))
                         .foregroundStyle(.red)
                         .fixedSize(horizontal: false, vertical: true)
-                    Button("Try Again") {
+                    Button(L10n.t("Try Again")) {
                         store.beginScopedWorkspacePairing()
                     }
                     .controlSize(.small)
@@ -3600,10 +3624,10 @@ struct ShareWorkspaceSheet: View {
                     VStack(alignment: .leading, spacing: 5) {
                         Text("\(pairedDeviceName) paired with \(workspaceName)")
                             .font(.system(size: 13, weight: .semibold))
-                        Text("The displayed one-time code has been consumed.")
+                        Text(L10n.t("The displayed one-time code has been consumed."))
                             .font(.system(size: 12))
                             .foregroundStyle(Theme.mutedForeground)
-                        Button("Pair Another Device") {
+                        Button(L10n.t("Pair Another Device")) {
                             self.pairedDeviceName = nil
                             baselineDeviceIDs = currentDeviceIDs()
                             store.beginScopedWorkspacePairing()
@@ -3617,7 +3641,7 @@ struct ShareWorkspaceSheet: View {
                 HStack(spacing: 12) {
                     ProgressView()
                         .controlSize(.small)
-                    Text("Waiting for \(workspaceName)… Its instance starts in the background if it isn't running.")
+                    Text(L10n.format("Waiting for %@… Its instance starts in the background if it isn't running.", workspaceName))
                         .font(.system(size: 13))
                         .foregroundStyle(Theme.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
@@ -3629,10 +3653,10 @@ struct ShareWorkspaceSheet: View {
                         .frame(width: 184, height: 184)
 
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("Scan or paste this code into another Unpeel device.")
+                        Text(L10n.t("Scan or paste this code into another Unpeel device."))
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(Theme.foreground)
-                        Text("The code expires in five minutes and can be used once. The device then holds its own revocable entry in \(workspaceName)'s device list.")
+                        Text(L10n.format("The code expires in five minutes and can be used once. The device then holds its own revocable entry in %@'s device list.", workspaceName))
                             .font(.system(size: 12))
                             .foregroundStyle(Theme.mutedForeground)
                             .fixedSize(horizontal: false, vertical: true)
@@ -3643,12 +3667,12 @@ struct ShareWorkspaceSheet: View {
                             .foregroundStyle(Theme.mutedForeground)
 
                         HStack(spacing: 8) {
-                            Button("Refresh QR Code") {
+                            Button(L10n.t("Refresh QR Code")) {
                                 store.beginScopedWorkspacePairing()
                             }
                             .controlSize(.small)
 
-                            Button("Copy Pairing Code") {
+                            Button(L10n.t("Copy Pairing Code")) {
                                 guard let code = store.scopedWorkspacePairingCode else { return }
                                 NSPasteboard.general.clearContents()
                                 NSPasteboard.general.setString(code, forType: .string)
@@ -3706,6 +3730,7 @@ struct ShareWorkspaceSheet: View {
 /// enrolled — the entitlement check itself stays server-side
 /// (the Link service contract).
 private struct LinkEnrollmentSection: View {
+    @ObservedObject private var localization = LocalizationStore.shared
     @ObservedObject var store: UnpeelStore
     @ObservedObject private var management: HostManagementState
     @ObservedObject var hosts: RemoteHostStore
@@ -3720,12 +3745,13 @@ private struct LinkEnrollmentSection: View {
     }
 
     private var reachDescription: String {
-        let target = usesWorkspaceLanguage ? "this workspace" : "this Mac"
-        return "These devices reach \(target) — and these Hosts stay "
-            + "reachable — from any network, through the unpeel.com "
-            + "relay. Session traffic is end-to-end encrypted; notification "
-            + "titles pass through Unpeel and Apple Push. Everything not listed "
-            + "here connects direct-only, on your own network."
+        let target = usesWorkspaceLanguage
+            ? L10n.t("this workspace")
+            : L10n.t("this Mac")
+        return L10n.format(
+            "These devices reach %@ — and these Hosts stay reachable — from any network, through the unpeel.com relay. Session traffic is end-to-end encrypted; notification titles pass through Unpeel and Apple Push. Everything not listed here connects direct-only, on your own network.",
+            target
+        )
     }
 
     private var enrolledDevices: [RemotePairedDeviceSummary] {
@@ -3752,7 +3778,7 @@ private struct LinkEnrollmentSection: View {
     var body: some View {
         Section {
             if enrolledDevices.isEmpty, enrolledHosts.isEmpty {
-                Text("Nothing is on Link — every connection stays direct, on your own network.")
+                Text(L10n.t("Nothing is on Link — every connection stays direct, on your own network."))
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.mutedForeground)
             }
@@ -3780,7 +3806,7 @@ private struct LinkEnrollmentSection: View {
             // The uplink serves inbound devices; without one enrolled there
             // is nothing to report.
             if !enrolledDevices.isEmpty {
-                SettingsValueRow(label: "Relay", value: uplink.status.label)
+                SettingsValueRow(label: L10n.t("Relay"), value: uplink.status.label)
             }
 
             Menu {
@@ -3799,7 +3825,7 @@ private struct LinkEnrollmentSection: View {
                     }
                 }
             } label: {
-                Label("Add to Link…", systemImage: "plus")
+                Label(L10n.t("Add to Link…"), systemImage: "plus")
             }
             .disabled(addCandidatesEmpty)
             .help(addCandidatesEmpty
@@ -3807,7 +3833,7 @@ private struct LinkEnrollmentSection: View {
                 : "Enroll a paired device or Host on Unpeel Link.")
         } header: {
             SettingsSectionHeader(
-                title: "Reachable outside your network (Unpeel Link)",
+                title: L10n.t("Reachable outside your network (Unpeel Link)"),
                 description: reachDescription
             )
         }
@@ -3823,10 +3849,10 @@ private struct LinkEnrollmentSection: View {
             // A real bordered button: rendered borderless this read as a
             // status caption ("Direct Only") instead of the remove action,
             // which made enrollment look un-toggleable (2026-08-13).
-            Button("Remove from Link", action: remove)
+            Button(L10n.t("Remove from Link"), action: remove)
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-                .help("Take this device off Unpeel Link — it then connects only over your own network. Re-add it any time with \u{201C}Add to Link…\u{201D}.")
+                .help(L10n.t("Take this device off Unpeel Link — it then connects only over your own network. Re-add it any time with \u{201C}Add to Link…\u{201D}."))
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: icon)
@@ -3899,7 +3925,7 @@ struct PairingQRCodeView: View {
                 VStack(spacing: 6) {
                     Image(systemName: "qrcode")
                         .font(.system(size: 34, weight: .regular))
-                    Text("No Code")
+                    Text(L10n.t("No Code"))
                         .font(.system(size: 12, weight: .medium))
                 }
                 .foregroundStyle(Color.black.opacity(0.38))
@@ -3935,6 +3961,7 @@ struct PairingQRCodeView: View {
 /// the macOS/phone notification banners. General app behavior — nothing here
 /// is tied to the Sessions MCP.
 struct NotificationsSettingsPanel: View {
+    @ObservedObject private var localization = LocalizationStore.shared
     @ObservedObject var store: UnpeelStore
     @ObservedObject private var uplink = RelayUplinkManager.shared
     @ObservedObject private var notifier = DesktopNotifier.shared
@@ -3944,9 +3971,8 @@ struct NotificationsSettingsPanel: View {
             Form {
                 Section {} header: {
                     SettingsPaneHeader(
-                        title: "Notifications",
-                        description: "How Unpeel flags a session that needs you and "
-                            + "when it sends a notification banner."
+                        title: L10n.t("Notifications"),
+                        description: L10n.t("How Unpeel flags a session that needs you and when it sends a notification banner.")
                     )
                     .padding(.bottom, 4)
                 }
@@ -3957,18 +3983,18 @@ struct NotificationsSettingsPanel: View {
                 if !UnpeelWorkspaceContext.isDefaultInstance {
                     Section {
                         Button(
-                            "Use \(UnpeelWorkspaceContext.defaultWorkspaceName ?? "Personal")'s notifications"
+                            L10n.format(
+                                "Use %@'s notifications",
+                                UnpeelWorkspaceContext.defaultWorkspaceName ?? L10n.t("Personal")
+                            )
                         ) {
                             store.revertNotificationsToInheritedBaseline()
                         }
                         .disabled(!UnpeelStore.hasOwnMenuAttentionSetting)
                     } header: {
                         SettingsSectionHeader(
-                            title: "Inherits from \(UnpeelWorkspaceContext.defaultWorkspaceName ?? "Personal")",
-                            description: "This workspace uses the default "
-                                + "workspace's notification settings until a "
-                                + "setting below is changed. Revert drops its "
-                                + "own values."
+                            title: L10n.format("Inherits from %@", UnpeelWorkspaceContext.defaultWorkspaceName ?? L10n.t("Personal")),
+                            description: L10n.t("This workspace uses the default workspace's notification settings until a setting below is changed. Revert drops its own values.")
                         )
                     }
                 }
@@ -4000,12 +4026,10 @@ struct NotificationsSettingsPanel: View {
                 .controlSize(.small)
             } label: {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Flag menus waiting for a choice")
+                    Text(L10n.t("Flag menus waiting for a choice"))
                         .font(.system(size: 13))
                         .foregroundStyle(Theme.foreground)
-                    Text("Show the yellow attention dot when an agent draws a "
-                        + "pick-an-option menu. These prompts send no signal on "
-                        + "their own, so Unpeel reads them off the screen.")
+Text(L10n.t("Show the yellow attention dot when an agent draws a pick-an-option menu. These prompts send no signal on their own, so Unpeel reads them off the screen."))
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
@@ -4013,9 +4037,8 @@ struct NotificationsSettingsPanel: View {
             }
         } header: {
             SettingsSectionHeader(
-                title: "Attention",
-                description: "When a session is waiting for you to answer an "
-                    + "on-screen menu."
+                title: L10n.t("Attention"),
+                description: L10n.t("When a session is waiting for you to answer an on-screen menu.")
             )
         }
     }
@@ -4023,20 +4046,20 @@ struct NotificationsSettingsPanel: View {
     private var notificationsSection: some View {
         Section {
             Button(notifier.lastTestDiagnostic.isChecking
-                ? "Sending…"
-                : "Send a test Mac notification"
+                ? L10n.t("Sending…")
+                : L10n.t("Send a test Mac notification")
             ) {
                 notifier.sendTestNotification()
             }
             .disabled(notifier.lastTestDiagnostic.isChecking)
 
             SettingsValueRow(
-                label: "Last Mac test",
+                label: L10n.t("Last Mac test"),
                 value: notifier.lastTestDiagnostic.label
             )
 
             if notifier.lastTestDiagnostic.needsSystemSettings {
-                Button("Open Mac Notification Settings…") {
+                Button(L10n.t("Open Mac Notification Settings…")) {
                     if let url = URL(
                         string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension"
                     ) {
@@ -4045,34 +4068,29 @@ struct NotificationsSettingsPanel: View {
                 }
             }
 
-            Button("Send a test phone notification") {
+            Button(L10n.t("Send a test phone notification")) {
                 store.sendTestPhoneNotification()
             }
             .disabled(store.mobilePushTargetCount == 0)
 
             SettingsValueRow(
-                label: "Paired phone tokens",
+                label: L10n.t("Paired phone tokens"),
                 value: store.mobilePushTargetCount == 0
                     ? "None registered"
                     : "\(store.mobilePushTargetCount) ready"
             )
             SettingsValueRow(label: "Unpeel Link", value: uplink.status.label)
-            SettingsValueRow(label: "Last phone push", value: uplink.lastPushDiagnostic.label)
+            SettingsValueRow(label: L10n.t("Last phone push"), value: uplink.lastPushDiagnostic.label)
             if let attemptedAt = uplink.lastPushAttemptAt {
                 SettingsValueRow(
-                    label: "Last attempt",
+                    label: L10n.t("Last attempt"),
                     value: attemptedAt.formatted(date: .abbreviated, time: .standard)
                 )
             }
         } header: {
             SettingsSectionHeader(
-                title: "Notifications",
-                description: "A macOS banner (and a push to a paired iPhone) when a session "
-                    + "needs input, or finishes if you turned on \u{201C}Notify when done\u{201D} "
-                    + "for it. Phone alerts use Link/APNs even while terminal traffic stays "
-                    + "Direct or SSH. Mac and phone tests exercise their respective delivery "
-                    + "paths; phone diagnostics distinguish a missing APNs token, Link "
-                    + "entitlement failure, and APNs rejection."
+                title: L10n.t("Notifications"),
+                description: L10n.t("A macOS banner (and a push to a paired iPhone) when a session needs input, or finishes if you turned on \u{201C}Notify when done\u{201D} for it. Phone alerts use Link/APNs even while terminal traffic stays Direct or SSH. Mac and phone tests exercise their respective delivery paths; phone diagnostics distinguish a missing APNs token, Link entitlement failure, and APNs rejection.")
             )
         }
     }
@@ -4086,6 +4104,7 @@ struct NotificationsSettingsPanel: View {
 /// phone) and the Sessions MCP `read_transcript` tool (as its defaults), so
 /// all of them stay in sync.
 struct TranscriptsSettingsPanel: View {
+    @ObservedObject private var localization = LocalizationStore.shared
     @ObservedObject var store: UnpeelStore
 
     var body: some View {
@@ -4093,9 +4112,10 @@ struct TranscriptsSettingsPanel: View {
             Form {
                 Section {} header: {
                     SettingsPaneHeader(
-                        title: "Transcripts",
-                        description: "A session's conversation, rendered as Markdown — "
-                            + "what \"Copy transcript\" copies and what agents read."
+                        title: L10n.t("Transcripts"),
+                        description: L10n.t(
+                            "A session's conversation, rendered as Markdown — what \"Copy transcript\" copies and what agents read."
+                        )
                     )
                     .padding(.bottom, 4)
                 }
@@ -4110,36 +4130,36 @@ struct TranscriptsSettingsPanel: View {
     private var transcriptSection: some View {
         Section {
             transcriptToggle(
-                title: "Session info header",
-                subtitle: "Start with the session's title, ID, CLI, and model. "
-                    + "The ID lets another agent target this session with the "
-                    + "Sessions MCP tools.",
+                title: L10n.t("Session info header"),
+                subtitle: L10n.t(
+                    "Start with the session's title, ID, CLI, and model. The ID lets another agent target this session with the Sessions MCP tools."
+                ),
                 on: store.transcriptSettings.includeSessionInfo
             ) { $0.includeSessionInfo = $1 }
             transcriptToggle(
-                title: "User messages",
+                title: L10n.t("User messages"),
                 on: store.transcriptSettings.includeUser
             ) { $0.includeUser = $1 }
             transcriptToggle(
-                title: "Assistant messages",
+                title: L10n.t("Assistant messages"),
                 on: store.transcriptSettings.includeAssistant
             ) { $0.includeAssistant = $1 }
             transcriptToggle(
-                title: "Reasoning",
-                subtitle: "The agent's thinking blocks.",
+                title: L10n.t("Reasoning"),
+                subtitle: L10n.t("The agent's thinking blocks."),
                 on: store.transcriptSettings.includeReasoning
             ) { $0.includeReasoning = $1 }
             transcriptToggle(
-                title: "Tool calls & results",
-                subtitle: "Commands the agent ran and their output.",
+                title: L10n.t("Tool calls & results"),
+                subtitle: L10n.t("Commands the agent ran and their output."),
                 on: store.transcriptSettings.includeTools
             ) { $0.includeTools = $1 }
             transcriptToggle(
-                title: "File changes & diffs",
+                title: L10n.t("File changes & diffs"),
                 on: store.transcriptSettings.includeFileChanges
             ) { $0.includeFileChanges = $1 }
             transcriptToggle(
-                title: "Plan updates",
+                title: L10n.t("Plan updates"),
                 on: store.transcriptSettings.includePlanUpdates
             ) { $0.includePlanUpdates = $1 }
 
@@ -4153,20 +4173,20 @@ struct TranscriptsSettingsPanel: View {
                         }
                     )
                 ) {
-                    Text("Whole conversation").tag(0)
-                    Text("Last 20 entries").tag(20)
-                    Text("Last 50 entries").tag(50)
-                    Text("Last 100 entries").tag(100)
+                    Text(L10n.t("Whole conversation")).tag(0)
+                    Text(L10n.t("Last 20 entries")).tag(20)
+                    Text(L10n.t("Last 50 entries")).tag(50)
+                    Text(L10n.t("Last 100 entries")).tag(100)
                 }
                 .labelsHidden()
                 .pickerStyle(.menu)
                 .fixedSize()
             } label: {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Range")
+                    Text(L10n.t("Range"))
                         .font(.system(size: 13))
                         .foregroundStyle(Theme.foreground)
-                    Text("How much of the conversation to include.")
+                    Text(L10n.t("How much of the conversation to include."))
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
@@ -4174,11 +4194,10 @@ struct TranscriptsSettingsPanel: View {
             }
         } header: {
             SettingsSectionHeader(
-                title: "Transcript content",
-                description: "What \"Copy transcript\" (right-click a session) puts on "
-                    + "the clipboard as Markdown. These options also drive the defaults "
-                    + "for agents reading a session's transcript. Range is the default "
-                    + "for agent reads; the Copy transcript menu picks its own range."
+                title: L10n.t("Transcript content"),
+                description: L10n.t(
+                    "What \"Copy transcript\" (right-click a session) puts on the clipboard as Markdown. These options also drive the defaults for agents reading a session's transcript. Range is the default for agent reads; the Copy transcript menu picks its own range."
+                )
             )
         }
     }
@@ -4356,6 +4375,7 @@ struct SettingsValueRow: View {
 /// experimental ones under their own section — so adding a feature needs no
 /// new UI, just a registry entry in `FeatureFlags.swift`.
 struct FeaturesSettingsPanel: View {
+    @ObservedObject private var localization = LocalizationStore.shared
     @ObservedObject var store: UnpeelStore
 
     var body: some View {
@@ -4363,9 +4383,8 @@ struct FeaturesSettingsPanel: View {
             Form {
                 Section {} header: {
                     SettingsPaneHeader(
-                        title: "Features",
-                        description: "Turn Unpeel's optional features on or off — no "
-                            + "restart needed."
+                        title: L10n.t("Features"),
+                        description: L10n.t("Turn Unpeel's optional features on or off — no restart needed.")
                     )
                     .padding(.bottom, 4)
                 }
@@ -4376,7 +4395,10 @@ struct FeaturesSettingsPanel: View {
                 if !UnpeelWorkspaceContext.isDefaultInstance {
                     Section {
                         Button(
-                            "Use \(UnpeelWorkspaceContext.defaultWorkspaceName ?? "Personal")'s features"
+                            L10n.format(
+                                "Use %@'s features",
+                                UnpeelWorkspaceContext.defaultWorkspaceName ?? L10n.t("Personal")
+                            )
                         ) {
                             store.revertExperimentalToInheritedBaseline()
                         }
@@ -4387,17 +4409,15 @@ struct FeaturesSettingsPanel: View {
                         )
                     } header: {
                         SettingsSectionHeader(
-                            title: "Inherits from \(UnpeelWorkspaceContext.defaultWorkspaceName ?? "Personal")",
-                            description: "This workspace uses the default "
-                                + "workspace's features until a toggle below "
-                                + "is changed. Revert drops its own values."
+                            title: L10n.format("Inherits from %@", UnpeelWorkspaceContext.defaultWorkspaceName ?? L10n.t("Personal")),
+                            description: L10n.t("This workspace uses the default workspace's features until a toggle below is changed. Revert drops its own values.")
                         )
                     }
                 }
 
                 if UnpeelFeatureFlags.availableFeatures.isEmpty {
                     Section {
-                        Text("No optional features right now. Check back after an update.")
+                        Text(L10n.t("No optional features right now. Check back after an update."))
                             .font(.system(size: 12))
                             .foregroundStyle(Theme.mutedForeground)
                     }
@@ -4414,8 +4434,8 @@ struct FeaturesSettingsPanel: View {
                             }
                         } header: {
                             SettingsSectionHeader(
-                                title: "Experimental",
-                                description: AppFeature.experimentalSectionDescription
+                                title: L10n.t("Experimental"),
+                                description: AppFeature.localizedExperimentalSectionDescription
                             )
                         }
                     }
@@ -4436,10 +4456,10 @@ struct FeaturesSettingsPanel: View {
             .toggleStyle(.switch)
         } label: {
             VStack(alignment: .leading, spacing: 2) {
-                Text(feature.title)
+                Text(feature.localizedTitle)
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.foreground)
-                Text(feature.summary)
+                Text(feature.localizedSummary)
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.mutedForeground)
                     .lineSpacing(2)
@@ -4455,6 +4475,7 @@ struct FeaturesSettingsPanel: View {
 /// Native Advanced panel: memory usage, running terminal hosts (with
 /// Stop), cleanup policy, and diagnostics utilities.
 struct AdvancedSettingsPanel: View {
+    @ObservedObject private var localization = LocalizationStore.shared
     @ObservedObject var store: UnpeelStore
 
     @State private var memory: MemorySnapshot?
@@ -4467,8 +4488,8 @@ struct AdvancedSettingsPanel: View {
             Form {
                 Section {} header: {
                     SettingsPaneHeader(
-                        title: "Advanced",
-                        description: "Resource usage, cleanup, and on-disk data for Unpeel's terminal hosts."
+                        title: L10n.t("Advanced"),
+                        description: L10n.t("Resource usage, cleanup, and on-disk data for Unpeel's terminal hosts.")
                     )
                     .padding(.bottom, 4)
                 }
@@ -4496,7 +4517,7 @@ struct AdvancedSettingsPanel: View {
         Section {
             LabeledContent {
                 Picker(
-                    "Auto-stop inactive terminals",
+                    L10n.t("Auto-stop inactive terminals"),
                     selection: Binding(
                         get: { store.autoStopMinutes },
                         set: { store.setAutoStopMinutes($0) }
@@ -4510,13 +4531,13 @@ struct AdvancedSettingsPanel: View {
                 .pickerStyle(.menu)
                 .frame(width: 150)
             } label: {
-                Text("Auto-stop inactive terminals")
+                Text(L10n.t("Auto-stop inactive terminals"))
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.foreground)
             }
             LabeledContent {
                 Picker(
-                    "Stopped sessions to keep",
+                    L10n.t("Stopped sessions to keep"),
                     selection: Binding(
                         get: { store.sidebarVisibleSessionLimit },
                         set: { store.setSidebarStoppedLimit($0) }
@@ -4530,14 +4551,14 @@ struct AdvancedSettingsPanel: View {
                 .pickerStyle(.menu)
                 .frame(width: 150)
             } label: {
-                Text("Stopped sessions to keep")
+                Text(L10n.t("Stopped sessions to keep"))
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.foreground)
             }
         } header: {
             SettingsSectionHeader(
-                title: "Cleanup",
-                description: "Sessions that have stayed idle for the selected time are stopped — the same as clicking \"Stop\": the terminal stops and the row stays in the sidebar, where Resume continues the conversation. Sessions that keep working (including loops — any activity resets the clock), or that are pinned, selected, unread, or waiting for input, are left alone; plain shell terminals are never touched. Each project keeps its newest stopped sessions up to the limit; older ones are removed automatically, except pinned and unread ones. The agent's own history (for example claude --resume) still has those conversations."
+                title: L10n.t("Cleanup"),
+                description: L10n.t("Sessions that have stayed idle for the selected time are stopped — the same as clicking \"Stop\": the terminal stops and the row stays in the sidebar, where Resume continues the conversation. Sessions that keep working (including loops — any activity resets the clock), or that are pinned, selected, unread, or waiting for input, are left alone; plain shell terminals are never touched. Each project keeps its newest stopped sessions up to the limit; older ones are removed automatically, except pinned and unread ones. The agent's own history (for example claude --resume) still has those conversations.")
             )
         }
     }
@@ -4566,8 +4587,8 @@ struct AdvancedSettingsPanel: View {
             }
         } header: {
             SettingsSectionHeader(
-                title: "Memory",
-                description: "Current process memory usage and active session counts."
+                title: L10n.t("Memory"),
+                description: L10n.t("Current process memory usage and active session counts.")
             )
         }
     }
@@ -4579,8 +4600,8 @@ struct AdvancedSettingsPanel: View {
 
     private var summaryText: String {
         terminals.isEmpty
-            ? "Live terminal hosts sorted by current CPU usage."
-            : "\(terminals.count) running · \(formatCpu(totalCpu)) CPU · \(formatMB(totalRss)) memory. Sorted by current CPU usage."
+            ? L10n.t("Live terminal hosts sorted by current CPU usage.")
+            : L10n.format("%d running · %@ CPU · %@ memory. Sorted by current CPU usage.", terminals.count, formatCpu(totalCpu), formatMB(totalRss))
     }
 
     private var terminalsSection: some View {
@@ -4596,7 +4617,7 @@ struct AdvancedSettingsPanel: View {
             }
         } header: {
             HStack(alignment: .top, spacing: 12) {
-                SettingsSectionHeader(title: "Running Terminals", description: summaryText)
+                SettingsSectionHeader(title: L10n.t("Running Terminals"), description: summaryText)
                 Spacer(minLength: 8)
                 Button(loading ? "Refreshing…" : "Refresh") { refresh() }
                     .controlSize(.small)
@@ -4633,8 +4654,8 @@ struct AdvancedSettingsPanel: View {
                         .truncationMode(.tail)
                         .frame(maxWidth: 200, alignment: .leading)
                         .fixedSize(horizontal: true, vertical: false)
-                    Text("PID \(String(terminal.pid))")
-                    Text("\(terminal.processCount) proc")
+                    Text(L10n.format("PID %@", String(terminal.pid)))
+                    Text(L10n.format("%d proc", terminal.processCount))
                     Text(compactPath(terminal.cwd))
                         .opacity(0.75)
                         .lineLimit(1)
@@ -4652,21 +4673,21 @@ struct AdvancedSettingsPanel: View {
             }
 
             HStack(spacing: 8) {
-                Button("Open") {
+                Button(L10n.t("Open")) {
                     store.revealSessionInSidebar(terminal.id)
                 }
                 .controlSize(.small)
                 .disabled(isRemoving)
 
                 if store.sessionCanStop(terminal.id) {
-                    Button("Stop") {
+                    Button(L10n.t("Stop")) {
                         store.confirmStopSession(terminal.id)
                         terminals.removeAll { $0.id == terminal.id }
                     }
                     .controlSize(.small)
                     .disabled(isRemoving)
                 } else {
-                    Button("Remove") {
+                    Button(L10n.t("Remove")) {
                         store.requestRemoveSession(terminal.id)
                         store.revealSessionInSidebar(terminal.id)
                     }
@@ -4697,17 +4718,17 @@ struct AdvancedSettingsPanel: View {
     private var diagnosticsSection: some View {
         Section {
             LabeledContent {
-                Button("Show in Finder") {
+                Button(L10n.t("Show in Finder")) {
                     NSWorkspace.shared.open(LaunchConfig.appSessionsDir)
                 }
                 .controlSize(.small)
             } label: {
-                Text("Sessions folder")
+                Text(L10n.t("Sessions folder"))
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.foreground)
             }
             LabeledContent {
-                Button("Show in Finder") {
+                Button(L10n.t("Show in Finder")) {
                     let trace = LaunchConfig.unpeelDir
                         .appendingPathComponent("hooks")
                         .appendingPathComponent("trace.log")
@@ -4719,14 +4740,14 @@ struct AdvancedSettingsPanel: View {
                 }
                 .controlSize(.small)
             } label: {
-                Text("Hooks trace log")
+                Text(L10n.t("Hooks trace log"))
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.foreground)
             }
         } header: {
             SettingsSectionHeader(
-                title: "Diagnostics",
-                description: "Quick access to Unpeel's on-disk session data and hook trace log."
+                title: L10n.t("Diagnostics"),
+                description: L10n.t("Quick access to Unpeel's on-disk session data and hook trace log.")
             )
         }
     }
@@ -4755,7 +4776,7 @@ struct AdvancedSettingsPanel: View {
     }
 
     private func compactPath(_ path: String) -> String {
-        guard !path.isEmpty else { return "No folder" }
+        guard !path.isEmpty else { return L10n.t("No folder") }
         let parts = path.split(separator: "/").map(String.init)
         guard parts.count > 2 else { return path }
         return ".../" + parts.suffix(2).joined(separator: "/")
@@ -4783,7 +4804,7 @@ struct RunningTerminal: Identifiable, Sendable {
     let rssBytes: UInt64
 
     var commandLabel: String {
-        command.trimmingCharacters(in: .whitespaces).isEmpty ? "Blank shell" : command
+        command.trimmingCharacters(in: .whitespaces).isEmpty ? L10n.t("Blank shell") : command
     }
 }
 

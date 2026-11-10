@@ -1663,11 +1663,11 @@ final class UnpeelStore: ObservableObject {
 
     static func autoStopLabel(for minutes: Int) -> String {
         switch minutes {
-        case 0: return "Never"
-        case ..<60: return "After \(minutes) minutes"
-        case 60: return "After 1 hour"
-        case 1440: return "After 1 day"
-        default: return "After \(minutes / 60) hours"
+        case 0: return L10n.t("Never")
+        case ..<60: return L10n.format("After %d minutes", minutes)
+        case 60: return L10n.t("After 1 hour")
+        case 1440: return L10n.t("After 1 day")
+        default: return L10n.format("After %d hours", minutes / 60)
         }
     }
 
@@ -4402,7 +4402,7 @@ final class UnpeelStore: ObservableObject {
     }
 
     static func sidebarStoppedLimitLabel(for limit: Int) -> String {
-        limit == 0 ? "None" : "\(limit)"
+        limit == 0 ? L10n.t("None") : "\(limit)"
     }
 
     func setSidebarStoppedLimit(_ limit: Int) {

@@ -48,14 +48,14 @@ struct LinkLicenseSections: View {
     private var profileSection: some View {
         Section {
             LabeledContent {
-                TextField("Your name", text: $nameInput)
+                TextField(L10n.t("Your name"), text: $nameInput)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 13))
                     .frame(maxWidth: 220)
                     .focused($nameFieldFocused)
                     .onSubmit { store.setProfileDisplayName(nameInput) }
             } label: {
-                Text("Display name")
+                Text(L10n.t("Display name"))
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.foreground)
             }
@@ -76,19 +76,21 @@ struct LinkLicenseSections: View {
                                 )
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("Avatar \(emoji)")
+                        .accessibilityLabel(L10n.format("Avatar %@", emoji))
                     }
                 }
             } label: {
-                Text("Avatar")
+                Text(L10n.t("Avatar"))
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.foreground)
             }
         } header: {
             SettingsSectionHeader(
-                title: "Presence",
-                description: "How you appear to others connected to the same Host — "
-                    + "the name and avatar on presence chips."
+                title: L10n.t("Presence"),
+                description: L10n.t(
+                    "How you appear to others connected to the same Host — "
+                        + "the name and avatar on presence chips."
+                )
             )
         }
         .onAppear { nameInput = store.profileDisplayName }
@@ -108,30 +110,35 @@ struct LinkLicenseSections: View {
             HStack(spacing: 8) {
                 Image(systemName: "checkmark.seal.fill")
                     .foregroundStyle(Theme.accent)
-                Text("Unpeel Link is active")
+                Text(L10n.t("Unpeel Link is active"))
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Theme.foreground)
             }
-            SettingsValueRow(label: "Licensed to", value: payload.email)
-            SettingsValueRow(label: "Seats", value: "\(payload.seats) Hosts")
+            SettingsValueRow(label: L10n.t("Licensed to"), value: payload.email)
+            SettingsValueRow(
+                label: L10n.t("Seats"),
+                value: L10n.format("%d Hosts", payload.seats)
+            )
 
             LabeledContent {
-                Button(license.working ? "Deactivating…" : "Deactivate this Host") {
+                Button(license.working ? L10n.t("Deactivating…") : L10n.t("Deactivate this Host")) {
                     Task { await license.deactivate() }
                 }
                 .controlSize(.small)
                 .disabled(license.working)
             } label: {
-                Text("Release seat")
+                Text(L10n.t("Release seat"))
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.foreground)
             }
             lastErrorText
         } header: {
             SettingsSectionHeader(
-                title: "Unpeel Link subscription",
-                description: "One compatibility seat activates one Host. Deactivating frees this Host's "
-                    + "seat so you can use the key on a different machine."
+                title: L10n.t("Unpeel Link subscription"),
+                description: L10n.t(
+                    "One compatibility seat activates one Host. Deactivating frees this Host's "
+                        + "seat so you can use the key on a different machine."
+                )
             )
         }
     }
@@ -143,12 +150,17 @@ struct LinkLicenseSections: View {
             HStack(spacing: 8) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(Theme.danger)
-                Text("This Unpeel Link key is no longer active")
+                Text(L10n.t("This Unpeel Link key is no longer active"))
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Theme.foreground)
             }
-            Text("The subscription for \(payload.email) has ended or been refunded. Unpeel "
-                + "keeps working — renew or enter a different key to use Unpeel Link again.")
+            Text(
+                L10n.format(
+                    "The subscription for %@ has ended or been refunded. Unpeel "
+                        + "keeps working — renew or enter a different key to use Unpeel Link again.",
+                    payload.email
+                )
+            )
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.mutedForeground)
                 .fixedSize(horizontal: false, vertical: true)
@@ -156,7 +168,7 @@ struct LinkLicenseSections: View {
             activateButton
             lastErrorText
         } header: {
-            SettingsSectionHeader(title: "Unpeel Link subscription")
+            SettingsSectionHeader(title: L10n.t("Unpeel Link subscription"))
         } footer: {
             activationFooter
         }
@@ -173,10 +185,10 @@ struct LinkLicenseSections: View {
                         .foregroundStyle(Theme.accent)
                         .frame(width: 16)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(feature.title)
+                        Text(L10n.t(feature.title))
                             .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(Theme.foreground)
-                        Text(feature.detail)
+                        Text(L10n.t(feature.detail))
                             .font(.system(size: 12))
                             .foregroundStyle(Theme.mutedForeground)
                             .fixedSize(horizontal: false, vertical: true)
@@ -189,10 +201,12 @@ struct LinkLicenseSections: View {
             lastErrorText
         } header: {
             SettingsSectionHeader(
-                title: "Get Unpeel Link",
-                description: "Unpeel is free on your Mac; Link is the relay above — "
-                    + "$59 per seat per year, one compatibility seat activates one Host. Paste the key "
-                    + "from your purchase email to activate."
+                title: L10n.t("Get Unpeel Link"),
+                description: L10n.t(
+                    "Unpeel is free on your Mac; Link is the relay above — "
+                        + "$59 per seat per year, one compatibility seat activates one Host. Paste the key "
+                        + "from your purchase email to activate."
+                )
             )
         } footer: {
             activationFooter
@@ -229,9 +243,9 @@ struct LinkLicenseSections: View {
 
     private var activationFooter: some View {
         HStack(spacing: 4) {
-            Link("Get Unpeel Link", destination: LicenseConfig.apiBaseURL.appendingPathComponent("link"))
+            Link(L10n.t("Get Unpeel Link"), destination: LicenseConfig.apiBaseURL.appendingPathComponent("link"))
             Text("·").foregroundStyle(Theme.mutedForeground)
-            Link("Lost your key?",
+            Link(L10n.t("Lost your key?"),
                  destination: LicenseConfig.apiBaseURL.appendingPathComponent("license/recover"))
         }
         .font(.system(size: 12))
@@ -253,7 +267,7 @@ struct LinkLicenseSections: View {
     }
 
     private var activateButton: some View {
-        Button(license.working ? "Activating…" : "Activate") {
+        Button(license.working ? L10n.t("Activating…") : L10n.t("Activate")) {
             Task { await license.activate(keyInput) }
         }
         .controlSize(.regular)

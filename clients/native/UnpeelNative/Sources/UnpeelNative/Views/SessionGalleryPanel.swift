@@ -576,24 +576,24 @@ struct SessionGalleryPanel: View {
             Button {
                 addToPrompt(artifact)
             } label: {
-                Label("Add to prompt", systemImage: "paperclip")
+                Label(L10n.t("Add to prompt"), systemImage: "paperclip")
             }
         }
         Button {
             open(artifact)
         } label: {
-            Label("Open", systemImage: "arrow.up.left.and.arrow.down.right")
+            Label(L10n.t("Open"), systemImage: "arrow.up.left.and.arrow.down.right")
         }
         Button {
             NSWorkspace.shared.activateFileViewerSelecting([artifact.url])
         } label: {
-            Label("Reveal in Finder", systemImage: "magnifyingglass")
+            Label(L10n.t("Reveal in Finder"), systemImage: "magnifyingglass")
         }
         Divider()
         Button(role: .destructive) {
             delete(artifact)
         } label: {
-            Label("Delete", systemImage: "trash")
+            Label(L10n.t("Delete"), systemImage: "trash")
         }
     }
 

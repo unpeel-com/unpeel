@@ -154,6 +154,14 @@ extension AppFeature {
         + "disappear between releases. Turn one off here if it gets in the way."
 }
 
+extension AppFeature {
+    var localizedTitle: String { L10n.t(title) }
+    var localizedSummary: String { L10n.t(summary) }
+    static var localizedExperimentalSectionDescription: String {
+        L10n.t(experimentalSectionDescription)
+    }
+}
+
 enum UnpeelFeatureFlags {
     // Kept for old saved settings; this feature is retired in every build.
     static var computerUseAvailable: Bool { false }
