@@ -28,15 +28,22 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -47,6 +54,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
@@ -65,6 +73,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
@@ -83,6 +92,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -118,10 +128,12 @@ private enum class HomeSheet { Workspaces, Activity, Gallery, Organize, Presets 
 @Composable
 fun UnpeelApp(controller: Controller) {
     MaterialTheme(colorScheme = darkColorScheme(background = Frame, surface = Sheet, primary = Foreground)) {
-        if (controller.selectedHost == null) {
-            PairScreen(controller, firstRun = true)
-        } else {
-            TerminalHome(controller)
+        Box(Modifier.fillMaxSize().background(Frame).windowInsetsPadding(WindowInsets.statusBars)) {
+            if (controller.selectedHost == null) {
+                PairScreen(controller, firstRun = true)
+            } else {
+                TerminalHome(controller)
+            }
         }
     }
 }
@@ -356,6 +368,7 @@ private fun TerminalSurface(
     var listening by remember { mutableStateOf(false) }
     var voiceText by remember { mutableStateOf("") }
     DisposableEffect(voice) { onDispose { voice.cancel() } }
+    DisposableEffect(session.id) { onDispose { controller.releasePhoneFit() } }
     val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) listening = true else controller.reportError("需要麦克风权限才能听写")
     }
@@ -434,8 +447,8 @@ private fun TerminalSurface(
             }
         }
         Row(
-            Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 10.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             KeyChip("粘贴") {
                 val text = clipboard.getText()?.text.orEmpty()
@@ -461,15 +474,41 @@ private fun TerminalSurface(
             KeyChip("/") { controller.composer += "/" }
             KeyChip("@") { controller.composer += "@" }
         }
-        Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
+                .padding(start = 20.dp, end = 20.dp, bottom = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             OutlinedTextField(
                 value = controller.composer,
                 onValueChange = { controller.composer = it },
                 modifier = Modifier.weight(1f),
                 placeholder = { Text("发给这个会话", color = Muted) },
                 singleLine = true,
+                shape = RoundedCornerShape(24.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedTextColor = Foreground,
+                    unfocusedTextColor = Foreground,
+                    cursorColor = Foreground,
+                    focusedBorderColor = Color.White.copy(alpha = 0.35f),
+                    unfocusedBorderColor = Color.White.copy(alpha = 0.16f),
+                    focusedContainerColor = Color.White.copy(alpha = 0.06f),
+                    unfocusedContainerColor = Color.White.copy(alpha = 0.06f),
+                ),
             )
-            TextButton(onClick = controller::sendComposer) { Text("发送", color = Foreground, fontWeight = FontWeight.SemiBold) }
+            Text(
+                "发送",
+                color = Foreground,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(Color.White.copy(alpha = 0.10f))
+                    .clickable(onClick = controller::sendComposer)
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+            )
         }
     }
 }
@@ -517,8 +556,20 @@ private fun ColumnScope.TerminalGrid(controller: Controller) {
         lineHeight = 16.sp,
         platformStyle = PlatformTextStyle(includeFontPadding = false),
     )
+    val density = LocalDensity.current
     val cellW = rememberTextMeasurer().measure(AnnotatedString("M"), style = style).size.width.toFloat().coerceAtLeast(1f)
-    val cellH = with(LocalDensity.current) { 16.sp.toPx() }.coerceAtLeast(1f)
+    val cellH = with(density) { 16.sp.toPx() }.coerceAtLeast(1f)
+    val insetPx = with(density) { 8.dp.toPx() }
+    val imeBottom = WindowInsets.ime.getBottom(density)
+    var phoneFitSent by remember(controller.openSessionID) { mutableStateOf(false) }
+    var gridSize by remember(controller.openSessionID) { mutableStateOf(IntSize.Zero) }
+    LaunchedEffect(controller.openSessionID, gridSize, imeBottom, controller.connection) {
+        if (phoneFitSent || imeBottom > 0) return@LaunchedEffect
+        val grid = phoneFitGrid(gridSize.width, gridSize.height, cellW, cellH, insetPx) ?: return@LaunchedEffect
+        delay(120)
+        if (phoneFitSent || imeBottom > 0) return@LaunchedEffect
+        if (controller.fitPhone(grid.first, grid.second)) phoneFitSent = true
+    }
     var selection by remember { mutableStateOf<CellSel?>(null) }
     val clipboard = LocalClipboardManager.current
     val cols = tail.firstOrNull()?.size ?: 1
@@ -527,7 +578,8 @@ private fun ColumnScope.TerminalGrid(controller: Controller) {
             .weight(1f)
             .padding(horizontal = 8.dp)
             .clip(RoundedCornerShape(16.dp))
-            .background(Canvas),
+            .background(Canvas)
+            .onSizeChanged { gridSize = it },
     ) {
         Column(
             Modifier
@@ -562,6 +614,16 @@ private fun ColumnScope.TerminalGrid(controller: Controller) {
             }
         }
     }
+}
+
+/** Columns and rows that letterbox the Host PTY to this terminal box. Null until the box is real. */
+internal fun phoneFitGrid(widthPx: Int, heightPx: Int, cellW: Float, cellH: Float, insetPx: Float): Pair<Int, Int>? {
+    val innerW = widthPx - insetPx * 2
+    val innerH = heightPx - insetPx * 2
+    if (innerW < 48f || innerH < 48f || cellW <= 0f || cellH <= 0f) return null
+    val columns = (innerW / cellW).toInt().coerceIn(2, 300)
+    val rows = (innerH / cellH).toInt().coerceIn(2, 120)
+    return columns to rows
 }
 
 private fun hitCell(x: Float, y: Float, cellW: Float, cellH: Float, rows: Int, cols: Int): Pair<Int, Int> {
@@ -662,44 +724,66 @@ private fun SessionDrawer(
         Text(
             "反馈与问题",
             color = Muted,
-            fontSize = 13.sp,
+            fontSize = 14.sp,
             modifier = Modifier
                 .fillMaxWidth()
+                .navigationBarsPadding()
                 .border(width = 1.dp, color = Hairline)
                 .clickable {
                     context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/orgs/unpeel-com/discussions")))
                 }
-                .padding(horizontal = 16.dp, vertical = 14.dp),
+                .padding(horizontal = 16.dp, vertical = 16.dp),
         )
     }
 }
 
 @Composable
 private fun WorkspaceHeader(controller: Controller, onClick: () -> Unit) {
-    val workspace = controller.snapshot?.workspaces?.firstOrNull { it.isCurrent }
-    val title = workspace?.name ?: controller.snapshot?.macName ?: controller.selectedHost?.macName ?: "工作区"
+    val title = controller.selectedHost?.macName ?: controller.snapshot?.macName ?: "Host"
     val failing = controller.snapshot == null && controller.connection != "正在连接" && controller.connection != "未配对"
-    val subtitle = when {
+    val hostCount = controller.hosts.size
+    val link = when {
         controller.snapshot == null -> if (failing) "连接中断" else "正在连接…"
         controller.usingRelay -> "经由 Link"
         else -> null
     }
+    val subtitle = buildString {
+        append(if (hostCount > 1) "$hostCount 台 Host · 点按切换" else "点按切换 Host")
+        if (link != null) append(" · ").append(link)
+    }
     Row(
         Modifier
             .padding(start = 8.dp, end = 8.dp, top = 12.dp)
-            .clip(RoundedCornerShape(9.dp))
+            .clip(RoundedCornerShape(14.dp))
             .background(Hover)
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 8.dp),
+            .padding(horizontal = 12.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(9.dp).clip(CircleShape).background(if (failing) Attention else Muted.copy(alpha = 0.5f)))
-        Spacer(Modifier.width(8.dp))
+        Box(
+            Modifier.size(10.dp).clip(CircleShape).background(
+                when {
+                    failing -> Attention
+                    controller.snapshot == null -> Muted.copy(alpha = 0.5f)
+                    else -> Color(0xFF3DDC84)
+                },
+            ),
+        )
+        Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
-            Text(title, color = Foreground, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (subtitle != null) Text(subtitle, color = Muted, fontSize = 10.sp, maxLines = 1)
+            Text(title, color = Foreground, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(subtitle, color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        Text("${controller.snapshot?.sessions?.size ?: 0}", color = Muted, fontSize = 10.sp, modifier = Modifier.clip(RoundedCornerShape(9.dp)).background(Hover).padding(horizontal = 6.dp, vertical = 2.dp))
+        Text(
+            "切换",
+            color = Foreground,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color.White.copy(alpha = 0.10f))
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+        )
     }
 }
 
@@ -718,21 +802,26 @@ private fun ProjectBlock(
     val open = project.id in expanded
     val own = sessions.filter { it.projectID == project.id }
     val attention = own.any { it.activity == "blocked" }
-    Row(Modifier.fillMaxWidth().height(34.dp).clickable(onClick = onToggle), verticalAlignment = Alignment.CenterVertically) {
-        Text(if (open) "▾" else "▸", color = Muted, fontSize = 12.sp, modifier = Modifier.width(16.dp))
-        Text(project.name, color = if (project.isGroup) Foreground else Foreground.copy(alpha = 0.62f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-        if (attention) Box(Modifier.padding(end = 6.dp).size(6.dp).clip(CircleShape).background(Attention))
+    Row(Modifier.fillMaxWidth().height(48.dp).clickable(onClick = onToggle), verticalAlignment = Alignment.CenterVertically) {
+        Text(if (open) "▾" else "▸", color = Muted, fontSize = 16.sp, modifier = Modifier.width(22.dp))
+        Text(project.name, color = if (project.isGroup) Foreground else Foreground.copy(alpha = 0.62f), fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        if (attention) Box(Modifier.padding(end = 8.dp).size(8.dp).clip(CircleShape).background(Attention))
         val branch = project.worktreeBranch ?: project.gitBranch
         if (!branch.isNullOrEmpty() && branch != project.name) {
-            Text(branch, color = Muted.copy(alpha = 0.55f), fontSize = 10.sp, fontFamily = FontFamily.Monospace, maxLines = 1, modifier = Modifier.widthIn(max = 88.dp))
+            Text(branch, color = Muted.copy(alpha = 0.55f), fontSize = 12.sp, fontFamily = FontFamily.Monospace, maxLines = 1, modifier = Modifier.widthIn(max = 96.dp).padding(end = 4.dp))
         }
         if (!project.isGroup) {
-            Text("+", color = Muted, fontSize = 18.sp, modifier = Modifier.clip(RoundedCornerShape(9.dp)).background(Hover.copy(alpha = 0.44f)).clickable { onNewSession(project) }.padding(horizontal = 8.dp, vertical = 2.dp))
+            Box(
+                Modifier.size(36.dp).clip(CircleShape).clickable { onNewSession(project) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("+", color = Foreground, fontSize = 22.sp)
+            }
         }
     }
     if (open) {
         projects.filter { it.parentProjectID == project.id }.forEach { child ->
-            Text(child.name, color = Muted, fontSize = 13.sp, modifier = Modifier.padding(start = 28.dp, top = 4.dp, bottom = 4.dp))
+            Text(child.name, color = Muted, fontSize = 15.sp, modifier = Modifier.padding(start = 32.dp, top = 8.dp, bottom = 8.dp))
         }
         val pinned = own.filter { it.pinned }
         val rest = own.filter { !it.pinned }
@@ -747,36 +836,37 @@ private fun SessionLine(session: SessionSummary, selected: Boolean, onOpen: () -
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(start = 12.dp, top = 1.dp, bottom = 1.dp)
-            .clip(RoundedCornerShape(9.dp))
+            .padding(start = 8.dp, top = 4.dp, bottom = 4.dp)
+            .clip(RoundedCornerShape(12.dp))
             .background(if (selected) ActiveRow else Color.Transparent)
             .combinedClickable(onClick = onOpen, onLongClick = onOrganize)
-            .padding(horizontal = 8.dp, vertical = 6.dp),
+            .padding(horizontal = 10.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(18.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(22.dp), contentAlignment = Alignment.Center) {
             when {
                 session.status == "running" && session.activity == "blocked" ->
-                    Box(Modifier.size(6.dp).clip(CircleShape).background(Attention))
+                    Box(Modifier.size(8.dp).clip(CircleShape).background(Attention))
                 session.status == "running" && (session.activity == "working" || session.activity == "starting") ->
                     BrailleSpinner(rgb(session.spinnerColorHex ?: 0xB9BDC9))
-                session.unread -> Box(Modifier.size(7.dp).clip(CircleShape).background(Unread))
+                session.unread -> Box(Modifier.size(8.dp).clip(CircleShape).background(Unread))
             }
         }
-        BrandMark(session.command)
+        Spacer(Modifier.width(6.dp))
+        BrandMark(session.command, size = 28.dp)
         Text(
             session.title.ifEmpty { session.command },
             color = if (session.status == "exited") Muted else Foreground,
-            fontSize = 14.sp,
+            fontSize = 16.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f).padding(start = 6.dp),
+            modifier = Modifier.weight(1f).padding(start = 10.dp, end = 8.dp),
         )
-        if (session.pinned) Text("📌", fontSize = 10.sp, modifier = Modifier.padding(end = 4.dp))
+        if (session.pinned) Text("📌", fontSize = 14.sp, modifier = Modifier.padding(end = 8.dp))
         Text(
             if (session.activity == "blocked") "blocked" else relativeAge(session.updatedAtUnixMs),
             color = Muted,
-            fontSize = 10.sp,
+            fontSize = 12.sp,
         )
     }
 }
@@ -812,22 +902,64 @@ private fun HostSheet(controller: Controller, onDismiss: () -> Unit) {
     val context = LocalContext.current
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = Sheet) {
         Column(Modifier.padding(horizontal = 18.dp, vertical = 8.dp).verticalScroll(rememberScrollState())) {
-            Text("工作区", color = Foreground, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(12.dp))
+            Text("Host", color = Foreground, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(6.dp))
+            Text("一台手机可以记住多台 Mac。点一台切换，下面可以再配一台。", color = Muted, fontSize = 13.sp)
+            Spacer(Modifier.height(14.dp))
             controller.hosts.forEach { host ->
-                Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                val selected = host.macID == controller.selectedHost?.macID
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 6.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(if (selected) ActiveRow else Hover)
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Column(Modifier.weight(1f).clickable {
                         controller.select(host.macID)
                         onDismiss()
                     }) {
-                        Text(host.macName, color = Foreground, fontSize = 15.sp)
-                        Text(if (host.macID == controller.selectedHost?.macID) "当前" else host.endpoint, color = Muted, fontSize = 11.sp, maxLines = 1)
+                        Text(host.macName, color = Foreground, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            if (selected) "当前 · ${host.endpoint}" else host.endpoint,
+                            color = Muted,
+                            fontSize = 13.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
-                    TextButton(onClick = { controller.forget(host.macID) }) { Text("忘记", color = Attention) }
+                    TextButton(onClick = { controller.forget(host.macID) }) { Text("忘记", color = Attention, fontSize = 15.sp) }
                 }
             }
+            val workspaces = controller.snapshot?.workspaces.orEmpty()
+            if (workspaces.size > 1) {
+                Spacer(Modifier.height(16.dp))
+                Text("这台 Host 上的工作区", color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(6.dp))
+                workspaces.forEach { workspace ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(if (workspace.isCurrent) ActiveRow else Color.Transparent)
+                            .clickable {
+                                controller.selectWorkspace(workspace.id)
+                                onDismiss()
+                            }
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(workspace.name, color = Foreground, fontSize = 16.sp, modifier = Modifier.weight(1f))
+                        if (workspace.isCurrent) Text("当前", color = Muted, fontSize = 13.sp)
+                    }
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+            Text("添加另一台", color = Foreground, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(8.dp))
-            Text("再配一台", color = Muted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
             PairFields(controller, context)
             Spacer(Modifier.height(24.dp))
         }
@@ -958,7 +1090,10 @@ private fun PresetSheet(controller: Controller, project: ProjectSummary, onDismi
 @Composable
 private fun PairScreen(controller: Controller, firstRun: Boolean) {
     val context = LocalContext.current
-    Column(Modifier.fillMaxSize().background(Frame).verticalScroll(rememberScrollState()).padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(
+        Modifier.fillMaxSize().background(Frame).navigationBarsPadding().verticalScroll(rememberScrollState()).padding(20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
         Spacer(Modifier.height(28.dp))
         Box(Modifier.size(68.dp).clip(RoundedCornerShape(20.dp)).background(Color(0xFF2A2118)), contentAlignment = Alignment.Center) {
             Text("U", color = Color(0xFFF2A05A), fontSize = 32.sp, fontWeight = FontWeight.SemiBold)

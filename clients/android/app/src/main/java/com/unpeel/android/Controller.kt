@@ -23,6 +23,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -52,6 +54,10 @@ class Controller(context: Context) {
     private var pollJob: Job? = null
     private var outputJob: Job? = null
     private var link: HostLink? = null
+    private var phoneFitGeneration = 0
+    private var phoneFitSession: String? = null
+    private var phoneFitColumns: Int? = null
+    private val phoneFitLock = Mutex()
     var usingRelay by mutableStateOf(false)
         private set
 
@@ -130,6 +136,7 @@ class Controller(context: Context) {
     }
 
     fun select(macID: String) {
+        releasePhoneFit()
         selectedMacID = macID
         prefs.edit().putString("selected", macID).apply()
         snapshot = null
@@ -138,6 +145,7 @@ class Controller(context: Context) {
     }
 
     fun forget(macID: String) {
+        if (selectedMacID == macID) releasePhoneFit()
         hosts = hosts.filterNot { it.macID == macID }
         saveHosts()
         if (selectedMacID == macID) {
@@ -155,6 +163,8 @@ class Controller(context: Context) {
     }
 
     fun openSession(id: String) {
+        if (openSessionID == id) return
+        releasePhoneFit()
         openSessionID = id
         screen = VtScreen(80, 24)
         screenRevision += 1
@@ -166,10 +176,76 @@ class Controller(context: Context) {
     }
 
     fun closeSession() {
+        releasePhoneFit()
         outputJob?.cancel()
         openSessionID = null
         showGallery = false
         artifactImage = null
+    }
+
+    /**
+     * Ask the Host to letterbox this session to the phone's terminal grid.
+     * One request per open session. Returns false when there is nothing to
+     * send yet, so the caller can try again after the next layout.
+     * A later keyboard inset must not call this again.
+     */
+    fun fitPhone(columns: Int, rows: Int): Boolean {
+        val sessionID = openSessionID ?: return false
+        val active = link ?: return false
+        val cols = columns.coerceIn(2, 300)
+        val lines = rows.coerceIn(2, 120)
+        if (phoneFitSession == sessionID && phoneFitColumns == cols) return true
+        val generation = phoneFitGeneration
+        scope.launch {
+            phoneFitLock.withLock {
+                if (generation != phoneFitGeneration || openSessionID != sessionID) return@withLock
+                val posted = runCatching {
+                    active.post(
+                        "resize-desktop",
+                        JSONObject()
+                            .put("sessionID", sessionID)
+                            .put("columns", cols)
+                            .put("rows", lines)
+                            .toString(),
+                        8_000,
+                    )
+                }.isSuccess
+                if (generation != phoneFitGeneration || openSessionID != sessionID) {
+                    if (posted) revertPhoneFit(active, sessionID)
+                    return@withLock
+                }
+                if (!posted) return@withLock
+                phoneFitSession = sessionID
+                phoneFitColumns = cols
+                startOutput(sessionID, cols, lines)
+            }
+        }
+        return true
+    }
+
+    /** Drop a phone letterbox. Extra clears are safe; the Host treats them as a no-op success. */
+    fun releasePhoneFit() {
+        val generation = ++phoneFitGeneration
+        val sessionID = phoneFitSession
+        val active = link
+        phoneFitSession = null
+        phoneFitColumns = null
+        if (sessionID == null || active == null) return
+        scope.launch {
+            phoneFitLock.withLock {
+                if (generation != phoneFitGeneration && phoneFitSession == sessionID) return@withLock
+                revertPhoneFit(active, sessionID)
+            }
+        }
+    }
+
+    private suspend fun revertPhoneFit(active: HostLink, sessionID: String) {
+        runCatching {
+            active.post(
+                "resize-desktop",
+                JSONObject().put("sessionID", sessionID).put("clear", true).toString(),
+            )
+        }
     }
 
     fun sendComposer() {
@@ -380,11 +456,16 @@ class Controller(context: Context) {
 
     private fun link(): HostLink = link ?: throw HostException(0, "未连接")
 
-    private fun startOutput(sessionID: String) {
+    private fun startOutput(sessionID: String, columns: Int? = null, rows: Int? = null) {
         outputJob?.cancel()
+        if (columns != null && rows != null) {
+            screen.resize(columns, rows)
+            screenRevision += 1
+        }
+        val preset = columns != null && rows != null
         outputJob = scope.launch {
             var offset: Long? = null
-            var sized = false
+            var sized = preset
             while (openSessionID == sessionID) {
                 try {
                     val active = link()

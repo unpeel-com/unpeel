@@ -1,8 +1,10 @@
 package com.unpeel.controller
 
 /**
- * A display-only VT for a Host-owned PTY. The phone never resizes that PTY;
- * callers size this screen from `/mobile/metrics` and pan the grid.
+ * A display-only VT for a Host-owned PTY. The phone may POST
+ * `/mobile/resize-desktop` once, after the terminal viewport is measured,
+ * so the Host letterboxes to that grid. Callers then size this screen to
+ * the confirmed columns and rows. The keyboard does not resize the PTY.
  */
 class VtScreen(cols: Int, rows: Int) {
     var cols = cols.coerceIn(2, 300)
