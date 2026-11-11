@@ -1852,10 +1852,7 @@ final class UnpeelStore: ObservableObject {
         let timer = Timer(timeInterval: 5.0, repeats: true) { [weak self] _ in
             // Off-main collection: the safety net fires forever, and its
             // disk pass must never cost the main queue a frame.
-            Task { @MainActor in
-                self?.publishDesktopViewing()
-                self?.scheduleRescan(after: 0)
-            }
+            Task { @MainActor in self?.scheduleRescan(after: 0) }
         }
         RunLoop.main.add(timer, forMode: .common)
         safetyTimer = timer
@@ -5203,26 +5200,6 @@ final class UnpeelStore: ObservableObject {
         for sessionID in result.unreadToClear { removeUnread(sessionID) }
         for sessionID in result.unreadToMark { markUnread(sessionID) }
         previousObservedSessionID = observedSessionID
-        publishDesktopViewing()
-    }
-
-    /// Tell the Host whether this Mac is actually showing a session, so a
-    /// phone reads `desktopViewing` on `/mobile/metrics` and does not fight
-    /// the pane the user is looking at. A remote Host scope is not this
-    /// machine's grid. The file is deleted when nothing is observed; the
-    /// Host ignores a marker older than its TTL if this process dies.
-    private func publishDesktopViewing() {
-        // Tests construct this store against whatever UNPEEL_HOME the runner
-        // has; never publish a viewing marker from XCTest.
-        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil { return }
-        let url = LaunchConfig.unpeelDir.appendingPathComponent("desktop-viewing.json")
-        guard selectedHostScope == .local, let sessionID = observedSessionID else {
-            try? FileManager.default.removeItem(at: url)
-            return
-        }
-        let millis = Int64(Date().timeIntervalSince1970 * 1000)
-        let body = #"{"sessionID":"\#(sessionID)","updatedAtUnixMs":\#(millis)}"#
-        try? body.data(using: .utf8)?.write(to: url, options: .atomic)
     }
 
     private func markUnread(_ sessionID: String) {

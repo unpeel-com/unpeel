@@ -1179,35 +1179,6 @@ fn run_session_action(
     Ok(json!({ "ok": true }))
 }
 
-const DESKTOP_VIEWING_TTL_MS: u64 = 12_000;
-
-/// The Mac app writes this beside `UNPEEL_HOME` while that session is the
-/// frontmost selection, and deletes it otherwise. A crashed app stops
-/// refreshing, so a marker older than the TTL does not count.
-fn desktop_is_viewing(session_id: &str) -> bool {
-    desktop_is_viewing_in(
-        &crate::app_paths::unpeel_home().join("desktop-viewing.json"),
-        session_id,
-        current_timestamp_ms(),
-    )
-}
-
-fn desktop_is_viewing_in(path: &std::path::Path, session_id: &str, now_ms: u64) -> bool {
-    let Ok(bytes) = std::fs::read(path) else {
-        return false;
-    };
-    let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
-        return false;
-    };
-    let Some(id) = value.get("sessionID").and_then(|item| item.as_str()) else {
-        return false;
-    };
-    let Some(updated) = value.get("updatedAtUnixMs").and_then(|item| item.as_u64()) else {
-        return false;
-    };
-    id == session_id && now_ms.saturating_sub(updated) <= DESKTOP_VIEWING_TTL_MS
-}
-
 pub fn read_session_metrics(session_id: &str) -> Result<SessionMetrics, ControllerApiError> {
     if !valid_session_id(session_id) {
         return Err(ControllerApiError::new(400, "invalid session id"));
@@ -1603,10 +1574,7 @@ fn route_uncached(
                     "rows": metrics.rows.clamp(2, 120),
                     "outputOffset": metrics.output_offset,
                     "capturedAtUnixMs": metrics.captured_at_unix_ms,
-                    // True only while the Mac app is frontmost on this session.
-                    // The app refreshes `desktop-viewing.json`; a stale or
-                    // missing file means the desktop is not looking.
-                    "desktopViewing": desktop_is_viewing(&session_id),
+                    "desktopViewing": false,
                 }),
                 Err(error) => {
                     return Some(ControllerResponse {
@@ -3027,26 +2995,6 @@ mod tests {
     }
 
     #[test]
-    fn desktop_viewing_marker_matches_only_a_fresh_session() {
-        let dir = std::env::temp_dir().join(format!(
-            "unpeel-desktop-viewing-{}-{}",
-            std::process::id(),
-            current_timestamp_ms()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("desktop-viewing.json");
-        std::fs::write(&path, r#"{"sessionID":"abc","updatedAtUnixMs":1000}"#).unwrap();
-        assert!(desktop_is_viewing_in(&path, "abc", 5_000));
-        assert!(!desktop_is_viewing_in(&path, "other", 5_000));
-        assert!(!desktop_is_viewing_in(&path, "abc", 20_000));
-        assert!(!desktop_is_viewing_in(
-            &dir.join("missing.json"),
-            "abc",
-            5_000
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     fn metrics_missing_session_is_a_owned_bad_request() {
         let response = route(&request("GET", "/mobile/metrics"), None).unwrap();
         assert_eq!(response.status, 400);
