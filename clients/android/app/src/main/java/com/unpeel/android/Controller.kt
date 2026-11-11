@@ -69,8 +69,11 @@ class Controller(context: Context) {
     private var desiredRows = 0
     private var keyboardOpen = false
     private var lastFitAttemptMs = 0L
+    private var fitDriftSinceMs = 0L
+    private var fitYielded = false
+    private var sawDesktopViewing = false
     private var fitRejected = false
-    /** null = this Host omitted the flag (fit once). */
+    /** null = this Host omitted the flag. false from the installed Mac is not "the pane is free". */
     private var desktopViewing: Boolean? = null
     var usingRelay by mutableStateOf(false)
         private set
@@ -203,6 +206,9 @@ class Controller(context: Context) {
         desiredRows = 0
         keyboardOpen = false
         lastFitAttemptMs = 0L
+        fitDriftSinceMs = 0L
+        fitYielded = false
+        sawDesktopViewing = false
         fitRejected = false
         desktopViewing = null
         terminal.prepare(80, 24)
@@ -227,9 +233,10 @@ class Controller(context: Context) {
 
     /**
      * The measured terminal box. Keyboard height must not change the grid
-     * we ask the Host for. A Mac that is actively showing this session
-     * (`desktopViewing`) keeps the size; the phone only letterboxes while
-     * the Mac is not looking.
+     * we ask the Host for. A Mac that reports it is showing this session
+     * keeps the size. A Host that always reports `desktopViewing: false`
+     * (the installed 0.7.7 Mac) must not be treated as a free pane: the
+     * phone fits once, then leaves the grid alone if that size does not stick.
      */
     fun notePhoneViewport(columns: Int, rows: Int, keyboardOpen: Boolean) {
         this.keyboardOpen = keyboardOpen
@@ -262,32 +269,57 @@ class Controller(context: Context) {
     private fun reconcilePhoneFit(sessionID: String, observedColumns: Int, observedRows: Int) {
         if (keyboardOpen || desiredColumns < 2 || fitRejected) return
         val viewing = desktopViewing
-        val drifted = phoneFitColumns == null || kotlin.math.abs(observedColumns - desiredColumns) > 2
-        when (viewing) {
-            true -> {
-                // The Mac is showing this session. A revert (banner X) wins:
-                // follow the grid it settled on, and do not put the letterbox back.
-                if (phoneFitSession == sessionID && kotlin.math.abs(observedColumns - (phoneFitColumns ?: observedColumns)) > 2) {
-                    phoneFitSession = null
-                    phoneFitColumns = null
-                    if (terminal.columns != observedColumns || terminal.rows != observedRows) {
-                        startOutput(sessionID, observedColumns, observedRows)
-                    }
-                }
-            }
-            false -> {
-                if (!drifted) return
-                val now = android.os.SystemClock.elapsedRealtime()
-                if (now - lastFitAttemptMs < 3_000) return
-                lastFitAttemptMs = now
-                fitPhone(desiredColumns, desiredRows)
-            }
-            null -> {
-                if (lastFitAttemptMs != 0L) return
-                lastFitAttemptMs = android.os.SystemClock.elapsedRealtime()
-                fitPhone(desiredColumns, desiredRows)
-            }
+        // A real edge (Mac was showing this session, then left it) is the
+        // only time a later fit is allowed. A Host that never reports true
+        // never produces that edge, so it cannot re-enter the 3s fight.
+        if (viewing == true) sawDesktopViewing = true
+        if (viewing == false && sawDesktopViewing) {
+            sawDesktopViewing = false
+            fitYielded = false
+            lastFitAttemptMs = 0L
+            fitDriftSinceMs = 0L
         }
+        if (fitYielded) {
+            followObservedGrid(sessionID, observedColumns, observedRows)
+            return
+        }
+        val ownedColumns = if (phoneFitSession == sessionID) phoneFitColumns else null
+        if (ownedColumns != null && viewing != true && kotlin.math.abs(desiredColumns - ownedColumns) > 2) {
+            fitDriftSinceMs = 0L
+            lastFitAttemptMs = android.os.SystemClock.elapsedRealtime()
+            fitPhone(desiredColumns, desiredRows)
+            return
+        }
+        if (ownedColumns != null && kotlin.math.abs(observedColumns - ownedColumns) > 2) {
+            val now = android.os.SystemClock.elapsedRealtime()
+            // Our own resize is still landing. A Mac pane that keeps a
+            // different width past this window has taken the grid.
+            if (now - lastFitAttemptMs < 3_000) return
+            if (fitDriftSinceMs == 0L) {
+                fitDriftSinceMs = now
+                return
+            }
+            if (now - fitDriftSinceMs < 2_000) return
+            abandonPhoneFit(sessionID, observedColumns, observedRows)
+            return
+        }
+        fitDriftSinceMs = 0L
+        if (viewing == true || ownedColumns != null || lastFitAttemptMs != 0L) return
+        lastFitAttemptMs = android.os.SystemClock.elapsedRealtime()
+        fitPhone(desiredColumns, desiredRows)
+    }
+
+    /** The PTY left the phone letterbox and stayed there. Stop posting resizes. */
+    private fun abandonPhoneFit(sessionID: String, observedColumns: Int, observedRows: Int) {
+        fitYielded = true
+        fitDriftSinceMs = 0L
+        releasePhoneFit()
+        followObservedGrid(sessionID, observedColumns, observedRows)
+    }
+
+    private fun followObservedGrid(sessionID: String, observedColumns: Int, observedRows: Int) {
+        if (terminal.columns == observedColumns && terminal.rows == observedRows) return
+        startOutput(sessionID, observedColumns, observedRows)
     }
 
     /**

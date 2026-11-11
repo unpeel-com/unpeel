@@ -673,7 +673,7 @@ private fun ColumnScope.TerminalGrid(controller: Controller) {
         Modifier
             .weight(1f)
             .padding(horizontal = 8.dp)
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = 0.dp, bottomEnd = 0.dp))
             .background(Canvas),
     ) {
         AndroidView(

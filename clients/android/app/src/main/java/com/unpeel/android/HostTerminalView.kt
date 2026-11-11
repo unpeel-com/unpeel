@@ -32,8 +32,6 @@ class HostTerminalView(
     private var drawn: TerminalEmulator? = null
     private var topRow = 0
     private var panX = 0
-    private var panY = 0
-    private var followBottom = true
     private var scrollRemainder = 0f
     private var selecting = false
     private var selX1 = -1
@@ -81,13 +79,11 @@ class HostTerminalView(
                 invalidate()
                 return true
             }
-            // Finger down (negative distance) reveals rows above. Spend that
-            // inside the current screen before walking into scrollback.
             val emulator = terminal.emulator
-            val minY = minPanY(emulator)
-            if (distanceY < 0 && panY < 0) {
-                panY = (panY - distanceY.toInt()).coerceAtMost(0)
-            } else if (distanceY > 0 && topRow < 0) {
+            // Finger down (negative distance) walks into scrollback, one row
+            // at a time. The picture itself stays pinned to the bottom of the
+            // view; a taller Mac grid is clipped, not dragged.
+            if (distanceY != 0f && !emulator.isAlternateBufferActive) {
                 scrollRemainder += distanceY
                 val lines = (scrollRemainder / cellHeight).toInt()
                 if (lines != 0) {
@@ -95,18 +91,7 @@ class HostTerminalView(
                     scrollRemainder -= lines * cellHeight
                     clampTop()
                 }
-            } else if (distanceY < 0 && panY >= 0) {
-                scrollRemainder += distanceY
-                val lines = (scrollRemainder / cellHeight).toInt()
-                if (lines != 0) {
-                    topRow += lines
-                    scrollRemainder -= lines * cellHeight
-                    clampTop()
-                }
-            } else {
-                panY = (panY - distanceY.toInt()).coerceIn(minY, 0)
             }
-            followBottom = topRow == 0 && panY <= minY
             panX -= distanceX.toInt()
             horizontalShift(emulator)
             invalidate()
@@ -172,6 +157,9 @@ class HostTerminalView(
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            parent?.requestDisallowInterceptTouchEvent(true)
+        }
         gesture.onTouchEvent(event)
         if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
             scrollRemainder = 0f
@@ -179,19 +167,12 @@ class HostTerminalView(
         return true
     }
 
-    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
-        super.onSizeChanged(w, h, oldw, oldh)
-        if (followBottom) panY = minPanY(terminal.emulator)
-        invalidate()
-    }
-
     override fun onDraw(canvas: Canvas) {
         val emulator = terminal.emulator
         noteEmulator(emulator)
-        if (followBottom) panY = minPanY(emulator)
         canvas.drawColor(CANVAS)
         canvas.save()
-        canvas.translate(horizontalShift(emulator).toFloat(), panY.toFloat())
+        canvas.translate(horizontalShift(emulator).toFloat(), minPanY(emulator).toFloat())
         val sel = selectionArgs()
         if (sel == null) {
             renderer.render(emulator, canvas, topRow, -1, -1, -1, -1)
@@ -206,8 +187,6 @@ class HostTerminalView(
         drawn = emulator
         topRow = 0
         panX = 0
-        panY = 0
-        followBottom = true
         scrollRemainder = 0f
         if (selecting) clearSelection()
     }
@@ -219,7 +198,7 @@ class HostTerminalView(
         if (topRow > 0) topRow = 0
     }
 
-    /** 0 shows the top row. Negative values keep the cursor on screen. */
+    /** Pins the cursor row to the bottom of the view. The finger never moves this. */
     private fun minPanY(emulator: TerminalEmulator): Int {
         val contentHeight = topPad + emulator.mRows * cellHeight
         return min(0, height - contentHeight)
@@ -236,7 +215,7 @@ class HostTerminalView(
     private fun cellAt(x: Float, y: Float): Pair<Int, Int>? {
         val emulator = terminal.emulator
         val contentX = x - horizontalShift(emulator)
-        val contentY = y - panY
+        val contentY = y - minPanY(emulator)
         val localRow = ((contentY - topPad) / cellHeight).toInt()
         if (localRow < 0 || localRow >= emulator.mRows) return null
         val col = (contentX / cellWidth).toInt()
