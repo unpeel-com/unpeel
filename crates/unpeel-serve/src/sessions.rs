@@ -750,16 +750,15 @@ pub fn scan_sidebar(
             let exited_at =
                 (manifest.state == HostedSessionState::Exited).then_some(manifest.updated_at);
             let program_status = running.then(|| manifest.program_status.clone()).flatten();
-            let activity_at = unpeel_core::session_ops::latest_lifecycle_ms(
-                &manifest.session.id,
-                &manifest.session.command,
-                manifest.session.created_at,
-                exited_at,
-            )
-            .max(
-                program_status
-                    .as_ref()
-                    .map_or(0, |program| program.changed_at),
+            let activity_at = row_activity_at(
+                unpeel_core::session_ops::latest_lifecycle_ms(
+                    &manifest.session.id,
+                    &manifest.session.command,
+                    manifest.session.created_at,
+                    exited_at,
+                ),
+                program_status.as_ref().map(|program| program.changed_at),
+                manifest.runtime_launched_at,
             );
             let active_runtime_id = running
                 .then(|| unpeel_core::session_host::active_runtime_id(manifest).map(str::to_owned))
@@ -2161,6 +2160,21 @@ pub fn mobile_snapshot(
     }
 }
 
+/// A row's latest lifecycle stamp. A runtime launch counts: Resume keeps the
+/// old `created_at` (sidebar position) and drops the old hook seed, so
+/// without the launch stamp a resumed agent that has not had a turn yet
+/// reads as idle since its original creation — and the auto-stop sweep
+/// stopped it seconds after Resume once that was past the cutoff.
+fn row_activity_at(
+    lifecycle_at: u64,
+    program_changed_at: Option<u64>,
+    runtime_launched_at: Option<u64>,
+) -> u64 {
+    lifecycle_at
+        .max(program_changed_at.unwrap_or(0))
+        .max(runtime_launched_at.unwrap_or(0))
+}
+
 /// The project id recorded in a session's manifest (for pin writes).
 pub fn scan_project_of(session_id: &str) -> Option<String> {
     let raw = fs::read(
@@ -2253,6 +2267,15 @@ mod tests {
             group_id: "__recent_test_project".into(),
             detected_local_urls: Vec::new(),
         }
+    }
+
+    #[test]
+    fn a_resumed_runtime_launch_restarts_the_row_activity_clock() {
+        // Resume keeps the original created_at; the fresh launch must win so
+        // the auto-stop sweep does not see a day-old idle clock.
+        assert_eq!(row_activity_at(1_000, None, Some(90_000)), 90_000);
+        assert_eq!(row_activity_at(95_000, Some(10), Some(90_000)), 95_000);
+        assert_eq!(row_activity_at(1_000, Some(2_000), None), 2_000);
     }
 
     #[test]
