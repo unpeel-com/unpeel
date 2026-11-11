@@ -30,7 +30,7 @@
 
         open func selectedRange() -> NSRange {
             inputHandler?.inputMethodHandler?.currentSelectedRange()
-                ?? NSRange(location: NSNotFound, length: 0)
+                ?? TerminalTextInputHandler.idleSelectedRange
         }
 
         open func markedRange() -> NSRange {
