@@ -215,7 +215,7 @@ struct WorktreesSettingsPanel: View {
                 Text(
                     row.sessionCount == 1
                         ? L10n.t("1 session")
-                        : L10n.format("%d sessions", row.sessionCount)
+                        : L10n.format("%ld sessions", row.sessionCount)
                 )
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.mutedForeground)

@@ -16,6 +16,20 @@
 
 import SwiftUI
 
+/// System keeps the Mac's own locale, so en_GB and nb_NO still format dates
+/// and numbers for that region. An explicit language sets the locale.
+private struct ChosenLanguageLocale: ViewModifier {
+    @ObservedObject var localization: LocalizationStore
+
+    func body(content: Content) -> some View {
+        if localization.preference == .system {
+            content
+        } else {
+            content.environment(\.locale, localization.effectiveLocale)
+        }
+    }
+}
+
 struct RootView: View {
     @ObservedObject var store: UnpeelStore
     @ObservedObject var cache: SurfaceCache
@@ -117,7 +131,7 @@ struct RootView: View {
             // as sidebar rows, so they can sort the split or land at an exact
             // sidebar insertion gap with one continuous gesture.
             .environment(\.sidebarSessionDragController, sessionDragController)
-            .environment(\.locale, localization.effectiveLocale)
+            .modifier(ChosenLanguageLocale(localization: localization))
             .environmentObject(localization)
             // Force chrome that reads L10n at body-eval time to rebuild when
             // Settings ▸ Appearance ▸ Language changes.

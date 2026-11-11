@@ -1457,7 +1457,7 @@ private struct RemoteAppearanceSettingsPanel: View {
                         size: $terminalFont.size,
                         lineHeight: $terminalFont.lineHeight,
                         description: L10n.format(
-                            "Fonts render on this Mac, so this is this Controller's own setting: it applies to %@'s terminals and every other workspace alike. ⌘+ and ⌘− zoom all panes; ⌘0 returns to %d pt.",
+                            "Fonts render on this Mac, so this is this Controller's own setting: it applies to %@'s terminals and every other workspace alike. ⌘+ and ⌘− zoom all panes; ⌘0 returns to %ld pt.",
                             scopeName, Int(TerminalFontModel.defaultSize)
                         )
                     )
@@ -2903,7 +2903,7 @@ struct TerminalFontSection: View {
     static var localDescription: String {
         L10n.format(
             "Family and size for every terminal on this Mac. ⌘+ and ⌘− zoom all "
-                + "panes together; ⌘0 returns to %d pt. "
+                + "panes together; ⌘0 returns to %ld pt. "
                 + "Ghostty falls back to other installed faces for glyphs the chosen "
                 + "font lacks.",
             Int(TerminalFontModel.defaultSize)
@@ -3425,7 +3425,7 @@ struct ShareThisMacSheet: View {
     private var expiresInText: String {
         guard let expiry else { return "" }
         let remaining = max(0, Int(expiry.timeIntervalSince(now).rounded(.down)))
-        return L10n.format("Expires in %d:%02d", remaining / 60, remaining % 60)
+        return L10n.format("Expires in %ld:%02ld", remaining / 60, remaining % 60)
     }
 
     var body: some View {
@@ -3587,7 +3587,7 @@ struct ShareWorkspaceSheet: View {
     private var expiresInText: String {
         guard let expiry else { return "" }
         let remaining = max(0, Int(expiry.timeIntervalSince(now).rounded(.down)))
-        return L10n.format("Expires in %d:%02d", remaining / 60, remaining % 60)
+        return L10n.format("Expires in %ld:%02ld", remaining / 60, remaining % 60)
     }
 
     var body: some View {
@@ -4601,7 +4601,7 @@ struct AdvancedSettingsPanel: View {
     private var summaryText: String {
         terminals.isEmpty
             ? L10n.t("Live terminal hosts sorted by current CPU usage.")
-            : L10n.format("%d running · %@ CPU · %@ memory. Sorted by current CPU usage.", terminals.count, formatCpu(totalCpu), formatMB(totalRss))
+            : L10n.format("%ld running · %@ CPU · %@ memory. Sorted by current CPU usage.", terminals.count, formatCpu(totalCpu), formatMB(totalRss))
     }
 
     private var terminalsSection: some View {
@@ -4655,7 +4655,7 @@ struct AdvancedSettingsPanel: View {
                         .frame(maxWidth: 200, alignment: .leading)
                         .fixedSize(horizontal: true, vertical: false)
                     Text(L10n.format("PID %@", String(terminal.pid)))
-                    Text(L10n.format("%d proc", terminal.processCount))
+                    Text(L10n.format("%ld proc", terminal.processCount))
                     Text(compactPath(terminal.cwd))
                         .opacity(0.75)
                         .lineLimit(1)

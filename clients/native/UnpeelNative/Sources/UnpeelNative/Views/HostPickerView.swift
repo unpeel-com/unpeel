@@ -32,7 +32,7 @@ struct RemoteHostPairingSheet: View {
     private var expiresInText: String {
         guard let expiry else { return "" }
         let remaining = max(0, Int(expiry.timeIntervalSince(now).rounded(.down)))
-        return L10n.format("Expires in %d:%02d", remaining / 60, remaining % 60)
+        return L10n.format("Expires in %ld:%02ld", remaining / 60, remaining % 60)
     }
 
     var body: some View {

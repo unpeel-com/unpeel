@@ -140,6 +140,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, SPUU
             Task { @MainActor in
                 self?.installMainMenu()
                 self?.menuBar?.refreshLocalizedToolTip()
+                self?.store?.refreshLocalizedQuickPresets()
             }
         }
         // A service launch (UNPEEL_LAUNCH_HIDDEN=1 — a peer instance started

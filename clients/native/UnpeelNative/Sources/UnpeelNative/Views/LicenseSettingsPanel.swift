@@ -117,7 +117,7 @@ struct LinkLicenseSections: View {
             SettingsValueRow(label: L10n.t("Licensed to"), value: payload.email)
             SettingsValueRow(
                 label: L10n.t("Seats"),
-                value: L10n.format("%d Hosts", payload.seats)
+                value: L10n.format("%ld Hosts", payload.seats)
             )
 
             LabeledContent {

@@ -68,7 +68,8 @@ let package = Package(
                 .copy("Resources/MascotFrame2.png"),
                 .copy("Resources/MascotFrame3.png"),
                 // Compiled from UnpeelNative/Localization/Localizable.xcstrings
-                // (String Catalog source of truth) by sync-localizations.sh.
+                // (String Catalog source of truth) by sync-localizations.sh
+                // before swift build. The folder is gitignored.
                 // SwiftPM does not emit .lproj from .xcstrings for executable
                 // targets; Bundle lookups need this compiled folder.
                 // Lookups go through ModuleResources, never Bundle.module.

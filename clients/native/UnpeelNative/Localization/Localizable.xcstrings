@@ -431,12 +431,12 @@
         }
       }
     },
-    "%d devices": {
+    "%ld devices": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "%d 台设备"
+            "value": "%ld 台设备"
           }
         }
       }
@@ -2321,12 +2321,12 @@
         }
       }
     },
-    "%d running · %@ CPU · %@ memory. Sorted by current CPU usage.": {
+    "%ld running · %@ CPU · %@ memory. Sorted by current CPU usage.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "%d 个运行中 · %@ CPU · %@ 内存。按当前 CPU 排序。"
+            "value": "%ld 个运行中 · %@ CPU · %@ 内存。按当前 CPU 排序。"
           }
         }
       }
@@ -2891,12 +2891,12 @@
         }
       }
     },
-    "%d sessions": {
+    "%ld sessions": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "%d 个会话"
+            "value": "%ld 个会话"
           }
         }
       }
@@ -3001,12 +3001,12 @@
         }
       }
     },
-    "%d Hosts": {
+    "%ld Hosts": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "%d 个 Host"
+            "value": "%ld 个 Host"
           }
         }
       }
@@ -3181,12 +3181,12 @@
         }
       }
     },
-    "Expires in %d:%02d": {
+    "Expires in %ld:%02ld": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "于 %d:%02d 后过期"
+            "value": "于 %ld:%02ld 后过期"
           }
         }
       }
@@ -3701,12 +3701,12 @@
         }
       }
     },
-    "%d agents are installed without their Unpeel integration": {
+    "%ld agents are installed without their Unpeel integration": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "%d 个智能体已安装但未配置 Unpeel 集成"
+            "value": "%ld 个智能体已安装但未配置 Unpeel 集成"
           }
         }
       }
@@ -5231,12 +5231,12 @@
         }
       }
     },
-    "After %d minutes": {
+    "After %ld minutes": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "%d 分钟后"
+            "value": "%ld 分钟后"
           }
         }
       }
@@ -5261,12 +5261,12 @@
         }
       }
     },
-    "After %d hours": {
+    "After %ld hours": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "%d 小时后"
+            "value": "%ld 小时后"
           }
         }
       }
@@ -5751,12 +5751,12 @@
         }
       }
     },
-    "Fonts render on this Mac, so this is this Controller's own setting: it applies to %@'s terminals and every other workspace alike. ⌘+ and ⌘− zoom all panes; ⌘0 returns to %d pt.": {
+    "Fonts render on this Mac, so this is this Controller's own setting: it applies to %@'s terminals and every other workspace alike. ⌘+ and ⌘− zoom all panes; ⌘0 returns to %ld pt.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "字体在本机渲染，因此这是此 Controller 自己的设置：同样应用于 %@ 的终端及其他所有工作区。⌘+ / ⌘− 缩放所有窗格；⌘0 恢复为 %d pt。"
+            "value": "字体在本机渲染，因此这是此 Controller 自己的设置：同样应用于 %@ 的终端及其他所有工作区。⌘+ / ⌘− 缩放所有窗格；⌘0 恢复为 %ld pt。"
           }
         }
       }
@@ -6131,12 +6131,12 @@
         }
       }
     },
-    "Family and size for every terminal on this Mac. ⌘+ and ⌘− zoom all panes together; ⌘0 returns to %d pt. Ghostty falls back to other installed faces for glyphs the chosen font lacks.": {
+    "Family and size for every terminal on this Mac. ⌘+ and ⌘− zoom all panes together; ⌘0 returns to %ld pt. Ghostty falls back to other installed faces for glyphs the chosen font lacks.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "本机每个终端的字体族与大小。⌘+ / ⌘− 一并缩放所有窗格；⌘0 恢复为 %d pt。若所选字体缺少字形，Ghostty 会回退到其他已安装字体。"
+            "value": "本机每个终端的字体族与大小。⌘+ / ⌘− 一并缩放所有窗格；⌘0 恢复为 %ld pt。若所选字体缺少字形，Ghostty 会回退到其他已安装字体。"
           }
         }
       }
@@ -6831,12 +6831,12 @@
         }
       }
     },
-    "%d proc": {
+    "%ld proc": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "%d 进程"
+            "value": "%ld 进程"
           }
         }
       }

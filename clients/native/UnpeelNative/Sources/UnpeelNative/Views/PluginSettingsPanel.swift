@@ -455,7 +455,7 @@ struct PluginSettingsPanel: View {
                     ? L10n.format(
                         "%@ is installed without its Unpeel integration",
                         unconnectedAgents[0].name)
-                    : L10n.format("%d agents are installed without their Unpeel integration", count))
+                    : L10n.format("%ld agents are installed without their Unpeel integration", count))
                     .font(.system(size: 12, weight: .semibold))
                 Text(L10n.t(
                     "Install it for exact busy and idle, done notifications, transcripts, precise resume, "

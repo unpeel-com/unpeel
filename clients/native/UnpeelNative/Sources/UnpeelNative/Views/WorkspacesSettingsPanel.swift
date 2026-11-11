@@ -59,7 +59,7 @@ struct WorkspacesSettingsPanel: View {
             guard deviceCount > 0 else { return L10n.t("Not shared") }
             let devices = deviceCount == 1
                 ? L10n.t("1 device")
-                : L10n.format("%d devices", deviceCount)
+                : L10n.format("%ld devices", deviceCount)
             return L10n.format(
                 "%1$@ · Link %2$@",
                 devices,

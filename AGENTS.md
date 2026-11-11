@@ -204,9 +204,10 @@ Detail lives in `docs/agents/clients/` (`dev-builds.md`, `terminal.md`,
   dev:native:blank` runs against a throwaway `UNPEEL_HOME` (isolates
   UserDefaults too). Ghostty surfaces cannot initialize headless: verify
   Metal rendering interactively only. UI language strings: edit
-  `clients/native/UnpeelNative/Localization/Localizable.xcstrings`, then
-  `clients/native/sync-localizations.sh` (also run by `build-app.sh`) before
-  packaging; detail in `docs/agents/clients/terminal.md`.
+  `clients/native/UnpeelNative/Localization/Localizable.xcstrings`.
+  `sync-localizations.sh` compiles `zh-Hans.lproj` at build time (gitignored;
+  `build-app.sh` and `test-native.sh` run it). Detail in
+  `docs/agents/clients/terminal.md`.
 - Tests: `clients/native/test-native.sh` (debug bridge + `swift test`; the
   conformance tests read this checkout's `protocol/`, `UNPEEL_PROTOCOL_DIR`
   overrides); `swift test --package-path clients/shared/UnpeelShared`;
