@@ -3449,6 +3449,7 @@ extension RemoteHostRuntime {
         static let create = "session.create"
         static let orderSet = "session.order.set"
         static let projectOrganizationSet = "project.organization.set"
+        static let projectNameSet = "project.name.set"
         static let projectPinSet = "project.pin.set"
         static let presetsSet = RemoteControlProtocol.presetsSetCapability
         static let workspaceSettingsSet = RemoteControlProtocol.workspaceSettingsSetCapability

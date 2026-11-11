@@ -1142,6 +1142,7 @@ extension ProjectRowView: @MainActor Equatable {
             && lhs.showsWorktreeCreate == rhs.showsWorktreeCreate
             && lhs.showsLocalProjectVerbs == rhs.showsLocalProjectVerbs
             && lhs.showsOrganizationVerbs == rhs.showsOrganizationVerbs
+            && lhs.canRenameProject == rhs.canRenameProject
             && lhs.showsFilesystemVerbs == rhs.showsFilesystemVerbs
             && lhs.isConfirmingRemove == rhs.isConfirmingRemove
             && lhs.shortcutHint == rhs.shortcutHint
@@ -1393,6 +1394,9 @@ struct ProjectNodeView: View {
             onConfirmRemove: { store.removeProject(node.id) },
             onCancelRemove: { store.cancelRemoveProjectConfirm() },
             onRenameWorktree: { store.promptRenameWorktreeProject(node.id) },
+            canRenameProject: node.project.parentProjectID == nil
+                && store.canRenameTopLevelProject(node.id),
+            onRenameProject: { store.promptRenameProject(node.id) },
             onRemoveWorktree: { store.removeWorktreeProject(node.id) },
             onSetFolderColor: { color in
                 store.setProjectFolderColor(color, for: node.id)
@@ -1948,6 +1952,10 @@ struct ProjectRowView: View {
     /// Worktree child rows swap Remove for this: confirm dialog +
     /// `git worktree remove` + forget the project.
     var onRenameWorktree: () -> Void = {}
+    /// Top-level projects: set the sidebar display name (#24). Shown only
+    /// when the scope's Host advertises `project.name.set`.
+    var canRenameProject = false
+    var onRenameProject: () -> Void = {}
     var onRemoveWorktree: () -> Void = {}
     var onSetFolderColor: (ProjectFolderColor?) -> Void = { _ in }
     /// Plain-group Pin/Unpin is context-menu-only. A pinned group keeps a
@@ -2182,7 +2190,7 @@ struct ProjectRowView: View {
         .onTapGesture { onToggle() }
         .help("Drag anywhere on the row to reorder")
         // Project context menu (openProjectMenu, ProjectItem.svelte:818-941).
-        // Order: New session · [Folder color] · [Sort] · [New worktree…] ·
+        // Order: New session · [Rename…] · [Folder color] · [Sort] · [New worktree…] ·
         // [New group…] · [Move to ▸ Workspace] · [Stop all] ·
         // ── · Reveal in Finder · Open in <Editor> · ── · Remove. Stop all
         // is non-destructive (stopSession per live session — rows stay as
@@ -2231,6 +2239,9 @@ struct ProjectRowView: View {
             // Folder color is a MAIN-project verb: groups and worktrees stay
             // neutral so nesting reads by indent, not tint (decided
             // 2026-08-13 after a group picked up a color by accident).
+            if node.project.parentProjectID == nil, showsOrganizationVerbs, canRenameProject {
+                Button("Rename…") { onRenameProject() }
+            }
             if node.project.parentProjectID == nil, showsOrganizationVerbs {
                 Menu("Folder color") {
                     Button {

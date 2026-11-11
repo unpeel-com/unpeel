@@ -1582,37 +1582,46 @@ pub fn set_session_order(project_id: &str, ids: &[String]) -> Result<(), String>
     Ok(())
 }
 
-/// Rename a shared-state plain group. Refuses project/worktree records so a
-/// stale caller can never rename a real project through the group verb.
-/// Persists through the app-state choke point (flock + state-bus announce).
-pub fn rename_group_project(project_id: &str, name: &str) -> Result<(), String> {
-    crate::app_state::edit(|state| {
-        let projects = state
-            .get_mut("projects")
-            .and_then(|value| value.as_array_mut())
-            .ok_or("app-state.json has no projects array")?;
-        let project = projects
-            .iter_mut()
-            .find(|project| project.get("id").and_then(|value| value.as_str()) == Some(project_id))
-            .ok_or("this group is managed by the desktop app — rename it there")?;
-        let is_group = project
-            .get("parent_project_id")
+/// Rename a plain group or a top-level project. A top-level project's
+/// `name` is its sidebar display name only; its `path` stays the identity,
+/// so sessions, worktrees and hooks are untouched (#24). Worktree children
+/// and nested non-group records are refused so a stale caller can never
+/// rename them through this verb. Persists through the app-state choke
+/// point (flock + state-bus announce).
+pub fn rename_project(project_id: &str, name: &str) -> Result<(), String> {
+    crate::app_state::edit(|state| rename_project_in(state, project_id, name))
+}
+
+fn rename_project_in(
+    state: &mut serde_json::Map<String, serde_json::Value>,
+    project_id: &str,
+    name: &str,
+) -> Result<(), String> {
+    let projects = state
+        .get_mut("projects")
+        .and_then(|value| value.as_array_mut())
+        .ok_or("app-state.json has no projects array")?;
+    let project = projects
+        .iter_mut()
+        .find(|project| project.get("id").and_then(|value| value.as_str()) == Some(project_id))
+        .ok_or("this project is managed by the desktop app — rename it there")?;
+    let parent = project
+        .get("parent_project_id")
+        .and_then(|value| value.as_str());
+    let is_group = parent.is_some()
+        && project
+            .get("is_folder")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+        && project
+            .get("worktree_branch")
             .and_then(|value| value.as_str())
-            .is_some()
-            && project
-                .get("is_folder")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false)
-            && project
-                .get("worktree_branch")
-                .and_then(|value| value.as_str())
-                .is_none();
-        if !is_group {
-            return Err("only plain groups can be renamed here".into());
-        }
-        project["name"] = serde_json::Value::String(name.to_string());
-        Ok(())
-    })
+            .is_none();
+    if !is_group && parent.is_some() {
+        return Err("only plain groups and top-level projects can be renamed here".into());
+    }
+    project["name"] = serde_json::Value::String(name.to_string());
+    Ok(())
 }
 
 /// Whether this group's sidebar sessions use the shared Recent order
@@ -2631,11 +2640,36 @@ mod tests {
         browser_mcp_enabled_from_app_state, initial_text_payload, legacy_pinned_group_id,
         lifecycle_lock_target_at, merge_project_sibling_order, mixed_session_order_from,
         prepare_legacy_pin_groups, provider_transcript_has_resume_data,
-        remove_migrated_pin_entries, remove_unreferenced_legacy_pin_groups,
+        remove_migrated_pin_entries, remove_unreferenced_legacy_pin_groups, rename_project_in,
         rewrite_app_state_session_references, rewrite_session_order_references_at,
         rewrite_session_order_value, set_group_pinned_in_state,
         validate_session_order_references_at, InitialTextSubmitMode,
     };
+
+    #[test]
+    fn rename_sets_a_top_level_or_group_name_and_refuses_worktree_children() {
+        let serde_json::Value::Object(mut state) = serde_json::json!({ "projects": [
+            { "id": "p1", "name": "client-acme-api", "path": "/src/client-acme-api" },
+            { "id": "g1", "name": "Backlog", "path": "/src/client-acme-api",
+              "parent_project_id": "p1", "is_folder": true },
+            { "id": "w1", "name": "feature", "path": "/wt/feature",
+              "parent_project_id": "p1", "worktree_branch": "feature" },
+        ]}) else {
+            unreachable!()
+        };
+        rename_project_in(&mut state, "p1", "API").unwrap();
+        rename_project_in(&mut state, "g1", "Later").unwrap();
+        assert!(rename_project_in(&mut state, "w1", "x").is_err());
+        assert!(rename_project_in(&mut state, "missing", "x").is_err());
+        let projects = state["projects"].as_array().unwrap();
+        assert_eq!(projects[0]["name"], "API");
+        assert_eq!(
+            projects[0]["path"], "/src/client-acme-api",
+            "path is the identity"
+        );
+        assert_eq!(projects[1]["name"], "Later");
+        assert_eq!(projects[2]["name"], "feature");
+    }
 
     #[test]
     fn project_folder_color_round_trips_through_app_state() {

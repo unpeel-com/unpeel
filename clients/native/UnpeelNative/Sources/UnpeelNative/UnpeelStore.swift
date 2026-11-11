@@ -11183,6 +11183,96 @@ final class UnpeelStore: ObservableObject {
         }?.id
     }
 
+    /// Whether a top-level project's sidebar name can be set in this scope:
+    /// Host-served projects need a Host that advertises `project.name.set`
+    /// (older Hosts reject the rename); the launch-time local fallback edits
+    /// the local records directly.
+    func canRenameTopLevelProject(_ projectID: String) -> Bool {
+        if routesProjectVerbThroughHost(projectID) {
+            return remoteHostRuntime.supportsHostOperation(
+                RemoteHostRuntime.HostOperation.projectNameSet
+            )
+        }
+        return selectedHostScope == .local
+    }
+
+    /// Set a top-level project's sidebar display name (#24). The folder on
+    /// disk and the project's path — its identity — never change; blank
+    /// falls back to the folder name.
+    func promptRenameProject(_ projectID: String) {
+        guard let project = displayProjectsByID[projectID] ?? projectsByID[projectID],
+              project.parentProjectID == nil
+        else { return }
+        let folderName = Self.projectFolderName(project.path)
+        let alert = NSAlert()
+        alert.messageText = "Rename project"
+        alert.informativeText = """
+        This changes the name shown in Unpeel. The folder stays         "\(folderName)". Leave it empty to use the folder name.
+        """
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        field.stringValue = project.name
+        field.placeholderString = folderName
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        renameTopLevelProject(projectID, to: field.stringValue)
+    }
+
+    nonisolated static func projectFolderName(_ path: String) -> String {
+        let name = URL(fileURLWithPath: path).lastPathComponent
+        return name.isEmpty || name == "/" ? path : name
+    }
+
+    /// The name a rename request resolves to: trimmed, or the folder name
+    /// when blank.
+    nonisolated static func resolvedProjectDisplayName(_ rawName: String, path: String) -> String {
+        let trimmed = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? projectFolderName(path) : trimmed
+    }
+
+    @discardableResult
+    func renameTopLevelProject(_ projectID: String, to rawName: String) -> Bool {
+        guard let project = displayProjectsByID[projectID] ?? projectsByID[projectID],
+              project.parentProjectID == nil
+        else { return false }
+        let name = Self.resolvedProjectDisplayName(rawName, path: project.path)
+        guard name != project.name else { return false }
+        if routesProjectVerbThroughHost(projectID) {
+            guard remoteHostRuntime.supportsHostOperation(
+                RemoteHostRuntime.HostOperation.projectNameSet
+            ) else { return false }
+            performRemoteVerb("Couldn't rename the project") { [weak self] runtime in
+                try await runtime.renameProjectGroup(projectID: projectID, displayName: name)
+                // The Host wrote app-state.json; keep the native record in
+                // step so no later mirror or relaunch reverts it.
+                self?.recordHostRenamedNativeProject(projectID, name: name)
+            }
+            return true
+        }
+        guard selectedHostScope == .local else { return false }
+        var records = loadNativeProjects()
+        if let index = records.firstIndex(where: { $0.id == projectID }) {
+            records[index].name = name
+            guard let data = try? JSONEncoder().encode(records) else { return false }
+            AppDefaults.shared.set(data, forKey: Self.nativeProjectsKey)
+            mirrorProjectsToSharedState()
+        } else {
+            let changed = editPresetStateAnnouncing { object in
+                var projects = (object["projects"] as? [[String: Any]]) ?? []
+                guard let index = projects.firstIndex(where: {
+                    ($0["id"] as? String) == projectID && $0["parent_project_id"] == nil
+                }) else { return }
+                projects[index]["name"] = name
+                object["projects"] = projects
+            }
+            guard changed else { return false }
+        }
+        rescan()
+        return true
+    }
+
     /// Rename the Unpeel worktree project. This deliberately does not rename
     /// the git branch or move an existing checkout folder; live sessions and
     /// saved manifests continue to point at the same path.

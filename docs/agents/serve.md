@@ -255,6 +255,15 @@ auto-stop skips <id>: unread attention (waiting on the user; never
 auto-stopped unseen)` / `no resumable conversation …` / `idle for less than
 the cutoff` / `pinned` / …), so "why did this never stop" is one grep.
 
+### Project display names (protocol minor 24)
+
+`project.organization.set` accepts `displayName` for a top-level project as
+well as a plain group (`session_ops::rename_project`; worktree children are
+still refused). A top-level project's `name` is display only: its `path`
+stays the identity, so sessions, worktrees, and hooks are untouched. Hosts
+advertise it as `project.name.set`; Controllers offer **Rename…** only when
+the selected Host does, and send the folder name for a blank entry (#24).
+
 ### Archive removed (protocol minor 23)
 
 There is no archive: Stop is the only non-destructive end of a Session, and
