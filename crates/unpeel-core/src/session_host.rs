@@ -4462,8 +4462,22 @@ pub fn apply_app_title(session_id: &str, title: &str) -> bool {
 pub fn cleanup_session_artifacts(session_id: &str) -> Result<(), String> {
     let dir = session_dir(session_id);
     clear_cached_manifest_health(session_id);
-    if dir.exists() {
-        fs::remove_dir_all(&dir).map_err(|e| format!("Failed to remove session dir: {e}"))?;
+    // A Host that is finishing (or a sweep passing through) can drop one
+    // last marker into the dir while it is being removed, which fails the
+    // walk with "Directory not empty". Retry briefly instead of leaving a
+    // half-removed Session behind.
+    for attempt in 0..5 {
+        if !dir.exists() {
+            return Ok(());
+        }
+        match fs::remove_dir_all(&dir) {
+            Ok(()) => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::DirectoryNotEmpty && attempt < 4 => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(e) => return Err(format!("Failed to remove session dir: {e}")),
+        }
     }
     Ok(())
 }
