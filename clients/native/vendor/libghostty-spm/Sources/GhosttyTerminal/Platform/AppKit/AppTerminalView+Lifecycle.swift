@@ -73,7 +73,7 @@
                 )
                 updateMetalLayerMetrics()
                 updateColorScheme()
-                core.startDisplayLink()
+                core.refreshPresentationVisibility()
                 core.requestImmediateTick()
 
                 NotificationCenter.default.addObserver(
@@ -103,10 +103,35 @@
                     name: NSWindow.didChangeScreenNotification,
                     object: window
                 )
+                NotificationCenter.default.addObserver(
+                    self,
+                    selector: #selector(windowDidChangeOcclusion),
+                    name: NSWindow.didChangeOcclusionStateNotification,
+                    object: window
+                )
             } else {
-                core.stopDisplayLink()
+                core.stopRendering()
                 core.setFocus(false)
             }
+        }
+
+        override open func viewDidMoveToSuperview() {
+            super.viewDidMoveToSuperview()
+            core.refreshPresentationVisibility()
+        }
+
+        override open func viewDidHide() {
+            super.viewDidHide()
+            core.refreshPresentationVisibility()
+        }
+
+        override open func viewDidUnhide() {
+            super.viewDidUnhide()
+            core.refreshPresentationVisibility()
+        }
+
+        @objc func windowDidChangeOcclusion(_: Notification) {
+            core.refreshPresentationVisibility()
         }
 
         @objc func windowDidBecomeKey(_: Notification) {
@@ -156,6 +181,11 @@
             NotificationCenter.default.removeObserver(
                 self,
                 name: NSWindow.didChangeScreenNotification,
+                object: nil
+            )
+            NotificationCenter.default.removeObserver(
+                self,
+                name: NSWindow.didChangeOcclusionStateNotification,
                 object: nil
             )
         }

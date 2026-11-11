@@ -1296,7 +1296,7 @@ fn api_sessions<W: Write>(stream: &mut W) {
     let activity = mcp_host::load_activity_state();
     let mut manifests = session_host::list_manifests();
     manifests.retain(|m| m.state == HostedSessionState::Running);
-    manifests.sort_by(|a, b| b.session.created_at.cmp(&a.session.created_at));
+    manifests.sort_by_key(|manifest| std::cmp::Reverse(manifest.session.created_at));
     let sessions: Vec<Value> = manifests
         .iter()
         .map(|m| session_json(m, &mcp_host::activity_status_for_manifest(&activity, m)))

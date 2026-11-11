@@ -178,6 +178,45 @@ pub(crate) fn inspect_owned_session_processes(
     None
 }
 
+/// A positive retained-identity check is enough to keep a managed runtime
+/// blocked on routine observation ticks. A miss must still take the complete
+/// session scan: surviving process-group members also block shell recovery.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub(crate) fn retained_runtime_is_present(
+    session_leader_pid: u32,
+    session_leader_started_at_ms: u64,
+    prior: &ActiveRuntimeObservation,
+) -> bool {
+    // The leader may exec the final interactive shell without changing its
+    // start time. Leave that case to the executable/invocation inspection.
+    let Some(started_at) = prior.pid_started_at else {
+        return false;
+    };
+    if session_leader_pid <= 1
+        || prior.pid <= 1
+        || prior.pid == session_leader_pid
+        || prior.process_group_id <= 1
+    {
+        return false;
+    }
+    pid_start_matches(session_leader_pid, session_leader_started_at_ms)
+        && pid_start_matches(prior.pid, started_at)
+        && unsafe { libc::getsid(prior.pid as libc::pid_t) } == session_leader_pid as libc::pid_t
+        && unsafe { libc::getpgid(prior.pid as libc::pid_t) }
+            == prior.process_group_id as libc::pid_t
+        && pid_start_matches(prior.pid, started_at)
+        && pid_start_matches(session_leader_pid, session_leader_started_at_ms)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub(crate) fn retained_runtime_is_present(
+    _session_leader_pid: u32,
+    _session_leader_started_at_ms: u64,
+    _prior: &ActiveRuntimeObservation,
+) -> bool {
+    false
+}
+
 /// A fresh catalog miss is not proof that a previously observed job exited:
 /// the same process can `exec` an unrecognized binary, change its argv/title,
 /// or leave children in its old process group. Require both identities gone.
@@ -1062,6 +1101,37 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn retained_identity_requires_live_start_session_and_group() {
+        let pid = std::process::id();
+        let leader = u32::try_from(unsafe { libc::getsid(0) }).unwrap();
+        let group = u32::try_from(unsafe { libc::getpgid(0) }).unwrap();
+        let started = crate::session_host::process_start_time_ms(pid).unwrap();
+        let leader_started = crate::session_host::process_start_time_ms(leader).unwrap();
+        let mut prior = ActiveRuntimeObservation {
+            runtime_id: "test".into(),
+            pid,
+            pid_started_at: Some(started),
+            process_group_id: group,
+            process_name: "test".into(),
+            argv: None,
+        };
+        assert_eq!(
+            retained_runtime_is_present(leader, leader_started, &prior),
+            pid != leader && leader > 1 && group > 1,
+        );
+        prior.pid_started_at = Some(started.saturating_add(PID_START_TOLERANCE_MS + 1));
+        assert!(!retained_runtime_is_present(leader, leader_started, &prior));
+        prior.pid_started_at = Some(started);
+        prior.process_group_id = 0;
+        assert!(!retained_runtime_is_present(leader, leader_started, &prior));
+        prior.process_group_id = group;
+        assert!(!retained_runtime_is_present(pid, started, &prior));
+        prior.pid_started_at = None;
+        assert!(!retained_runtime_is_present(leader, leader_started, &prior));
+    }
 
     #[test]
     fn owned_shell_argv_requires_login_interactive_without_a_command() {

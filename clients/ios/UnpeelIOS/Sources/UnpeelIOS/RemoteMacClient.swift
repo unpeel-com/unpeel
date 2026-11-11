@@ -230,6 +230,8 @@ public struct RemoteMacClient: Sendable {
         // fits; the host caps its read at `limit`, and offset polling catches
         // up over multiple chunks with no data loss.
         let effectiveLimit = isRelay ? min(limit, 200 * 1024) : limit
+        // Keep legacy safe-boundary replies. feedPrepared injects DEC 2026
+        // between pages, so it must not opt in to session.output.raw.
         var query = [
             "session_id": sessionID,
             "limit": "\(effectiveLimit)",

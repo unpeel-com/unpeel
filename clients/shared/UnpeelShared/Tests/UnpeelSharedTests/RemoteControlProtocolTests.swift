@@ -2,6 +2,14 @@ import XCTest
 @testable import UnpeelShared
 
 final class RemoteControlProtocolTests: XCTestCase {
+    func testRawOutputRequiresExplicitAdvertisedCapability() throws {
+        let legacy = RemoteHostProtocolDescriptor(minorVersion: 19, capabilities: ["session.output.read"])
+        XCTAssertFalse(legacy.supports(RemoteControlProtocol.rawOutputCapability))
+        let current = try roundTrip(RemoteHostProtocolDescriptor(capabilities: ["session.output.read", RemoteControlProtocol.rawOutputCapability]))
+        XCTAssertTrue(current.supports(RemoteControlProtocol.rawOutputCapability))
+        XCTAssertTrue(current.isCompatible())
+    }
+
     func testHostProtocolDescriptorIsAdditiveAndMajorVersioned() throws {
         let descriptor = RemoteHostProtocolDescriptor(
             capabilities: ["host.bootstrap", "session.output.read", "future.capability"]

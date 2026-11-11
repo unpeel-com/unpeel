@@ -59,16 +59,6 @@ public final class TerminalController {
 
     public internal(set) var lastConfigurationIssue: String?
     var onWakeup: (() -> Void)?
-    /// Gates only the frame scheduling that follows a wakeup (`onWakeup`),
-    /// never the tick itself. Ghostty's app mailbox is a 64-slot blocking
-    /// queue that only `ghostty_app_tick` drains; a surface's io and reader
-    /// threads push into it with an infinite timeout (child exit, password
-    /// input, titles, pwd, mouse shape, progress...). Skipping ticks for a
-    /// hidden or detached surface let that queue fill, wedged the io
-    /// thread, and the next synchronous surface call from the main thread
-    /// (focusing the pane on a session or workspace switch) blocked forever
-    /// on the pane's full termio mailbox — a hard deadlock.
-    var shouldRenderOnWakeup: (() -> Bool)?
 
     // MARK: - Config Resolution State
 
@@ -299,13 +289,9 @@ public final class TerminalController {
     }
 
     func handleWakeup() {
-        // Always drain the app mailbox, visible or not (see
-        // `shouldRenderOnWakeup`); only the draw is optional.
+        // The mailbox carries lifecycle and IO callbacks even for hidden or
+        // detached retained surfaces. Only rendering may depend on visibility.
         tick()
-        guard shouldRenderOnWakeup?() ?? true else {
-            TerminalDebugLog.log(.lifecycle, "wakeup render suspended")
-            return
-        }
         onWakeup?()
     }
 

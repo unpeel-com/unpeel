@@ -105,8 +105,18 @@ final class RemoteGhosttyPaneRetentionTests: XCTestCase {
         )
         XCTAssertEqual(
             RemoteTerminalLocalFeed.resettingBeforeFeeding(payload).bytes,
-            reset + begin + clear + payload + end
+            reset + begin + clear + end + payload
         )
+    }
+
+    func testResetFeedPreservesRawContinuationInsideScalarAndControlStrings() {
+        for journal in [Data("€".utf8), Data("\u{1B}]0;title\u{7}".utf8), Data("\u{1B}_payload\u{1B}\\".utf8)] {
+            for split in 1..<journal.count {
+                let first = RemoteTerminalLocalFeed.resettingBeforeFeeding(Data(journal.prefix(split))).bytes
+                let feed = first + journal.dropFirst(split)
+                XCTAssertEqual(feed, RemoteTerminalLocalFeed.resetRetainedState.bytes + journal)
+            }
+        }
     }
 
     func testSessionIdentityIsScopedByHost() {
