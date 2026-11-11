@@ -1,4 +1,5 @@
 mod install;
+mod preview;
 mod ui;
 
 use std::ffi::{OsStr, OsString};
