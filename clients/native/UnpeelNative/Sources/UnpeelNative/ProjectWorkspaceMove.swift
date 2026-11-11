@@ -7,11 +7,11 @@
 //  trees (docs/agents/workspaces.md); this is a same-Mac file transfer of
 //  the shared on-disk contract, not a protocol verb.
 //
-//  Sessions stay the same ids. Live hosts keep running: a same-volume
-//  rename of app-sessions/<id> leaves the PTY, output.bin fd, and
-//  session.sock inode intact, which is the same survival model as an
-//  app restart. Hook broadcasts stay on the source home's ports until
-//  that Host is later replaced.
+//  Sessions stay the same ids. Only stopped Sessions may move: a live one
+//  is a thread of the source workspace's PTY core, which resolves its files
+//  under its own home, so renaming its dir into another home strands it
+//  (#32). `move` itself is a plain rename; the caller stops live Sessions
+//  first and waits with `waitUntilStopped`.
 //
 
 import Foundation
@@ -242,6 +242,28 @@ enum ProjectWorkspaceMove {
         sessionIDs(projectID: projectID, in: home).filter {
             sessionIsLive(home: home, sessionID: $0)
         }
+    }
+
+    /// Wait until none of `sessionIDs` is live any more, polling `isLive`.
+    /// Returns the ids still live at the deadline (empty on success). A move
+    /// must never run while one of its Sessions is live: each workspace's PTY
+    /// core resolves Session files under its own home, so a renamed live dir
+    /// is stranded (#32).
+    @MainActor
+    static func waitUntilStopped(
+        _ sessionIDs: [String],
+        timeout: Duration = .seconds(15),
+        pollInterval: Duration = .milliseconds(200),
+        isLive: (String) -> Bool
+    ) async -> [String] {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        var remaining = sessionIDs.filter(isLive)
+        while !remaining.isEmpty, clock.now < deadline {
+            try? await Task.sleep(for: pollInterval)
+            remaining = remaining.filter(isLive)
+        }
+        return remaining
     }
 
     // MARK: - Discovery

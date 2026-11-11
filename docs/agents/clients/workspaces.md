@@ -124,10 +124,15 @@ top-level project's right-click menu offers **Move to ▸ Workspace ▸
 and every session filed under that subtree — stopped ones included —
 move from the source home's `app-state.json` / `app-sessions/` /
 `session-order.json` / `project-order.json` into the destination home.
-Live hosts keep running: the session dir is renamed on the same volume,
-so the PTY, `output.bin`, and `session.sock` survive (same host-based
-survival model as an app restart). Hook broadcasts stay on the source
-home's ports until that Host is later replaced. Hidden for groups,
+Every Session in the subtree must be stopped first: Sessions are threads
+of the source workspace's PTY core, which resolves their files under its
+own home, so a live Session renamed into another home is stranded with no
+`session.sock` (#32). When any is live the app asks **Stop and Move**, stops
+them with the ordinary stop verb (rows stay resumable, so agents continue
+with Resume in the destination), waits until the Host reports them stopped,
+and only then renames the session dirs; if one is still running at the
+deadline, nothing moves. Live PTY migration between cores is out of scope
+(handoff is restart-with-resume). Hidden for groups,
 worktree children, and a true remote Host scope. Same-Mac only — remote
 Hosts are not destinations. Headless-serve parity is unbuilt.
 

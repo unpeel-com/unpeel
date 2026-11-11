@@ -10161,8 +10161,12 @@ final class UnpeelStore: ObservableObject {
     }
 
     /// Move the project record and its session dirs into another local
-    /// workspace on this Mac. Live hosts keep running — the session dir
-    /// is renamed, not copied.
+    /// workspace on this Mac. Every Session in the subtree must be stopped
+    /// first: Sessions are threads of the source workspace's PTY core, which
+    /// resolves their files under its own home, so a live Session renamed
+    /// into another home is stranded (#32). Live ones are offered "Stop and
+    /// Move" (the ordinary stop verb — rows stay resumable) and the move
+    /// waits until the Host reports them stopped.
     func moveProjectToLocalWorkspace(projectID: String, dest: WorkspaceMoveTarget) {
         guard selectedHostScope.isLocalMachine,
               let sourceHome = scopedLocalUnpeelDir,
@@ -10185,6 +10189,41 @@ final class UnpeelStore: ObservableObject {
         Task { @MainActor [weak self] in
             guard let self else { return }
             defer { self.projectWorkspaceMoveInFlight = false }
+
+            let live = ProjectWorkspaceMove.liveSessionIDs(projectID: projectID, in: sourceHome)
+            if !live.isEmpty {
+                guard Self.confirmStopAndMove(
+                    projectName: project.name,
+                    workspaceName: dest.name,
+                    liveCount: live.count
+                ) else { return }
+                let runtime = self.remoteHostRuntime
+                do {
+                    for sessionID in live {
+                        try await runtime.stopSession(sessionID)
+                    }
+                } catch {
+                    Self.showErrorAlert(
+                        title: "Couldn't stop the sessions",
+                        message: ((error as? RemoteHostVerbError)?.message
+                            ?? error.localizedDescription)
+                            + "\n\nNothing was moved."
+                    )
+                    return
+                }
+                let stillLive = await ProjectWorkspaceMove.waitUntilStopped(live) { sessionID in
+                    ProjectWorkspaceMove.sessionIsLive(home: sourceHome, sessionID: sessionID)
+                }
+                guard stillLive.isEmpty else {
+                    Self.showErrorAlert(
+                        title: "Couldn't move project",
+                        message: stillLive.count == 1
+                            ? "A session is still running. Nothing was moved."
+                            : "\(stillLive.count) sessions are still running. Nothing was moved."
+                    )
+                    return
+                }
+            }
 
             let outcome: ProjectWorkspaceMove.Outcome
             do {
@@ -12921,6 +12960,24 @@ final class UnpeelStore: ObservableObject {
                 }
             }
         }
+    }
+
+    private static func confirmStopAndMove(
+        projectName: String,
+        workspaceName: String,
+        liveCount: Int
+    ) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = liveCount == 1
+            ? "Stop 1 running session and move \"\(projectName)\"?"
+            : "Stop \(liveCount) running sessions and move \"\(projectName)\"?"
+        alert.informativeText = """
+        Running sessions can't move between workspaces. They stop first and \
+        keep their rows, so you can resume agents in \(workspaceName).
+        """
+        alert.addButton(withTitle: "Stop and Move")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     private static func confirmForceRemoveWorktree(name: String, branch: String) -> Bool {
