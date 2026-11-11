@@ -4268,6 +4268,14 @@ final class UnpeelStore: ObservableObject {
     /// scoping to another workspace repaints to its color and returning to
     /// Local restores ours. Display-only — never persists `appTint`.
     func applyScopeTint() {
+        // A direct repaint (scope switch, Settings) may change what the
+        // snapshot gate last saw; forget it so the next snapshot compares
+        // against the current look rather than a stale one.
+        lastSnapshotScopeAppearance = nil
+        animateScopeTint()
+    }
+
+    private func animateScopeTint() {
         // 0.5s settle: a swipe commit's wash is deliberately partial at the
         // commit point (scrubWash trails the fingers at ~60% blend), so the
         // remaining color arrival is felt here, AFTER the switch, not
@@ -4306,7 +4314,7 @@ final class UnpeelStore: ObservableObject {
         )
         guard inputs != lastSnapshotScopeAppearance else { return }
         lastSnapshotScopeAppearance = inputs
-        applyScopeTint()
+        animateScopeTint()
         refreshScopeAppearance()
     }
 
