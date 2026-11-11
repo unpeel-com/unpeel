@@ -75,19 +75,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -423,19 +419,19 @@ private fun TerminalSurface(
     var listening by remember { mutableStateOf(false) }
     var voiceText by remember { mutableStateOf("") }
     var ctrlArmed by remember { mutableStateOf(false) }
-    var allowComposerFocus by remember { mutableStateOf(false) }
-    val composerFocus = remember { FocusRequester() }
-    val focusManager = LocalFocusManager.current
+    var terminalView by remember { mutableStateOf<HostTerminalView?>(null) }
     val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
+    DisposableEffect(lifecycleOwner, session.id) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_START || event == Lifecycle.Event.ON_RESUME || event == Lifecycle.Event.ON_STOP) {
-                allowComposerFocus = false
-                focusManager.clearFocus(force = true)
+                terminalView?.dismissKeyboard()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            terminalView?.dismissKeyboard()
+        }
     }
     DisposableEffect(voice) { onDispose { voice.cancel() } }
     DisposableEffect(session.id) { onDispose { controller.releasePhoneFit() } }
@@ -503,7 +499,8 @@ private fun TerminalSurface(
                 if (spinning) BrailleSpinner(if (blocked) Attention else Foreground) else Text("🔔", fontSize = 14.sp)
             }
         }
-        TerminalGrid(controller)
+        TerminalGrid(controller, onView = { terminalView = it }, controlArmed = { ctrlArmed }, onControlUsed = { ctrlArmed = false })
+        Column(Modifier.windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
         if (listening) {
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
@@ -556,20 +553,12 @@ private fun TerminalSurface(
                 RoundKey("⌃", armed = ctrlArmed) { ctrlArmed = !ctrlArmed }
                 KeyDot()
                 RoundKey("/") {
-                    if (ctrlArmed) {
-                        controller.sendRaw("\u001f")
-                        ctrlArmed = false
-                    } else {
-                        controller.composer += "/"
-                    }
+                    if (ctrlArmed) controller.sendRaw("\u001f") else controller.sendRaw("/")
+                    ctrlArmed = false
                 }
                 RoundKey("@") {
-                    if (ctrlArmed) {
-                        controller.sendRaw("\u0000")
-                        ctrlArmed = false
-                    } else {
-                        controller.composer += "@"
-                    }
+                    if (ctrlArmed) controller.sendRaw("\u0000") else controller.sendRaw("@")
+                    ctrlArmed = false
                 }
             }
             Spacer(Modifier.width(8.dp))
@@ -583,73 +572,17 @@ private fun TerminalSurface(
                 }
             }
         }
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
-                .padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.Bottom,
-        ) {
-            OutlinedTextField(
-                value = controller.composer,
-                onValueChange = { next ->
-                    val added = next.removePrefix(controller.composer)
-                    if (ctrlArmed && added.length == 1 && added[0].isLetter()) {
-                        val code = added[0].lowercaseChar().code - 'a'.code + 1
-                        if (code in 1..26) {
-                            controller.sendRaw(code.toChar().toString())
-                            ctrlArmed = false
-                            return@OutlinedTextField
-                        }
-                    }
-                    controller.composer = next
-                },
-                modifier = Modifier
-                    .weight(1f)
-                    .pointerInput(Unit) {
-                        awaitPointerEventScope {
-                            while (true) {
-                                val event = awaitPointerEvent(PointerEventPass.Initial)
-                                val pressed = event.changes.any { change -> change.pressed && !change.previousPressed }
-                                if (pressed) allowComposerFocus = true
-                            }
-                        }
-                    }
-                    .focusRequester(composerFocus)
-                    .onFocusChanged { state ->
-                        if (state.isFocused && !allowComposerFocus) focusManager.clearFocus(force = true)
-                    },
-                placeholder = { Text("发给这个会话", color = Muted) },
-                minLines = 1,
-                maxLines = 5,
-                shape = RoundedCornerShape(22.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = Foreground,
-                    unfocusedTextColor = Foreground,
-                    cursorColor = Foreground,
-                    focusedBorderColor = Color.White.copy(alpha = 0.35f),
-                    unfocusedBorderColor = Color.White.copy(alpha = 0.16f),
-                    focusedContainerColor = Color.White.copy(alpha = 0.06f),
-                    unfocusedContainerColor = Color.White.copy(alpha = 0.06f),
-                ),
-            )
-            Box(
-                Modifier
-                    .size(36.dp)
-                    .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.14f))
-                    .clickable(onClick = controller::sendComposer),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("↑", color = Foreground, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-            }
         }
     }
 }
 
 @Composable
-private fun ColumnScope.TerminalGrid(controller: Controller) {
+private fun ColumnScope.TerminalGrid(
+    controller: Controller,
+    onView: (HostTerminalView) -> Unit,
+    controlArmed: () -> Boolean,
+    onControlUsed: () -> Unit,
+) {
     val density = LocalDensity.current
     val imeBottom = WindowInsets.ime.getBottom(density)
     var gridSize by remember(controller.openSessionID) { mutableStateOf(IntSize.Zero) }
@@ -677,17 +610,24 @@ private fun ColumnScope.TerminalGrid(controller: Controller) {
             .background(Canvas),
     ) {
         AndroidView(
-            modifier = Modifier.fillMaxSize().onSizeChanged { gridSize = it },
+            modifier = Modifier.fillMaxSize().onSizeChanged { gridSize = it }.focusProperties { canFocus = false },
             factory = { context ->
                 HostTerminalView(context, controller.terminal).also { view ->
                     surface = view
+                    onView(view)
                     cellW = view.cellWidth
                     cellH = view.cellHeight.toFloat()
                     topPad = view.topPad.toFloat()
                     view.onSelectionChanged = { selecting = it }
                 }
             },
-            update = { view -> view.bind(controller.terminal) },
+            update = { view ->
+                view.bind(controller.terminal)
+                view.onText = { controller.sendRaw(it) }
+                view.controlArmed = controlArmed
+                view.onControlUsed = onControlUsed
+                onView(view)
+            },
         )
         if (selecting) {
             Row(Modifier.align(Alignment.TopEnd).padding(4.dp)) {

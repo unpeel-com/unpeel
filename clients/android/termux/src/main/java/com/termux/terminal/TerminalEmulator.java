@@ -483,6 +483,11 @@ public final class TerminalEmulator {
         return isDecsetInternalBitSet(DECSET_BIT_MOUSE_TRACKING_PRESS_RELEASE) || isDecsetInternalBitSet(DECSET_BIT_MOUSE_TRACKING_BUTTON_EVENT);
     }
 
+    /** DEC 1006. Wheel reports use `CSI < button ; col ; row M` when this is set. */
+    public boolean isMouseProtocolSgr() {
+        return isDecsetInternalBitSet(DECSET_BIT_MOUSE_PROTOCOL_SGR);
+    }
+
     private void setDefaultTabStops() {
         for (int i = 0; i < mColumns; i++)
             mTabStop[i] = (i & 7) == 0 && i != 0;

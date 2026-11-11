@@ -59,6 +59,7 @@ class Controller(context: Context) {
     private var phoneFitGeneration = 0
     private var phoneFitSession: String? = null
     private var phoneFitColumns: Int? = null
+    private var phoneFitRows: Int? = null
     private val phoneFitLock = Mutex()
     /** Paste and the Enter that submits it must not be split by another write. */
     private val inputLock = Mutex()
@@ -69,12 +70,7 @@ class Controller(context: Context) {
     private var desiredRows = 0
     private var keyboardOpen = false
     private var lastFitAttemptMs = 0L
-    private var fitDriftSinceMs = 0L
-    private var fitYielded = false
-    private var sawDesktopViewing = false
     private var fitRejected = false
-    /** null = this Host omitted the flag. false from the installed Mac is not "the pane is free". */
-    private var desktopViewing: Boolean? = null
     var usingRelay by mutableStateOf(false)
         private set
 
@@ -101,7 +97,6 @@ class Controller(context: Context) {
             clipboard.setPrimaryClip(ClipData.newPlainText("unpeel", text))
         },
     )
-    var composer by mutableStateOf("")
     var busy by mutableStateOf(false)
         private set
     var error by mutableStateOf<String?>(null)
@@ -206,11 +201,7 @@ class Controller(context: Context) {
         desiredRows = 0
         keyboardOpen = false
         lastFitAttemptMs = 0L
-        fitDriftSinceMs = 0L
-        fitYielded = false
-        sawDesktopViewing = false
         fitRejected = false
-        desktopViewing = null
         terminal.prepare(80, 24)
         artifacts = emptyList()
         artifactImage = null
@@ -232,11 +223,9 @@ class Controller(context: Context) {
     }
 
     /**
-     * The measured terminal box. Keyboard height must not change the grid
-     * we ask the Host for. A Mac that reports it is showing this session
-     * keeps the size. A Host that always reports `desktopViewing: false`
-     * (the installed 0.7.7 Mac) must not be treated as a free pane: the
-     * phone fits once, then leaves the grid alone if that size does not stick.
+     * The measured terminal box. Keyboard height must not change the grid.
+     * While this session stays open the phone keeps that grid; the Mac
+     * reclaim is its Fit to desktop button, and leaving the session clears it.
      */
     fun notePhoneViewport(columns: Int, rows: Int, keyboardOpen: Boolean) {
         this.keyboardOpen = keyboardOpen
@@ -254,7 +243,6 @@ class Controller(context: Context) {
                     JSONObject(link().get("metrics", mapOf("session_id" to sessionID), timeoutMs = 4_000))
                 }.getOrNull()
                 if (metrics != null && openSessionID == sessionID) {
-                    desktopViewing = if (metrics.has("desktopViewing")) metrics.getBoolean("desktopViewing") else null
                     reconcilePhoneFit(
                         sessionID,
                         metrics.optInt("columns", 80),
@@ -268,71 +256,39 @@ class Controller(context: Context) {
 
     private fun reconcilePhoneFit(sessionID: String, observedColumns: Int, observedRows: Int) {
         if (keyboardOpen || desiredColumns < 2 || fitRejected) return
-        val viewing = desktopViewing
-        // A real edge (Mac was showing this session, then left it) is the
-        // only time a later fit is allowed. A Host that never reports true
-        // never produces that edge, so it cannot re-enter the 3s fight.
-        if (viewing == true) sawDesktopViewing = true
-        if (viewing == false && sawDesktopViewing) {
-            sawDesktopViewing = false
-            fitYielded = false
-            lastFitAttemptMs = 0L
-            fitDriftSinceMs = 0L
-        }
-        if (fitYielded) {
-            followObservedGrid(sessionID, observedColumns, observedRows)
-            return
-        }
         val ownedColumns = if (phoneFitSession == sessionID) phoneFitColumns else null
-        if (ownedColumns != null && viewing != true && kotlin.math.abs(desiredColumns - ownedColumns) > 2) {
-            fitDriftSinceMs = 0L
+        val ownedRows = if (phoneFitSession == sessionID) phoneFitRows else null
+        if (ownedColumns == null || ownedRows == null ||
+            kotlin.math.abs(desiredColumns - ownedColumns) > 2 ||
+            kotlin.math.abs(desiredRows - ownedRows) > 2
+        ) {
             lastFitAttemptMs = android.os.SystemClock.elapsedRealtime()
-            fitPhone(desiredColumns, desiredRows)
+            fitPhone(desiredColumns, desiredRows, force = false)
             return
         }
-        if (ownedColumns != null && kotlin.math.abs(observedColumns - ownedColumns) > 2) {
+        // The Mac Fit to desktop button, or any other resize, moved the grid.
+        // This session is still open on the phone, so take the phone size back.
+        if (kotlin.math.abs(observedColumns - ownedColumns) > 2 ||
+            kotlin.math.abs(observedRows - ownedRows) > 2
+        ) {
             val now = android.os.SystemClock.elapsedRealtime()
-            // Our own resize is still landing. A Mac pane that keeps a
-            // different width past this window has taken the grid.
             if (now - lastFitAttemptMs < 3_000) return
-            if (fitDriftSinceMs == 0L) {
-                fitDriftSinceMs = now
-                return
-            }
-            if (now - fitDriftSinceMs < 2_000) return
-            abandonPhoneFit(sessionID, observedColumns, observedRows)
-            return
+            lastFitAttemptMs = now
+            fitPhone(desiredColumns, desiredRows, force = true)
         }
-        fitDriftSinceMs = 0L
-        if (viewing == true || ownedColumns != null || lastFitAttemptMs != 0L) return
-        lastFitAttemptMs = android.os.SystemClock.elapsedRealtime()
-        fitPhone(desiredColumns, desiredRows)
-    }
-
-    /** The PTY left the phone letterbox and stayed there. Stop posting resizes. */
-    private fun abandonPhoneFit(sessionID: String, observedColumns: Int, observedRows: Int) {
-        fitYielded = true
-        fitDriftSinceMs = 0L
-        releasePhoneFit()
-        followObservedGrid(sessionID, observedColumns, observedRows)
-    }
-
-    private fun followObservedGrid(sessionID: String, observedColumns: Int, observedRows: Int) {
-        if (terminal.columns == observedColumns && terminal.rows == observedRows) return
-        startOutput(sessionID, observedColumns, observedRows)
     }
 
     /**
      * Ask the Host to letterbox this session to the phone's terminal grid.
-     * The keyboard must not call this. A Mac that reports `desktopViewing`
-     * keeps its own grid.
+     * The keyboard must not call this. `force` repeats the same grid after
+     * the Mac clears it.
      */
-    private fun fitPhone(columns: Int, rows: Int) {
+    private fun fitPhone(columns: Int, rows: Int, force: Boolean) {
         val sessionID = openSessionID ?: return
         val active = link ?: return
         val cols = columns.coerceIn(2, 300)
         val lines = rows.coerceIn(2, 120)
-        if (phoneFitSession == sessionID && phoneFitColumns == cols) return
+        if (!force && phoneFitSession == sessionID && phoneFitColumns == cols && phoneFitRows == lines) return
         val generation = phoneFitGeneration
         scope.launch {
             phoneFitLock.withLock {
@@ -358,6 +314,7 @@ class Controller(context: Context) {
                 }
                 phoneFitSession = sessionID
                 phoneFitColumns = cols
+                phoneFitRows = lines
                 startOutput(sessionID, cols, lines)
             }
         }
@@ -370,6 +327,7 @@ class Controller(context: Context) {
         val active = link
         phoneFitSession = null
         phoneFitColumns = null
+        phoneFitRows = null
         if (sessionID == null || active == null) return
         scope.launch {
             phoneFitLock.withLock {
@@ -385,28 +343,6 @@ class Controller(context: Context) {
                 "resize-desktop",
                 JSONObject().put("sessionID", sessionID).put("clear", true).toString(),
             )
-        }
-    }
-
-    fun sendComposer() {
-        val text = TerminalInput.sanitize(composer)
-        val id = openSessionID ?: return
-        val active = link
-        if (text.isEmpty() || active == null) return
-        composer = ""
-        scope.launch {
-            inputLock.withLock {
-                // Cursor and the other full-screen agents finish a bracketed
-                // paste before they will honor Enter, and they swallow the
-                // first Enter that arrives with the paste. iOS never hits
-                // this: Return is its own key, after the text is already in
-                // the composer. Same settle as the Host prompt recipe.
-                if (!postWrite(active, id, TerminalInput.paste(text))) return@withLock
-                delay(if (TerminalInput.containsPath(text)) 900 else 250)
-                if (!postWrite(active, id, "\r")) return@withLock
-                delay(80)
-                postWrite(active, id, "\r")
-            }
         }
     }
 
@@ -597,7 +533,7 @@ class Controller(context: Context) {
         }
     }
 
-    /** Re-upload an existing capture into the composer. Does not submit. */
+    /** Re-upload an existing capture into the terminal. Does not submit. */
     fun pasteArtifact(kind: String, name: String) {
         val id = openSessionID ?: return
         scope.launch {
