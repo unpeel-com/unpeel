@@ -497,15 +497,13 @@ pub(crate) enum JournalMsg {
     },
 }
 
+/// Timer jobs are keyed by the Session's journal id, never its reactor slot:
+/// a slot is reused the moment a Session ends, while its teardown thread
+/// retires the jobs later, so a slot-keyed `Remove` could take the next
+/// occupant's heartbeat and status jobs with it.
 pub(crate) enum TimerMsg {
-    Add {
-        slot: usize,
-        jobs: Vec<HostTimerJob>,
-    },
-    Remove {
-        slot: usize,
-        ack: mpsc::Sender<()>,
-    },
+    Add { key: u64, jobs: Vec<HostTimerJob> },
+    Remove { key: u64, ack: mpsc::Sender<()> },
 }
 
 #[derive(Clone)]
@@ -865,7 +863,8 @@ impl Reactor {
             self.free_slots.push(slot);
             return Err(error);
         }
-        let _ = self.timer_tx.send(TimerMsg::Add { slot, jobs });
+        let key = session.journal_id();
+        let _ = self.timer_tx.send(TimerMsg::Add { key, jobs });
         self.sessions[slot] = Some(Box::new(session));
         Ok(())
     }
@@ -969,7 +968,7 @@ impl Reactor {
             }
             let (timer_ack_tx, timer_ack_rx) = mpsc::channel();
             let _ = self.timer_tx.send(TimerMsg::Remove {
-                slot,
+                key: session.journal_id(),
                 ack: timer_ack_tx,
             });
             if timer_ack_rx.recv_timeout(Duration::from_secs(10)).is_err() {
@@ -1072,7 +1071,8 @@ impl Reactor {
             let registry = &mut self.registry;
             if let Some(session) = self.sessions[slot].as_mut() {
                 let jobs = session.resume_after_handoff(registry);
-                let _ = self.timer_tx.send(TimerMsg::Add { slot, jobs });
+                let key = session.journal_id();
+                let _ = self.timer_tx.send(TimerMsg::Add { key, jobs });
             }
         }
         Err(error)
@@ -1286,7 +1286,7 @@ fn run_journal_writer(rx: mpsc::Receiver<JournalMsg>, reactor: ReactorHandle) {
 /// never interleave with each other), and the idle tick never exceeds
 /// `HOST_TIMER_MAX_SLEEP` so a removal ack is never held hostage.
 fn run_timer(rx: mpsc::Receiver<TimerMsg>) {
-    let mut jobs: HashMap<usize, Vec<HostTimerJob>> = HashMap::new();
+    let mut jobs: HashMap<u64, Vec<HostTimerJob>> = HashMap::new();
     let running = AtomicBool::new(true);
     loop {
         let now = Instant::now();
@@ -1317,11 +1317,11 @@ fn run_timer(rx: mpsc::Receiver<TimerMsg>) {
         let mut pending = message;
         while let Some(message) = pending.take() {
             match message {
-                TimerMsg::Add { slot, jobs: new } => {
-                    jobs.entry(slot).or_default().extend(new);
+                TimerMsg::Add { key, jobs: new } => {
+                    jobs.entry(key).or_default().extend(new);
                 }
-                TimerMsg::Remove { slot, ack } => {
-                    jobs.remove(&slot);
+                TimerMsg::Remove { key, ack } => {
+                    jobs.remove(&key);
                     let _ = ack.send(());
                 }
             }
@@ -1360,6 +1360,55 @@ mod tests {
     use std::io::{self, Read};
     use std::os::unix::net::{UnixListener, UnixStream};
     use std::sync::atomic::{AtomicU64, AtomicUsize};
+
+    /// A slot is reused as soon as a Session ends, but its teardown retires
+    /// the timer jobs later. The late `Remove` for the old Session must not
+    /// take the new occupant's jobs (heartbeat, status) with it.
+    #[test]
+    fn a_late_timer_retire_spares_the_next_occupant_of_the_slot() {
+        let (tx, rx) = mpsc::channel::<TimerMsg>();
+        let timer = thread::spawn(move || run_timer(rx));
+        let old_ticks = Arc::new(AtomicUsize::new(0));
+        let new_ticks = Arc::new(AtomicUsize::new(0));
+        let job = |ticks: &Arc<AtomicUsize>| {
+            let ticks = Arc::clone(ticks);
+            HostTimerJob::new(Duration::ZERO, Duration::from_millis(5), move || {
+                ticks.fetch_add(1, Ordering::SeqCst);
+                true
+            })
+        };
+        // The old Session (journal 1) and its successor in the same slot
+        // (journal 2) are both registered before the old teardown retires.
+        tx.send(TimerMsg::Add {
+            key: 1,
+            jobs: vec![job(&old_ticks)],
+        })
+        .unwrap();
+        tx.send(TimerMsg::Add {
+            key: 2,
+            jobs: vec![job(&new_ticks)],
+        })
+        .unwrap();
+        let (ack_tx, ack_rx) = mpsc::channel();
+        tx.send(TimerMsg::Remove {
+            key: 1,
+            ack: ack_tx,
+        })
+        .unwrap();
+        ack_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("retire ack");
+        let old_after_retire = old_ticks.load(Ordering::SeqCst);
+        let new_before = new_ticks.load(Ordering::SeqCst);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while new_ticks.load(Ordering::SeqCst) < new_before + 3 {
+            assert!(Instant::now() < deadline, "successor's timer job stopped");
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(old_ticks.load(Ordering::SeqCst), old_after_retire);
+        drop(tx);
+        timer.join().unwrap();
+    }
 
     fn reactor_handle_stub() -> ReactorHandle {
         let (control_tx, _control_rx) = mpsc::channel();
