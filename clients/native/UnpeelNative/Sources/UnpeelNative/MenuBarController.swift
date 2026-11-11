@@ -292,6 +292,10 @@ final class MenuBarController: NSObject {
             // The persisted history page is local-only.
             height += 28
         }
+        if !activity.finished.isEmpty,
+           store.canMarkActivityItemsRead(activity.finished) {
+            height += 28
+        }
         return NSSize(width: 372, height: height)
     }
 }
@@ -311,7 +315,10 @@ struct MenuBarActivityPanel: View {
             blockers: activity.blockers,
             finished: activity.finished,
             onSelect: onSelect,
-            onShowAll: store.selectedHostScope == .local ? onShowAll : nil
+            onShowAll: store.selectedHostScope == .local ? onShowAll : nil,
+            onMarkAllRead: store.canMarkActivityItemsRead(activity.finished)
+                ? { store.markActivityItemsRead(activity.finished) }
+                : nil
         )
         .padding(6)
         .frame(width: 360)
