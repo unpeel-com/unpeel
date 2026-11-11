@@ -20,7 +20,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -90,15 +89,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.PlatformTextStyle
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -120,7 +114,6 @@ import com.unpeel.controller.folderColorArgb
 import com.unpeel.controller.resumeOffer
 import com.unpeel.controller.sidebarEntries
 import com.unpeel.controller.sidebarIndex
-import com.unpeel.controller.VtScreen
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -655,165 +648,67 @@ private fun TerminalSurface(
     }
 }
 
-private data class CellSel(val anchorRow: Int, val anchorCol: Int, val focusRow: Int, val focusCol: Int)
-
-private fun CellSel.ordered(): CellSel {
-    val forward = anchorRow < focusRow || (anchorRow == focusRow && anchorCol <= focusCol)
-    return if (forward) this else CellSel(focusRow, focusCol, anchorRow, anchorCol)
-}
-
-private fun CellSel.contains(row: Int, col: Int): Boolean {
-    val sel = ordered()
-    if (row < sel.anchorRow || row > sel.focusRow) return false
-    if (sel.anchorRow == sel.focusRow) return col in sel.anchorCol..sel.focusCol
-    if (row == sel.anchorRow) return col >= sel.anchorCol
-    if (row == sel.focusRow) return col <= sel.focusCol
-    return true
-}
-
 @Composable
 private fun ColumnScope.TerminalGrid(controller: Controller) {
-    val revision = controller.screenRevision
-    val history = remember(revision) { controller.screen.scrollback() }
-    val view = remember(revision) { controller.screen.snapshot() }
-    val cursor = remember(revision) { controller.screen.cursor() }
-    val all = history + view
-    val tailStart = (all.size - 300).coerceAtLeast(0)
-    val tail = if (tailStart == 0) all else all.subList(tailStart, all.size)
-    val cursorRow = history.size + cursor.first - tailStart
-    val cursorCol = cursor.second
-    val scroll = rememberScrollState()
-    var stick by remember { mutableStateOf(true) }
-    LaunchedEffect(scroll.isScrollInProgress) {
-        if (!scroll.isScrollInProgress) {
-            stick = scroll.maxValue == 0 || scroll.value >= scroll.maxValue - 48
-        }
-    }
-    LaunchedEffect(revision, scroll.maxValue) {
-        if (stick) scroll.scrollTo(scroll.maxValue)
-    }
-    val style = TextStyle(
-        fontFamily = FontFamily.Monospace,
-        fontSize = 13.sp,
-        lineHeight = 16.sp,
-        platformStyle = PlatformTextStyle(includeFontPadding = false),
-    )
     val density = LocalDensity.current
-    val cellW = rememberTextMeasurer().measure(AnnotatedString("M"), style = style).size.width.toFloat().coerceAtLeast(1f)
-    val cellH = with(density) { 16.sp.toPx() }.coerceAtLeast(1f)
-    val insetPx = with(density) { 8.dp.toPx() }
     val imeBottom = WindowInsets.ime.getBottom(density)
     var gridSize by remember(controller.openSessionID) { mutableStateOf(IntSize.Zero) }
-    LaunchedEffect(controller.openSessionID, gridSize, imeBottom, controller.connection) {
-        if (gridSize.width < 48 || gridSize.height < 48) return@LaunchedEffect
+    var cellW by remember { mutableFloatStateOf(0f) }
+    var cellH by remember { mutableFloatStateOf(0f) }
+    var topPad by remember { mutableFloatStateOf(0f) }
+    var selecting by remember(controller.openSessionID) { mutableStateOf(false) }
+    var surface by remember { mutableStateOf<HostTerminalView?>(null) }
+    val clipboard = LocalClipboardManager.current
+    LaunchedEffect(controller.openSessionID, gridSize, imeBottom, cellW, cellH, topPad, controller.connection) {
+        if (gridSize.width < 48 || gridSize.height < 48 || cellW <= 0f || cellH <= 0f) return@LaunchedEffect
         delay(120)
         if (imeBottom > 0) {
             controller.notePhoneViewport(0, 0, keyboardOpen = true)
             return@LaunchedEffect
         }
-        val grid = phoneFitGrid(gridSize.width, gridSize.height, cellW, cellH, insetPx) ?: return@LaunchedEffect
+        val grid = phoneFitGrid(gridSize.width, gridSize.height, cellW, cellH, topPad) ?: return@LaunchedEffect
         controller.notePhoneViewport(grid.first, grid.second, keyboardOpen = false)
     }
-    var selection by remember { mutableStateOf<CellSel?>(null) }
-    val clipboard = LocalClipboardManager.current
-    val cols = tail.firstOrNull()?.size ?: 1
     Box(
         Modifier
             .weight(1f)
             .padding(horizontal = 8.dp)
             .clip(RoundedCornerShape(16.dp))
-            .background(Canvas)
-            .onSizeChanged { gridSize = it },
+            .background(Canvas),
     ) {
-        Column(
-            Modifier
-                .fillMaxSize()
-                .verticalScroll(scroll)
-                .horizontalScroll(rememberScrollState())
-                .padding(8.dp)
-                .pointerInput(tail.size, cols, cellW, cellH) {
-                    detectDragGesturesAfterLongPress(
-                        onDragStart = { offset ->
-                            val hit = hitCell(offset.x, offset.y, cellW, cellH, tail.size, cols)
-                            selection = CellSel(hit.first, hit.second, hit.first, hit.second)
-                        },
-                        onDrag = { change, _ ->
-                            val hit = hitCell(change.position.x, change.position.y, cellW, cellH, tail.size, cols)
-                            selection = selection?.copy(focusRow = hit.first, focusCol = hit.second)
-                        },
-                    )
-                },
-        ) {
-            tail.forEachIndexed { index, row ->
-                Text(terminalLine(row, index, cursorRow, cursorCol, selection), style = style, maxLines = 1, softWrap = false)
-            }
-        }
-        selection?.let { sel ->
+        AndroidView(
+            modifier = Modifier.fillMaxSize().onSizeChanged { gridSize = it },
+            factory = { context ->
+                HostTerminalView(context, controller.terminal).also { view ->
+                    surface = view
+                    cellW = view.cellWidth
+                    cellH = view.cellHeight.toFloat()
+                    topPad = view.topPad.toFloat()
+                    view.onSelectionChanged = { selecting = it }
+                }
+            },
+            update = { view -> view.bind(controller.terminal) },
+        )
+        if (selecting) {
             Row(Modifier.align(Alignment.TopEnd).padding(4.dp)) {
                 TextButton(onClick = {
-                    clipboard.setText(AnnotatedString(selectedText(tail, sel)))
-                    selection = null
+                    val text = surface?.selectedText().orEmpty()
+                    if (text.isNotEmpty()) clipboard.setText(AnnotatedString(text))
+                    surface?.clearSelection()
                 }) { Text("复制") }
-                TextButton(onClick = { selection = null }) { Text("取消") }
+                TextButton(onClick = { surface?.clearSelection() }) { Text("取消") }
             }
         }
     }
 }
 
 /** Columns and rows that letterbox the Host PTY to this terminal box. Null until the box is real. */
-internal fun phoneFitGrid(widthPx: Int, heightPx: Int, cellW: Float, cellH: Float, insetPx: Float): Pair<Int, Int>? {
-    val innerW = widthPx - insetPx * 2
-    val innerH = heightPx - insetPx * 2
-    if (innerW < 48f || innerH < 48f || cellW <= 0f || cellH <= 0f) return null
-    val columns = (innerW / cellW).toInt().coerceIn(2, 300)
+internal fun phoneFitGrid(widthPx: Int, heightPx: Int, cellW: Float, cellH: Float, topPadPx: Float): Pair<Int, Int>? {
+    val innerH = heightPx - topPadPx
+    if (widthPx < 48 || innerH < 48f || cellW <= 0f || cellH <= 0f) return null
+    val columns = (widthPx / cellW).toInt().coerceIn(2, 300)
     val rows = (innerH / cellH).toInt().coerceIn(2, 120)
     return columns to rows
-}
-
-private fun hitCell(x: Float, y: Float, cellW: Float, cellH: Float, rows: Int, cols: Int): Pair<Int, Int> {
-    val row = (y / cellH).toInt().coerceIn(0, (rows - 1).coerceAtLeast(0))
-    val col = (x / cellW).toInt().coerceIn(0, (cols - 1).coerceAtLeast(0))
-    return row to col
-}
-
-private fun terminalLine(
-    row: List<VtScreen.Cell>,
-    rowIndex: Int,
-    cursorRow: Int,
-    cursorCol: Int,
-    selection: CellSel?,
-) = buildAnnotatedString {
-    row.forEachIndexed { col, cell ->
-        if (cell.ch == '\u0000') return@forEachIndexed
-        val selected = selection?.contains(rowIndex, col) == true
-        val atCursor = selection == null && rowIndex == cursorRow && col == cursorCol
-        val fg = when {
-            selected -> Color(0xFF121314)
-            atCursor -> Canvas
-            else -> rgb(cell.fg)
-        }
-        val bg = when {
-            selected -> Color(0xFFD0D0D0)
-            atCursor -> rgb(cell.fg)
-            else -> rgb(cell.bg)
-        }
-        withStyle(SpanStyle(color = fg, background = bg, fontWeight = if (cell.bold) FontWeight.Bold else null)) {
-            append(cell.ch)
-        }
-    }
-}
-
-private fun selectedText(rows: List<List<VtScreen.Cell>>, selection: CellSel): String {
-    if (rows.isEmpty()) return ""
-    val sel = selection.ordered()
-    return (sel.anchorRow..sel.focusRow).joinToString("\n") { rowIndex ->
-        val row = rows.getOrNull(rowIndex).orEmpty()
-        val from = if (rowIndex == sel.anchorRow) sel.anchorCol else 0
-        val to = if (rowIndex == sel.focusRow) sel.focusCol else row.lastIndex
-        row.filterIndexed { col, cell -> col in from..to && cell.ch != '\u0000' }
-            .joinToString("") { it.ch.toString() }
-            .trimEnd()
-    }
 }
 
 @Composable

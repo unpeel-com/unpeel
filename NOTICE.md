@@ -55,6 +55,22 @@ package, binary reference, and licenses live under
 `clients/native/vendor/libghostty-spm/`. Its release cycle is independent
 of the Host library above.
 
+## Vendored: Termux terminal emulator (GPL-3.0-only)
+
+`clients/android/termux/` is the terminal engine the Android Controller
+draws with, compiled into the app module. It is termux-app **v0.118.3**,
+commit `5b657c6adf4304e5198951ce815fe0205dcac29c`: the Java
+`terminal-emulator` and `TerminalRenderer`, without `TerminalSession`,
+JNI, or `TerminalView`.
+Upstream terms are `LICENSE.md` and `COPYING` in that directory. The
+emulator also contains Apache-2.0 code from jackpal/Android-Terminal-Emulator
+(`Apache-2.0.txt`). Provenance and the omitted files are `UPSTREAM.txt`.
+
+Unpeel itself stays MIT. An Android APK that links this module is a
+GPL-3 combined work. The embed does not start a local shell; it only
+displays the Host's terminal bytes. It is temporary until an MIT renderer
+replaces it.
+
 ## Runtime marks
 
 `runtimes/<slug>/assets/icon.svg` are the marks of third-party agent CLIs

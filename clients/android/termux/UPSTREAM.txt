@@ -1,0 +1,14 @@
+Source: termux/termux-app v0.118.3
+Commit: 5b657c6adf4304e5198951ce815fe0205dcac29c
+https://github.com/termux/termux-app
+
+Included: terminal-emulator Java sources and TerminalRenderer.java.
+Omitted: TerminalSession.java (local PTY), JNI.java, src/main/jni, TerminalView.java, tests.
+Added by Unpeel: TerminalSession.java stub and TerminalMetrics.java.
+
+termux-app is GPL-3.0-only. The terminal-emulator and terminal-view code
+also contains Apache-2.0 work from jackpal/Android-Terminal-Emulator.
+See LICENSE.md, COPYING, and Apache-2.0.txt.
+
+The Android APK that links this module is a GPL-3 combined work.
+The rest of the Unpeel repository stays MIT. This embed is temporary.

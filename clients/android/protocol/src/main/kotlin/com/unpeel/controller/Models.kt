@@ -96,6 +96,8 @@ data class OutputChunk(
     val nextOffset: Long,
     val data: ByteArray,
     val modePreamble: ByteArray?,
+    /** The Host restarted this read from a new journal position. */
+    val truncated: Boolean = false,
 )
 
 data class BootstrapSnapshot(
@@ -199,6 +201,7 @@ object BootstrapJson {
             nextOffset = json.optLong("nextOffset"),
             data = b64d(json.optString("dataBase64")),
             modePreamble = json.optString("modePreambleBase64").ifEmpty { null }?.let { b64d(it) },
+            truncated = json.optBoolean("truncated", false),
         )
     }
 

@@ -1,10 +1,11 @@
 package com.unpeel.android
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.BitmapFactory
 import android.os.Build
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.unpeel.controller.AgentCatalog
@@ -16,7 +17,7 @@ import com.unpeel.controller.PairingCode
 import com.unpeel.controller.PairingCrypto
 import com.unpeel.controller.acceptPairingResponse
 import com.unpeel.controller.TerminalInput
-import com.unpeel.controller.VtScreen
+import com.unpeel.controller.TerminalQueryFilter
 import com.unpeel.controller.b64d
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -84,10 +85,19 @@ class Controller(context: Context) {
         private set
     var openSessionID by mutableStateOf<String?>(null)
         private set
-    var screen by mutableStateOf(VtScreen(80, 24))
-        private set
-    var screenRevision by mutableIntStateOf(0)
-        private set
+    val terminal = HostTerminal(
+        replies = { bytes ->
+            val id = openSessionID ?: return@HostTerminal
+            val active = link ?: return@HostTerminal
+            val text = bytes.toString(Charsets.UTF_8)
+            if (text.isEmpty()) return@HostTerminal
+            scope.launch { postWrite(active, id, text) }
+        },
+        onCopy = { text ->
+            val clipboard = appContext.getSystemService(ClipboardManager::class.java) ?: return@HostTerminal
+            clipboard.setPrimaryClip(ClipData.newPlainText("unpeel", text))
+        },
+    )
     var composer by mutableStateOf("")
     var busy by mutableStateOf(false)
         private set
@@ -195,8 +205,7 @@ class Controller(context: Context) {
         lastFitAttemptMs = 0L
         fitRejected = false
         desktopViewing = null
-        screen = VtScreen(80, 24)
-        screenRevision += 1
+        terminal.prepare(80, 24)
         artifacts = emptyList()
         artifactImage = null
         showGallery = false
@@ -261,7 +270,7 @@ class Controller(context: Context) {
                 if (phoneFitSession == sessionID && kotlin.math.abs(observedColumns - (phoneFitColumns ?: observedColumns)) > 2) {
                     phoneFitSession = null
                     phoneFitColumns = null
-                    if (screen.cols != observedColumns || screen.rows != observedRows) {
+                    if (terminal.columns != observedColumns || terminal.rows != observedRows) {
                         startOutput(sessionID, observedColumns, observedRows)
                     }
                 }
@@ -716,13 +725,13 @@ class Controller(context: Context) {
     private fun startOutput(sessionID: String, columns: Int? = null, rows: Int? = null) {
         outputJob?.cancel()
         if (columns != null && rows != null) {
-            screen.resize(columns, rows)
-            screenRevision += 1
+            terminal.prepare(columns, rows)
         }
         val preset = columns != null && rows != null
         outputJob = scope.launch {
             var offset: Long? = null
             var sized = preset
+            val queries = TerminalQueryFilter()
             while (openSessionID == sessionID) {
                 try {
                     val active = link()
@@ -731,8 +740,10 @@ class Controller(context: Context) {
                             JSONObject(active.get("metrics", mapOf("session_id" to sessionID)))
                         }.getOrNull()
                         if (metrics != null) {
-                            screen.resize(metrics.optInt("columns", 80), metrics.optInt("rows", 24))
-                            screenRevision += 1
+                            terminal.prepare(
+                                metrics.optInt("columns", 80).coerceIn(2, 300),
+                                metrics.optInt("rows", 24).coerceIn(2, 120),
+                            )
                         }
                         sized = true
                     }
@@ -742,16 +753,22 @@ class Controller(context: Context) {
                         "wait_ms" to if (offset == null) "0" else "8000",
                     )
                     if (offset != null) query["offset"] = offset.toString()
+                    val requested = offset
                     val chunk = BootstrapJson.outputChunk(
                         active.get("output", query, timeoutMs = if (offset == null) 10_000 else 14_000),
                     )
-                    if (offset == null) {
-                        screen.reset()
-                        chunk.modePreamble?.let { screen.feed(it) }
+                    // A fresh tail, or a journal that moved under us, is a new
+                    // screen. Queries are removed from every chunk: the Mac
+                    // terminal already answered them.
+                    val replay = requested == null || chunk.truncated || chunk.offset != requested
+                    if (replay) {
+                        queries.reset()
+                        terminal.prepare(terminal.columns, terminal.rows)
+                        chunk.modePreamble?.let { terminal.feed(it, live = false) }
                     }
-                    if (chunk.data.isNotEmpty()) screen.feed(chunk.data)
+                    val visible = queries.strip(chunk.data)
+                    if (visible.isNotEmpty()) terminal.feed(visible, live = !replay)
                     offset = chunk.nextOffset
-                    screenRevision += 1
                 } catch (_: Exception) {
                     link = null
                     delay(1_000)
