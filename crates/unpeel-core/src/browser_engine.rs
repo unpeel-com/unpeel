@@ -795,7 +795,18 @@ mod tests {
         assert!(done.load(Ordering::SeqCst));
         assert_eq!(path, binary_path(&home));
         assert_eq!(std::fs::read(&path).unwrap(), engine);
-        assert!(try_lock(&home).unwrap().is_some());
+        // The worker released the lock. Another test in this binary may fork
+        // a child while the worker's lock fd is open; the child shares that
+        // open file (and its flock) until it execs and O_CLOEXEC closes it,
+        // so allow that brief window instead of probing exactly once.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while try_lock(&home).unwrap().is_none() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "lock still held after the installer finished"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         let _ = std::fs::remove_dir_all(&home);
     }
 
