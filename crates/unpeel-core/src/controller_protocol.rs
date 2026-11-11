@@ -10,7 +10,7 @@
 use serde::{Deserialize, Serialize};
 
 pub const HOST_PROTOCOL_MAJOR: u16 = 1;
-pub const HOST_PROTOCOL_MINOR: u16 = 23;
+pub const HOST_PROTOCOL_MINOR: u16 = 24;
 
 pub const NATIVE_HOST_CAPABILITIES: &[&str] = &[
     "approval.answer",
@@ -27,6 +27,7 @@ pub const NATIVE_HOST_CAPABILITIES: &[&str] = &[
     "host.mobile.tls",
     "pairing.create",
     "pairing.invitation",
+    "project.name.set",
     "project.organization.set",
     "project.pin.set",
     "push.register",
@@ -80,6 +81,7 @@ pub const HEADLESS_HOST_CAPABILITIES: &[&str] = &[
     "host.mobile.tls",
     "pairing.create",
     "pairing.invitation",
+    "project.name.set",
     "project.organization.set",
     "project.pin.set",
     "session.create",

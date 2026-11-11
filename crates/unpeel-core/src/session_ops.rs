@@ -281,7 +281,7 @@ fn provider_transcript_has_resume_data(path: Option<&str>) -> bool {
 /// transcript or a real lifecycle event, or populated managed per-Session
 /// storage recorded by an older launch. A launch alone never qualifies.
 pub fn has_resume_evidence(manifest: &HostedSessionManifest) -> bool {
-    if !crate::resume::can_resume(&manifest.session.command) {
+    if !crate::resume::can_resume(&resume_base_command(manifest)) {
         return false;
     }
     if managed_storage_has_resume_data(manifest) {
@@ -1582,37 +1582,46 @@ pub fn set_session_order(project_id: &str, ids: &[String]) -> Result<(), String>
     Ok(())
 }
 
-/// Rename a shared-state plain group. Refuses project/worktree records so a
-/// stale caller can never rename a real project through the group verb.
-/// Persists through the app-state choke point (flock + state-bus announce).
-pub fn rename_group_project(project_id: &str, name: &str) -> Result<(), String> {
-    crate::app_state::edit(|state| {
-        let projects = state
-            .get_mut("projects")
-            .and_then(|value| value.as_array_mut())
-            .ok_or("app-state.json has no projects array")?;
-        let project = projects
-            .iter_mut()
-            .find(|project| project.get("id").and_then(|value| value.as_str()) == Some(project_id))
-            .ok_or("this group is managed by the desktop app — rename it there")?;
-        let is_group = project
-            .get("parent_project_id")
+/// Rename a plain group or a top-level project. A top-level project's
+/// `name` is its sidebar display name only; its `path` stays the identity,
+/// so sessions, worktrees and hooks are untouched (#24). Worktree children
+/// and nested non-group records are refused so a stale caller can never
+/// rename them through this verb. Persists through the app-state choke
+/// point (flock + state-bus announce).
+pub fn rename_project(project_id: &str, name: &str) -> Result<(), String> {
+    crate::app_state::edit(|state| rename_project_in(state, project_id, name))
+}
+
+fn rename_project_in(
+    state: &mut serde_json::Map<String, serde_json::Value>,
+    project_id: &str,
+    name: &str,
+) -> Result<(), String> {
+    let projects = state
+        .get_mut("projects")
+        .and_then(|value| value.as_array_mut())
+        .ok_or("app-state.json has no projects array")?;
+    let project = projects
+        .iter_mut()
+        .find(|project| project.get("id").and_then(|value| value.as_str()) == Some(project_id))
+        .ok_or("this project is managed by the desktop app — rename it there")?;
+    let parent = project
+        .get("parent_project_id")
+        .and_then(|value| value.as_str());
+    let is_group = parent.is_some()
+        && project
+            .get("is_folder")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+        && project
+            .get("worktree_branch")
             .and_then(|value| value.as_str())
-            .is_some()
-            && project
-                .get("is_folder")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false)
-            && project
-                .get("worktree_branch")
-                .and_then(|value| value.as_str())
-                .is_none();
-        if !is_group {
-            return Err("only plain groups can be renamed here".into());
-        }
-        project["name"] = serde_json::Value::String(name.to_string());
-        Ok(())
-    })
+            .is_none();
+    if !is_group && parent.is_some() {
+        return Err("only plain groups and top-level projects can be renamed here".into());
+    }
+    project["name"] = serde_json::Value::String(name.to_string());
+    Ok(())
 }
 
 /// Whether this group's sidebar sessions use the shared Recent order
@@ -2269,14 +2278,72 @@ pub fn relaunch_command(session_id: &str, mode: RelaunchMode) -> Result<String, 
         .or(old.provider_session_id.clone());
     let relaunch = match mode {
         RelaunchMode::Restart { force_fresh } => {
-            if force_fresh || !old.has_been_written_to {
+            if force_fresh {
                 crate::resume::fresh(&old.session.command)
+            } else if !old.has_been_written_to {
+                // Nothing happened since this launch, so relaunch it exactly:
+                // a replacement that already resumes a conversation
+                // (`claude --resume <id>`) must keep it, and a plain launch
+                // must not pick up some other conversation's continue-last.
+                old.session.command.clone()
             } else {
-                crate::resume::resumed(&old.session.command, provider_id.as_deref())
+                crate::resume::resumed(&resume_base_command(&old), provider_id.as_deref())
             }
         }
     };
     Ok(relaunch)
+}
+
+/// The launch a replacement Resume works from. A preset Session resumes its
+/// own command. A blank terminal where the user hand-typed an agent resumes
+/// the runtime its integration's hooks captured (`provider_runtime`), unless
+/// the Host proved that agent handed the PTY back to the owned shell after
+/// its last hook event (`agent_returned_to_shell_at`): an agent the user quit
+/// stays quit, and the shell comes back. A different agent observed in the
+/// foreground never inherits the captured conversation.
+fn resume_base_command(manifest: &HostedSessionManifest) -> String {
+    resume_base_command_at(&session_dir(&manifest.session.id), manifest)
+}
+
+fn resume_base_command_at(dir: &Path, manifest: &HostedSessionManifest) -> String {
+    let command = &manifest.session.command;
+    if !command.trim().is_empty() {
+        return command.clone();
+    }
+    let Some(captured) = provider_session_runtime_at(dir)
+        .and_then(|captured| crate::integrations::runtime_for_dispatch(&captured))
+    else {
+        return String::new();
+    };
+    let foreground = manifest
+        .runtime
+        .as_ref()
+        .and_then(|runtime| runtime.current_observation.as_ref())
+        .map(|observation| crate::integrations::runtime_for_dispatch(&observation.runtime_id));
+    let agent_is_current = match foreground {
+        Some(foreground) => {
+            foreground.is_some_and(|foreground| foreground.legacy_slug == captured.legacy_slug)
+        }
+        None => manifest
+            .agent_returned_to_shell_at
+            .is_none_or(|returned_at| last_hook_event_at(dir).is_some_and(|at| at > returned_at)),
+    };
+    if !agent_is_current {
+        return String::new();
+    }
+    captured
+        .detection
+        .command_aliases
+        .first()
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn last_hook_event_at(dir: &Path) -> Option<u64> {
+    let modified = std::fs::metadata(dir.join("last-hook-event.json"))
+        .and_then(|metadata| metadata.modified())
+        .ok()?;
+    Some(modified.duration_since(UNIX_EPOCH).ok()?.as_millis() as u64)
 }
 
 /// Legacy spelling retained for local/API compatibility. Current protocol-v3
@@ -2573,11 +2640,36 @@ mod tests {
         browser_mcp_enabled_from_app_state, initial_text_payload, legacy_pinned_group_id,
         lifecycle_lock_target_at, merge_project_sibling_order, mixed_session_order_from,
         prepare_legacy_pin_groups, provider_transcript_has_resume_data,
-        remove_migrated_pin_entries, remove_unreferenced_legacy_pin_groups,
+        remove_migrated_pin_entries, remove_unreferenced_legacy_pin_groups, rename_project_in,
         rewrite_app_state_session_references, rewrite_session_order_references_at,
         rewrite_session_order_value, set_group_pinned_in_state,
         validate_session_order_references_at, InitialTextSubmitMode,
     };
+
+    #[test]
+    fn rename_sets_a_top_level_or_group_name_and_refuses_worktree_children() {
+        let serde_json::Value::Object(mut state) = serde_json::json!({ "projects": [
+            { "id": "p1", "name": "client-acme-api", "path": "/src/client-acme-api" },
+            { "id": "g1", "name": "Backlog", "path": "/src/client-acme-api",
+              "parent_project_id": "p1", "is_folder": true },
+            { "id": "w1", "name": "feature", "path": "/wt/feature",
+              "parent_project_id": "p1", "worktree_branch": "feature" },
+        ]}) else {
+            unreachable!()
+        };
+        rename_project_in(&mut state, "p1", "API").unwrap();
+        rename_project_in(&mut state, "g1", "Later").unwrap();
+        assert!(rename_project_in(&mut state, "w1", "x").is_err());
+        assert!(rename_project_in(&mut state, "missing", "x").is_err());
+        let projects = state["projects"].as_array().unwrap();
+        assert_eq!(projects[0]["name"], "API");
+        assert_eq!(
+            projects[0]["path"], "/src/client-acme-api",
+            "path is the identity"
+        );
+        assert_eq!(projects[1]["name"], "Later");
+        assert_eq!(projects[2]["name"], "feature");
+    }
 
     #[test]
     fn project_folder_color_round_trips_through_app_state() {
@@ -2626,6 +2718,58 @@ mod tests {
         assert!(!super::dir_holds_a_file(&artifacts, 8));
         std::fs::write(artifacts.join("browser/downloads/shot.png"), b"png").unwrap();
         assert!(super::dir_holds_a_file(&artifacts, 8));
+    }
+
+    #[test]
+    fn blank_terminal_resumes_a_hand_typed_agent_unless_it_was_quit_to_the_shell() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = |command: &str, foreground: Option<&str>, returned_at: Option<u64>| {
+            let mut value = serde_json::json!({
+                "session": {
+                    "id": "s1", "project_id": "p1", "label": "t",
+                    "command": command, "created_at": 1
+                },
+                "cwd": "/tmp", "state": "exited", "pid": null,
+                "created_at": 1, "heartbeat_at": 1, "updated_at": 1,
+                "agent_returned_to_shell_at": returned_at
+            });
+            if let Some(id) = foreground {
+                value["runtime"] = serde_json::json!({"currentObservation": {
+                    "id": id, "pid": 51, "processGroupId": 51, "processName": id
+                }});
+            }
+            serde_json::from_value::<super::HostedSessionManifest>(value).unwrap()
+        };
+        let base = |m: &super::HostedSessionManifest| super::resume_base_command_at(dir.path(), m);
+        let id = "86d3ddc7-fc7c-4202-bdd7-6fe747598ab6";
+        // No capture yet: a blank terminal stays a plain shell.
+        assert_eq!(base(&manifest("", Some("claude"), None)), "");
+        super::set_provider_session_at(dir.path(), Some(id), None, Some("claude")).unwrap();
+        std::fs::write(
+            dir.path().join("last-hook-event.json"),
+            br#"{"hook_event_name":"Stop"}"#,
+        )
+        .unwrap();
+        let hook_at = super::last_hook_event_at(dir.path()).unwrap();
+
+        // The Session died under a live Claude (the observation may already
+        // have timed out): resume the captured conversation.
+        for m in [manifest("", Some("claude"), None), manifest("", None, None)] {
+            let command = base(&m);
+            assert!(crate::resume::can_resume(&command), "{command:?}");
+            assert_eq!(
+                crate::resume::resumed(&command, Some(id)),
+                format!("claude --resume '{id}'")
+            );
+        }
+        // The user quit Claude back to the shell: the shell comes back...
+        assert_eq!(base(&manifest("", None, Some(hook_at + 1_000))), "");
+        // ...until Claude speaks again after that return.
+        assert_eq!(base(&manifest("", None, Some(hook_at - 1_000))), "claude");
+        // A different agent in the foreground never inherits Claude's id.
+        assert_eq!(base(&manifest("", Some("codex"), None)), "");
+        // A preset's own launch always wins over the capture.
+        assert_eq!(base(&manifest("codex --yolo", None, None)), "codex --yolo");
     }
 
     #[test]

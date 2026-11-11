@@ -2,13 +2,21 @@
   "schemaVersion": 1,
   "protocol": {
     "major": 1,
-    "minor": 23,
+    "minor": 24,
     "compatibility": {
       "major": "must-match",
       "minor": "additive",
       "unknownCapabilities": "ignore"
     },
     "history": [
+      {
+        "minor": 24,
+        "release": "0.7.8",
+        "summary": "A top-level project's sidebar name can be set through `project.organization.set` `displayName`, not only a group's. The path stays the project identity; the name is display only.",
+        "capabilities": [
+          "project.name.set"
+        ]
+      },
       {
         "minor": 23,
         "release": "0.7.5",
@@ -190,6 +198,13 @@
       "id": "pairing.invitation",
       "method": "POST",
       "path": "/mobile/pairing-invitation",
+      "native": true,
+      "tui": true
+    },
+    {
+      "id": "project.name.set",
+      "method": "POST",
+      "path": "/mobile/project-organization#displayName",
       "native": true,
       "tui": true
     },

@@ -194,7 +194,10 @@ final class ProjectWorkspaceMoveTests: XCTestCase {
         XCTAssertTrue(sessionExists(home: source, id: "shared"))
     }
 
-    func testMovesRunningSessionDirWithoutStopping() throws {
+    /// The move itself is a plain rename. Stopping live Sessions first is the
+    /// caller's job (`UnpeelStore.moveProjectToLocalWorkspace`, #32);
+    /// `liveSessionIDs` is what it checks.
+    func testMoveRenamesARunningSessionDirAndReportsItLive() throws {
         let source = root.appendingPathComponent("source", isDirectory: true)
         let dest = root.appendingPathComponent("dest", isDirectory: true)
         try writeAppState(at: source, object: [
@@ -226,6 +229,29 @@ final class ProjectWorkspaceMoveTests: XCTestCase {
             )
         ) as? [String: Any]
         XCTAssertEqual(manifest?["state"] as? String, "running")
+    }
+
+    func testWaitUntilStoppedReturnsOnceEverySessionStops() async {
+        var stopsAt = ["a": 2, "b": 4]
+        let remaining = await ProjectWorkspaceMove.waitUntilStopped(
+            ["a", "b", "done"],
+            timeout: .seconds(5),
+            pollInterval: .milliseconds(1)
+        ) { id in
+            guard let left = stopsAt[id] else { return false }
+            stopsAt[id] = left - 1
+            return left > 0
+        }
+        XCTAssertEqual(remaining, [])
+    }
+
+    func testWaitUntilStoppedReportsSessionsStillLiveAtTheDeadline() async {
+        let remaining = await ProjectWorkspaceMove.waitUntilStopped(
+            ["stuck", "gone"],
+            timeout: .milliseconds(30),
+            pollInterval: .milliseconds(5)
+        ) { $0 == "stuck" }
+        XCTAssertEqual(remaining, ["stuck"])
     }
 
     func testCollectsChildGroupsAndWorktrees() {

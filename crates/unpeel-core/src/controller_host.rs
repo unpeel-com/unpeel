@@ -794,8 +794,14 @@ pub fn project_organization_response(
         .get("isGroup")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    if display_name.is_some() && !is_group {
-        return (400, error("Only groups can be renamed remotely"));
+    // Groups and top-level projects carry a sidebar name; a path-backed
+    // project's name is display only (the path stays its identity, #24).
+    // Worktree children are renamed through their branch instead.
+    if display_name.is_some() && !is_group && parent_id.is_some() {
+        return (
+            400,
+            error("Only groups and top-level projects can be renamed remotely"),
+        );
     }
     if pinned.is_some() && !is_group {
         return (400, error("Only groups can be pinned remotely"));
@@ -832,7 +838,7 @@ pub fn project_organization_response(
     // The group/non-group split was already answered from the wire catalog
     // above, so a failure here is broken shared state or IO, not validation.
     if let Some(name) = display_name {
-        if let Err(e) = crate::session_ops::rename_group_project(project_id, &name) {
+        if let Err(e) = crate::session_ops::rename_project(project_id, &name) {
             return (
                 500,
                 error(&format!("organization rename preflight failed: {e}")),
@@ -2674,6 +2680,7 @@ mod tests {
             runtime_launch_generation: 1,
             runtime_launch_pending: false,
             runtime_launched_at: Some(1),
+            agent_returned_to_shell_at: None,
             runtime_launch_output_offset: 0,
             mcp_enabled: None,
             browser_mcp_enabled: None,
@@ -3097,6 +3104,10 @@ mod tests {
                 "id": "g1", "name": "Backlog", "path": "/tmp/one",
                 "parentProjectID": "p1", "isGroup": true, "sortOrder": 1
             }),
+            json!({
+                "id": "w1", "name": "feature", "path": "/tmp/one-feature",
+                "parentProjectID": "p1", "sortOrder": 2
+            }),
         ];
         let case = |body: Value| project_organization_response(&body, &projects, None).0;
 
@@ -3132,9 +3143,9 @@ mod tests {
             "legacy folder moves are rejected, never silently ignored"
         );
         assert_eq!(
-            case(json!({ "projectID": "p1", "displayName": "New name" })),
+            case(json!({ "projectID": "w1", "displayName": "New name" })),
             400,
-            "only groups rename remotely"
+            "worktree children are not renamed through displayName"
         );
         assert_eq!(
             case(json!({ "projectID": "p1", "pinned": true })),

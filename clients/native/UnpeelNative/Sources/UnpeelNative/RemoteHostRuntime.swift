@@ -3253,7 +3253,9 @@ final class RemoteHostRuntime: ObservableObject {
         }
     }
 
-    private func requestMarkReadIfNeeded(_ sessionID: String) {
+    /// Mark-read only while the Host still reports the row unread and no
+    /// earlier mark-read for it is awaiting its snapshot or has failed.
+    func requestMarkReadIfNeeded(_ sessionID: String) {
         guard snapshot?.sessions.first(where: { $0.id == sessionID })?.unread == true,
               !markReadAwaitingSnapshotClearSessionIDs.contains(sessionID),
               !failedAutomaticMarkReadSessionIDs.contains(sessionID)
@@ -3449,6 +3451,7 @@ extension RemoteHostRuntime {
         static let create = "session.create"
         static let orderSet = "session.order.set"
         static let projectOrganizationSet = "project.organization.set"
+        static let projectNameSet = "project.name.set"
         static let projectPinSet = "project.pin.set"
         static let presetsSet = RemoteControlProtocol.presetsSetCapability
         static let workspaceSettingsSet = RemoteControlProtocol.workspaceSettingsSetCapability

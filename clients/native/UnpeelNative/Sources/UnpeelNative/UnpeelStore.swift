@@ -302,6 +302,10 @@ final class UnpeelStore: ObservableObject {
                     if recentActivityVisible { recentActivityVisible = false }
                     if remoteHostRuntime.selectedSessionID != id {
                         remoteHostRuntime.selectSession(id)
+                    } else {
+                        // Re-landing on the already-selected row (its
+                        // notification, the activity menu) is still a look.
+                        clearObservedHostUnreadIfNeeded()
                     }
                 }
                 // The title-strip branch is not local-host bookkeeping: a
@@ -1443,6 +1447,11 @@ final class UnpeelStore: ObservableObject {
     /// unread when they settle (sessionUnread.ts pendingUnreadSessions).
     private var pendingUnreadSessions: Set<String> = []
 
+    /// Host-reported unread rows this app already sent a read receipt for
+    /// while observing them. Pruned when the Host republishes them as read,
+    /// so one unread episode costs one receipt, never one per refresh.
+    private var observedHostUnreadReceiptIDs: Set<String> = []
+
     /// Sessions whose current `menu_prompt_active` flag the user dismissed
     /// ("Clear attention" in the sidebar context menu). The host's flag is
     /// level-held while the detected menu stays on screen, so a plain clear
@@ -1747,8 +1756,7 @@ final class UnpeelStore: ObservableObject {
                 self.projectRemoteScope(snapshot: snapshot)
                 // A remote Host's advertised tint (hostTintHue) arrives with
                 // its bootstrap, after the scope switch — repaint when it does.
-                self.applyScopeTint()
-                self.refreshScopeAppearance()
+                self.applyScopeAppearanceIfChanged()
             }
             .store(in: &remoteScopeCancellables)
         remoteHostRuntime.$selectedSessionID
@@ -4262,6 +4270,14 @@ final class UnpeelStore: ObservableObject {
     /// scoping to another workspace repaints to its color and returning to
     /// Local restores ours. Display-only — never persists `appTint`.
     func applyScopeTint() {
+        // A direct repaint (scope switch, Settings) may change what the
+        // snapshot gate last saw; forget it so the next snapshot compares
+        // against the current look rather than a stale one.
+        lastSnapshotScopeAppearance = nil
+        animateScopeTint()
+    }
+
+    private func animateScopeTint() {
         // 0.5s settle: a swipe commit's wash is deliberately partial at the
         // commit point (scrubWash trails the fingers at ~60% blend), so the
         // remaining color arrival is felt here, AFTER the switch, not
@@ -4271,6 +4287,37 @@ final class UnpeelStore: ObservableObject {
         ) { [weak self] in
             self?.objectWillChange.send()
         }
+    }
+
+    /// What the snapshot-driven scope repaint resolves from. Snapshots land
+    /// every poll while agents work; repainting each time re-ran a 0.5s tint
+    /// animation, two full terminal-surface restyles, and an appearance-file
+    /// write even when nothing about the scope's look had changed.
+    private struct ScopeAppearanceInputs: Equatable {
+        let scope: SelectedHostScope
+        let tintHue: Double?
+        let theme: ThemePreference
+        let remoteAppearance: RemoteAppearanceSettings?
+    }
+
+    private var lastSnapshotScopeAppearance: ScopeAppearanceInputs?
+
+    private func applyScopeAppearanceIfChanged() {
+        var remoteAppearance: RemoteAppearanceSettings?
+        if case .remote = selectedHostScope {
+            remoteAppearance = remoteHostRuntime.snapshot?.workspaceSettings?
+                .appearanceSettings
+        }
+        let inputs = ScopeAppearanceInputs(
+            scope: selectedHostScope,
+            tintHue: effectiveScopeTintHue(),
+            theme: scopeThemePreference(),
+            remoteAppearance: remoteAppearance
+        )
+        guard inputs != lastSnapshotScopeAppearance else { return }
+        lastSnapshotScopeAppearance = inputs
+        animateScopeTint()
+        refreshScopeAppearance()
     }
 
     private func effectiveScopeTintHue() -> Double? {
@@ -5168,7 +5215,73 @@ final class UnpeelStore: ObservableObject {
         // only if reconciliation actually changes unread membership; the
         // rescan path still requests a full status snapshot below.
         reconcileUnread(persistSessionStates: false)
+        if let observedSessionID {
+            // A deliberate look always earns a fresh receipt attempt.
+            observedHostUnreadReceiptIDs.remove(observedSessionID)
+        }
+        clearObservedHostUnreadIfNeeded()
         refreshTitlebarBranch()
+    }
+
+    /// Host truth can mark the row on screen unread without any observation
+    /// edge: a Session that settles while its row is already selected (app
+    /// in the background, then brought forward or reached through its
+    /// notification), or a late child finish that advances the lifecycle
+    /// clock past an earlier receipt. The local reconciliation above only
+    /// runs on observation changes and trusts its own clock, so without this
+    /// the dot stayed until something else (opening Settings) re-observed
+    /// the row. Runs on every observation change and Host projection.
+    private func clearObservedHostUnreadIfNeeded() {
+        guard displaysHostProjection,
+              let sessionID = observedSessionID,
+              remoteSummary(for: sessionID)?.unread == true
+        else { return }
+        if selectedHostScope == .local {
+            guard observedHostUnreadReceiptIDs.insert(sessionID).inserted else { return }
+            // The Host already judged the row unread against its own clock;
+            // don't let the local estimate veto the receipt.
+            removeUnread(sessionID, forceReceipt: true)
+        } else {
+            remoteHostRuntime.requestMarkReadIfNeeded(sessionID)
+        }
+    }
+
+    /// "Mark all read" in the activity dropdowns: clears every Done row this
+    /// app can write a receipt for. The foreground workspace goes through
+    /// its own Host (mark-read verb or shared receipt); this instance's
+    /// Local workspace takes a shared receipt even while another scope is
+    /// selected. Other pooled workspaces are read-only background
+    /// connections by design, so their rows clear when visited.
+    func markActivityItemsRead(_ items: [GlobalActivityMenuItem]) {
+        for item in items {
+            switch activityReadRoute(for: item.workspaceKey) {
+            case .foregroundHost:
+                remoteHostRuntime.requestMarkReadIfNeeded(item.session.sessionID)
+            case .localReceipt:
+                removeUnread(item.session.sessionID, forceReceipt: true)
+            case nil:
+                continue
+            }
+        }
+    }
+
+    /// Whether `markActivityItemsRead` can clear at least one of `items`.
+    func canMarkActivityItemsRead(_ items: [GlobalActivityMenuItem]) -> Bool {
+        items.contains { activityReadRoute(for: $0.workspaceKey) != nil }
+    }
+
+    private enum ActivityReadRoute { case foregroundHost, localReceipt }
+
+    private func activityReadRoute(for workspaceKey: String) -> ActivityReadRoute? {
+        if selectedHostScope != .local, workspaceKey == workspacePoolForegroundKey() {
+            return .foregroundHost
+        }
+        if workspaceKey == WorkspaceListOrder.localKey(
+            home: Self.currentInstanceNormalizedHome()
+        ) {
+            return .localReceipt
+        }
+        return nil
     }
 
     private func reconcileUnread(persistSessionStates: Bool = true) {
@@ -5515,7 +5628,7 @@ final class UnpeelStore: ObservableObject {
         qos: .utility
     )
 
-    private func removeUnread(_ sessionID: String) {
+    private func removeUnread(_ sessionID: String, forceReceipt: Bool = false) {
         // The visible state is entirely in memory, so clear it synchronously.
         // The shared receipt requires several filesystem reads (and sometimes
         // an atomic write); doing those in a sidebar click handler made even a
@@ -5542,7 +5655,8 @@ final class UnpeelStore: ObservableObject {
                 ),
                 alertAt: alertAt
             )
-            if Self.sharedReadReceiptNeedsRefresh(readAt: readAt, settledAt: settledAt),
+            if forceReceipt
+                || Self.sharedReadReceiptNeedsRefresh(readAt: readAt, settledAt: settledAt),
                Self.writeSharedMarker(
                    sessionID,
                    .read,
@@ -10163,8 +10277,12 @@ final class UnpeelStore: ObservableObject {
     }
 
     /// Move the project record and its session dirs into another local
-    /// workspace on this Mac. Live hosts keep running — the session dir
-    /// is renamed, not copied.
+    /// workspace on this Mac. Every Session in the subtree must be stopped
+    /// first: Sessions are threads of the source workspace's PTY core, which
+    /// resolves their files under its own home, so a live Session renamed
+    /// into another home is stranded (#32). Live ones are offered "Stop and
+    /// Move" (the ordinary stop verb — rows stay resumable) and the move
+    /// waits until the Host reports them stopped.
     func moveProjectToLocalWorkspace(projectID: String, dest: WorkspaceMoveTarget) {
         guard selectedHostScope.isLocalMachine,
               let sourceHome = scopedLocalUnpeelDir,
@@ -10187,6 +10305,41 @@ final class UnpeelStore: ObservableObject {
         Task { @MainActor [weak self] in
             guard let self else { return }
             defer { self.projectWorkspaceMoveInFlight = false }
+
+            let live = ProjectWorkspaceMove.liveSessionIDs(projectID: projectID, in: sourceHome)
+            if !live.isEmpty {
+                guard Self.confirmStopAndMove(
+                    projectName: project.name,
+                    workspaceName: dest.name,
+                    liveCount: live.count
+                ) else { return }
+                let runtime = self.remoteHostRuntime
+                do {
+                    for sessionID in live {
+                        try await runtime.stopSession(sessionID)
+                    }
+                } catch {
+                    Self.showErrorAlert(
+                        title: "Couldn't stop the sessions",
+                        message: ((error as? RemoteHostVerbError)?.message
+                            ?? error.localizedDescription)
+                            + "\n\nNothing was moved."
+                    )
+                    return
+                }
+                let stillLive = await ProjectWorkspaceMove.waitUntilStopped(live) { sessionID in
+                    ProjectWorkspaceMove.sessionIsLive(home: sourceHome, sessionID: sessionID)
+                }
+                guard stillLive.isEmpty else {
+                    Self.showErrorAlert(
+                        title: "Couldn't move project",
+                        message: stillLive.count == 1
+                            ? "A session is still running. Nothing was moved."
+                            : "\(stillLive.count) sessions are still running. Nothing was moved."
+                    )
+                    return
+                }
+            }
 
             let outcome: ProjectWorkspaceMove.Outcome
             do {
@@ -11144,6 +11297,96 @@ final class UnpeelStore: ObservableObject {
         return projectID ?? projectsByID.values.first {
             URL(fileURLWithPath: $0.path).resolvingSymlinksInPath().path == canonicalPath
         }?.id
+    }
+
+    /// Whether a top-level project's sidebar name can be set in this scope:
+    /// Host-served projects need a Host that advertises `project.name.set`
+    /// (older Hosts reject the rename); the launch-time local fallback edits
+    /// the local records directly.
+    func canRenameTopLevelProject(_ projectID: String) -> Bool {
+        if routesProjectVerbThroughHost(projectID) {
+            return remoteHostRuntime.supportsHostOperation(
+                RemoteHostRuntime.HostOperation.projectNameSet
+            )
+        }
+        return selectedHostScope == .local
+    }
+
+    /// Set a top-level project's sidebar display name (#24). The folder on
+    /// disk and the project's path — its identity — never change; blank
+    /// falls back to the folder name.
+    func promptRenameProject(_ projectID: String) {
+        guard let project = displayProjectsByID[projectID] ?? projectsByID[projectID],
+              project.parentProjectID == nil
+        else { return }
+        let folderName = Self.projectFolderName(project.path)
+        let alert = NSAlert()
+        alert.messageText = "Rename project"
+        alert.informativeText = """
+        This changes the name shown in Unpeel. The folder stays         "\(folderName)". Leave it empty to use the folder name.
+        """
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        field.stringValue = project.name
+        field.placeholderString = folderName
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        renameTopLevelProject(projectID, to: field.stringValue)
+    }
+
+    nonisolated static func projectFolderName(_ path: String) -> String {
+        let name = URL(fileURLWithPath: path).lastPathComponent
+        return name.isEmpty || name == "/" ? path : name
+    }
+
+    /// The name a rename request resolves to: trimmed, or the folder name
+    /// when blank.
+    nonisolated static func resolvedProjectDisplayName(_ rawName: String, path: String) -> String {
+        let trimmed = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? projectFolderName(path) : trimmed
+    }
+
+    @discardableResult
+    func renameTopLevelProject(_ projectID: String, to rawName: String) -> Bool {
+        guard let project = displayProjectsByID[projectID] ?? projectsByID[projectID],
+              project.parentProjectID == nil
+        else { return false }
+        let name = Self.resolvedProjectDisplayName(rawName, path: project.path)
+        guard name != project.name else { return false }
+        if routesProjectVerbThroughHost(projectID) {
+            guard remoteHostRuntime.supportsHostOperation(
+                RemoteHostRuntime.HostOperation.projectNameSet
+            ) else { return false }
+            performRemoteVerb("Couldn't rename the project") { [weak self] runtime in
+                try await runtime.renameProjectGroup(projectID: projectID, displayName: name)
+                // The Host wrote app-state.json; keep the native record in
+                // step so no later mirror or relaunch reverts it.
+                self?.recordHostRenamedNativeProject(projectID, name: name)
+            }
+            return true
+        }
+        guard selectedHostScope == .local else { return false }
+        var records = loadNativeProjects()
+        if let index = records.firstIndex(where: { $0.id == projectID }) {
+            records[index].name = name
+            guard let data = try? JSONEncoder().encode(records) else { return false }
+            AppDefaults.shared.set(data, forKey: Self.nativeProjectsKey)
+            mirrorProjectsToSharedState()
+        } else {
+            let changed = editPresetStateAnnouncing { object in
+                var projects = (object["projects"] as? [[String: Any]]) ?? []
+                guard let index = projects.firstIndex(where: {
+                    ($0["id"] as? String) == projectID && $0["parent_project_id"] == nil
+                }) else { return }
+                projects[index]["name"] = name
+                object["projects"] = projects
+            }
+            guard changed else { return false }
+        }
+        rescan()
+        return true
     }
 
     /// Rename the Unpeel worktree project. This deliberately does not rename
@@ -12923,6 +13166,24 @@ final class UnpeelStore: ObservableObject {
                 }
             }
         }
+    }
+
+    private static func confirmStopAndMove(
+        projectName: String,
+        workspaceName: String,
+        liveCount: Int
+    ) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = liveCount == 1
+            ? "Stop 1 running session and move \"\(projectName)\"?"
+            : "Stop \(liveCount) running sessions and move \"\(projectName)\"?"
+        alert.informativeText = """
+        Running sessions can't move between workspaces. They stop first and \
+        keep their rows, so you can resume agents in \(workspaceName).
+        """
+        alert.addButton(withTitle: "Stop and Move")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     private static func confirmForceRemoveWorktree(name: String, branch: String) -> Bool {
@@ -15744,6 +16005,10 @@ extension UnpeelStore {
                 remoteHostRuntime.selectDirectDataPlaneSession(selectedSessionID)
             }
         }
+        observedHostUnreadReceiptIDs = observedHostUnreadReceiptIDs.filter {
+            remoteSummariesByID[$0]?.unread == true
+        }
+        clearObservedHostUnreadIfNeeded()
         refreshTitlebarBranch()
     }
 

@@ -368,7 +368,9 @@ struct RootView: View {
                 // are still all present in the dropdown itself.
                 onShowAll: store.selectedHostScope == .local
                     ? { store.openRecentActivity() }
-                    : nil
+                    : nil,
+                canMarkAllRead: { store.canMarkActivityItemsRead($0) },
+                onMarkAllRead: { store.markActivityItemsRead($0) }
             )
 
             if store.selectedHostScope == .local {
@@ -769,6 +771,8 @@ struct TitlebarActivityMenuButton: View {
     let onSelect: (GlobalActivityMenuItem) -> Void
     /// Footer link: opens the app-wide "All recent" page.
     let onShowAll: (() -> Void)?
+    let canMarkAllRead: ([GlobalActivityMenuItem]) -> Bool
+    let onMarkAllRead: ([GlobalActivityMenuItem]) -> Void
 
     @State private var hovering = false
     @State private var showing = false
@@ -826,7 +830,10 @@ struct TitlebarActivityMenuButton: View {
                 onShowAll: onShowAll.map { action in {
                     showing = false
                     action()
-                } }
+                } },
+                onMarkAllRead: canMarkAllRead(activity.finished)
+                    ? { onMarkAllRead(activity.finished) }
+                    : nil
             )
             .padding(6)
             .frame(width: 360)
@@ -852,6 +859,9 @@ struct ActivityMenuList: View {
     let onSelect: (GlobalActivityMenuItem) -> Void
     /// Footer link to the app-wide "All recent" page.
     let onShowAll: (() -> Void)?
+    /// Footer action clearing the Done group; nil when no Done row is
+    /// clearable from here (the row is hidden too while Done is empty).
+    var onMarkAllRead: (() -> Void)? = nil
 
     private var rowCount: Int { jobs.count + blockers.count + finished.count }
 
@@ -905,8 +915,19 @@ struct ActivityMenuList: View {
                 }
             }
             .frame(height: scrollHeight)
+            if let onMarkAllRead, !finished.isEmpty {
+                ActivityMenuFooterRow(
+                    title: "Mark all as read",
+                    systemImage: "checkmark",
+                    onSelect: onMarkAllRead
+                )
+            }
             if let onShowAll {
-                AllRecentMenuRow(onSelect: onShowAll)
+                ActivityMenuFooterRow(
+                    title: "All recent",
+                    systemImage: "chevron.right",
+                    onSelect: onShowAll
+                )
             }
         }
     }
@@ -932,10 +953,13 @@ struct ActivityMenuList: View {
     }
 }
 
-/// Footer row of the activity dropdowns: opens the app-wide "All recent"
-/// history page. Always present, even when nothing is active or unread —
-/// this is the bell's guaranteed path to history.
-private struct AllRecentMenuRow: View {
+/// Footer row of the activity dropdowns. "All recent" opens the app-wide
+/// history page and is always present, even when nothing is active or
+/// unread — the bell's guaranteed path to history. "Mark all as read"
+/// clears the Done group while it has rows.
+private struct ActivityMenuFooterRow: View {
+    let title: String
+    let systemImage: String
     let onSelect: () -> Void
 
     @State private var hovering = false
@@ -943,11 +967,11 @@ private struct AllRecentMenuRow: View {
     var body: some View {
         Button(action: onSelect) {
             HStack(spacing: 8) {
-                Text(L10n.t("All recent"))
+                Text(L10n.t(title))
                     .font(.system(size: 13))
                     .foregroundStyle(hovering ? Theme.foreground : Theme.mutedForeground)
                 Spacer(minLength: 0)
-                Image(systemName: "chevron.right")
+                Image(systemName: systemImage)
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(Theme.mutedForeground)
             }

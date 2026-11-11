@@ -687,6 +687,16 @@ mod tests {
         let lock = mutation_lock(home.path()).unwrap();
         assert!(mutation_lock(home.path()).is_err());
         drop(lock);
-        assert!(mutation_lock(home.path()).is_ok());
+        // Another test in this binary may fork while the lock fd is open;
+        // the child shares that flock until it execs (O_CLOEXEC), so allow
+        // that brief window instead of probing exactly once.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while mutation_lock(home.path()).is_err() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "lock still held after it was dropped"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 }
