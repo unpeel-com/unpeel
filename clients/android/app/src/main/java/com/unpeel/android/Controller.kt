@@ -19,6 +19,7 @@ import com.unpeel.controller.acceptPairingResponse
 import com.unpeel.controller.TerminalInput
 import com.unpeel.controller.TerminalQueryFilter
 import com.unpeel.controller.b64d
+import com.unpeel.controller.sha256Hex
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -346,28 +347,6 @@ class Controller(context: Context) {
         }
     }
 
-    fun sendKey(name: String) {
-        sendModifiedKey(name, ctrl = false)
-    }
-
-    fun sendModifiedKey(name: String, ctrl: Boolean) {
-        val id = openSessionID ?: return
-        val data = if (!ctrl) {
-            TerminalInput.key(name)
-        } else {
-            when (name) {
-                "arrowUp" -> "\u001b[1;5A"
-                "arrowDown" -> "\u001b[1;5B"
-                "arrowRight" -> "\u001b[1;5C"
-                "arrowLeft" -> "\u001b[1;5D"
-                "tab" -> "\u001b[27;5;9~"
-                "escape" -> "\u001b[27;5;27~"
-                else -> TerminalInput.key(name)
-            }
-        }
-        if (data.isNotEmpty()) write(id, data)
-    }
-
     fun sendRaw(text: String) {
         val id = openSessionID ?: return
         if (text.isEmpty()) return
@@ -376,28 +355,88 @@ class Controller(context: Context) {
 
     /** Upload a JPEG and paste its quoted Host path. Does not submit. */
     fun attachImage(jpeg: ByteArray) {
+        uploadAndPaste(jpeg, "image/jpeg", filename = null, failure = "图片上传失败")
+    }
+
+    /** Upload any other file and paste its quoted Host path. Does not submit. */
+    fun attachFile(bytes: ByteArray, filename: String) {
+        uploadAndPaste(bytes, "application/octet-stream", sanitizeUploadName(filename), "文件上传失败")
+    }
+
+    private fun uploadAndPaste(bytes: ByteArray, contentType: String, filename: String?, failure: String) {
         val id = openSessionID ?: return
-        if (jpeg.isEmpty()) return
+        if (bytes.isEmpty()) {
+            error = failure
+            return
+        }
+        val limit = if (filename == null) 4 * 1024 * 1024 else 64 * 1024 * 1024
+        if (bytes.size > limit) {
+            error = if (filename == null) "图片超过 4 MB" else "文件超过 64 MB"
+            return
+        }
         scope.launch {
             busy = true
             try {
-                val body = link().postBinary(
-                    "upload",
-                    mapOf("session_id" to id),
-                    "image/jpeg",
-                    jpeg,
-                    30_000,
-                )
-                val path = JSONObject(body).optString("path")
-                if (path.isEmpty() || !path.startsWith("/")) throw HostException(0, "上传没有返回路径")
+                val path = uploadChunks(id, bytes, contentType, filename)
                 val quoted = "'" + path.replace("'", "'\\''") + "' "
                 write(id, TerminalInput.paste(quoted))
             } catch (caught: Exception) {
-                error = caught.message ?: "图片上传失败"
+                error = caught.message ?: failure
             } finally {
                 busy = false
             }
         }
+    }
+
+    private suspend fun uploadChunks(
+        sessionID: String,
+        bytes: ByteArray,
+        contentType: String,
+        filename: String?,
+    ): String {
+        val uploadID = UUID.randomUUID().toString()
+        val digest = sha256Hex(bytes)
+        val total = bytes.size.toString()
+        val route = if (filename == null) "upload-chunk" else "file-upload-chunk"
+        var offset = 0
+        var path = ""
+        while (offset < bytes.size) {
+            val end = minOf(offset + 256 * 1024, bytes.size)
+            val query = linkedMapOf(
+                "session_id" to sessionID,
+                "upload_id" to uploadID,
+                "offset" to offset.toString(),
+                "total_size" to total,
+                "sha256" to digest,
+            )
+            if (filename != null) query["filename"] = filename
+            val body = link().postBinary(route, query, contentType, bytes.copyOfRange(offset, end), 60_000)
+            val returned = JSONObject(body).optString("path")
+            if (returned.startsWith("/")) path = returned
+            offset = end
+        }
+        if (!path.startsWith("/")) throw HostException(0, "上传没有返回路径")
+        return path
+    }
+
+    /** Host file names cannot contain a path, `..`, or control characters, and stay within 180 bytes. */
+    private fun sanitizeUploadName(raw: String): String {
+        val base = raw.substringAfterLast('/').substringAfterLast('\\')
+            .filter { !it.isISOControl() }
+            .trim()
+            .ifEmpty { "file" }
+        var flattened = base
+        while (".." in flattened) flattened = flattened.replace("..", ".")
+        flattened = flattened.trim('.', ' ').ifEmpty { "file" }
+        val limited = utf8Prefix(flattened, 180).trim('.', ' ')
+        return if (limited.isEmpty() || limited == "." || limited == "..") "file" else limited
+    }
+
+    private fun utf8Prefix(value: String, maxBytes: Int): String {
+        if (value.toByteArray(Charsets.UTF_8).size <= maxBytes) return value
+        var end = value.length
+        while (end > 0 && value.substring(0, end).toByteArray(Charsets.UTF_8).size > maxBytes) end -= 1
+        return value.substring(0, end)
     }
 
     fun createSession(projectID: String, presetID: String?, initialText: String) {
@@ -541,12 +580,15 @@ class Controller(context: Context) {
             try {
                 val bytes = withContext(Dispatchers.IO) { fetchArtifact(id, kind, name) }
                 val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                    ?: throw HostException(0, "这张图贴不上")
-                val jpeg = java.io.ByteArrayOutputStream()
-                bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, jpeg)
-                bitmap.recycle()
                 showGallery = false
-                attachImage(jpeg.toByteArray())
+                if (bitmap == null) {
+                    attachFile(bytes, name)
+                } else {
+                    val jpeg = java.io.ByteArrayOutputStream()
+                    bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, jpeg)
+                    bitmap.recycle()
+                    attachImage(jpeg.toByteArray())
+                }
             } catch (caught: Exception) {
                 error = caught.message ?: "贴上失败"
             } finally {

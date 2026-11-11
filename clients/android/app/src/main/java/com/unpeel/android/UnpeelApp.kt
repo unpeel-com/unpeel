@@ -9,7 +9,6 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.animateFloatAsState
@@ -81,10 +80,8 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -193,17 +190,18 @@ private fun TerminalHome(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val session = controller.snapshot?.sessions?.firstOrNull { it.id == controller.openSessionID }
-    val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+    val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
-            val bitmap = withContext(Dispatchers.IO) {
-                context.contentResolver.openInputStream(uri)?.use { decodeUploadBitmap(it) }
+            when (val loaded = withContext(Dispatchers.IO) { loadAttachment(context, uri) }) {
+                is LoadedAttachment.Image -> annotate = loaded.bitmap
+                is LoadedAttachment.File -> controller.attachFile(loaded.bytes, loaded.name)
+                is LoadedAttachment.Failed -> controller.reportError(loaded.message)
             }
-            if (bitmap == null) controller.reportError("打不开这张图片") else annotate = bitmap
         }
     }
-    fun chooseImage() {
-        pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+    fun chooseFile() {
+        pickFile.launch(arrayOf("*/*"))
     }
     LaunchedEffect(controller.openSessionID) {
         if (controller.openSessionID != null) {
@@ -235,7 +233,7 @@ private fun TerminalHome(
                     drawerOpen = true
                 }
             } else {
-                TerminalSurface(controller, session, onSessions = { drawerOpen = true }, onPickImage = ::chooseImage, onSheet = { kind ->
+                TerminalSurface(controller, session, onSessions = { drawerOpen = true }, onSheet = { kind ->
                     if (kind == HomeSheet.Organize) organizeID = session.id
                     sheet = kind
                 })
@@ -322,7 +320,7 @@ private fun TerminalHome(
                 controller.openSession(chosen)
             },
         )
-        HomeSheet.Gallery -> GallerySheet(controller, onPickImage = ::chooseImage) { sheet = null }
+        HomeSheet.Gallery -> GallerySheet(controller, onPickFile = ::chooseFile) { sheet = null }
         HomeSheet.Organize -> {
             val target = controller.snapshot?.sessions?.firstOrNull { it.id == organizeID } ?: session
             if (target != null) {
@@ -410,14 +408,9 @@ private fun TerminalSurface(
     controller: Controller,
     session: SessionSummary,
     onSessions: () -> Unit,
-    onPickImage: () -> Unit,
     onSheet: (HomeSheet) -> Unit,
 ) {
     val project = controller.snapshot?.projects?.firstOrNull { it.id == session.projectID }
-    val context = LocalContext.current
-    val voice = remember { VoiceCapture(context) }
-    var listening by remember { mutableStateOf(false) }
-    var voiceText by remember { mutableStateOf("") }
     var ctrlArmed by remember { mutableStateOf(false) }
     var terminalView by remember { mutableStateOf<HostTerminalView?>(null) }
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -433,28 +426,7 @@ private fun TerminalSurface(
             terminalView?.dismissKeyboard()
         }
     }
-    DisposableEffect(voice) { onDispose { voice.cancel() } }
     DisposableEffect(session.id) { onDispose { controller.releasePhoneFit() } }
-    val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) listening = true else controller.reportError("需要麦克风权限才能听写")
-    }
-    LaunchedEffect(listening) {
-        if (!listening) return@LaunchedEffect
-        voiceText = ""
-        voice.start(
-            onPartial = { voiceText = it },
-            onFinal = { text ->
-                listening = false
-                voiceText = ""
-                if (text.isNotEmpty()) controller.sendRaw(TerminalInput.paste(text))
-            },
-            onError = { message ->
-                listening = false
-                voiceText = ""
-                controller.reportError(message)
-            },
-        )
-    }
     Column(Modifier.fillMaxSize()) {
         Row(
             Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 6.dp),
@@ -499,29 +471,13 @@ private fun TerminalSurface(
                 if (spinning) BrailleSpinner(if (blocked) Attention else Foreground) else Text("🔔", fontSize = 14.sp)
             }
         }
-        TerminalGrid(controller, onView = { terminalView = it }, controlArmed = { ctrlArmed }, onControlUsed = { ctrlArmed = false })
+        TerminalGrid(
+            controller,
+            onView = { terminalView = it },
+            controlArmed = { ctrlArmed },
+            onControlUsed = { ctrlArmed = false },
+        )
         Column(Modifier.windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
-        if (listening) {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    voiceText.ifEmpty { "正在听…" },
-                    color = Foreground,
-                    fontSize = 13.sp,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                TextButton(onClick = {
-                    listening = false
-                    voice.cancel()
-                    voiceText = ""
-                }) { Text("取消") }
-                TextButton(onClick = { voice.stop() }) { Text("完成") }
-            }
-        }
         controller.error?.let { message ->
             Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(message, color = Color(0xFFE85D5D), fontSize = 12.sp, modifier = Modifier.weight(1f), maxLines = 2)
@@ -534,42 +490,20 @@ private fun TerminalSurface(
                 onRestart = { controller.sessionAction(session.id, "restart") },
             )
         }
-        Row(
-            Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        val keyboardOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+        if (keyboardOpen) {
             Row(
-                Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                RoundKey("◀") { controller.sendModifiedKey("arrowLeft", ctrlArmed); ctrlArmed = false }
-                RoundKey("▲") { controller.sendModifiedKey("arrowUp", ctrlArmed); ctrlArmed = false }
-                RoundKey("▼") { controller.sendModifiedKey("arrowDown", ctrlArmed); ctrlArmed = false }
-                RoundKey("▶") { controller.sendModifiedKey("arrowRight", ctrlArmed); ctrlArmed = false }
-                KeyDot()
-                RoundKey("esc", textSize = 11) { controller.sendModifiedKey("escape", ctrlArmed); ctrlArmed = false }
-                RoundKey("⇥") { controller.sendModifiedKey("tab", ctrlArmed); ctrlArmed = false }
-                RoundKey("⌃", armed = ctrlArmed) { ctrlArmed = !ctrlArmed }
-                KeyDot()
-                RoundKey("/") {
-                    if (ctrlArmed) controller.sendRaw("\u001f") else controller.sendRaw("/")
-                    ctrlArmed = false
-                }
-                RoundKey("@") {
-                    if (ctrlArmed) controller.sendRaw("\u0000") else controller.sendRaw("@")
-                    ctrlArmed = false
-                }
-            }
-            Spacer(Modifier.width(8.dp))
-            RoundKey(if (listening) "停" else "麦", armed = listening, textSize = 12) {
-                if (listening) {
-                    voice.stop()
-                } else if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                    listening = true
-                } else {
-                    micPermission.launch(Manifest.permission.RECORD_AUDIO)
-                }
+                TerminalKey("◀") { sendTerminalKey(controller, "arrowLeft", ctrlArmed); ctrlArmed = false }
+                TerminalKey("▲") { sendTerminalKey(controller, "arrowUp", ctrlArmed); ctrlArmed = false }
+                TerminalKey("▼") { sendTerminalKey(controller, "arrowDown", ctrlArmed); ctrlArmed = false }
+                TerminalKey("▶") { sendTerminalKey(controller, "arrowRight", ctrlArmed); ctrlArmed = false }
+                TerminalKey("esc", 11) { sendTerminalKey(controller, "escape", ctrlArmed); ctrlArmed = false }
+                TerminalKey("⇥") { sendTerminalKey(controller, "tab", ctrlArmed); ctrlArmed = false }
+                TerminalKey("⌃", armed = ctrlArmed) { ctrlArmed = !ctrlArmed }
             }
         }
         }
@@ -591,7 +525,6 @@ private fun ColumnScope.TerminalGrid(
     var topPad by remember { mutableFloatStateOf(0f) }
     var selecting by remember(controller.openSessionID) { mutableStateOf(false) }
     var surface by remember { mutableStateOf<HostTerminalView?>(null) }
-    val clipboard = LocalClipboardManager.current
     LaunchedEffect(controller.openSessionID, gridSize, imeBottom, cellW, cellH, topPad, controller.connection) {
         if (gridSize.width < 48 || gridSize.height < 48 || cellW <= 0f || cellH <= 0f) return@LaunchedEffect
         delay(120)
@@ -630,13 +563,17 @@ private fun ColumnScope.TerminalGrid(
             },
         )
         if (selecting) {
-            Row(Modifier.align(Alignment.TopEnd).padding(4.dp)) {
+            Row(
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(8.dp)
+                    .background(Color(0xF01A1B1D), RoundedCornerShape(18.dp))
+                    .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(18.dp)),
+            ) {
                 TextButton(onClick = {
-                    val text = surface?.selectedText().orEmpty()
-                    if (text.isNotEmpty()) clipboard.setText(AnnotatedString(text))
-                    surface?.clearSelection()
-                }) { Text("复制") }
-                TextButton(onClick = { surface?.clearSelection() }) { Text("取消") }
+                    if (surface?.copySelection() != true) controller.reportError("没有可复制的文字")
+                }) { Text("复制", color = Foreground) }
+                TextButton(onClick = { surface?.clearSelection() }) { Text("取消", color = Muted) }
             }
         }
     }
@@ -1104,15 +1041,15 @@ private fun ActivityGroup(title: String, sessions: List<SessionSummary>, project
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun GallerySheet(controller: Controller, onPickImage: () -> Unit, onDismiss: () -> Unit) {
+private fun GallerySheet(controller: Controller, onPickFile: () -> Unit, onDismiss: () -> Unit) {
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Sheet) {
         Column(Modifier.padding(horizontal = 16.dp).verticalScroll(rememberScrollState())) {
             Text("截图和图库", color = Foreground, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
             TextButton(onClick = controller::requestScreenshot) { Text("现在截一张", color = Foreground) }
             TextButton(onClick = {
+                onPickFile()
                 onDismiss()
-                onPickImage()
-            }) { Text("从相册标注并附上", color = Foreground) }
+            }) { Text("附上文件", color = Foreground) }
             if (controller.artifacts.isEmpty()) Text("还没有截图。", color = Muted, fontSize = 13.sp)
             controller.artifacts.forEach { artifact ->
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -1403,8 +1340,25 @@ private fun GlassButton(onClick: () -> Unit, content: @Composable () -> Unit) {
     ) { content() }
 }
 
+private fun sendTerminalKey(controller: Controller, name: String, ctrl: Boolean) {
+    val data = if (!ctrl) {
+        TerminalInput.key(name)
+    } else {
+        when (name) {
+            "arrowUp" -> "\u001b[1;5A"
+            "arrowDown" -> "\u001b[1;5B"
+            "arrowRight" -> "\u001b[1;5C"
+            "arrowLeft" -> "\u001b[1;5D"
+            "tab" -> "\u001b[27;5;9~"
+            "escape" -> "\u001b[27;5;27~"
+            else -> TerminalInput.key(name)
+        }
+    }
+    if (data.isNotEmpty()) controller.sendRaw(data)
+}
+
 @Composable
-private fun RoundKey(label: String, armed: Boolean = false, textSize: Int = 14, onClick: () -> Unit) {
+private fun TerminalKey(label: String, textSize: Int = 14, armed: Boolean = false, onClick: () -> Unit) {
     Box(
         Modifier
             .size(36.dp)
@@ -1421,11 +1375,6 @@ private fun RoundKey(label: String, armed: Boolean = false, textSize: Int = 14, 
             fontFamily = if (label.length == 1) FontFamily.Monospace else FontFamily.Default,
         )
     }
-}
-
-@Composable
-private fun KeyDot() {
-    Box(Modifier.size(6.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.28f)))
 }
 
 @Composable
@@ -1511,7 +1460,7 @@ private fun hostChrome(hue: Double?): Color {
 }
 
 private fun canPasteArtifact(kind: String, name: String): Boolean {
-    if (kind == "screenshots" || kind == "computer") return true
+    if (kind == "screenshots" || kind == "computer" || kind == "uploads" || kind == "downloads") return true
     val lower = name.lowercase()
     return lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".webp")
 }

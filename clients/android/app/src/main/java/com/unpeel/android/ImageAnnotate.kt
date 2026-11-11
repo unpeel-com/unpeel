@@ -45,6 +45,51 @@ import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import kotlin.math.min
 
+internal sealed class LoadedAttachment {
+    class Image(val bitmap: Bitmap) : LoadedAttachment()
+    class File(val bytes: ByteArray, val name: String) : LoadedAttachment()
+    class Failed(val message: String) : LoadedAttachment()
+}
+
+/** Images that decode open the annotator. Everything else uploads as a file. */
+internal fun loadAttachment(context: android.content.Context, uri: android.net.Uri): LoadedAttachment {
+    val resolver = context.contentResolver
+    val name = resolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+        if (cursor.moveToFirst()) cursor.getString(0) else null
+    }?.takeIf { it.isNotBlank() } ?: "file"
+    val mime = resolver.getType(uri).orEmpty()
+    val bytes = try {
+        resolver.openInputStream(uri)?.use { readBounded(it, 64 * 1024 * 1024) }
+            ?: return LoadedAttachment.Failed("打不开这个文件")
+    } catch (_: AttachmentTooLarge) {
+        return LoadedAttachment.Failed("文件超过 64 MB")
+    } catch (_: Exception) {
+        return LoadedAttachment.Failed("打不开这个文件")
+    }
+    if (bytes.isEmpty()) return LoadedAttachment.Failed("这个文件是空的")
+    if (mime.startsWith("image/") && bytes.size <= 20 * 1024 * 1024) {
+        val bitmap = decodeUploadBitmap(java.io.ByteArrayInputStream(bytes))
+        if (bitmap != null) return LoadedAttachment.Image(bitmap)
+    }
+    return LoadedAttachment.File(bytes, name)
+}
+
+private class AttachmentTooLarge : Exception()
+
+private fun readBounded(source: InputStream, maxBytes: Int): ByteArray {
+    val out = ByteArrayOutputStream()
+    val buffer = ByteArray(16 * 1024)
+    var total = 0
+    while (true) {
+        val count = source.read(buffer)
+        if (count < 0) break
+        total += count
+        if (total > maxBytes) throw AttachmentTooLarge()
+        out.write(buffer, 0, count)
+    }
+    return out.toByteArray()
+}
+
 internal fun decodeUploadBitmap(source: InputStream): Bitmap? {
     val bytes = source.readBytes()
     if (bytes.isEmpty()) return null

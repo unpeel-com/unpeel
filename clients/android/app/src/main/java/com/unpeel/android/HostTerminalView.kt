@@ -1,6 +1,8 @@
 package com.unpeel.android
 
 import android.annotation.SuppressLint
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Canvas
 import android.text.InputType
@@ -46,7 +48,11 @@ class HostTerminalView(
     /** Rows above the bottom of the view. 0 keeps the cursor row on screen. */
     private var offsetRows = 0
     private var panX = 0
+    /** Finger travel not yet worth a whole row, in GestureDetector distanceY sign. */
     private var scrollRemainder = 0f
+    /** Rows already sent to the host that its next frame has not drawn yet. */
+    private var pendingRemoteRows = 0
+    private var flingVelocity = 0f
     private var selecting = false
     private var selX1 = -1
     private var selY1 = -1
@@ -55,9 +61,30 @@ class HostTerminalView(
     private var blinkOn = true
 
     private val frameListener: () -> Unit = {
+        // The host picture already includes the rows we asked for.
+        pendingRemoteRows = 0
+        if (terminal.emulator.isMouseTrackingActive() || terminal.emulator.isAlternateBufferActive()) {
+            scrollRemainder = 0f
+        }
         noteEmulator(terminal.emulator)
         clampOffset(terminal.emulator)
         postInvalidateOnAnimation()
+    }
+
+    private val flingTick = object : Runnable {
+        override fun run() {
+            val emulator = terminal.emulator
+            if (flingVelocity == 0f || emulator.isMouseTrackingActive() || emulator.isAlternateBufferActive()) {
+                flingVelocity = 0f
+                return
+            }
+            scrollRemainder += flingVelocity * 0.016f
+            applyScrollLines(emulator, null)
+            flingVelocity *= 0.90f
+            if (kotlin.math.abs(flingVelocity) < 50f) flingVelocity = 0f
+            invalidate()
+            if (flingVelocity != 0f) postOnAnimation(this)
+        }
     }
 
     private val blink = object : Runnable {
@@ -70,10 +97,17 @@ class HostTerminalView(
     }
 
     private val gesture = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
-        override fun onDown(e: MotionEvent): Boolean = true
+        override fun onDown(e: MotionEvent): Boolean {
+            flingVelocity = 0f
+            removeCallbacks(flingTick)
+            return true
+        }
 
         override fun onSingleTapUp(e: MotionEvent): Boolean {
-            if (selecting) return true
+            if (selecting) {
+                clearSelection()
+                return true
+            }
             val emulator = terminal.emulator
             if (!emulator.isMouseTrackingActive()) {
                 showKeyboard()
@@ -87,6 +121,11 @@ class HostTerminalView(
         }
 
         override fun onLongPress(e: MotionEvent) {
+            val emulator = terminal.emulator
+            if (tapTargetsCursor(emulator, e) && pasteClipboard()) {
+                clearSelection()
+                return
+            }
             val cell = cellAt(e.x, e.y) ?: return
             selX1 = cell.first
             selY1 = cell.second
@@ -109,25 +148,35 @@ class HostTerminalView(
             }
             val emulator = terminal.emulator
             // Finger down (negative distance) moves toward older rows.
-            if (distanceY != 0f) {
+            // The picture shifts with the finger immediately; a whole row
+            // is committed only after the finger has travelled one cell.
+            if (distanceY != 0f && cellHeight > 0) {
                 scrollRemainder += distanceY
-                val lines = (scrollRemainder / cellHeight).toInt()
-                if (lines != 0) {
-                    scrollRemainder -= lines * cellHeight
-                    val steps = min(kotlin.math.abs(lines), 12)
-                    when {
-                        emulator.isMouseTrackingActive() -> sendWheel(emulator, e2, lines > 0, steps)
-                        emulator.isAlternateBufferActive() -> sendAlternateScroll(emulator, lines > 0, steps)
-                        else -> {
-                            offsetRows = (offsetRows - lines).coerceIn(0, maxOffset(emulator))
-                            clampOffset(emulator)
-                        }
-                    }
-                }
+                applyScrollLines(emulator, e2)
             }
             panX -= distanceX.toInt()
             horizontalShift(emulator)
             invalidate()
+            return true
+        }
+
+        override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
+            if (selecting || cellHeight <= 0) return false
+            val emulator = terminal.emulator
+            // velocityY is downward. distanceY (and scrollRemainder) grow when the finger moves up.
+            if (emulator.isMouseTrackingActive() || emulator.isAlternateBufferActive()) {
+                val lines = (-velocityY / cellHeight / 6f).toInt()
+                if (lines == 0) return false
+                val steps = min(kotlin.math.abs(lines), 8)
+                val applied = if (lines > 0) steps else -steps
+                pendingRemoteRows += applied
+                if (emulator.isMouseTrackingActive()) sendWheel(emulator, e2, applied > 0, steps)
+                else sendAlternateScroll(emulator, applied > 0, steps)
+                invalidate()
+                return true
+            }
+            flingVelocity = -velocityY
+            postOnAnimation(flingTick)
             return true
         }
     })
@@ -163,6 +212,16 @@ class HostTerminalView(
         }.getOrDefault("")
     }
 
+    /** Copies the selection onto the system clipboard and clears it. */
+    fun copySelection(): Boolean {
+        val text = selectedText()
+        if (text.isEmpty()) return false
+        val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return false
+        clipboard.setPrimaryClip(ClipData.newPlainText("unpeel", text))
+        clearSelection()
+        return true
+    }
+
     fun clearSelection() {
         if (!selecting) return
         selecting = false
@@ -193,9 +252,9 @@ class HostTerminalView(
     override fun onCheckIsTextEditor(): Boolean = true
 
     override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
-        outAttrs.inputType = InputType.TYPE_CLASS_TEXT or
-            InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS or
-            InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+        // No password variation: that flag is what makes Android open the
+        // secure keyboard and hide dictation, emoji, and a normal IME.
+        outAttrs.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
         outAttrs.imeOptions = EditorInfo.IME_ACTION_NONE or
             EditorInfo.IME_FLAG_NO_EXTRACT_UI or
             EditorInfo.IME_FLAG_NO_FULLSCREEN
@@ -270,6 +329,7 @@ class HostTerminalView(
 
     override fun onDetachedFromWindow() {
         removeCallbacks(blink)
+        removeCallbacks(flingTick)
         if (terminal.onFrame === frameListener) terminal.onFrame = null
         super.onDetachedFromWindow()
     }
@@ -279,9 +339,6 @@ class HostTerminalView(
             parent?.requestDisallowInterceptTouchEvent(true)
         }
         gesture.onTouchEvent(event)
-        if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
-            scrollRemainder = 0f
-        }
         return true
     }
 
@@ -309,7 +366,38 @@ class HostTerminalView(
         offsetRows = 0
         panX = 0
         scrollRemainder = 0f
+        pendingRemoteRows = 0
+        flingVelocity = 0f
         if (selecting) clearSelection()
+    }
+
+    /**
+     * Turns accumulated finger travel into whole rows. Remote rows are sent
+     * to the host; the local buffer moves `offsetRows`. Pixels short of a
+     * row stay in `scrollRemainder` and `place` draws them.
+     */
+    private fun applyScrollLines(emulator: TerminalEmulator, event: MotionEvent?) {
+        if (cellHeight <= 0) return
+        val lines = (scrollRemainder / cellHeight).toInt()
+        if (lines == 0) return
+        val remote = emulator.isMouseTrackingActive() || emulator.isAlternateBufferActive()
+        val steps = if (remote) min(kotlin.math.abs(lines), 24) else kotlin.math.abs(lines)
+        val applied = if (lines > 0) steps else -steps
+        scrollRemainder -= applied * cellHeight
+        when {
+            emulator.isMouseTrackingActive() && event != null -> {
+                pendingRemoteRows += applied
+                sendWheel(emulator, event, applied > 0, steps)
+            }
+            emulator.isAlternateBufferActive() -> {
+                pendingRemoteRows += applied
+                sendAlternateScroll(emulator, applied > 0, steps)
+            }
+            else -> {
+                offsetRows = (offsetRows - applied).coerceIn(0, maxOffset(emulator))
+                clampOffset(emulator)
+            }
+        }
     }
 
     /** Rows of the current screen that sit above the view, plus saved scrollback. */
@@ -331,11 +419,18 @@ class HostTerminalView(
     /** topRow for the renderer, and the Y translation that puts that row in view. */
     private fun place(emulator: TerminalEmulator): Pair<Int, Int> {
         clampOffset(emulator)
+        val remote = emulator.isMouseTrackingActive() || emulator.isAlternateBufferActive()
+        if (!remote) {
+            if (offsetRows == 0 && scrollRemainder > 0f) scrollRemainder = 0f
+            if (offsetRows == maxOffset(emulator) && scrollRemainder < 0f) scrollRemainder = 0f
+        }
         val hidden = (emulator.mRows - visibleRows()).coerceAtLeast(0)
         val intoHistory = (offsetRows - hidden).coerceAtLeast(0)
         val row = -intoHistory
-        val shift = if (intoHistory > 0) 0 else minPanY(emulator) + offsetRows * cellHeight
-        return row to shift
+        val base = if (intoHistory > 0) 0 else minPanY(emulator) + offsetRows * cellHeight
+        // Negative remainder is a finger moving down, so the picture moves down with it.
+        val slack = Math.round(-scrollRemainder) - pendingRemoteRows * cellHeight
+        return row to (base + slack)
     }
 
     /** Left press then release at the tapped cell. Column and row are 1-based. */
@@ -355,6 +450,21 @@ class HostTerminalView(
             bytes.toString(Charsets.ISO_8859_1)
         }
         onText?.invoke(payload)
+    }
+
+    /** Bracketed paste of the system clipboard. False when there is nothing to paste. */
+    private fun pasteClipboard(): Boolean {
+        val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return false
+        val text = try {
+            clipboard.primaryClip?.takeIf { it.itemCount > 0 }
+                ?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
+        } catch (_: Exception) {
+            return false
+        }
+        val sanitized = TerminalInput.sanitize(text)
+        if (sanitized.isEmpty()) return false
+        onText?.invoke(TerminalInput.paste(sanitized))
+        return true
     }
 
     private fun tapTargetsCursor(emulator: TerminalEmulator, event: MotionEvent): Boolean {

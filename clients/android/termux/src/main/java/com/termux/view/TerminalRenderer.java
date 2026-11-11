@@ -44,6 +44,13 @@ public final class TerminalRenderer {
         mFontLineSpacing = (int) Math.ceil(mTextPaint.getFontSpacing());
         mFontAscent = (int) Math.ceil(mTextPaint.ascent());
         mFontLineSpacingAndAscent = mFontLineSpacing + mFontAscent;
+        // System monospace is about 0.6em wide. A terminal cell is half a
+        // line tall. Narrow the glyphs; the line height stays the font's own.
+        float naturalWidth = mTextPaint.measureText("X");
+        float targetWidth = mFontLineSpacing * 0.5f;
+        if (naturalWidth > targetWidth && targetWidth > 0f) {
+            mTextPaint.setTextScaleX(targetWidth / naturalWidth);
+        }
         mFontWidth = mTextPaint.measureText("X");
 
         StringBuilder sb = new StringBuilder(" ");
