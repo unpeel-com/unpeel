@@ -52,7 +52,8 @@ class Controller(context: Context) {
     private var pollJob: Job? = null
     private var outputJob: Job? = null
     private var link: HostLink? = null
-    private var usingRelay = false
+    var usingRelay by mutableStateOf(false)
+        private set
 
     var hosts by mutableStateOf(loadHosts())
         private set
@@ -182,6 +183,38 @@ class Controller(context: Context) {
     fun sendKey(name: String) {
         val id = openSessionID ?: return
         write(id, TerminalInput.key(name))
+    }
+
+    fun sendRaw(text: String) {
+        val id = openSessionID ?: return
+        if (text.isEmpty()) return
+        write(id, text)
+    }
+
+    /** Upload a JPEG and paste its quoted Host path. Does not submit. */
+    fun attachImage(jpeg: ByteArray) {
+        val id = openSessionID ?: return
+        if (jpeg.isEmpty()) return
+        scope.launch {
+            busy = true
+            try {
+                val body = link().postBinary(
+                    "upload",
+                    mapOf("session_id" to id),
+                    "image/jpeg",
+                    jpeg,
+                    30_000,
+                )
+                val path = JSONObject(body).optString("path")
+                if (path.isEmpty() || !path.startsWith("/")) throw HostException(0, "上传没有返回路径")
+                val quoted = "'" + path.replace("'", "'\\''") + "' "
+                write(id, TerminalInput.paste(quoted))
+            } catch (caught: Exception) {
+                error = caught.message ?: "图片上传失败"
+            } finally {
+                busy = false
+            }
+        }
     }
 
     fun createSession(projectID: String, presetID: String?, initialText: String) {

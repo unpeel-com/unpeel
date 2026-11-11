@@ -26,6 +26,7 @@ class VtScreen(cols: Int, rows: Int) {
     private var alt = Grid(this.cols, this.rows)
     private var onAlt = false
     private val grid: Grid get() = if (onAlt) alt else normal
+    private val history = ArrayDeque<Array<Cell>>()
 
     private var fg = DEFAULT_FG
     private var bg = DEFAULT_BG
@@ -44,6 +45,7 @@ class VtScreen(cols: Int, rows: Int) {
         normal = Grid(cols, rows)
         alt = Grid(cols, rows)
         onAlt = false
+        history.clear()
         resetStyle()
         mode = Mode.GROUND
         utf8 = ByteArray(0)
@@ -76,6 +78,9 @@ class VtScreen(cols: Int, rows: Int) {
     }
 
     fun snapshot(): List<List<Cell>> = grid.cells.map { row -> row.toList() }
+
+    /** Lines that scrolled off the top of the primary screen. The alt screen does not record. */
+    fun scrollback(): List<List<Cell>> = history.map { row -> row.toList() }
 
     fun cursor(): Pair<Int, Int> = grid.cursorRow to grid.cursorCol
 
@@ -216,13 +221,17 @@ class VtScreen(cols: Int, rows: Int) {
     }
 
     private fun put(ch: Char) {
-        if (grid.cursorCol >= cols) {
+        val width = if (ch.isWide()) 2 else 1
+        if (grid.cursorCol + width > cols) {
             grid.cursorCol = 0
             lineFeed()
         }
-        if (grid.cursorRow !in 0 until rows) return
+        if (grid.cursorRow !in 0 until rows || grid.cursorCol >= cols) return
         grid.cells[grid.cursorRow][grid.cursorCol] = Cell(ch, fg, bg, bold)
-        grid.cursorCol += 1
+        if (width == 2 && grid.cursorCol + 1 < cols) {
+            grid.cells[grid.cursorRow][grid.cursorCol + 1] = Cell('\u0000', fg, bg, false)
+        }
+        grid.cursorCol += width
     }
 
     private fun backspace() {
@@ -244,6 +253,10 @@ class VtScreen(cols: Int, rows: Int) {
 
     private fun scrollUp() {
         val cells = grid.cells
+        if (!onAlt && grid.scrollTop == 0) {
+            history.addLast(cells[0].copyOf())
+            while (history.size > SCROLLBACK) history.removeFirst()
+        }
         for (row in grid.scrollTop until grid.scrollBottom) cells[row] = cells[row + 1]
         cells[grid.scrollBottom] = blankRow()
     }
@@ -310,6 +323,7 @@ class VtScreen(cols: Int, rows: Int) {
     companion object {
         const val DEFAULT_FG = 0xD0D0D0
         const val DEFAULT_BG = 0x1E1E1E
+        private const val SCROLLBACK = 1000
         private val ANSI = intArrayOf(
             0x1E1E1E, 0xCD3131, 0x0DBC79, 0xE5E510, 0x2472C8, 0xBC3FBC, 0x11A8CD, 0xE5E5E5,
         )
@@ -331,4 +345,21 @@ class VtScreen(cols: Int, rows: Int) {
             return (red shl 16) or (green shl 8) or blue
         }
     }
+}
+
+/** East-Asian wide and common emoji occupy two cells. A continuation cell is `\u0000`. */
+private fun Char.isWide(): Boolean {
+    val code = code
+    return code in 0x1100..0x115F ||
+        code in 0x2329..0x232A ||
+        code in 0x2E80..0xA4CF ||
+        code in 0xAC00..0xD7A3 ||
+        code in 0xF900..0xFAFF ||
+        code in 0xFE10..0xFE19 ||
+        code in 0xFE30..0xFE6F ||
+        code in 0xFF00..0xFF60 ||
+        code in 0xFFE0..0xFFE6 ||
+        code in 0x1F300..0x1F64F ||
+        code in 0x1F900..0x1F9FF ||
+        code in 0x20000..0x3FFFD
 }

@@ -94,6 +94,7 @@ class ProtocolTest {
         assertEquals("Studio", snapshot.macName)
         assertEquals("working", snapshot.sessions.single().activity)
         assertEquals(true, snapshot.sessions.single().pinned)
+        assertEquals(1L, snapshot.sessions.single().updatedAtUnixMs)
         assertEquals("default", snapshot.workspaces.single().name)
     }
 
@@ -111,8 +112,29 @@ class ProtocolTest {
 
     @Test
     fun pasteAndSubmitUsesBracketedPaste() {
+        assertEquals("\u001b[200~hello\u001b[201~", TerminalInput.paste("hello"))
         assertEquals("\u001b[200~hello\u001b[201~\r", TerminalInput.pasteAndSubmit("hello"))
         assertEquals("\u0003", TerminalInput.key("controlC"))
+    }
+
+    @Test
+    fun scrollbackKeepsTheLineThatLeftTheTop() {
+        val screen = VtScreen(4, 2)
+        screen.feed("ab\r\ncd\r\nef".toByteArray())
+        assertEquals('a', screen.scrollback().single()[0].ch)
+        assertEquals('c', screen.snapshot()[0][0].ch)
+        assertEquals('e', screen.snapshot()[1][0].ch)
+    }
+
+    @Test
+    fun wideCharacterOccupiesTwoCells() {
+        val screen = VtScreen(6, 2)
+        screen.feed("中a".toByteArray())
+        val row = screen.snapshot()[0]
+        assertEquals('中', row[0].ch)
+        assertEquals('\u0000', row[1].ch)
+        assertEquals('a', row[2].ch)
+        assertEquals(3, screen.cursor().second)
     }
 
     @Test

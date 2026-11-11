@@ -36,6 +36,13 @@ class HostException(val status: Int, message: String) : Exception(message.ifEmpt
 interface HostLink {
     suspend fun get(path: String, query: Map<String, String> = emptyMap(), timeoutMs: Long = 10_000): String
     suspend fun post(path: String, json: String, timeoutMs: Long = 10_000): String
+    suspend fun postBinary(
+        path: String,
+        query: Map<String, String>,
+        contentType: String,
+        bytes: ByteArray,
+        timeoutMs: Long = 30_000,
+    ): String
 }
 
 /** Direct `/mobile` on the LAN. A certificate pin rewrites the URL to HTTPS. */
@@ -52,16 +59,25 @@ class DirectLink(
     private val client = httpClient(fingerprint)
 
     override suspend fun get(path: String, query: Map<String, String>, timeoutMs: Long): String =
-        call("GET", path, query, null, timeoutMs)
+        call("GET", path, query, null, null, timeoutMs)
 
     override suspend fun post(path: String, json: String, timeoutMs: Long): String =
-        call("POST", path, emptyMap(), json, timeoutMs)
+        call("POST", path, emptyMap(), json.toByteArray(), "application/json", timeoutMs)
+
+    override suspend fun postBinary(
+        path: String,
+        query: Map<String, String>,
+        contentType: String,
+        bytes: ByteArray,
+        timeoutMs: Long,
+    ): String = call("POST", path, query, bytes, contentType, timeoutMs)
 
     private suspend fun call(
         method: String,
         path: String,
         query: Map<String, String>,
-        json: String?,
+        body: ByteArray?,
+        contentType: String?,
         timeoutMs: Long,
     ): String = withContext(Dispatchers.IO) {
         val url = buildString {
@@ -75,7 +91,8 @@ class DirectLink(
         }
         val builder = Request.Builder().url(url).header("Authorization", "Bearer $authToken")
         if (method == "POST") {
-            builder.post((json ?: "{}").toRequestBody(JSON)).header("Content-Type", "application/json")
+            val type = (contentType ?: "application/json").toMediaType()
+            builder.post((body ?: "{}".toByteArray()).toRequestBody(type))
         }
         val call = client.newCall(builder.build())
         call.timeout().timeout(timeoutMs, TimeUnit.MILLISECONDS)
@@ -92,10 +109,6 @@ class DirectLink(
     }
 
     private fun encode(value: String) = java.net.URLEncoder.encode(value, Charsets.UTF_8.name())
-
-    companion object {
-        private val JSON = "application/json".toMediaType()
-    }
 }
 
 /**
@@ -121,16 +134,25 @@ class RelayLink(
     private val pending = ConcurrentHashMap<Long, CompletableDeferred<JSONObject>>()
 
     override suspend fun get(path: String, query: Map<String, String>, timeoutMs: Long): String =
-        tunnel("GET", path, query, null, timeoutMs)
+        tunnel("GET", path, query, null, null, timeoutMs)
 
     override suspend fun post(path: String, json: String, timeoutMs: Long): String =
-        tunnel("POST", path, emptyMap(), json, timeoutMs)
+        tunnel("POST", path, emptyMap(), json.toByteArray(), "application/json", timeoutMs)
+
+    override suspend fun postBinary(
+        path: String,
+        query: Map<String, String>,
+        contentType: String,
+        bytes: ByteArray,
+        timeoutMs: Long,
+    ): String = tunnel("POST", path, query, bytes, contentType, timeoutMs)
 
     private suspend fun tunnel(
         method: String,
         path: String,
         query: Map<String, String>,
-        json: String?,
+        body: ByteArray?,
+        contentType: String?,
         timeoutMs: Long,
     ): String {
         val id = mutex.withLock {
@@ -145,9 +167,9 @@ class RelayLink(
             .put("path", "/mobile/${path.trimStart('/')}")
             .put("query", JSONObject(query))
             .put("auth", "Bearer $authToken")
-        if (json != null) {
-            request.put("contentType", "application/json")
-            request.put("bodyB64", b64(json.toByteArray()))
+        if (body != null) {
+            request.put("contentType", contentType ?: "application/json")
+            request.put("bodyB64", b64(body))
         }
         val sealed = mutex.withLock {
             val current = session ?: throw HostException(0, "relay closed")

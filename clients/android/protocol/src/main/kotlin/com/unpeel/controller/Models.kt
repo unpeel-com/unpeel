@@ -20,6 +20,8 @@ data class SessionSummary(
     val lastOutputPreview: String?,
     val cwd: String?,
     val activeAppName: String?,
+    val updatedAtUnixMs: Long?,
+    val worktreeBranch: String?,
 )
 
 data class ProjectSummary(
@@ -202,6 +204,12 @@ object BootstrapJson {
         lastOutputPreview = it.optString("lastOutputPreview").ifEmpty { null },
         cwd = it.optString("cwd").ifEmpty { null },
         activeAppName = it.optString("activeAppName").ifEmpty { null },
+        updatedAtUnixMs = when {
+            it.has("updatedAtUnixMs") && !it.isNull("updatedAtUnixMs") -> it.optLong("updatedAtUnixMs")
+            it.has("createdAtUnixMs") && !it.isNull("createdAtUnixMs") -> it.optLong("createdAtUnixMs")
+            else -> null
+        },
+        worktreeBranch = it.optString("worktreeBranch").ifEmpty { null },
     )
 }
 
@@ -230,6 +238,9 @@ object TerminalInput {
         else -> ""
     }
 
+    /** Bracketed paste, no Enter. Voice and image attach use this. */
+    fun paste(text: String): String = "\u001b[200~$text\u001b[201~"
+
     /** Bracketed paste plus Enter, the same recipe the iOS composer uses. */
-    fun pasteAndSubmit(text: String): String = "\u001b[200~$text\u001b[201~\r"
+    fun pasteAndSubmit(text: String): String = paste(text) + "\r"
 }
