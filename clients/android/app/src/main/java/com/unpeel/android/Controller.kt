@@ -7,6 +7,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.unpeel.controller.AgentCatalog
 import com.unpeel.controller.ArtifactSummary
 import com.unpeel.controller.BootstrapJson
 import com.unpeel.controller.BootstrapSnapshot
@@ -58,6 +59,18 @@ class Controller(context: Context) {
     private var phoneFitSession: String? = null
     private var phoneFitColumns: Int? = null
     private val phoneFitLock = Mutex()
+    /** Paste and the Enter that submits it must not be split by another write. */
+    private val inputLock = Mutex()
+    private var fitWatchJob: Job? = null
+    private var galleryWatchJob: Job? = null
+    private var galleryBaseline: Long? = null
+    private var desiredColumns = 0
+    private var desiredRows = 0
+    private var keyboardOpen = false
+    private var lastFitAttemptMs = 0L
+    private var fitRejected = false
+    /** null = this Host omitted the flag (fit once). */
+    private var desktopViewing: Boolean? = null
     var usingRelay by mutableStateOf(false)
         private set
 
@@ -86,6 +99,10 @@ class Controller(context: Context) {
         private set
     var showCreate by mutableStateOf(false)
     var showGallery by mutableStateOf(false)
+    var galleryPulse by mutableStateOf(false)
+        private set
+    var restartingSessionID by mutableStateOf<String?>(null)
+        private set
 
     val deviceId: String
         get() = prefs.getString("deviceId", null) ?: UUID.randomUUID().toString().also {
@@ -136,6 +153,8 @@ class Controller(context: Context) {
     }
 
     fun select(macID: String) {
+        fitWatchJob?.cancel()
+        stopGalleryWatch()
         releasePhoneFit()
         selectedMacID = macID
         prefs.edit().putString("selected", macID).apply()
@@ -145,7 +164,11 @@ class Controller(context: Context) {
     }
 
     fun forget(macID: String) {
-        if (selectedMacID == macID) releasePhoneFit()
+        if (selectedMacID == macID) {
+            fitWatchJob?.cancel()
+            stopGalleryWatch()
+            releasePhoneFit()
+        }
         hosts = hosts.filterNot { it.macID == macID }
         saveHosts()
         if (selectedMacID == macID) {
@@ -166,6 +189,12 @@ class Controller(context: Context) {
         if (openSessionID == id) return
         releasePhoneFit()
         openSessionID = id
+        desiredColumns = 0
+        desiredRows = 0
+        keyboardOpen = false
+        lastFitAttemptMs = 0L
+        fitRejected = false
+        desktopViewing = null
         screen = VtScreen(80, 24)
         screenRevision += 1
         artifacts = emptyList()
@@ -173,9 +202,13 @@ class Controller(context: Context) {
         showGallery = false
         scope.launch { runCatching { link()?.post("mark-read", JSONObject().put("sessionID", id).toString()) } }
         startOutput(id)
+        startFitWatch(id)
+        startGalleryWatch(id)
     }
 
     fun closeSession() {
+        fitWatchJob?.cancel()
+        stopGalleryWatch()
         releasePhoneFit()
         outputJob?.cancel()
         openSessionID = null
@@ -184,17 +217,81 @@ class Controller(context: Context) {
     }
 
     /**
-     * Ask the Host to letterbox this session to the phone's terminal grid.
-     * One request per open session. Returns false when there is nothing to
-     * send yet, so the caller can try again after the next layout.
-     * A later keyboard inset must not call this again.
+     * The measured terminal box. Keyboard height must not change the grid
+     * we ask the Host for. A Mac that is actively showing this session
+     * (`desktopViewing`) keeps the size; the phone only letterboxes while
+     * the Mac is not looking.
      */
-    fun fitPhone(columns: Int, rows: Int): Boolean {
-        val sessionID = openSessionID ?: return false
-        val active = link ?: return false
+    fun notePhoneViewport(columns: Int, rows: Int, keyboardOpen: Boolean) {
+        this.keyboardOpen = keyboardOpen
+        if (!keyboardOpen && columns > 0 && rows > 0) {
+            desiredColumns = columns
+            desiredRows = rows
+        }
+    }
+
+    private fun startFitWatch(sessionID: String) {
+        fitWatchJob?.cancel()
+        fitWatchJob = scope.launch {
+            while (openSessionID == sessionID) {
+                val metrics = runCatching {
+                    JSONObject(link().get("metrics", mapOf("session_id" to sessionID), timeoutMs = 4_000))
+                }.getOrNull()
+                if (metrics != null && openSessionID == sessionID) {
+                    desktopViewing = if (metrics.has("desktopViewing")) metrics.getBoolean("desktopViewing") else null
+                    reconcilePhoneFit(
+                        sessionID,
+                        metrics.optInt("columns", 80),
+                        metrics.optInt("rows", 24),
+                    )
+                }
+                delay(1_000)
+            }
+        }
+    }
+
+    private fun reconcilePhoneFit(sessionID: String, observedColumns: Int, observedRows: Int) {
+        if (keyboardOpen || desiredColumns < 2 || fitRejected) return
+        val viewing = desktopViewing
+        val drifted = phoneFitColumns == null || kotlin.math.abs(observedColumns - desiredColumns) > 2
+        when (viewing) {
+            true -> {
+                // The Mac is showing this session. A revert (banner X) wins:
+                // follow the grid it settled on, and do not put the letterbox back.
+                if (phoneFitSession == sessionID && kotlin.math.abs(observedColumns - (phoneFitColumns ?: observedColumns)) > 2) {
+                    phoneFitSession = null
+                    phoneFitColumns = null
+                    if (screen.cols != observedColumns || screen.rows != observedRows) {
+                        startOutput(sessionID, observedColumns, observedRows)
+                    }
+                }
+            }
+            false -> {
+                if (!drifted) return
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (now - lastFitAttemptMs < 3_000) return
+                lastFitAttemptMs = now
+                fitPhone(desiredColumns, desiredRows)
+            }
+            null -> {
+                if (lastFitAttemptMs != 0L) return
+                lastFitAttemptMs = android.os.SystemClock.elapsedRealtime()
+                fitPhone(desiredColumns, desiredRows)
+            }
+        }
+    }
+
+    /**
+     * Ask the Host to letterbox this session to the phone's terminal grid.
+     * The keyboard must not call this. A Mac that reports `desktopViewing`
+     * keeps its own grid.
+     */
+    private fun fitPhone(columns: Int, rows: Int) {
+        val sessionID = openSessionID ?: return
+        val active = link ?: return
         val cols = columns.coerceIn(2, 300)
         val lines = rows.coerceIn(2, 120)
-        if (phoneFitSession == sessionID && phoneFitColumns == cols) return true
+        if (phoneFitSession == sessionID && phoneFitColumns == cols) return
         val generation = phoneFitGeneration
         scope.launch {
             phoneFitLock.withLock {
@@ -214,13 +311,15 @@ class Controller(context: Context) {
                     if (posted) revertPhoneFit(active, sessionID)
                     return@withLock
                 }
-                if (!posted) return@withLock
+                if (!posted) {
+                    fitRejected = true
+                    return@withLock
+                }
                 phoneFitSession = sessionID
                 phoneFitColumns = cols
                 startOutput(sessionID, cols, lines)
             }
         }
-        return true
     }
 
     /** Drop a phone letterbox. Extra clears are safe; the Host treats them as a no-op success. */
@@ -249,16 +348,47 @@ class Controller(context: Context) {
     }
 
     fun sendComposer() {
-        val text = composer
+        val text = TerminalInput.sanitize(composer)
         val id = openSessionID ?: return
-        if (text.isEmpty()) return
+        val active = link
+        if (text.isEmpty() || active == null) return
         composer = ""
-        write(id, TerminalInput.pasteAndSubmit(text))
+        scope.launch {
+            inputLock.withLock {
+                // Cursor and the other full-screen agents finish a bracketed
+                // paste before they will honor Enter, and they swallow the
+                // first Enter that arrives with the paste. iOS never hits
+                // this: Return is its own key, after the text is already in
+                // the composer. Same settle as the Host prompt recipe.
+                if (!postWrite(active, id, TerminalInput.paste(text))) return@withLock
+                delay(if (TerminalInput.containsPath(text)) 900 else 250)
+                if (!postWrite(active, id, "\r")) return@withLock
+                delay(80)
+                postWrite(active, id, "\r")
+            }
+        }
     }
 
     fun sendKey(name: String) {
+        sendModifiedKey(name, ctrl = false)
+    }
+
+    fun sendModifiedKey(name: String, ctrl: Boolean) {
         val id = openSessionID ?: return
-        write(id, TerminalInput.key(name))
+        val data = if (!ctrl) {
+            TerminalInput.key(name)
+        } else {
+            when (name) {
+                "arrowUp" -> "\u001b[1;5A"
+                "arrowDown" -> "\u001b[1;5B"
+                "arrowRight" -> "\u001b[1;5C"
+                "arrowLeft" -> "\u001b[1;5D"
+                "tab" -> "\u001b[27;5;9~"
+                "escape" -> "\u001b[27;5;27~"
+                else -> TerminalInput.key(name)
+            }
+        }
+        if (data.isNotEmpty()) write(id, data)
     }
 
     fun sendRaw(text: String) {
@@ -322,24 +452,81 @@ class Controller(context: Context) {
     }
 
     fun organize(sessionID: String, title: String? = null, pinned: Boolean? = null) {
+        saveSession(sessionID, title, pinned, null) {}
+    }
+
+    /** Null fields stay unchanged. `onDone` receives the Host error, or null. */
+    fun saveSession(
+        sessionID: String,
+        title: String?,
+        pinned: Boolean?,
+        notifyWhenDone: Boolean?,
+        onDone: (String?) -> Unit,
+    ) {
         scope.launch {
             val body = JSONObject().put("sessionID", sessionID)
             if (title != null) body.put("title", title)
             if (pinned != null) body.put("pinned", pinned)
-            runCatching { link().post("session-organization", body.toString()) }
+            if (notifyWhenDone != null) body.put("notifyWhenDone", notifyWhenDone)
+            val failure = runCatching { link().post("session-organization", body.toString()) }.exceptionOrNull()
             refreshOnce()
+            onDone(failure?.message)
+        }
+    }
+
+    fun supportsProjectOrganization(): Boolean =
+        snapshot?.capabilities?.contains("project.organization.set") == true
+
+    fun saveProject(
+        projectID: String,
+        displayName: String?,
+        colorID: String?,
+        dateSorted: Boolean?,
+        onDone: (String?) -> Unit,
+    ) {
+        scope.launch {
+            val body = JSONObject().put("projectID", projectID)
+            if (displayName != null) body.put("displayName", displayName)
+            if (colorID != null) body.put("colorID", colorID)
+            if (dateSorted != null) body.put("dateSorted", dateSorted)
+            val failure = runCatching { link().post("project-organization", body.toString()) }.exceptionOrNull()
+            refreshOnce()
+            onDone(failure?.message)
+        }
+    }
+
+    fun copyTranscript(sessionID: String, entries: Int, onResult: (String?, String?) -> Unit) {
+        scope.launch {
+            busy = true
+            try {
+                val body = link().get(
+                    "transcript-markdown",
+                    mapOf("session_id" to sessionID, "entries" to entries.toString()),
+                    timeoutMs = 20_000,
+                )
+                val markdown = JSONObject(body).optString("markdown").trim()
+                if (markdown.isEmpty()) onResult(null, "这个会话还没有可读的记录")
+                else onResult(markdown, null)
+            } catch (caught: Exception) {
+                onResult(null, caught.message ?: "复制失败")
+            } finally {
+                busy = false
+            }
         }
     }
 
     fun sessionAction(sessionID: String, action: String) {
         scope.launch {
-            runCatching {
+            if (action == "restart" || action == "resume_agent") restartingSessionID = sessionID
+            val failure = runCatching {
                 link().post(
                     "session-action",
                     JSONObject().put("sessionID", sessionID).put("action", action).toString(),
                 )
-            }
-            if (action == "remove" && openSessionID == sessionID) closeSession()
+            }.exceptionOrNull()
+            if (failure == null && action == "remove" && openSessionID == sessionID) closeSession()
+            if (failure != null) error = failure.message
+            if (restartingSessionID == sessionID) restartingSessionID = null
             refreshOnce()
         }
     }
@@ -361,10 +548,33 @@ class Controller(context: Context) {
 
     fun loadArtifacts() {
         val id = openSessionID ?: return
+        galleryPulse = false
         scope.launch {
             artifacts = runCatching { BootstrapJson.artifacts(link().get("artifacts", mapOf("session_id" to id))) }
                 .getOrDefault(emptyList())
             showGallery = true
+        }
+    }
+
+    /** Re-upload an existing capture into the composer. Does not submit. */
+    fun pasteArtifact(kind: String, name: String) {
+        val id = openSessionID ?: return
+        scope.launch {
+            busy = true
+            try {
+                val bytes = withContext(Dispatchers.IO) { fetchArtifact(id, kind, name) }
+                val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    ?: throw HostException(0, "这张图贴不上")
+                val jpeg = java.io.ByteArrayOutputStream()
+                bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, jpeg)
+                bitmap.recycle()
+                showGallery = false
+                attachImage(jpeg.toByteArray())
+            } catch (caught: Exception) {
+                error = caught.message ?: "贴上失败"
+            } finally {
+                busy = false
+            }
         }
     }
 
@@ -395,15 +605,62 @@ class Controller(context: Context) {
         error = null
     }
 
-    private fun write(sessionID: String, data: String) {
-        scope.launch {
-            runCatching {
-                link().post(
-                    "write",
-                    JSONObject().put("sessionID", sessionID).put("data", data).put("wid", UUID.randomUUID().toString()).toString(),
-                )
-            }.onFailure { error = it.message }
+    private fun stopGalleryWatch() {
+        galleryWatchJob?.cancel()
+        galleryWatchJob = null
+        galleryBaseline = null
+        galleryPulse = false
+    }
+
+    private fun startGalleryWatch(sessionID: String) {
+        stopGalleryWatch()
+        galleryWatchJob = scope.launch {
+            while (true) {
+                val session = snapshot?.sessions?.firstOrNull { it.id == sessionID }
+                if (session != null && AgentCatalog.isAgent(session.providerID, session.command)) {
+                    val list = runCatching {
+                        BootstrapJson.artifacts(
+                            link().get("artifacts", mapOf("session_id" to sessionID), timeoutMs = 8_000),
+                        )
+                    }.getOrNull()
+                    if (list != null) {
+                        val newest = list
+                            .filter { it.kind == "screenshots" || it.kind == "computer" }
+                            .maxOfOrNull { it.modifiedAtUnixMs } ?: 0L
+                        val floor = galleryBaseline
+                        if (floor == null) {
+                            galleryBaseline = newest
+                        } else if (newest > floor) {
+                            galleryBaseline = newest
+                            galleryPulse = true
+                            delay(2_200)
+                            galleryPulse = false
+                        }
+                    }
+                }
+                delay(5_000)
+            }
         }
+    }
+
+    private fun write(sessionID: String, data: String) {
+        val active = link ?: return
+        scope.launch {
+            inputLock.withLock { postWrite(active, sessionID, data) }
+        }
+    }
+
+    private suspend fun postWrite(active: HostLink, sessionID: String, data: String): Boolean {
+        return runCatching {
+            active.post(
+                "write",
+                JSONObject()
+                    .put("sessionID", sessionID)
+                    .put("data", data)
+                    .put("wid", UUID.randomUUID().toString())
+                    .toString(),
+            )
+        }.onFailure { error = it.message }.isSuccess
     }
 
     private fun startPolling() {

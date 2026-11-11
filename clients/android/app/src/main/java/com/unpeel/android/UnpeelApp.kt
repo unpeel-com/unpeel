@@ -3,6 +3,7 @@
 package com.unpeel.android
 
 import android.Manifest
+import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
@@ -11,6 +12,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -55,6 +57,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
@@ -72,14 +75,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.SpanStyle
@@ -98,11 +107,23 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
+import com.unpeel.controller.AgentCatalog
 import com.unpeel.controller.PendingApproval
 import com.unpeel.controller.ProjectSummary
+import com.unpeel.controller.ResumeOffer
 import com.unpeel.controller.SessionSummary
+import com.unpeel.controller.SidebarEntry
 import com.unpeel.controller.TerminalInput
+import com.unpeel.controller.canNotifyWhenDone
+import com.unpeel.controller.canStopSession
+import com.unpeel.controller.folderColorArgb
+import com.unpeel.controller.resumeOffer
+import com.unpeel.controller.sidebarEntries
+import com.unpeel.controller.sidebarIndex
 import com.unpeel.controller.VtScreen
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -123,26 +144,58 @@ private val KeyFill = Color(0x1AFFFFFF)
 
 private val SpinnerFrames = listOf("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 
-private enum class HomeSheet { Workspaces, Activity, Gallery, Organize, Presets }
+private enum class HomeSheet { Workspaces, Activity, Gallery, Organize, Presets, Project }
 
 @Composable
 fun UnpeelApp(controller: Controller) {
-    MaterialTheme(colorScheme = darkColorScheme(background = Frame, surface = Sheet, primary = Foreground)) {
-        Box(Modifier.fillMaxSize().background(Frame).windowInsetsPadding(WindowInsets.statusBars)) {
+    val context = LocalContext.current
+    val activity = context as? Activity
+    val lock = remember { AppLock(context) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val credential = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        lock.finishCredential(result.resultCode == Activity.RESULT_OK)
+    }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) lock.onBackground()
+            if (event == Lifecycle.Event.ON_START && activity != null) {
+                lock.onForeground(activity)?.let { credential.launch(it) }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    LaunchedEffect(activity) {
+        if (activity != null) lock.onForeground(activity)?.let { credential.launch(it) }
+    }
+    val chrome = hostChrome(controller.snapshot?.hostTintHue)
+    MaterialTheme(colorScheme = darkColorScheme(background = chrome, surface = Sheet, primary = Foreground)) {
+        Box(Modifier.fillMaxSize().background(chrome).windowInsetsPadding(WindowInsets.statusBars)) {
             if (controller.selectedHost == null) {
                 PairScreen(controller, firstRun = true)
             } else {
-                TerminalHome(controller)
+                TerminalHome(controller, locked = lock.locked, lock = lock, onCredential = { credential.launch(it) })
+            }
+            if (lock.locked) {
+                AppLockCover(lock, onUnlock = {
+                    if (activity != null) lock.unlock(activity)?.let { credential.launch(it) }
+                })
             }
         }
     }
 }
 
 @Composable
-private fun TerminalHome(controller: Controller) {
+private fun TerminalHome(
+    controller: Controller,
+    locked: Boolean,
+    lock: AppLock,
+    onCredential: (Intent) -> Unit,
+) {
     var sheet by remember { mutableStateOf<HomeSheet?>(null) }
     var presetProject by remember { mutableStateOf<ProjectSummary?>(null) }
     var organizeID by remember { mutableStateOf<String?>(null) }
+    var organizeProjectID by remember { mutableStateOf<String?>(null) }
     var confirmingRemove by remember { mutableStateOf(false) }
     var annotate by remember { mutableStateOf<Bitmap?>(null) }
     var drawerPosition by remember { mutableFloatStateOf(0f) }
@@ -169,7 +222,7 @@ private fun TerminalHome(controller: Controller) {
             drawerOpen = false
         }
     }
-    Box(Modifier.fillMaxSize().background(Frame)) {
+    Box(Modifier.fillMaxSize().background(hostChrome(controller.snapshot?.hostTintHue))) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val drawerWidth = minOf(360.dp, maxOf(286.dp, maxWidth * 0.88f))
         val drawerPx = with(LocalDensity.current) { drawerWidth.toPx() }.coerceAtLeast(1f)
@@ -251,6 +304,10 @@ private fun TerminalHome(controller: Controller) {
                         organizeID = chosen.id
                         sheet = HomeSheet.Organize
                     },
+                    onOrganizeProject = { project ->
+                        organizeProjectID = project.id
+                        sheet = HomeSheet.Project
+                    },
                 )
             }
         }
@@ -266,8 +323,8 @@ private fun TerminalHome(controller: Controller) {
             it.targetSessionID == session.id || it.callerSessionID == session.id
         } ?: 1) - 1, onAnswer = controller::answer)
     }
-    when (sheet) {
-        HomeSheet.Workspaces -> HostSheet(controller) { sheet = null }
+    if (!locked) when (sheet) {
+        HomeSheet.Workspaces -> HostSheet(controller, lock, onCredential) { sheet = null }
         HomeSheet.Activity -> ActivitySheet(
             controller,
             onDismiss = { sheet = null },
@@ -285,6 +342,12 @@ private fun TerminalHome(controller: Controller) {
         }
         HomeSheet.Presets -> presetProject?.let { project ->
             PresetSheet(controller, project) { sheet = null }
+        }
+        HomeSheet.Project -> {
+            val project = controller.snapshot?.projects?.firstOrNull { it.id == organizeProjectID }
+            if (project != null) {
+                ProjectOrganizeSheet(controller, project) { sheet = null }
+            }
         }
         null -> Unit
     }
@@ -363,10 +426,24 @@ private fun TerminalSurface(
 ) {
     val project = controller.snapshot?.projects?.firstOrNull { it.id == session.projectID }
     val context = LocalContext.current
-    val clipboard = LocalClipboardManager.current
     val voice = remember { VoiceCapture(context) }
     var listening by remember { mutableStateOf(false) }
     var voiceText by remember { mutableStateOf("") }
+    var ctrlArmed by remember { mutableStateOf(false) }
+    var allowComposerFocus by remember { mutableStateOf(false) }
+    val composerFocus = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_START || event == Lifecycle.Event.ON_RESUME || event == Lifecycle.Event.ON_STOP) {
+                allowComposerFocus = false
+                focusManager.clearFocus(force = true)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     DisposableEffect(voice) { onDispose { voice.cancel() } }
     DisposableEffect(session.id) { onDispose { controller.releasePhoneFit() } }
     val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -400,16 +477,31 @@ private fun TerminalSurface(
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text(session.title.ifEmpty { session.command }, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                val context = listOfNotNull(project?.name, session.worktreeBranch ?: project?.gitBranch).joinToString("  ")
-                if (context.isNotEmpty()) {
-                    Text(context, color = Color.White.copy(alpha = 0.55f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                val branch = session.worktreeBranch ?: project?.gitBranch
+                if (!project?.name.isNullOrEmpty() || !branch.isNullOrEmpty()) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (!project?.name.isNullOrEmpty()) {
+                            Text(project?.name.orEmpty(), color = Color.White.copy(alpha = 0.55f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 120.dp))
+                        }
+                        if (!branch.isNullOrEmpty()) {
+                            if (!project?.name.isNullOrEmpty()) Spacer(Modifier.width(4.dp))
+                            BranchMark(11.dp, Color.White.copy(alpha = 0.55f))
+                            Spacer(Modifier.width(2.dp))
+                            Text(branch, color = Color.White.copy(alpha = 0.55f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 96.dp))
+                        }
+                    }
                 }
             }
-            if (session.providerID != null || session.activeRuntimeID != null) {
-                GlassButton(onClick = {
-                    controller.loadArtifacts()
-                    onSheet(HomeSheet.Gallery)
-                }) { Text("▣", color = Foreground, fontSize = 16.sp) }
+            if (AgentCatalog.isAgent(session.providerID, session.command)) {
+                val pulse by animateFloatAsState(if (controller.galleryPulse) 1.12f else 1f, label = "gallery")
+                Box(Modifier.graphicsLayer { scaleX = pulse; scaleY = pulse }) {
+                    GlassButton(onClick = {
+                        controller.loadArtifacts()
+                        onSheet(HomeSheet.Gallery)
+                    }) {
+                        Text("▣", color = if (controller.galleryPulse) Attention else Foreground, fontSize = 16.sp)
+                    }
+                }
                 Spacer(Modifier.width(8.dp))
             }
             val spinning = controller.snapshot?.sessions?.any { it.activity == "working" || it.activity == "starting" } == true
@@ -446,15 +538,49 @@ private fun TerminalSurface(
                 TextButton(onClick = controller::dismissError) { Text("关闭") }
             }
         }
+        if (session.status == "exited" && session.capabilities?.restart == true) {
+            ExitedRestartBar(
+                restarting = controller.restartingSessionID == session.id,
+                onRestart = { controller.sessionAction(session.id, "restart") },
+            )
+        }
         Row(
-            Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            KeyChip("粘贴") {
-                val text = clipboard.getText()?.text.orEmpty()
-                if (text.isNotEmpty()) controller.sendRaw(TerminalInput.pasteAndSubmit(text))
+            Row(
+                Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RoundKey("◀") { controller.sendModifiedKey("arrowLeft", ctrlArmed); ctrlArmed = false }
+                RoundKey("▲") { controller.sendModifiedKey("arrowUp", ctrlArmed); ctrlArmed = false }
+                RoundKey("▼") { controller.sendModifiedKey("arrowDown", ctrlArmed); ctrlArmed = false }
+                RoundKey("▶") { controller.sendModifiedKey("arrowRight", ctrlArmed); ctrlArmed = false }
+                KeyDot()
+                RoundKey("esc", textSize = 11) { controller.sendModifiedKey("escape", ctrlArmed); ctrlArmed = false }
+                RoundKey("⇥") { controller.sendModifiedKey("tab", ctrlArmed); ctrlArmed = false }
+                RoundKey("⌃", armed = ctrlArmed) { ctrlArmed = !ctrlArmed }
+                KeyDot()
+                RoundKey("/") {
+                    if (ctrlArmed) {
+                        controller.sendRaw("\u001f")
+                        ctrlArmed = false
+                    } else {
+                        controller.composer += "/"
+                    }
+                }
+                RoundKey("@") {
+                    if (ctrlArmed) {
+                        controller.sendRaw("\u0000")
+                        ctrlArmed = false
+                    } else {
+                        controller.composer += "@"
+                    }
+                }
             }
-            KeyChip(if (listening) "停" else "语音") {
+            Spacer(Modifier.width(8.dp))
+            RoundKey(if (listening) "停" else "麦", armed = listening, textSize = 12) {
                 if (listening) {
                     voice.stop()
                 } else if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
@@ -463,32 +589,48 @@ private fun TerminalSurface(
                     micPermission.launch(Manifest.permission.RECORD_AUDIO)
                 }
             }
-            KeyChip("图片") { onPickImage() }
-            KeyChip("←") { controller.sendKey("arrowLeft") }
-            KeyChip("↑") { controller.sendKey("arrowUp") }
-            KeyChip("↓") { controller.sendKey("arrowDown") }
-            KeyChip("→") { controller.sendKey("arrowRight") }
-            KeyChip("Esc") { controller.sendKey("escape") }
-            KeyChip("Tab") { controller.sendKey("tab") }
-            KeyChip("^C") { controller.sendKey("controlC") }
-            KeyChip("/") { controller.composer += "/" }
-            KeyChip("@") { controller.composer += "@" }
         }
         Row(
             Modifier
                 .fillMaxWidth()
                 .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
-                .padding(start = 20.dp, end = 20.dp, bottom = 12.dp),
+                .padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = Alignment.Bottom,
         ) {
             OutlinedTextField(
                 value = controller.composer,
-                onValueChange = { controller.composer = it },
-                modifier = Modifier.weight(1f),
+                onValueChange = { next ->
+                    val added = next.removePrefix(controller.composer)
+                    if (ctrlArmed && added.length == 1 && added[0].isLetter()) {
+                        val code = added[0].lowercaseChar().code - 'a'.code + 1
+                        if (code in 1..26) {
+                            controller.sendRaw(code.toChar().toString())
+                            ctrlArmed = false
+                            return@OutlinedTextField
+                        }
+                    }
+                    controller.composer = next
+                },
+                modifier = Modifier
+                    .weight(1f)
+                    .pointerInput(Unit) {
+                        awaitPointerEventScope {
+                            while (true) {
+                                val event = awaitPointerEvent(PointerEventPass.Initial)
+                                val pressed = event.changes.any { change -> change.pressed && !change.previousPressed }
+                                if (pressed) allowComposerFocus = true
+                            }
+                        }
+                    }
+                    .focusRequester(composerFocus)
+                    .onFocusChanged { state ->
+                        if (state.isFocused && !allowComposerFocus) focusManager.clearFocus(force = true)
+                    },
                 placeholder = { Text("发给这个会话", color = Muted) },
-                singleLine = true,
-                shape = RoundedCornerShape(24.dp),
+                minLines = 1,
+                maxLines = 5,
+                shape = RoundedCornerShape(22.dp),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedTextColor = Foreground,
                     unfocusedTextColor = Foreground,
@@ -499,16 +641,16 @@ private fun TerminalSurface(
                     unfocusedContainerColor = Color.White.copy(alpha = 0.06f),
                 ),
             )
-            Text(
-                "发送",
-                color = Foreground,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(24.dp))
-                    .background(Color.White.copy(alpha = 0.10f))
-                    .clickable(onClick = controller::sendComposer)
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
-            )
+            Box(
+                Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.14f))
+                    .clickable(onClick = controller::sendComposer),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("↑", color = Foreground, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+            }
         }
     }
 }
@@ -561,14 +703,16 @@ private fun ColumnScope.TerminalGrid(controller: Controller) {
     val cellH = with(density) { 16.sp.toPx() }.coerceAtLeast(1f)
     val insetPx = with(density) { 8.dp.toPx() }
     val imeBottom = WindowInsets.ime.getBottom(density)
-    var phoneFitSent by remember(controller.openSessionID) { mutableStateOf(false) }
     var gridSize by remember(controller.openSessionID) { mutableStateOf(IntSize.Zero) }
     LaunchedEffect(controller.openSessionID, gridSize, imeBottom, controller.connection) {
-        if (phoneFitSent || imeBottom > 0) return@LaunchedEffect
-        val grid = phoneFitGrid(gridSize.width, gridSize.height, cellW, cellH, insetPx) ?: return@LaunchedEffect
+        if (gridSize.width < 48 || gridSize.height < 48) return@LaunchedEffect
         delay(120)
-        if (phoneFitSent || imeBottom > 0) return@LaunchedEffect
-        if (controller.fitPhone(grid.first, grid.second)) phoneFitSent = true
+        if (imeBottom > 0) {
+            controller.notePhoneViewport(0, 0, keyboardOpen = true)
+            return@LaunchedEffect
+        }
+        val grid = phoneFitGrid(gridSize.width, gridSize.height, cellW, cellH, insetPx) ?: return@LaunchedEffect
+        controller.notePhoneViewport(grid.first, grid.second, keyboardOpen = false)
     }
     var selection by remember { mutableStateOf<CellSel?>(null) }
     val clipboard = LocalClipboardManager.current
@@ -683,19 +827,25 @@ private fun SessionDrawer(
     onWorkspaces: () -> Unit,
     onNewSession: (ProjectSummary) -> Unit,
     onOrganize: (SessionSummary) -> Unit,
+    onOrganizeProject: (ProjectSummary) -> Unit,
 ) {
     val snapshot = controller.snapshot
     var expanded by remember { mutableStateOf(setOf<String>()) }
-    LaunchedEffect(selectedID) {
-        val projectID = snapshot?.sessions?.firstOrNull { it.id == selectedID }?.projectID
-        if (!projectID.isNullOrEmpty()) expanded = expanded + projectID
+    var openFolder by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(selectedID, snapshot?.projects, snapshot?.sessions) {
+        val projectID = snapshot?.sessions?.firstOrNull { it.id == selectedID }?.projectID ?: return@LaunchedEffect
+        val project = snapshot.projects.firstOrNull { it.id == projectID }
+        val parent = snapshot.projects.firstOrNull { it.id == project?.parentProjectID }
+        val folderID = project?.folderID ?: parent?.folderID
+        if (folderID != null) openFolder = folderID
+        expanded = expanded + listOfNotNull(projectID, project?.parentProjectID, parent?.parentProjectID)
     }
     Column(
         Modifier
             .fillMaxHeight()
             .width(width)
             .clip(RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp))
-            .background(Frame)
+            .background(hostChrome(snapshot?.hostTintHue))
             .pointerInput(Unit) {
                 detectHorizontalDragGestures(
                     onHorizontalDrag = { _, amount -> onDrag(amount) },
@@ -709,14 +859,52 @@ private fun SessionDrawer(
             if (snapshot == null) {
                 Text(controller.connection, color = Muted, fontSize = 13.sp, modifier = Modifier.padding(16.dp))
             } else {
-                val projects = snapshot.projects.filter { it.parentProjectID == null }
-                projects.forEach { project ->
-                    ProjectBlock(project, snapshot.projects, snapshot.sessions, expanded, selectedID, onToggle = {
-                        expanded = if (project.id in expanded) expanded - project.id else expanded + project.id
-                    }, onNewSession = onNewSession, onOpen = {
-                        controller.openSession(it.id)
-                        onClose()
-                    }, onOrganize = onOrganize)
+                val index = sidebarIndex(snapshot)
+                val worktrees = snapshot.experimentalWorktreesEnabled
+                index.folderGroups.forEach { group ->
+                    val open = openFolder == group.folder.id
+                    val memberSessions = group.projects.flatMap { project ->
+                        val children = index.childrenByParent[project.id].orEmpty()
+                            .filter { it.isGroup || (worktrees && it.worktreeBranch != null) }
+                        index.sessionsByProject[project.id].orEmpty() +
+                            children.flatMap { child -> index.sessionsByProject[child.id].orEmpty() }
+                    }
+                    FolderHeader(
+                        name = group.folder.name,
+                        colorID = group.folder.colorID,
+                        open = open,
+                        count = memberSessions.size,
+                        attention = !open && memberSessions.any { it.activity == "blocked" },
+                        onToggle = { openFolder = if (open) null else group.folder.id },
+                    )
+                    if (open) {
+                        group.projects.forEach { project ->
+                            ProjectBlock(
+                                project, index, worktrees, expanded, selectedID,
+                                onToggle = { id -> expanded = expanded.toggle(id) },
+                                onNewSession = onNewSession,
+                                onOpen = {
+                                    controller.openSession(it.id)
+                                    onClose()
+                                },
+                                onOrganize = onOrganize,
+                                onOrganizeProject = onOrganizeProject,
+                            )
+                        }
+                    }
+                }
+                index.looseProjects.forEach { project ->
+                    ProjectBlock(
+                        project, index, worktrees, expanded, selectedID,
+                        onToggle = { id -> expanded = expanded.toggle(id) },
+                        onNewSession = onNewSession,
+                        onOpen = {
+                            controller.openSession(it.id)
+                            onClose()
+                        },
+                        onOrganize = onOrganize,
+                        onOrganizeProject = onOrganizeProject,
+                    )
                 }
             }
         }
@@ -790,25 +978,58 @@ private fun WorkspaceHeader(controller: Controller, onClick: () -> Unit) {
 @Composable
 private fun ProjectBlock(
     project: ProjectSummary,
-    projects: List<ProjectSummary>,
-    sessions: List<SessionSummary>,
+    index: com.unpeel.controller.SidebarIndex,
+    worktreesEnabled: Boolean,
     expanded: Set<String>,
     selectedID: String?,
-    onToggle: () -> Unit,
+    depth: Int = 0,
+    onToggle: (String) -> Unit,
     onNewSession: (ProjectSummary) -> Unit,
     onOpen: (SessionSummary) -> Unit,
     onOrganize: (SessionSummary) -> Unit,
+    onOrganizeProject: (ProjectSummary) -> Unit,
 ) {
     val open = project.id in expanded
-    val own = sessions.filter { it.projectID == project.id }
-    val attention = own.any { it.activity == "blocked" }
-    Row(Modifier.fillMaxWidth().height(48.dp).clickable(onClick = onToggle), verticalAlignment = Alignment.CenterVertically) {
-        Text(if (open) "▾" else "▸", color = Muted, fontSize = 16.sp, modifier = Modifier.width(22.dp))
-        Text(project.name, color = if (project.isGroup) Foreground else Foreground.copy(alpha = 0.62f), fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+    val rows = sidebarEntries(
+        project,
+        index.sessionsByProject[project.id].orEmpty(),
+        index.childrenByParent[project.id].orEmpty(),
+        index.hoistedSessionIDs,
+        worktreesEnabled,
+    )
+    val attention = rows.any { entry ->
+        when (entry) {
+            is SidebarEntry.Session -> entry.session.activity == "blocked"
+            is SidebarEntry.Project -> index.sessionsByProject[entry.project.id].orEmpty().any { it.activity == "blocked" }
+        }
+    }
+    val tint = folderColorArgb(project.colorID)?.let { Color(it) } ?: Muted
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(48.dp)
+            .padding(start = (depth * 14).dp)
+            .combinedClickable(onClick = { onToggle(project.id) }, onLongClick = { onOrganizeProject(project) }),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(if (open) "▾" else "▸", color = tint, fontSize = 16.sp, modifier = Modifier.width(22.dp))
+        Text(
+            project.name,
+            color = if (project.isGroup) Foreground else Foreground.copy(alpha = 0.62f),
+            fontSize = 16.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
         if (attention) Box(Modifier.padding(end = 8.dp).size(8.dp).clip(CircleShape).background(Attention))
+        if (project.pinned == true) Text("📌", fontSize = 12.sp, modifier = Modifier.padding(end = 4.dp))
         val branch = project.worktreeBranch ?: project.gitBranch
         if (!branch.isNullOrEmpty() && branch != project.name) {
-            Text(branch, color = Muted.copy(alpha = 0.55f), fontSize = 12.sp, fontFamily = FontFamily.Monospace, maxLines = 1, modifier = Modifier.widthIn(max = 96.dp).padding(end = 4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(end = 4.dp)) {
+                BranchMark(12.dp, Muted.copy(alpha = 0.55f))
+                Spacer(Modifier.width(3.dp))
+                Text(branch, color = Muted.copy(alpha = 0.55f), fontSize = 12.sp, fontFamily = FontFamily.Monospace, maxLines = 1, modifier = Modifier.widthIn(max = 96.dp))
+            }
         }
         if (!project.isGroup) {
             Box(
@@ -820,13 +1041,23 @@ private fun ProjectBlock(
         }
     }
     if (open) {
-        projects.filter { it.parentProjectID == project.id }.forEach { child ->
-            Text(child.name, color = Muted, fontSize = 15.sp, modifier = Modifier.padding(start = 32.dp, top = 8.dp, bottom = 8.dp))
-        }
-        val pinned = own.filter { it.pinned }
-        val rest = own.filter { !it.pinned }
-        (pinned + rest).forEach { session ->
-            SessionLine(session, session.id == selectedID, onOpen = { onOpen(session) }, onOrganize = { onOrganize(session) })
+        rows.forEach { entry ->
+            when (entry) {
+                is SidebarEntry.Session -> SessionLine(
+                    entry.session,
+                    entry.session.id == selectedID,
+                    onOpen = { onOpen(entry.session) },
+                    onOrganize = { onOrganize(entry.session) },
+                )
+                is SidebarEntry.Project -> ProjectBlock(
+                    entry.project, index, worktreesEnabled, expanded, selectedID, depth + 1,
+                    onToggle = onToggle,
+                    onNewSession = onNewSession,
+                    onOpen = onOpen,
+                    onOrganize = onOrganize,
+                    onOrganizeProject = onOrganizeProject,
+                )
+            }
         }
     }
 }
@@ -853,7 +1084,13 @@ private fun SessionLine(session: SessionSummary, selected: Boolean, onOpen: () -
             }
         }
         Spacer(Modifier.width(6.dp))
-        BrandMark(session.command, size = 28.dp)
+        ToolLogo(
+            command = session.command,
+            providerID = session.providerID,
+            activeRuntimeID = session.activeRuntimeID,
+            running = session.status == "running",
+            size = 28.dp,
+        )
         Text(
             session.title.ifEmpty { session.command },
             color = if (session.status == "exited") Muted else Foreground,
@@ -862,6 +1099,7 @@ private fun SessionLine(session: SessionSummary, selected: Boolean, onOpen: () -
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f).padding(start = 10.dp, end = 8.dp),
         )
+        if (session.notifyWhenDone) Text("🔔", fontSize = 12.sp, modifier = Modifier.padding(end = 6.dp))
         if (session.pinned) Text("📌", fontSize = 14.sp, modifier = Modifier.padding(end = 8.dp))
         Text(
             if (session.activity == "blocked") "blocked" else relativeAge(session.updatedAtUnixMs),
@@ -898,7 +1136,12 @@ private fun ApprovalOverlay(approval: PendingApproval, more: Int, onAnswer: (Str
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun HostSheet(controller: Controller, onDismiss: () -> Unit) {
+private fun HostSheet(
+    controller: Controller,
+    lock: AppLock,
+    onCredential: (Intent) -> Unit,
+    onDismiss: () -> Unit,
+) {
     val context = LocalContext.current
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = Sheet) {
         Column(Modifier.padding(horizontal = 18.dp, vertical = 8.dp).verticalScroll(rememberScrollState())) {
@@ -958,6 +1201,26 @@ private fun HostSheet(controller: Controller, onDismiss: () -> Unit) {
                 }
             }
             Spacer(Modifier.height(16.dp))
+            Text("安全", color = Foreground, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(6.dp))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("离开时锁定", color = Foreground, fontSize = 15.sp)
+                    Text("指纹、面容，或锁屏密码", color = Muted, fontSize = 12.sp)
+                }
+                val activity = context as? Activity
+                Switch(
+                    checked = lock.enabled,
+                    onCheckedChange = { armed ->
+                        if (activity == null) return@Switch
+                        if (armed) lock.arm(activity)?.let(onCredential) else lock.disarm()
+                    },
+                )
+            }
+            lock.lastError?.let {
+                Text(it, color = Attention, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+            }
+            Spacer(Modifier.height(16.dp))
             Text("添加另一台", color = Foreground, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(8.dp))
             PairFields(controller, context)
@@ -993,7 +1256,7 @@ private fun ActivityGroup(title: String, sessions: List<SessionSummary>, project
                     session.activity == "working" || session.activity == "starting" -> BrailleSpinner(rgb(session.spinnerColorHex ?: 0xB9BDC9))
                     session.activity == "blocked" -> Box(Modifier.size(7.dp).clip(CircleShape).background(Attention))
                     session.unread -> Box(Modifier.size(7.dp).clip(CircleShape).background(Unread))
-                    else -> BrandMark(session.command, size = 18.dp)
+                    else -> ToolLogo(session.command, session.providerID, session.activeRuntimeID, session.status == "running", 18.dp)
                 }
             }
             Column(Modifier.weight(1f).padding(start = 8.dp)) {
@@ -1017,8 +1280,19 @@ private fun GallerySheet(controller: Controller, onPickImage: () -> Unit, onDism
             }) { Text("从相册标注并附上", color = Foreground) }
             if (controller.artifacts.isEmpty()) Text("还没有截图。", color = Muted, fontSize = 13.sp)
             controller.artifacts.forEach { artifact ->
-                TextButton(onClick = { controller.openArtifact(artifact.kind, artifact.name) }) {
-                    Text("${artifact.kind}  ${artifact.name}", color = Foreground)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(
+                        onClick = { controller.openArtifact(artifact.kind, artifact.name) },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("${artifact.kind}  ${artifact.name}", color = Foreground, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    if (canPasteArtifact(artifact.kind, artifact.name)) {
+                        TextButton(onClick = {
+                            controller.pasteArtifact(artifact.kind, artifact.name)
+                            onDismiss()
+                        }) { Text("贴上", color = Foreground) }
+                    }
                 }
             }
             Spacer(Modifier.height(20.dp))
@@ -1030,23 +1304,166 @@ private fun GallerySheet(controller: Controller, onPickImage: () -> Unit, onDism
 @Composable
 private fun OrganizeSheet(controller: Controller, session: SessionSummary, onDismiss: () -> Unit, onRemove: () -> Unit) {
     var title by remember(session.id) { mutableStateOf(session.title) }
+    var notify by remember(session.id, session.notifyWhenDone) { mutableStateOf(session.notifyWhenDone) }
+    var note by remember { mutableStateOf<String?>(null) }
+    var confirmStop by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val offer = resumeOffer(session, controller.snapshot?.capabilities.orEmpty())
+    val showNotify = canNotifyWhenDone(session)
+    val showTranscript = AgentCatalog.supportsTranscript(session.providerID, session.command)
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Sheet) {
-        Column(Modifier.padding(horizontal = 18.dp)) {
+        Column(Modifier.padding(horizontal = 18.dp).verticalScroll(rememberScrollState())) {
             Text("编辑会话", color = Foreground, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(10.dp))
             OutlinedTextField(value = title, onValueChange = { title = it }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            if (showNotify) {
+                Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("完成后通知", color = Foreground, fontSize = 15.sp)
+                        Text("这一轮结束时提醒你", color = Muted, fontSize = 12.sp)
+                    }
+                    Switch(checked = notify, onCheckedChange = { notify = it })
+                }
+            }
             Row {
-                TextButton(onClick = {
-                    controller.organize(session.id, title = title.trim())
-                    onDismiss()
-                }, enabled = title.isNotBlank()) { Text("保存名称") }
+                TextButton(
+                    onClick = {
+                        val trimmed = title.trim()
+                        val titlePatch = trimmed.takeIf { it.isNotEmpty() && it != session.title }
+                        val notifyPatch = notify.takeIf { showNotify && it != session.notifyWhenDone }
+                        if (titlePatch == null && notifyPatch == null) {
+                            onDismiss()
+                            return@TextButton
+                        }
+                        controller.saveSession(session.id, titlePatch, null, notifyPatch) { failure ->
+                            if (failure == null) onDismiss() else note = failure
+                        }
+                    },
+                    enabled = title.isNotBlank(),
+                ) { Text("保存") }
                 TextButton(onClick = { controller.organize(session.id, pinned = !session.pinned) }) {
                     Text(if (session.pinned) "取消置顶" else "置顶")
                 }
             }
-            TextButton(onClick = { controller.sessionAction(session.id, "stop") }) { Text("停止") }
-            TextButton(onClick = { controller.sessionAction(session.id, "restart") }) { Text("重启") }
-            TextButton(onClick = onRemove) { Text("移除", color = Attention) }
+            if (showTranscript) {
+                Text("复制记录", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
+                Row {
+                    listOf(20 to "最近 20 条", 50 to "最近 50 条", 0 to "全部").forEach { (entries, label) ->
+                        TextButton(onClick = {
+                            controller.copyTranscript(session.id, entries) { markdown, failure ->
+                                if (markdown != null) {
+                                    val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
+                                    clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("transcript", markdown))
+                                    note = "已复制为 Markdown"
+                                } else {
+                                    note = failure
+                                }
+                            }
+                        }, enabled = !controller.busy) { Text(label, fontSize = 13.sp) }
+                    }
+                }
+            }
+            when (offer) {
+                ResumeOffer.Agent -> TextButton(onClick = {
+                    controller.sessionAction(session.id, "resume_agent")
+                    onDismiss()
+                }) { Text("恢复 Agent") }
+                ResumeOffer.Session -> TextButton(onClick = {
+                    controller.sessionAction(session.id, "restart")
+                    onDismiss()
+                }) { Text("恢复") }
+                ResumeOffer.None -> Unit
+            }
+            if (canStopSession(session)) {
+                TextButton(onClick = { confirmStop = true }) { Text("停止") }
+            }
+            TextButton(onClick = onRemove) { Text(if (session.status == "running") "移除会话" else "从列表移除", color = Attention) }
+            note?.let { Text(it, color = if (it.startsWith("已复制")) Muted else Attention, fontSize = 12.sp) }
+            Text(organizeHint(session, offer), color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp, bottom = 18.dp))
+        }
+    }
+    if (confirmStop) {
+        AlertDialog(
+            onDismissRequest = { confirmStop = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmStop = false
+                    controller.sessionAction(session.id, "stop")
+                    onDismiss()
+                }) { Text("停止") }
+            },
+            dismissButton = { TextButton(onClick = { confirmStop = false }) { Text("取消") } },
+            title = { Text("停止这个会话") },
+            text = { Text("进程会停掉，会话留在列表里，之后可以恢复。") },
+            containerColor = Sheet,
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ProjectOrganizeSheet(controller: Controller, project: ProjectSummary, onDismiss: () -> Unit) {
+    var name by remember(project.id) { mutableStateOf(project.name) }
+    var colorID by remember(project.id) { mutableStateOf(project.colorID) }
+    var dateSorted by remember(project.id) { mutableStateOf(project.dateSorted == true) }
+    var note by remember { mutableStateOf<String?>(null) }
+    val canEdit = controller.supportsProjectOrganization()
+    val canRename = canEdit && project.isGroup
+    val canColor = canEdit && !project.isGroup && project.parentProjectID == null
+    val colors = listOf(null, "sky", "blue", "violet", "rose", "amber", "moss", "teal", "graphite")
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Sheet) {
+        Column(Modifier.padding(horizontal = 18.dp).verticalScroll(rememberScrollState())) {
+            Text(if (project.isGroup) "编辑分组" else "编辑文件夹", color = Foreground, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(10.dp))
+            if (!canEdit) {
+                Text("请先在 Mac 上更新 Unpeel，才能在手机上整理文件夹。", color = Muted, fontSize = 14.sp)
+            }
+            if (canRename) {
+                OutlinedTextField(value = name, onValueChange = { name = it }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            }
+            if (canEdit) {
+                Text("会话排序", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
+                Row {
+                    TextButton(onClick = { dateSorted = false }) { Text(if (!dateSorted) "自定义顺序 ✓" else "自定义顺序") }
+                    TextButton(onClick = { dateSorted = true }) { Text(if (dateSorted) "按时间 ✓" else "按时间") }
+                }
+            }
+            if (canColor) {
+                Text("颜色", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp, bottom = 6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                    colors.forEach { id ->
+                        val fill = folderColorArgb(id)?.let { Color(it) }
+                        val selected = colorID == id
+                        Box(
+                            Modifier
+                                .size(28.dp)
+                                .clip(CircleShape)
+                                .background(fill ?: Color.Transparent)
+                                .border(2.dp, if (selected) Foreground else Hairline, CircleShape)
+                                .clickable { colorID = id },
+                        )
+                    }
+                }
+            }
+            if (canEdit) {
+                TextButton(onClick = {
+                    val trimmed = name.trim()
+                    val namePatch = trimmed.takeIf { canRename && it.isNotEmpty() && it != project.name }
+                    val colorPatch = when {
+                        !canColor || colorID == project.colorID -> null
+                        else -> colorID ?: ""
+                    }
+                    val sortPatch = dateSorted.takeIf { it != (project.dateSorted == true) }
+                    if (namePatch == null && colorPatch == null && sortPatch == null) {
+                        onDismiss()
+                        return@TextButton
+                    }
+                    controller.saveProject(project.id, namePatch, colorPatch, sortPatch) { failure ->
+                        if (failure == null) onDismiss() else note = failure
+                    }
+                }, enabled = !canRename || name.isNotBlank()) { Text("保存") }
+            }
+            note?.let { Text(it, color = Attention, fontSize = 12.sp) }
             Spacer(Modifier.height(18.dp))
         }
     }
@@ -1074,7 +1491,7 @@ private fun PresetSheet(controller: Controller, project: ProjectSummary, onDismi
                         .padding(horizontal = 12.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    BrandMark(preset.command)
+                    ToolLogo(preset.command, size = 22.dp)
                     Column(Modifier.padding(start = 10.dp)) {
                         Text(preset.label.ifEmpty { preset.command }, color = Foreground, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
                         Text(preset.command, color = Muted, fontSize = 11.sp, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -1152,13 +1569,28 @@ private fun GlassButton(onClick: () -> Unit, content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun KeyChip(label: String, onClick: () -> Unit) {
-    Text(
-        label,
-        color = Color.White.copy(alpha = 0.92f),
-        fontSize = 13.sp,
-        modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(KeyFill).clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 8.dp),
-    )
+private fun RoundKey(label: String, armed: Boolean = false, textSize: Int = 14, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(36.dp)
+            .clip(CircleShape)
+            .background(if (armed) Color(0xFF32ADE6) else Color.White.copy(alpha = 0.10f))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            color = if (armed) Color.Black else Color.White.copy(alpha = 0.92f),
+            fontSize = textSize.sp,
+            fontWeight = FontWeight.SemiBold,
+            fontFamily = if (label.length == 1) FontFamily.Monospace else FontFamily.Default,
+        )
+    }
+}
+
+@Composable
+private fun KeyDot() {
+    Box(Modifier.size(6.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.28f)))
 }
 
 @Composable
@@ -1172,6 +1604,99 @@ private fun BrailleSpinner(color: Color) {
     }
     Text(SpinnerFrames[frame], color = color, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 14.sp)
 }
+
+@Composable
+private fun AppLockCover(lock: AppLock, onUnlock: () -> Unit) {
+    Column(
+        Modifier.fillMaxSize().background(Frame).clickable(onClick = {}).padding(28.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text("已锁定", color = Foreground, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(8.dp))
+        Text("验证后才能继续看会话", color = Muted, fontSize = 14.sp)
+        lock.lastError?.let {
+            Spacer(Modifier.height(8.dp))
+            Text(it, color = Attention, fontSize = 13.sp)
+        }
+        Spacer(Modifier.height(18.dp))
+        Button(onClick = onUnlock, enabled = !lock.authInFlight) { Text(if (lock.authInFlight) "正在验证…" else "解锁") }
+    }
+}
+
+@Composable
+private fun ExitedRestartBar(restarting: Boolean, onRestart: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .clip(RoundedCornerShape(22.dp))
+            .background(Color.White.copy(alpha = 0.08f))
+            .border(1.dp, Hairline, RoundedCornerShape(22.dp))
+            .padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(if (restarting) "正在恢复…" else "会话已结束", color = Foreground, fontSize = 14.sp, modifier = Modifier.weight(1f))
+        TextButton(onClick = onRestart, enabled = !restarting) { Text("恢复") }
+    }
+}
+
+@Composable
+private fun FolderHeader(
+    name: String,
+    colorID: String?,
+    open: Boolean,
+    count: Int,
+    attention: Boolean,
+    onToggle: () -> Unit,
+) {
+    val tint = folderColorArgb(colorID)?.let { Color(it) } ?: Muted
+    Row(
+        Modifier.fillMaxWidth().height(36.dp).clickable(onClick = onToggle).padding(horizontal = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(if (open) "▾" else "▸", color = tint, fontSize = 12.sp, modifier = Modifier.width(16.dp))
+        Text(name.uppercase(), color = Foreground, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, modifier = Modifier.weight(1f))
+        if (attention) Box(Modifier.padding(end = 6.dp).size(6.dp).clip(CircleShape).background(Attention))
+        if (!open && count > 0) {
+            Text(
+                count.toString(),
+                color = Muted,
+                fontSize = 11.sp,
+                modifier = Modifier.clip(RoundedCornerShape(9.dp)).background(Hover).padding(horizontal = 6.dp, vertical = 2.dp),
+            )
+        }
+    }
+}
+
+private fun hostChrome(hue: Double?): Color {
+    if (hue == null || hue.isNaN()) return Frame
+    val wrapped = ((hue % 360.0) + 360.0) % 360.0
+    return Color.hsl(wrapped.toFloat(), 0.18f, 0.10f)
+}
+
+private fun canPasteArtifact(kind: String, name: String): Boolean {
+    if (kind == "screenshots" || kind == "computer") return true
+    val lower = name.lowercase()
+    return lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".webp")
+}
+
+private fun organizeHint(session: SessionSummary, offer: ResumeOffer): String {
+    val stop = canStopSession(session)
+    return when {
+        session.status == "running" && offer == ResumeOffer.Agent && stop ->
+            "恢复 Agent 留在这个终端里。停止后会话还在列表中，可以再恢复。移除会删掉它。"
+        session.status == "running" && offer == ResumeOffer.Agent ->
+            "恢复 Agent 留在这个终端里。移除会停掉并删掉这个会话。"
+        session.status == "running" && stop ->
+            "停止后会话还在列表中，可以再恢复。移除会停掉并删掉它。"
+        session.status == "running" -> "这次启动没有可恢复的记录。移除会停掉并删掉它。"
+        offer == ResumeOffer.Session -> "恢复会接着这次对话。移除只是从列表里清掉。"
+        else -> "移除只是从列表里清掉。"
+    }
+}
+
+private fun Set<String>.toggle(id: String): Set<String> = if (id in this) this - id else this + id
 
 private fun rgb(hex: Int): Color {
     val argb = if (hex ushr 24 == 0) hex or 0xFF000000.toInt() else hex

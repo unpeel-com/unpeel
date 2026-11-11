@@ -3,9 +3,11 @@ package com.unpeel.controller
 import org.json.JSONObject
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ProtocolTest {
@@ -96,6 +98,85 @@ class ProtocolTest {
         assertEquals(true, snapshot.sessions.single().pinned)
         assertEquals(1L, snapshot.sessions.single().updatedAtUnixMs)
         assertEquals("default", snapshot.workspaces.single().name)
+        assertNull(snapshot.hostTintHue)
+        assertFalse(snapshot.experimentalWorktreesEnabled)
+        assertNull(snapshot.sessions.single().capabilities)
+        assertFalse(snapshot.sessions.single().notifyWhenDone)
+    }
+
+    @Test
+    fun bootstrapReadsSidebarAndSessionCapabilities() {
+        val snapshot = BootstrapJson.parse(
+            """
+            {"hostProtocol":{"capabilities":["session.runtime.resume","project.organization.set"]},
+             "hostTintHue":0,"experimentalWorktreesEnabled":true,
+             "folders":[{"id":"f","name":"Work","colorID":"blue","parentFolderID":"root","sortOrder":0},{"id":"empty","name":"Empty","sortOrder":1}],
+             "projects":[
+               {"id":"p","name":"upreel","path":"/code","folderID":"f","sortOrder":0,"colorID":"sky","gitBranch":"main","dateSorted":false,"sessionOrder":["s1","wt"]},
+               {"id":"loose","name":"notes","path":"/n","sortOrder":1},
+               {"id":"wt","name":"feature","path":"/wt","parentProjectID":"p","worktreeBranch":"feature","sortOrder":2},
+               {"id":"sidebar-p","name":"Sidebar","path":"/code","parentProjectID":"p","isGroup":true,"sortOrder":3},
+               {"id":"grp","name":"Ideas","path":"/code","parentProjectID":"p","isGroup":true,"pinned":true,"sortOrder":4}
+             ],
+             "sessions":[
+               {"id":"s1","projectID":"p","title":"a","command":"cursor","status":"running","activity":"idle","providerID":"cursor","notifyWhenDone":true,"capabilities":{"restart":true,"resumeAgent":true,"notifyWhenDone":true,"resumable":true}},
+               {"id":"s2","projectID":"sidebar-p","title":"hoisted","command":"/bin/bash","status":"running","activity":"idle"},
+               {"id":"s3","projectID":"wt","title":"old","command":"amp","status":"exited","activity":"idle","runtimeLaunchPending":true,"capabilities":{"restart":true,"notifyWhenDone":false,"archive":true}},
+               {"id":"s4","projectID":"loose","title":"shell","command":"claude","status":"running","activity":"idle","activeRuntimeID":"claude","capabilities":{"restart":false,"resumeAgent":true,"notifyWhenDone":false,"resumable":false}}
+             ],
+             "presets":[]}
+            """.trimIndent(),
+        )
+        assertEquals(0.0, snapshot.hostTintHue)
+        assertTrue(snapshot.experimentalWorktreesEnabled)
+        assertEquals("blue", snapshot.folders.first().colorID)
+        assertEquals("root", snapshot.folders.first().parentFolderID)
+        assertEquals("sky", snapshot.projects.first().colorID)
+        val index = sidebarIndex(snapshot)
+        assertEquals(listOf("p"), index.folderGroups.single().projects.map { it.id })
+        assertEquals(listOf("loose"), index.looseProjects.map { it.id })
+        assertEquals(setOf("s2"), index.hoistedSessionIDs)
+        assertEquals(setOf("wt", "grp"), index.childrenByParent["p"].orEmpty().map { it.id }.toSet())
+        assertEquals(setOf("s1", "s2"), index.sessionsByProject["p"].orEmpty().map { it.id }.toSet())
+        val rows = sidebarEntries(
+            snapshot.projects.first { it.id == "p" },
+            index.sessionsByProject["p"].orEmpty(),
+            index.childrenByParent["p"].orEmpty(),
+            index.hoistedSessionIDs,
+            worktreesEnabled = true,
+        )
+        assertEquals(listOf("s2", "grp", "s1", "wt"), rows.map { entry ->
+            when (entry) {
+                is SidebarEntry.Session -> entry.session.id
+                is SidebarEntry.Project -> entry.project.id
+            }
+        })
+        val hidden = sidebarEntries(
+            snapshot.projects.first { it.id == "p" },
+            index.sessionsByProject["p"].orEmpty(),
+            index.childrenByParent["p"].orEmpty(),
+            index.hoistedSessionIDs,
+            worktreesEnabled = false,
+        )
+        assertFalse(hidden.any { it is SidebarEntry.Project && it.project.id == "wt" })
+        val running = snapshot.sessions.first { it.id == "s1" }
+        assertEquals(ResumeOffer.Agent, resumeOffer(running, snapshot.capabilities))
+        assertEquals(ResumeOffer.None, resumeOffer(running.copy(runtimeLaunchPending = true), snapshot.capabilities))
+        assertEquals(ResumeOffer.None, resumeOffer(running, emptyList()))
+        val exited = snapshot.sessions.first { it.id == "s3" }
+        assertTrue(exited.capabilities!!.resumable)
+        assertEquals(ResumeOffer.Session, resumeOffer(exited, snapshot.capabilities))
+        assertEquals(ResumeOffer.None, resumeOffer(exited.copy(capabilities = null), snapshot.capabilities))
+        assertTrue(canNotifyWhenDone(snapshot.sessions.first { it.id == "s2" }))
+        assertFalse(canNotifyWhenDone(exited))
+        assertTrue(AgentCatalog.supportsTranscript("cursor", "cursor"))
+        assertFalse(AgentCatalog.supportsTranscript(null, "amp"))
+        assertFalse(AgentCatalog.supportsTranscript(null, "/bin/bash"))
+        assertTrue(AgentCatalog.isAgent(null, "amp"))
+        assertFalse(AgentCatalog.isAgent(null, "bash"))
+        val observed = snapshot.sessions.first { it.id == "s4" }
+        assertEquals(ResumeOffer.None, resumeOffer(observed, snapshot.capabilities))
+        assertTrue(AgentCatalog.supportsTranscript(null, "claude"))
     }
 
     @Test
@@ -114,6 +195,9 @@ class ProtocolTest {
     fun pasteAndSubmitUsesBracketedPaste() {
         assertEquals("\u001b[200~hello\u001b[201~", TerminalInput.paste("hello"))
         assertEquals("\u001b[200~hello\u001b[201~\r", TerminalInput.pasteAndSubmit("hello"))
+        assertEquals("hi\nthere[31m", TerminalInput.sanitize("hi\r\nthere\u001b[31m"))
+        assertEquals(true, TerminalInput.containsPath("look at src/lib/foo.ts"))
+        assertEquals(false, TerminalInput.containsPath("capture the result"))
         assertEquals("\u0003", TerminalInput.key("controlC"))
     }
 
