@@ -18,10 +18,7 @@ import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
-import android.graphics.Paint
-import android.graphics.Typeface
-import com.termit.ui.AnsiColors
-import com.termit.vt.Cell
+import com.termit.ui.TerminalMetrics
 import com.termit.vt.VtEmulator
 import com.unpeel.controller.AgentTerminalPolicy
 import com.unpeel.controller.CursorMotion
@@ -41,18 +38,10 @@ class HostTerminalView(
     context: Context,
     private var terminal: HostTerminal,
 ) : View(context) {
-    private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        typeface = Typeface.MONOSPACE
-    }
-    private val bgPaint = Paint()
-    private val cursorPaint = Paint().apply {
-        color = 0x99FFFFFF.toInt()
-        style = Paint.Style.FILL
-    }
+    private val renderer: com.termit.ui.TerminalRenderer
     val cellWidth: Float
     val cellHeight: Int
     val topPad: Int
-    private var cellBaseline = 0f
 
     var onSelectionChanged: ((Boolean) -> Unit)? = null
     /** Rising and falling edges of an on-screen select menu. */
@@ -274,13 +263,13 @@ class HostTerminalView(
 
     init {
         val textPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 16f, resources.displayMetrics)
-            .coerceAtLeast(8f)
-        textPaint.textSize = textPx
-        val fm = textPaint.fontMetrics
-        cellWidth = textPaint.measureText("M").coerceAtLeast(1f)
-        cellHeight = (fm.descent - fm.ascent + resources.displayMetrics.density).roundToInt().coerceAtLeast(1)
-        cellBaseline = -fm.ascent
-        topPad = cellBaseline.roundToInt().coerceAtLeast(0)
+            .roundToInt()
+            .coerceAtLeast(8)
+        val metrics = TerminalMetrics(textPx)
+        renderer = metrics.renderer
+        cellWidth = metrics.fontWidth.coerceAtLeast(1f)
+        cellHeight = metrics.fontLineSpacing.coerceAtLeast(1)
+        topPad = metrics.fontLineSpacingAndAscent
         setBackgroundColor(CANVAS)
         importantForAutofill = IMPORTANT_FOR_AUTOFILL_NO
         isFocusable = true
@@ -503,54 +492,13 @@ class HostTerminalView(
         }
         canvas.translate(shift.toFloat(), placed.second.toFloat())
         val sel = selectionArgs()
-        val rows = visibleRows().coerceAtMost(emulator.mRows)
-        val cols = emulator.mColumns
-        for (r in 0 until rows) {
-            val row = topRow + r
-            for (c in 0 until cols) {
-                val cell = emulator.screen.cellAtTranscript(row, c)
-                val selected = sel != null && row in sel[0]..sel[1] &&
-                    c >= (if (row == sel[0]) sel[2] else 0) &&
-                    c <= (if (row == sel[1]) sel[3] else cols - 1)
-                drawCell(canvas, r, c, cell, selected)
-            }
-        }
-        if (blinkOn && topRow <= emulator.cursorRow && emulator.cursorRow < topRow + rows) {
-            val cr = emulator.cursorRow - topRow
-            val cc = emulator.cursorCol
-            if (cc in 0 until cols) {
-                val left = cc * cellWidth
-                val top = topPad + cr * cellHeight
-                canvas.drawRect(left, top.toFloat(), left + cellWidth, (top + cellHeight).toFloat(), cursorPaint)
-            }
+        if (sel == null) {
+            renderer.render(emulator, canvas, topRow, -1, -1, -1, -1, blinkOn)
+        } else {
+            renderer.render(emulator, canvas, topRow, sel[0], sel[1], sel[2], sel[3], blinkOn)
         }
         canvas.restore()
         canvas.restore()
-    }
-
-    private fun drawCell(canvas: Canvas, row: Int, col: Int, cell: Cell, selected: Boolean) {
-        var fg = AnsiColors.foreground(cell.fg, cell.bold)
-        var bg = AnsiColors.background(cell.bg)
-        if (cell.inverse) {
-            val tmp = fg
-            fg = bg
-            bg = tmp
-        }
-        if (selected) {
-            bg = 0xFF3A5F8A.toInt()
-            fg = 0xFFFFFFFF.toInt()
-        }
-        val left = col * cellWidth
-        val top = (topPad + row * cellHeight).toFloat()
-        bgPaint.color = bg
-        canvas.drawRect(left, top, left + cellWidth, top + cellHeight, bgPaint)
-        val ch = cell.char
-        if (ch != ' ' && ch != '\u0000') {
-            textPaint.color = fg
-            textPaint.isFakeBoldText = cell.bold
-            textPaint.isUnderlineText = cell.underline
-            canvas.drawText(ch.toString(), left, top + cellBaseline, textPaint)
-        }
     }
 
     private fun publishMenu() {
