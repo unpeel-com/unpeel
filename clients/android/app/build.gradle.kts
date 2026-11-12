@@ -9,7 +9,8 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.unpeel.android"
+        // Distinct from ui-localization's com.unpeel.android so both can sit on one phone.
+        applicationId = "com.unpeel.android.termit"
         minSdk = 26
         targetSdk = 35
         versionCode = 30
