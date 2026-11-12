@@ -63,7 +63,7 @@ class TerminalView @JvmOverloads constructor(
     init {
         isFocusable = true
         isFocusableInTouchMode = true
-        setBackgroundColor(AnsiColors.background(0))
+        setBackgroundColor(AnsiColors.resolve(AnsiColors.INDEX_BG, AnsiColors.buildDefaultPalette()))
         measureCell()
     }
 
@@ -132,8 +132,9 @@ class TerminalView @JvmOverloads constructor(
     }
 
     private fun drawCell(canvas: Canvas, row: Int, col: Int, cell: Cell, forceFg: Boolean = false) {
-        var fg = AnsiColors.foreground(cell.fg, cell.bold)
-        var bg = AnsiColors.background(cell.bg)
+        val palette = session?.emulator?.colors ?: AnsiColors.buildDefaultPalette()
+        var fg = AnsiColors.resolve(cell.fg, palette, bold = cell.bold, dim = cell.dim)
+        var bg = AnsiColors.resolve(cell.bg, palette)
         if (cell.inverse) {
             val tmp = fg
             fg = bg

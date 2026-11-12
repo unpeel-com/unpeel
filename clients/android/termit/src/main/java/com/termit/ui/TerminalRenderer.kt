@@ -4,12 +4,12 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Typeface
 import com.termit.vt.Cell
+import com.termit.vt.CellStyle
 import com.termit.vt.VtEmulator
 
 /**
  * Renders a [VtEmulator] grid into a [Canvas].
- * Wide glyphs must not be painted over by the next cell's background — that is
- * what made CJK look shredded when HostTerminalView drew cell-by-cell.
+ * Row baselines match Termux TerminalRenderer (first baseline = ascentPad + lineSpacing).
  */
 class TerminalRenderer(
     textSize: Int,
@@ -21,7 +21,6 @@ class TerminalRenderer(
     }
     private val bgPaint = Paint()
     private val cursorPaint = Paint().apply {
-        color = 0x99FFFFFF.toInt()
         style = Paint.Style.FILL
     }
 
@@ -30,10 +29,6 @@ class TerminalRenderer(
     private val fontAscent: Int = kotlin.math.ceil(textPaint.ascent().toDouble()).toInt()
     val fontLineSpacingAndAscent: Int = fontLineSpacing + fontAscent
 
-    /**
-     * @param topRow transcript-style row of the first visible line (may be negative)
-     * @param selectionY1..selectionX2 selection in emulator coords, or -1 for none
-     */
     fun render(
         emulator: VtEmulator,
         canvas: Canvas,
@@ -46,50 +41,54 @@ class TerminalRenderer(
     ) {
         val cols = emulator.mColumns
         val rows = emulator.mRows
+        val palette = emulator.colors
+        // Termux: heightOffset starts at ascentPad, then += lineSpacing before each row.
         var y = fontLineSpacingAndAscent.toFloat()
         for (r in 0 until rows) {
+            y += fontLineSpacing
             val row = topRow + r
             var c = 0
             while (c < cols) {
                 val cell = emulator.screen.cellAtTranscript(row, c)
                 if (cell.char == '\u0000') {
-                    // Wide-glyph continuation: never paint — would erase the previous glyph.
                     c++
                     continue
                 }
-                val widthCells = if (c + 1 < cols && emulator.screen.cellAtTranscript(row, c + 1).char == '\u0000') 2 else 1
+                val widthCells =
+                    if (c + 1 < cols && emulator.screen.cellAtTranscript(row, c + 1).char == '\u0000') 2 else 1
                 val selected = selectionY1 >= 0 && row in selectionY1..selectionY2 &&
                     c >= (if (row == selectionY1) selectionX1 else 0) &&
                     c <= (if (row == selectionY2) selectionX2 else cols - 1)
-                drawRun(canvas, cell, c, y, widthCells, selected)
+                drawRun(canvas, cell, palette, c, y, widthCells, selected)
                 c += widthCells
             }
             if (cursorVisible && row == emulator.cursorRow) {
+                cursorPaint.color = AnsiColors.resolve(AnsiColors.INDEX_CURSOR, palette)
                 val left = emulator.cursorCol * fontWidth
                 val top = y - fontLineSpacingAndAscent
                 canvas.drawRect(left, top, left + fontWidth, top + fontLineSpacing, cursorPaint)
                 if (emulator.cursorCol in 0 until cols) {
                     val cell = emulator.screen.cellAtTranscript(row, emulator.cursorCol)
                     if (cell.char != '\u0000') {
-                        drawRun(canvas, cell, emulator.cursorCol, y, 1, selected = false, forceFg = true)
+                        drawRun(canvas, cell, palette, emulator.cursorCol, y, 1, selected = false, forceFg = true)
                     }
                 }
             }
-            y += fontLineSpacing
         }
     }
 
     private fun drawRun(
         canvas: Canvas,
         cell: Cell,
+        palette: IntArray,
         column: Int,
         baselineY: Float,
         widthCells: Int,
         selected: Boolean,
         forceFg: Boolean = false,
     ) {
-        var fg = AnsiColors.foreground(cell.fg, cell.bold)
-        var bg = AnsiColors.background(cell.bg)
+        var fg = AnsiColors.resolve(cell.fg, palette, bold = cell.bold, dim = cell.dim)
+        var bg = AnsiColors.resolve(cell.bg, palette, bold = false, dim = false)
         if (cell.inverse) {
             val tmp = fg
             fg = bg
@@ -102,14 +101,18 @@ class TerminalRenderer(
         val left = column * fontWidth
         val top = baselineY - fontLineSpacingAndAscent
         val right = left + fontWidth * widthCells
-        bgPaint.color = bg
-        canvas.drawRect(left, top, right, top + fontLineSpacing, bgPaint)
+        // Default background: skip fill so the view's canvasColor shows through
+        // (matches Termux painting default bg from the palette that Host sets to CANVAS).
+        val isDefaultBg = !selected && !cell.inverse && cell.bg == CellStyle.DEFAULT_BG
+        if (!isDefaultBg) {
+            bgPaint.color = bg
+            canvas.drawRect(left, top, right, top + fontLineSpacing, bgPaint)
+        }
         val ch = cell.char
         if (forceFg || (ch != ' ' && ch != '\u0000')) {
             textPaint.color = fg
             textPaint.isFakeBoldText = cell.bold
             textPaint.isUnderlineText = cell.underline
-            // Scale down only when the glyph is wider than its cells (never scale CJK up).
             val expected = fontWidth * widthCells
             val measured = textPaint.measureText(ch.toString())
             canvas.save()

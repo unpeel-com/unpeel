@@ -57,6 +57,17 @@ class VtEmulator(
     private var utf8Expected = 0
     private var utf8Codepoint = 0
 
+    /** Live indexed palette (0..258), same shape as Termux TerminalColors.mCurrentColors. */
+    val colors: IntArray = com.termit.ui.AnsiColors.buildDefaultPalette()
+
+    fun setDefaultBackground(argb: Int) {
+        colors[com.termit.ui.AnsiColors.INDEX_BG] = argb or 0xff000000.toInt()
+    }
+
+    fun setDefaultForeground(argb: Int) {
+        colors[com.termit.ui.AnsiColors.INDEX_FG] = argb or 0xff000000.toInt()
+    }
+
     fun resize(cols: Int, rows: Int) {
         primary.resize(cols, rows)
         alternate.resize(cols, rows)
@@ -291,9 +302,13 @@ class VtEmulator(
             when (val p = csiParams[i]) {
                 0 -> style.reset()
                 1 -> style.bold = true
+                2 -> style.dim = true
                 4 -> style.underline = true
                 7 -> style.inverse = true
-                22 -> style.bold = false
+                22 -> {
+                    style.bold = false
+                    style.dim = false
+                }
                 24 -> style.underline = false
                 27 -> style.inverse = false
                 in 30..37 -> style.fg = p - 30
@@ -303,8 +318,19 @@ class VtEmulator(
                 in 90..97 -> style.fg = p - 90 + 8
                 in 100..107 -> style.bg = p - 100 + 8
                 38, 48 -> {
-                    if (i + 1 < csiParamCount && csiParams[i + 1] == 5) i += 2
-                    else if (i + 1 < csiParamCount && csiParams[i + 1] == 2) i += 4
+                    val isFg = p == 38
+                    if (i + 1 < csiParamCount && csiParams[i + 1] == 5 && i + 2 < csiParamCount) {
+                        val idx = csiParams[i + 2].coerceIn(0, 255)
+                        if (isFg) style.fg = idx else style.bg = idx
+                        i += 2
+                    } else if (i + 1 < csiParamCount && csiParams[i + 1] == 2 && i + 4 < csiParamCount) {
+                        val r = csiParams[i + 2].coerceIn(0, 255)
+                        val g = csiParams[i + 3].coerceIn(0, 255)
+                        val b = csiParams[i + 4].coerceIn(0, 255)
+                        val argb = 0xff000000.toInt() or (r shl 16) or (g shl 8) or b
+                        if (isFg) style.fg = argb else style.bg = argb
+                        i += 4
+                    }
                 }
             }
             i++

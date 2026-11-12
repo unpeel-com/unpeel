@@ -1,5 +1,7 @@
 package com.termit.vt
 
+import com.termit.ui.AnsiColors
+
 data class Cell(
     var char: Char = ' ',
     var fg: Int = CellStyle.DEFAULT_FG,
@@ -7,6 +9,7 @@ data class Cell(
     var bold: Boolean = false,
     var underline: Boolean = false,
     var inverse: Boolean = false,
+    var dim: Boolean = false,
 ) {
     fun reset() {
         char = ' '
@@ -15,6 +18,7 @@ data class Cell(
         bold = false
         underline = false
         inverse = false
+        dim = false
     }
 
     fun copyFrom(other: Cell) {
@@ -24,6 +28,7 @@ data class Cell(
         bold = other.bold
         underline = other.underline
         inverse = other.inverse
+        dim = other.dim
     }
 
     fun applyStyle(style: CellStyle) {
@@ -32,6 +37,7 @@ data class Cell(
         bold = style.bold
         underline = style.underline
         inverse = style.inverse
+        dim = style.dim
     }
 }
 
@@ -41,6 +47,7 @@ data class CellStyle(
     var bold: Boolean = false,
     var underline: Boolean = false,
     var inverse: Boolean = false,
+    var dim: Boolean = false,
 ) {
     fun reset() {
         fg = DEFAULT_FG
@@ -48,10 +55,12 @@ data class CellStyle(
         bold = false
         underline = false
         inverse = false
+        dim = false
     }
 
     companion object {
-        const val DEFAULT_FG = 7
-        const val DEFAULT_BG = 0
+        /** Termux COLOR_INDEX_FOREGROUND / BACKGROUND. */
+        const val DEFAULT_FG = AnsiColors.INDEX_FG
+        const val DEFAULT_BG = AnsiColors.INDEX_BG
     }
 }

@@ -35,7 +35,9 @@ class HostTerminal(
     var parkedScroll: Int = 0
 
     init {
-        emulator = VtEmulator(80, 24, TRANSCRIPT_ROWS)
+        emulator = VtEmulator(80, 24, TRANSCRIPT_ROWS).also {
+            it.setDefaultBackground(CANVAS)
+        }
     }
 
     /**
@@ -46,7 +48,9 @@ class HostTerminal(
     fun prepare(columns: Int, rows: Int, notify: Boolean = true) {
         live = false
         modes.reset()
-        emulator = VtEmulator(columns.coerceIn(2, 300), rows.coerceIn(2, 120), TRANSCRIPT_ROWS)
+        emulator = VtEmulator(columns.coerceIn(2, 300), rows.coerceIn(2, 120), TRANSCRIPT_ROWS).also {
+            it.setDefaultBackground(appliedCanvas)
+        }
         if (notify) onFrame?.invoke()
     }
 
@@ -54,6 +58,7 @@ class HostTerminal(
     fun applyCanvas(argb: Int) {
         if (argb == appliedCanvas) return
         appliedCanvas = argb
+        emulator.setDefaultBackground(argb)
     }
 
     /**
