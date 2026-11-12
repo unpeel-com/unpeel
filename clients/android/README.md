@@ -13,13 +13,16 @@ here is a VT parser sized to the Host grid; keyboard focus does not resize
 that grid.
 
 ```sh
-clients/android/gradlew -p clients/android :protocol:test :app:assembleDebug
+clients/android/gradlew -p clients/android :protocol:test :app:assembleRelease
 ```
 
-Debug APK: `clients/android/app/build/outputs/apk/debug/app-debug.apk`.
+Release APK: `clients/android/app/build/outputs/apk/release/app-release.apk`.
 If a user-level Gradle init script redirects Maven to an unreachable mirror,
 run that command with a clean `GRADLE_USER_HOME`.
 
-CI (Actions → **Android APK**) builds the same debug APK and attaches it as a
-workflow artifact — no GitHub Release is created. Trigger with
+CI (Actions → **Android APK**) builds the same **release** APK and attaches it
+as a workflow artifact — no GitHub Release is created. Optional signing via
+repo secrets `ANDROID_KEYSTORE_BASE64` / `ANDROID_KEYSTORE_PASSWORD` /
+`ANDROID_KEY_ALIAS` / `ANDROID_KEY_PASSWORD`; otherwise the release build is
+signed with the debug key so it still sideloads. Trigger with
 `workflow_dispatch`, or push to `android/termit` under `clients/android/`.

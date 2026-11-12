@@ -17,9 +17,30 @@ android {
         versionName = "0.7.7"
     }
 
+    // Optional release keystore via env (CI secrets). Without it, release is
+    // still signed with the debug key so the APK sideloads; never published as
+    // a GitHub Release from this branch.
+    val releaseStoreFile = System.getenv("ANDROID_KEYSTORE_FILE")
+    if (releaseStoreFile != null) {
+        signingConfigs {
+            create("release") {
+                storeFile = file(releaseStoreFile)
+                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            isDebuggable = false
+            signingConfig = if (releaseStoreFile != null) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 

@@ -1,4 +1,4 @@
-# Debug APK for the phone Controller. Artifact only — never creates or
+# Release APK for the phone Controller. Artifact only — never creates or
 # updates a GitHub Release. Download from the Actions run page.
 name: Android APK
 
@@ -42,14 +42,41 @@ jobs:
       - name: Install platform 35
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Protocol tests + debug APK
-        working-directory: clients/android
-        run: ./gradlew :protocol:test :app:assembleDebug --no-daemon
+      - name: Decode release keystore
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "${RUNNER_TEMP}/unpeel-android.jks"
+          echo "ANDROID_KEYSTORE_FILE=${RUNNER_TEMP}/unpeel-android.jks" >> "$GITHUB_ENV"
+          echo "ANDROID_KEYSTORE_PASSWORD=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" >> "$GITHUB_ENV"
+          echo "ANDROID_KEY_ALIAS=${{ secrets.ANDROID_KEY_ALIAS }}" >> "$GITHUB_ENV"
+          echo "ANDROID_KEY_PASSWORD=${{ secrets.ANDROID_KEY_PASSWORD }}" >> "$GITHUB_ENV"
 
-      - name: Upload debug APK
+      - name: Protocol tests + release APK
+        working-directory: clients/android
+        run: ./gradlew :protocol:test :app:assembleRelease --no-daemon
+
+      - name: Name release APK
+        id: apk
+        run: |
+          src=clients/android/app/build/outputs/apk/release/app-release.apk
+          test -f "$src"
+          ver=$(python3 -c '
+          import re
+          text = open("clients/android/app/build.gradle.kts").read()
+          code = re.search(r"versionCode\s*=\s*(\d+)", text).group(1)
+          name = re.search(r"versionName\s*=\s*\"([^\"]+)\"", text).group(1)
+          print(f"{name}-{code}")
+          ')
+          out="Unpeel-Termit-${ver}.apk"
+          cp "$src" "$out"
+          echo "path=$out" >> "$GITHUB_OUTPUT"
+
+      - name: Upload release APK
         uses: actions/upload-artifact@v4
         with:
-          name: unpeel-android-debug-${{ github.sha }}
-          path: clients/android/app/build/outputs/apk/debug/app-debug.apk
+          name: unpeel-android-release-${{ github.sha }}
+          path: ${{ steps.apk.outputs.path }}
           if-no-files-found: error
           retention-days: 30
