@@ -5,237 +5,314 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Canvas
-import android.graphics.Paint
-import android.graphics.Path
-import android.graphics.Typeface
 import android.text.InputType
-import android.util.SparseIntArray
 import android.util.TypedValue
-import android.view.GestureDetector
 import android.view.HapticFeedbackConstants
 import android.view.KeyEvent
+import android.view.GestureDetector
 import android.view.MotionEvent
+import android.view.ScaleGestureDetector
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
-import com.termit.ui.TerminalKeys
+import android.graphics.Paint
+import android.graphics.Typeface
+import com.termit.ui.AnsiColors
+import com.termit.vt.Cell
+import com.termit.vt.VtEmulator
 import com.unpeel.controller.AgentTerminalPolicy
-import com.unpeel.controller.VtScreen
+import com.unpeel.controller.CursorMotion
+import com.unpeel.controller.TerminalInput
 import kotlin.math.abs
-import kotlin.math.ceil
-import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
- * Draws a Host terminal with a fixed glyph grid. Wide (CJK) cells occupy two
- * columns; continuation cells are `\u0000` and are not painted again.
+ * Draws a Host terminal and takes the keyboard. Committed characters go
+ * straight to the session. This view never changes the PTY size. A pinch
+ * magnifies that same grid. A drag that starts on the cursor walks it
+ * with arrow keys; the remote program is what actually moves it.
  */
 @SuppressLint("ViewConstructor", "ClickableViewAccessibility")
 class HostTerminalView(
     context: Context,
     private var terminal: HostTerminal,
 ) : View(context) {
-    private val baseTextSize =
-        TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 13f, resources.displayMetrics)
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         typeface = Typeface.MONOSPACE
-        textSize = baseTextSize
-        // Prefer text glyphs over Noto Color Emoji when the platform exposes
-        // the switch (hidden on some SDK stubs — reflect so compile stays clean).
-        disableEmojiFallback(this)
     }
     private val bgPaint = Paint()
     private val cursorPaint = Paint().apply {
         color = 0x99FFFFFF.toInt()
         style = Paint.Style.FILL
     }
-    private val selectionPaint = Paint().apply {
-        color = 0x553D7EFF
-        style = Paint.Style.FILL
-    }
-    private val shapePath = Path()
-    /** 0 unknown, 1 mono has glyph, 2 missing — same cache as stock Android terminal. */
-    private val glyphCache = SparseIntArray(64)
-
     val cellWidth: Float
     val cellHeight: Int
     val topPad: Int
-    private val baseline: Float
+    private var cellBaseline = 0f
 
     var onSelectionChanged: ((Boolean) -> Unit)? = null
+    /** Rising and falling edges of an on-screen select menu. */
     var onMenuChanged: ((Boolean) -> Unit)? = null
+    /** Claude, Grok, or OpenCode, for the wheel guess before modes arrive. */
     var prefersRemoteWheel: Boolean = false
-    /** cursor-agent: neither SGR nor ↑/↓ — local Ghostty-style scrollback. */
-    var echoesMouseWheel: Boolean = false
+    /** Link relay. iOS shortens the release glide on that path. */
     var relayed: Boolean = false
-    var canvasColor: Int = HostTerminal.CANVAS
+    var canvasColor: Int = CANVAS
         set(value) {
             if (field == value) return
             field = value
             setBackgroundColor(value)
             invalidate()
         }
+    /** Raw terminal bytes. Enter is already `\r`. A multi-line paste is bracketed and not submitted. */
     var onText: ((String) -> Unit)? = null
+    /** Sticky control from the key row. Read when a letter is committed. */
     var controlArmed: () -> Boolean = { false }
     var onControlUsed: () -> Unit = {}
 
+    private var drawn: VtEmulator? = null
+    private var topRow = 0
+    /** Rows above the bottom of the view. 0 keeps the cursor row on screen. */
     private var offsetRows = 0
+    private var panX = 0
+    /** Finger travel not yet worth a whole row, in GestureDetector distanceY sign. */
     private var scrollRemainder = 0f
+    /** Wheel travel for a full-screen program. Never moves the canvas. */
     private var wheelRemainder = 0f
+    /** iOS `startWheelMomentum`: steps per second after the finger lifts. */
+    private var glideRate = 0f
+    private var glideCarry = 0f
+    private var glideX = 0f
+    private var glideY = 0f
+    private val glideTick = object : Runnable {
+        override fun run() {
+            val emulator = terminal.emulator
+            val mode = forwarding(emulator)
+            if (glideRate == 0f ||
+                (mode != AgentTerminalPolicy.Wheel.Mouse && mode != AgentTerminalPolicy.Wheel.AlternateScroll)
+            ) {
+                stopGlide()
+                return
+            }
+            glideCarry += glideRate * GLIDE_TICK_SECONDS
+            val steps = abs(glideCarry).toInt()
+            if (steps > 0) {
+                val sign = if (glideCarry < 0f) -1 else 1
+                glideCarry -= steps * sign
+                val burst = min(steps, if (relayed) GLIDE_BURST_RELAY else WHEEL_BURST_CAP)
+                dispatchRemoteWheel(emulator, mode, glideX, glideY, glideRate > 0f, burst)
+            }
+            glideRate *= if (relayed) GLIDE_FRICTION_RELAY else GLIDE_FRICTION_LAN
+            if (abs(glideRate) <= GLIDE_STOP_STEPS_PER_SECOND) {
+                stopGlide()
+                return
+            }
+            postDelayed(this, GLIDE_TICK_MS)
+        }
+    }
+    private var flingVelocity = 0f
     private var selecting = false
-    private var selC1 = -1
-    private var selR1 = -1
-    private var selC2 = -1
-    private var selR2 = -1
-    private var cursorVisible = true
+    private var selX1 = -1
+    private var selY1 = -1
+    private var selX2 = -1
+    private var selY2 = -1
+    private var blinkOn = true
     private var menuActive = false
-    /** Painted cell size — uniform scale so glyphs stay square; letterbox if needed. */
-    private var drawCellW = 0f
-    private var drawCellH = 0f
-    private var drawOriginX = 0f
-    private var drawOriginY = 0f
-    private var drawBaseline = 0f
+    /** Visual magnification. The PTY grid stays the phone-fit size. */
+    private var zoom = 1f
+    private var zoomPanX = 0f
+    private var zoomPanY = 0f
+    private var pinching = false
+    private var downX = 0f
+    private var downY = 0f
+    private var downOnCursor = false
+    private var gestureDecided = false
+    private var cursorDrag = false
+    private var placedCol = 0
+    private var placedRow = 0
+    private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
 
     private val frameListener: () -> Unit = {
-        clampOffset()
+        noteEmulator(terminal.emulator)
+        clampOffset(terminal.emulator)
         publishMenu()
         postInvalidateOnAnimation()
     }
 
+    private val flingTick = object : Runnable {
+        override fun run() {
+            val emulator = terminal.emulator
+            if (flingVelocity == 0f || forwarding(emulator) != AgentTerminalPolicy.Wheel.None) {
+                flingVelocity = 0f
+                return
+            }
+            scrollRemainder += flingVelocity * 0.016f
+            applyScrollLines(emulator)
+            flingVelocity *= 0.90f
+            if (kotlin.math.abs(flingVelocity) < 50f) flingVelocity = 0f
+            invalidate()
+            if (flingVelocity != 0f) postOnAnimation(this)
+        }
+    }
+
     private val blink = object : Runnable {
         override fun run() {
-            cursorVisible = !cursorVisible
+            blinkOn = !blinkOn
+            terminal.emulator.setCursorBlinkState(blinkOn)
             invalidate()
-            postDelayed(this, 530L)
+            postDelayed(this, 500)
         }
     }
 
     private val gesture = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
-        override fun onDown(e: MotionEvent): Boolean = true
+        override fun onDown(e: MotionEvent): Boolean {
+            flingVelocity = 0f
+            removeCallbacks(flingTick)
+            stopGlide()
+            wheelRemainder = 0f
+            downX = e.x
+            downY = e.y
+            downOnCursor = tapTargetsCursor(terminal.emulator, e)
+            gestureDecided = false
+            cursorDrag = false
+            return true
+        }
 
         override fun onSingleTapUp(e: MotionEvent): Boolean {
             if (selecting) {
                 clearSelection()
                 return true
             }
-            // Claude's virtual-scroll chip: "Jump to bottom (click)" or
-            // "(ctrl+End)". iOS fakes ctrl+End via Ghostty; we send a click
-            // when the chip asks for one, else CSI ctrl+End. Always clear
-            // local scrollback so the phone matches.
-            if (handleTuiJumpTap(e)) return true
-            // Stock Unpeel Android / iOS: only click when the program asked
-            // for mouse reports (Stop, Run Everything, menus, links).
-            if (!terminal.mouseTrackingActive) {
+            val emulator = terminal.emulator
+            if (!emulator.isMouseTrackingActive()) {
                 showKeyboard()
                 return true
             }
-            sendClick(e)
-            if (tapTargetsCursor(e)) showKeyboard() else dismissKeyboard()
+            // The program owns the click (Stop, menus, links). The keyboard
+            // comes up only when the tap lands on the cursor row.
+            sendClick(emulator, e)
+            if (tapTargetsCursor(emulator, e)) showKeyboard() else dismissKeyboard()
             return true
         }
 
         override fun onLongPress(e: MotionEvent) {
-            val cell = cellAt(e.x, e.y) ?: return
-            selecting = true
-            selC1 = cell.first
-            selR1 = cell.second
-            selC2 = selC1
-            selR2 = selR1
+            val emulator = terminal.emulator
+            if (tapTargetsCursor(emulator, e) && pasteClipboard()) {
+                clearSelection()
+                return
+            }
             performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-            onSelectionChanged?.invoke(true)
-            invalidate()
+            if (!selecting || !selectionContains(e)) selectWord(e)
         }
 
-        override fun onScroll(
-            e1: MotionEvent?,
-            e2: MotionEvent,
-            distanceX: Float,
-            distanceY: Float,
-        ): Boolean {
+        override fun onScroll(e1: MotionEvent?, e2: MotionEvent, distanceX: Float, distanceY: Float): Boolean {
             if (selecting) {
                 val cell = cellAt(e2.x, e2.y) ?: return true
-                selC2 = cell.first
-                selR2 = cell.second
+                selX2 = cell.first
+                selY2 = cell.second
                 invalidate()
                 return true
             }
-            val mode = forwarding()
-            if (mode != AgentTerminalPolicy.Wheel.None) {
-                val rowH = drawCellH.coerceAtLeast(1f)
-                wheelRemainder += distanceY
-                val lines = (wheelRemainder / rowH).toInt()
-                if (lines != 0) {
-                    val steps = min(abs(lines), 8)
-                    // distanceY > 0 = finger up → content toward bottom (same as stock Android terminal view).
-                    val towardBottom = lines > 0
-                    val applied = if (towardBottom) steps else -steps
-                    wheelRemainder -= applied * rowH
-                    when (mode) {
-                        AgentTerminalPolicy.Wheel.Mouse ->
-                            sendWheel(e2.x, e2.y, towardBottom, steps)
-                        AgentTerminalPolicy.Wheel.AlternateScroll ->
-                            sendAlternateScroll(towardBottom, steps)
-                        AgentTerminalPolicy.Wheel.None -> Unit
-                    }
+            val emulator = terminal.emulator
+            if (!gestureDecided) {
+                val dx = e2.x - downX
+                val dy = e2.y - downY
+                if (abs(dx) < touchSlop && abs(dy) < touchSlop) return true
+                gestureDecided = true
+                cursorDrag = wantsCursorDrag(emulator, dx, dy)
+                if (cursorDrag) {
+                    placedCol = emulator.cursorCol
+                    placedRow = emulator.cursorRow
                 }
+            }
+            if (cursorDrag) {
+                moveCursor(emulator, e2)
                 return true
             }
-            val rowH = drawCellH.coerceAtLeast(cellHeight.toFloat())
-            scrollRemainder += distanceY
-            val lines = (scrollRemainder / rowH).toInt()
-            if (lines != 0) {
-                // Match stock: finger down (distanceY < 0) increases offset into history.
-                val applied = if (lines > 0) lines else -abs(lines)
-                scrollRemainder -= applied * rowH
-                offsetRows = (offsetRows - applied).coerceIn(0, maxOffset())
+            // A magnified view pans under one finger. Pinch back to 1 to scroll.
+            if (zoom > 1f) {
+                zoomPanX -= distanceX
+                zoomPanY -= distanceY
+                clampZoom()
                 invalidate()
+                return true
+            }
+            // Finger down (negative distance) moves toward older rows.
+            // The picture shifts with the finger immediately; a whole row
+            // is committed only after the finger has travelled one cell.
+            if (forwardRemote(emulator, e2, distanceY)) return true
+            if (distanceY != 0f && cellHeight > 0) {
+                scrollRemainder += distanceY
+                applyScrollLines(emulator)
+            }
+            panX -= distanceX.toInt()
+            horizontalShift(emulator)
+            invalidate()
+            return true
+        }
+
+        override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
+            if (selecting || cursorDrag || zoom > 1f || cellHeight <= 0) return false
+            val emulator = terminal.emulator
+            // velocityY is downward. A positive line count reveals newer rows.
+            when (forwarding(emulator)) {
+                AgentTerminalPolicy.Wheel.Mouse, AgentTerminalPolicy.Wheel.AlternateScroll -> {
+                    startGlide(-velocityY / cellHeight, e2.x, e2.y)
+                }
+                AgentTerminalPolicy.Wheel.None -> {
+                    flingVelocity = -velocityY
+                    postOnAnimation(flingTick)
+                }
             }
             return true
         }
     })
 
     init {
-        isFocusable = true
-        isFocusableInTouchMode = true
-        setBackgroundColor(canvasColor)
+        val textPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 16f, resources.displayMetrics)
+            .coerceAtLeast(8f)
+        textPaint.textSize = textPx
         val fm = textPaint.fontMetrics
-        cellWidth = textPaint.measureText("X")
-        cellHeight = ceil(fm.descent - fm.ascent + dp(3f).toDouble()).toInt().coerceAtLeast(1)
-        baseline = -fm.ascent + dp(1.5f)
-        drawCellW = cellWidth
-        drawCellH = cellHeight.toFloat()
-        drawBaseline = baseline
-        topPad = 0
-        terminal.onFrame = frameListener
-        setOnTouchListener { _, event -> gesture.onTouchEvent(event); true }
+        cellWidth = textPaint.measureText("M").coerceAtLeast(1f)
+        cellHeight = (fm.descent - fm.ascent + resources.displayMetrics.density).roundToInt().coerceAtLeast(1)
+        cellBaseline = -fm.ascent
+        topPad = cellBaseline.roundToInt().coerceAtLeast(0)
+        setBackgroundColor(CANVAS)
+        importantForAutofill = IMPORTANT_FOR_AUTOFILL_NO
+        isFocusable = true
+        isFocusableInTouchMode = false
+        isClickable = true
+        bind(terminal)
     }
 
     fun bind(terminal: HostTerminal) {
-        if (this.terminal !== terminal) {
-            this.terminal.onFrame = null
+        val switching = this.terminal !== terminal
+        if (switching && this.terminal.onFrame === frameListener) {
             this.terminal.parkedScroll = offsetRows
-            this.terminal = terminal
-            offsetRows = terminal.parkedScroll.coerceAtLeast(0)
-            clearSelection()
-            if (menuActive) {
-                menuActive = false
-                onMenuChanged?.invoke(false)
-            }
+            this.terminal.onFrame = null
         }
+        this.terminal = terminal
         terminal.onFrame = frameListener
-        clampOffset()
-        invalidate()
+        terminal.updateCellSize(cellWidth.roundToInt(), cellHeight)
+        if (!switching) return
+        noteEmulator(terminal.emulator)
+        offsetRows = terminal.parkedScroll.coerceAtLeast(0)
+        clampOffset(terminal.emulator)
+        postInvalidateOnAnimation()
     }
 
     fun selectedText(): String {
-        if (!selecting) return ""
-        return terminal.selectedText(selC1, selR1, selC2, selR2, offsetRows)
+        val args = selectionArgs() ?: return ""
+        return runCatching {
+            terminal.emulator.getSelectedText(args[2], args[0], args[3], args[1])
+        }.getOrDefault("")
     }
 
+    /** Copies the selection onto the system clipboard. */
     fun copySelection(clear: Boolean = true): Boolean {
         val text = selectedText()
         if (text.isEmpty()) return false
@@ -245,546 +322,661 @@ class HostTerminalView(
         return true
     }
 
+    /** Up, down, enter, or escape for an on-screen select menu. Arrows follow DECCKM. */
+    fun menuKey(name: String): String {
+        val application = terminal.emulator.isCursorKeysApplicationMode()
+        return when (name) {
+            "up" -> if (application) "\u001bOA" else "\u001b[A"
+            "down" -> if (application) "\u001bOB" else "\u001b[B"
+            "enter" -> "\r"
+            else -> "\u001b"
+        }
+    }
+
     fun clearSelection() {
         if (!selecting) return
         selecting = false
-        selC1 = -1
-        selR1 = -1
-        selC2 = -1
-        selR2 = -1
+        selX1 = -1
+        selY1 = -1
+        selX2 = -1
+        selY2 = -1
         onSelectionChanged?.invoke(false)
         invalidate()
     }
 
-    fun menuKey(name: String): String {
-        val application = terminal.applicationCursorKeys
-        return when (name) {
-            "up" -> if (application) "\u001bOA" else TerminalKeys.UP
-            "down" -> if (application) "\u001bOB" else TerminalKeys.DOWN
-            "left" -> if (application) "\u001bOD" else TerminalKeys.LEFT
-            "right" -> if (application) "\u001bOC" else TerminalKeys.RIGHT
-            "enter" -> TerminalKeys.ENTER
-            "esc" -> TerminalKeys.ESC
-            "tab" -> TerminalKeys.TAB
-            else -> ""
+    fun showKeyboard() {
+        isFocusableInTouchMode = true
+        requestFocus()
+        post {
+            context.getSystemService(InputMethodManager::class.java)
+                ?.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
         }
     }
 
     fun dismissKeyboard() {
-        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-        imm.hideSoftInputFromWindow(windowToken, 0)
-    }
-
-    fun showKeyboard() {
-        requestFocus()
-        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-        imm.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
-    }
-
-    override fun onAttachedToWindow() {
-        super.onAttachedToWindow()
-        removeCallbacks(blink)
-        post(blink)
-    }
-
-    override fun onDetachedFromWindow() {
-        removeCallbacks(blink)
-        terminal.onFrame = null
-        super.onDetachedFromWindow()
-    }
-
-    override fun onDraw(canvas: Canvas) {
-        super.onDraw(canvas)
-        val frame = terminal.frame(offsetRows)
-        val cols = frame.cols.coerceAtLeast(1)
-        val rows = frame.rows.coerceAtLeast(1)
-        if (width <= 0 || height <= 0) return
-
-        val scale = min(width / (cols * cellWidth), height / (rows * cellHeight.toFloat()))
-            .coerceAtMost(1.15f)
-            .coerceAtLeast(0.55f)
-        drawCellW = cellWidth * scale
-        drawCellH = cellHeight * scale
-        drawOriginX = ((width - cols * drawCellW) / 2f).coerceAtLeast(0f)
-        drawOriginY = 0f // top-align like iOS phone terminal
-        textPaint.textSize = baseTextSize * scale
-        val fm = textPaint.fontMetrics
-        drawBaseline = -fm.ascent + (drawCellH - (fm.descent - fm.ascent)) / 2f
-
-        // Clear unused letterbox with canvas color.
-        if (drawOriginX > 0.5f || cols * drawCellW < width - 0.5f) {
-            bgPaint.color = canvasColor
-            canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), bgPaint)
-        }
-
-        for (r in 0 until rows) {
-            var c = 0
-            while (c < cols) {
-                val cell = frame.cell(r, c)
-                if (cell.ch == '\u0000') {
-                    if (selecting && inSelection(c, r)) {
-                        val left = drawOriginX + c * drawCellW
-                        val top = drawOriginY + r * drawCellH
-                        canvas.drawRect(left, top, left + drawCellW, top + drawCellH, selectionPaint)
-                    }
-                    c++
-                    continue
-                }
-                val span = if (isWideGlyph(cell.ch)) min(2, cols - c) else 1
-                drawCell(canvas, r, c, cell, span, selecting && inSelection(c, r))
-                c += span
-            }
-        }
-
-        if (cursorVisible && offsetRows == 0) {
-            if (frame.cursorRow in 0 until rows && frame.cursorCol in 0 until cols) {
-                val x = drawOriginX + frame.cursorCol * drawCellW
-                val y = drawOriginY + frame.cursorRow * drawCellH
-                canvas.drawRect(x, y, x + drawCellW, y + drawCellH, cursorPaint)
-            }
-        }
-    }
-
-    private fun drawCell(
-        canvas: Canvas,
-        row: Int,
-        col: Int,
-        cell: VtScreen.Cell,
-        span: Int,
-        selected: Boolean,
-    ) {
-        val left = drawOriginX + col * drawCellW
-        val top = drawOriginY + row * drawCellH
-        val right = left + drawCellW * span
-        val bottom = top + drawCellH
-        bgPaint.color = paintBg(cell.bg)
-        canvas.drawRect(left, top, right, bottom, bgPaint)
-        if (selected) {
-            canvas.drawRect(left, top, right, bottom, selectionPaint)
-        }
-        if (cell.ch != ' ') {
-            textPaint.color = paintFg(cell)
-            textPaint.isFakeBoldText = cell.bold && !cell.dim
-            textPaint.style = Paint.Style.FILL
-            val save = canvas.save()
-            canvas.clipRect(left, top, right + 0.5f, bottom)
-            drawGlyph(canvas, cell.ch, left, top, span)
-            canvas.restoreToCount(save)
-        }
-    }
-
-    /**
-     * Agent TUIs lean on geometric symbols the phone mono font either lacks
-     * or hands off to Noto Color Emoji (yellow record / bullet). Match stock
-     * Draw a few shapes ourselves, force text presentation, and
-     * shrink any leftover glyph that still overflows the cell.
-     */
-    private fun drawGlyph(canvas: Canvas, ch: Char, left: Float, top: Float, span: Int) {
-        when (ch.code) {
-            // Claude caret / auto-mode arrows — emoji form is a fat yellow ▶.
-            0x23F5, 0x25B6, 0x25B8, 0x25BA -> {
-                drawPromptTriangle(canvas, left, top, drawCellW)
-                return
-            }
-            // ⏩ / ⏪ occupy one cell but emoji paints a wide yellow block.
-            0x23E9 -> {
-                drawPromptTriangle(canvas, left, top, drawCellW * 0.55f)
-                drawPromptTriangle(canvas, left + drawCellW * 0.42f, top, drawCellW * 0.55f)
-                return
-            }
-            0x23EA -> {
-                drawPromptTriangle(canvas, left, top, drawCellW * 0.55f, pointLeft = true)
-                drawPromptTriangle(canvas, left + drawCellW * 0.42f, top, drawCellW * 0.55f, pointLeft = true)
-                return
-            }
-            0x25C0, 0x25C2, 0x25C4 -> {
-                drawPromptTriangle(canvas, left, top, drawCellW, pointLeft = true)
-                return
-            }
-            // Record / black circle bullets (⏺ ● ◆ etc.) — avoid emoji rings.
-            0x23FA, 0x25CF, 0x2B24, 0x26AB, 0x2B25 -> {
-                drawFilledCircle(canvas, left, top, drawCellW * span)
-                return
-            }
-            // Claude status marks (☀ ✻ ※ …) default to color-emoji sunbursts.
-            0x2600, 0x2601, 0x203B, 0x2042, 0x2055, 0x2726, 0x2727, 0x2728,
-            0x2733, 0x2734, 0x273B, 0x273F, 0x2742, 0x2747, 0x274B, 0x2B50,
-            0x2B51, 0x2B52, 0x2B53, 0x2B54 -> {
-                drawFilledCircle(canvas, left, top, drawCellW * span)
-                return
-            }
-            0x25CB, 0x25E6, 0x26AA -> {
-                drawHollowCircle(canvas, left, top, drawCellW * span)
-                return
-            }
-        }
-        // Phone mono fonts either lack Braille or put the ink on the left of
-        // the em-square, so adjacent cells look like "wide gap, tight gap".
-        // Decode U+28xx ourselves onto a regular 2×4 grid inside the cell.
-        if (ch.code in 0x2800..0x28FF) {
-            drawBraille(canvas, ch.code, left, top, drawCellW * span)
-            return
-        }
-        val text = textPresentation(ch)
-        val budget = drawCellW * span
-        val measured = textPaint.measureText(text)
-        val nested = canvas.save()
-        if (measured > budget + 0.5f && measured > 0.01f) {
-            // Stock TerminalRenderer: scale X only so the glyph fits its cells.
-            canvas.scale(budget / measured, 1f, left, top)
-        }
-        canvas.drawText(text, left, top + drawBaseline, textPaint)
-        canvas.restoreToCount(nested)
-    }
-
-    /** VS15 requests text style for symbols that also have an emoji form. */
-    private fun textPresentation(ch: Char): String {
-        val cp = ch.code
-        if (cp in EMOJI_TEXT_VARIANTS) return ch.toString() + "\uFE0E"
-        if (!monoHasGlyph(ch) && cp > 127) return ch.toString() + "\uFE0E"
-        return ch.toString()
-    }
-
-    private fun monoHasGlyph(ch: Char): Boolean {
-        val cached = glyphCache.get(ch.code, 0)
-        if (cached != 0) return cached == 1
-        val has = textPaint.hasGlyph(ch.toString())
-        glyphCache.put(ch.code, if (has) 1 else 2)
-        return has
-    }
-
-    private fun drawPromptTriangle(
-        canvas: Canvas,
-        left: Float,
-        top: Float,
-        cellW: Float,
-        pointLeft: Boolean = false,
-    ) {
-        val insetX = cellW * 0.28f
-        val insetY = drawCellH * 0.30f
-        shapePath.rewind()
-        if (pointLeft) {
-            shapePath.moveTo(left + cellW - insetX, top + insetY)
-            shapePath.lineTo(left + insetX, top + drawCellH * 0.5f)
-            shapePath.lineTo(left + cellW - insetX, top + drawCellH - insetY)
-        } else {
-            shapePath.moveTo(left + insetX, top + insetY)
-            shapePath.lineTo(left + cellW - insetX, top + drawCellH * 0.5f)
-            shapePath.lineTo(left + insetX, top + drawCellH - insetY)
-        }
-        shapePath.close()
-        canvas.drawPath(shapePath, textPaint)
-    }
-
-    private fun drawFilledCircle(canvas: Canvas, left: Float, top: Float, width: Float) {
-        val cx = left + width * 0.5f
-        val cy = top + drawCellH * 0.5f
-        val radius = min(width, drawCellH) * 0.22f
-        canvas.drawCircle(cx, cy, radius, textPaint)
-    }
-
-    /**
-     * U+2800 Braille Patterns: bit0=dot1 … bit7=dot8. Layout inside one cell:
-     * ```
-     *  1 4
-     *  2 5
-     *  3 6
-     *  7 8
-     * ```
-     */
-    private fun drawBraille(canvas: Canvas, code: Int, left: Float, top: Float, width: Float) {
-        val bits = code - 0x2800
-        if (bits == 0) return
-        val insetX = width * 0.22f
-        val insetY = drawCellH * 0.14f
-        val colGap = width - insetX * 2f
-        val rowGap = drawCellH - insetY * 2f
-        val radius = min(width, drawCellH) * 0.11f
-        // Dot number → (col, row), 0-based.
-        val dots = intArrayOf(
-            /*1*/ 0, 0, /*2*/ 0, 1, /*3*/ 0, 2, /*4*/ 1, 0,
-            /*5*/ 1, 1, /*6*/ 1, 2, /*7*/ 0, 3, /*8*/ 1, 3,
-        )
-        var bit = 0
-        while (bit < 8) {
-            if ((bits shr bit) and 1 != 0) {
-                val col = dots[bit * 2]
-                val row = dots[bit * 2 + 1]
-                val cx = left + insetX + col * colGap
-                val cy = top + insetY + row * (rowGap / 3f)
-                canvas.drawCircle(cx, cy, radius, textPaint)
-            }
-            bit++
-        }
-    }
-
-    private fun drawHollowCircle(canvas: Canvas, left: Float, top: Float, width: Float) {
-        val cx = left + width * 0.5f
-        val cy = top + drawCellH * 0.5f
-        val radius = min(width, drawCellH) * 0.22f
-        val stroke = textPaint.strokeWidth
-        val style = textPaint.style
-        textPaint.style = Paint.Style.STROKE
-        textPaint.strokeWidth = max(1.2f, radius * 0.28f)
-        canvas.drawCircle(cx, cy, radius, textPaint)
-        textPaint.style = style
-        textPaint.strokeWidth = stroke
-    }
-
-    private companion object {
-        /** Unicode emoji text-variation sequences that agents use as icons. */
-        private val EMOJI_TEXT_VARIANTS = intArrayOf(
-            0x231A, 0x231B, 0x23E9, 0x23EA, 0x23EB, 0x23EC, 0x23F0, 0x23F3,
-            0x23F8, 0x23F9, 0x23FA, 0x25AA, 0x25AB, 0x25B6, 0x25C0, 0x25FB,
-            0x25FC, 0x25FD, 0x25FE, 0x2600, 0x2601, 0x260E, 0x2611, 0x2614,
-            0x2615, 0x26A0, 0x26A1, 0x26AA, 0x26AB, 0x26BD, 0x26BE, 0x26C4,
-            0x26C5, 0x26CE, 0x26D4, 0x26EA, 0x26F2, 0x26F3, 0x26F5, 0x26FA,
-            0x26FD, 0x2702, 0x2708, 0x2709, 0x270F, 0x2712, 0x2714, 0x2716,
-            0x271D, 0x2721, 0x2728, 0x2733, 0x2734, 0x2744, 0x2747, 0x2753,
-            0x2757, 0x2763, 0x2764, 0x27A1, 0x2B05, 0x2B06, 0x2B07, 0x2B1B,
-            0x2B1C, 0x2B50, 0x2B55,
-        ).toHashSet()
-
-        private fun disableEmojiFallback(paint: Paint) {
-            try {
-                val method = Paint::class.java.getMethod("setEmojiFallbackEnabled", Boolean::class.javaPrimitiveType)
-                method.invoke(paint, false)
-            } catch (_: Throwable) {
-                // Pre-API 34 / stub without the method — FE0E + shapes cover us.
-            }
-        }
-    }
-
-    private fun paintBg(color: Int): Int {
-        val rgb24 = color and 0xFFFFFF
-        // Unthemed / default cells follow the session canvas (OpenCode/Grok hex, etc.).
-        if (rgb24 == (VtScreen.DEFAULT_BG and 0xFFFFFF) ||
-            rgb24 == (terminal.screen.defaultBg and 0xFFFFFF)
-        ) {
-            return canvasColor
-        }
-        return rgb(color)
-    }
-
-    private fun paintFg(cell: VtScreen.Cell): Int {
-        var color = run {
-            val rgb24 = cell.fg and 0xFFFFFF
-            if (rgb24 == (VtScreen.DEFAULT_FG and 0xFFFFFF) ||
-                rgb24 == (terminal.screen.defaultFg and 0xFFFFFF)
-            ) {
-                rgb(terminal.screen.defaultFg)
-            } else {
-                rgb(cell.fg)
-            }
-        }
-        if (cell.dim) {
-            // SGR 2: blend toward the cell background so muted greys read.
-            color = blendRgb(color, paintBg(cell.bg), 0.55f)
-        } else if (cell.bold) {
-            color = brighten(color, 1.12f)
-        }
-        return color
-    }
-
-    private fun blendRgb(fg: Int, bg: Int, towardBg: Float): Int {
-        val t = towardBg.coerceIn(0f, 1f)
-        fun ch(v: Int, shift: Int): Int {
-            val a = (v shr shift) and 0xff
-            val b = (bg shr shift) and 0xff
-            return (a + (b - a) * t).toInt().coerceIn(0, 255)
-        }
-        return 0xFF000000.toInt() or (ch(fg, 16) shl 16) or (ch(fg, 8) shl 8) or ch(fg, 0)
-    }
-
-    private fun brighten(color: Int, factor: Float): Int {
-        fun ch(shift: Int): Int =
-            (((color shr shift) and 0xff) * factor).toInt().coerceIn(0, 255)
-        return 0xFF000000.toInt() or (ch(16) shl 16) or (ch(8) shl 8) or ch(0)
+        context.getSystemService(InputMethodManager::class.java)
+            ?.hideSoftInputFromWindow(windowToken, 0)
+        clearFocus()
+        isFocusableInTouchMode = false
     }
 
     override fun onCheckIsTextEditor(): Boolean = true
 
     override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
-        outAttrs.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-        outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN or EditorInfo.IME_ACTION_NONE
-        return object : BaseInputConnection(this, false) {
-            override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
-                if (text.isNullOrEmpty()) return true
-                var out = text.toString()
-                if (controlArmed() && out.length == 1) {
-                    val ch = out[0].lowercaseChar()
-                    if (ch in 'a'..'z') {
-                        out = TerminalKeys.ctrl(ch)
-                        onControlUsed()
-                    }
-                }
-                onText?.invoke(out)
-                return true
-            }
-
-            override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
-                if (beforeLength > 0) onText?.invoke(TerminalKeys.BACKSPACE)
-                return true
-            }
-
-            override fun sendKeyEvent(event: KeyEvent): Boolean {
-                if (event.action != KeyEvent.ACTION_DOWN) return true
-                return handleKey(event)
-            }
-        }
+        // No password variation: that flag is what makes Android open the
+        // secure keyboard and hide dictation, emoji, and a normal IME.
+        outAttrs.inputType = InputType.TYPE_CLASS_TEXT or
+            InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+            InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        outAttrs.imeOptions = EditorInfo.IME_ACTION_NONE or
+            EditorInfo.IME_FLAG_NO_EXTRACT_UI or
+            EditorInfo.IME_FLAG_NO_FULLSCREEN
+        outAttrs.initialSelStart = 0
+        outAttrs.initialSelEnd = 0
+        return TerminalInputConnection(this)
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
-        if (handleKey(event)) return true
-        return super.onKeyDown(keyCode, event)
+        if (!isFocused) return super.onKeyDown(keyCode, event)
+        return handleTerminalKey(keyCode, event) || super.onKeyDown(keyCode, event)
     }
 
-    private fun handleKey(event: KeyEvent): Boolean {
-        val text = when {
-            event.isCtrlPressed -> {
-                val label = event.displayLabel.lowercaseChar()
-                if (label in 'a'..'z') TerminalKeys.ctrl(label) else null
+    internal fun handleTerminalKey(keyCode: Int, event: KeyEvent): Boolean {
+        val mapped = when (keyCode) {
+            KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> "\r"
+            KeyEvent.KEYCODE_DEL -> "\u007f"
+            KeyEvent.KEYCODE_FORWARD_DEL -> "\u001b[3~"
+            KeyEvent.KEYCODE_TAB -> if (event.isShiftPressed) "\u001b[Z" else "\t"
+            KeyEvent.KEYCODE_ESCAPE -> "\u001b"
+            KeyEvent.KEYCODE_DPAD_UP -> "\u001b[A"
+            KeyEvent.KEYCODE_DPAD_DOWN -> "\u001b[B"
+            KeyEvent.KEYCODE_DPAD_RIGHT -> "\u001b[C"
+            KeyEvent.KEYCODE_DPAD_LEFT -> "\u001b[D"
+            else -> null
+        }
+        if (mapped != null) {
+            deliver(mapped)
+            return true
+        }
+        val ch = event.unicodeChar
+        if (ch > 0) {
+            emitCommitted(ch.toChar().toString())
+            return true
+        }
+        return false
+    }
+
+    /** A finished IME commit. A lone newline is Enter. A block with newlines is a paste, not a submit. */
+    internal fun emitCommitted(text: String) {
+        val normalized = text.replace("\r\n", "\n").replace('\r', '\n')
+        if (normalized.isEmpty()) return
+        if (normalized.all { it == '\n' }) {
+            deliver("\r".repeat(normalized.length))
+            return
+        }
+        if ('\n' in normalized) {
+            deliver(TerminalInput.paste(TerminalInput.sanitize(normalized)))
+            return
+        }
+        if (controlArmed() && normalized.length == 1 && normalized[0].isLetter()) {
+            val code = normalized[0].lowercaseChar().code - 'a'.code + 1
+            if (code in 1..26) {
+                deliver(code.toChar().toString())
+                onControlUsed()
+                return
             }
-            event.keyCode == KeyEvent.KEYCODE_ENTER -> TerminalKeys.ENTER
-            event.keyCode == KeyEvent.KEYCODE_DEL -> TerminalKeys.BACKSPACE
-            event.keyCode == KeyEvent.KEYCODE_TAB -> TerminalKeys.TAB
-            event.keyCode == KeyEvent.KEYCODE_ESCAPE -> TerminalKeys.ESC
-            event.keyCode == KeyEvent.KEYCODE_DPAD_UP -> menuKey("up")
-            event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN -> menuKey("down")
-            event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT -> menuKey("left")
-            event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT -> menuKey("right")
-            else -> {
-                val unicode = event.getUnicodeChar(event.metaState)
-                if (unicode != 0) unicode.toChar().toString() else null
+        }
+        deliver(normalized)
+    }
+
+    private fun deliver(text: String) {
+        if (text.isNotEmpty()) onText?.invoke(text)
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        bind(terminal)
+        removeCallbacks(blink)
+        postDelayed(blink, 500)
+    }
+
+    override fun onDetachedFromWindow() {
+        removeCallbacks(blink)
+        removeCallbacks(flingTick)
+        stopGlide()
+        if (terminal.onFrame === frameListener) terminal.onFrame = null
+        super.onDetachedFromWindow()
+    }
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            parent?.requestDisallowInterceptTouchEvent(true)
+            pinching = false
+        }
+        scaler.onTouchEvent(event)
+        if (event.pointerCount > 1 || scaler.isInProgress) {
+            if (!pinching) {
+                pinching = true
+                cursorDrag = false
+                val cancel = MotionEvent.obtain(event)
+                cancel.action = MotionEvent.ACTION_CANCEL
+                gesture.onTouchEvent(cancel)
+                cancel.recycle()
             }
-        } ?: return false
-        onText?.invoke(text)
+            return true
+        }
+        if (pinching) {
+            if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+                pinching = false
+            }
+            return true
+        }
+        gesture.onTouchEvent(event)
+        // GestureDetector does not deliver a drag that starts after the
+        // long-press timeout. Extend the selection here so it can cross lines.
+        if (selecting && event.actionMasked == MotionEvent.ACTION_MOVE) {
+            val cell = cellAt(event.x, event.y)
+            if (cell != null) {
+                selX2 = cell.first
+                selY2 = cell.second
+                invalidate()
+            }
+        }
         return true
     }
 
+    override fun onDraw(canvas: Canvas) {
+        val emulator = terminal.emulator
+        noteEmulator(emulator)
+        canvas.drawColor(canvasColor)
+        canvas.save()
+        canvas.translate(zoomPanX, zoomPanY)
+        canvas.scale(zoom, zoom)
+        canvas.save()
+        val placed = place(emulator)
+        topRow = placed.first
+        val shift = if (forwarding(emulator) != AgentTerminalPolicy.Wheel.None) {
+            panX = 0
+            0
+        } else {
+            horizontalShift(emulator)
+        }
+        canvas.translate(shift.toFloat(), placed.second.toFloat())
+        val sel = selectionArgs()
+        val rows = visibleRows().coerceAtMost(emulator.mRows)
+        val cols = emulator.mColumns
+        for (r in 0 until rows) {
+            val row = topRow + r
+            for (c in 0 until cols) {
+                val cell = emulator.screen.cellAtTranscript(row, c)
+                val selected = sel != null && row in sel[0]..sel[1] &&
+                    c >= (if (row == sel[0]) sel[2] else 0) &&
+                    c <= (if (row == sel[1]) sel[3] else cols - 1)
+                drawCell(canvas, r, c, cell, selected)
+            }
+        }
+        if (blinkOn && topRow <= emulator.cursorRow && emulator.cursorRow < topRow + rows) {
+            val cr = emulator.cursorRow - topRow
+            val cc = emulator.cursorCol
+            if (cc in 0 until cols) {
+                val left = cc * cellWidth
+                val top = topPad + cr * cellHeight
+                canvas.drawRect(left, top.toFloat(), left + cellWidth, (top + cellHeight).toFloat(), cursorPaint)
+            }
+        }
+        canvas.restore()
+        canvas.restore()
+    }
+
+    private fun drawCell(canvas: Canvas, row: Int, col: Int, cell: Cell, selected: Boolean) {
+        var fg = AnsiColors.foreground(cell.fg, cell.bold)
+        var bg = AnsiColors.background(cell.bg)
+        if (cell.inverse) {
+            val tmp = fg
+            fg = bg
+            bg = tmp
+        }
+        if (selected) {
+            bg = 0xFF3A5F8A.toInt()
+            fg = 0xFFFFFFFF.toInt()
+        }
+        val left = col * cellWidth
+        val top = (topPad + row * cellHeight).toFloat()
+        bgPaint.color = bg
+        canvas.drawRect(left, top, left + cellWidth, top + cellHeight, bgPaint)
+        val ch = cell.char
+        if (ch != ' ' && ch != '\u0000') {
+            textPaint.color = fg
+            textPaint.isFakeBoldText = cell.bold
+            textPaint.isUnderlineText = cell.underline
+            canvas.drawText(ch.toString(), left, top + cellBaseline, textPaint)
+        }
+    }
+
     private fun publishMenu() {
-        val active = AgentTerminalPolicy.viewportHasMenuPrompt(terminal.visibleText())
+        val emulator = terminal.emulator
+        val text = runCatching {
+            emulator.getSelectedText(0, 0, emulator.mColumns, emulator.mRows)
+        }.getOrDefault("")
+        val active = AgentTerminalPolicy.viewportHasMenuPrompt(text)
         if (active == menuActive) return
         menuActive = active
         onMenuChanged?.invoke(active)
     }
 
-    private fun forwarding(): AgentTerminalPolicy.Wheel =
-        AgentTerminalPolicy.wheelForwarding(
+    private fun noteEmulator(emulator: VtEmulator) {
+        if (drawn === emulator) return
+        drawn = emulator
+        topRow = 0
+        offsetRows = 0
+        panX = 0
+        scrollRemainder = 0f
+        wheelRemainder = 0f
+        stopGlide()
+        flingVelocity = 0f
+        if (selecting) clearSelection()
+        if (menuActive) {
+            menuActive = false
+            onMenuChanged?.invoke(false)
+        }
+    }
+
+    /** Turns accumulated finger travel into whole rows of the local scrollback. */
+    private fun applyScrollLines(emulator: VtEmulator) {
+        if (cellHeight <= 0) return
+        val lines = (scrollRemainder / cellHeight).toInt()
+        if (lines == 0) return
+        val applied = if (lines > 0) lines else -kotlin.math.abs(lines)
+        scrollRemainder -= applied * cellHeight
+        offsetRows = (offsetRows - applied).coerceIn(0, maxOffset(emulator))
+        clampOffset(emulator)
+    }
+
+    /** iOS `wheelForwarding`. The view stays put for anything other than local scrollback. */
+    private fun forwarding(emulator: VtEmulator): AgentTerminalPolicy.Wheel {
+        return AgentTerminalPolicy.wheelForwarding(
             modesKnown = terminal.hostModeSnapshot,
-            mouseTracking = terminal.mouseTrackingActive,
-            alternateScreen = terminal.alternateBufferActive,
+            mouseTracking = emulator.isMouseTrackingActive(),
+            alternateScreen = emulator.isAlternateBufferActive(),
             sawMouseOrAlternateDisable = terminal.sawMouseOrAlternateDisable,
             prefersRemoteMouseWheel = prefersRemoteWheel,
-            echoesMouseWheel = echoesMouseWheel,
         )
-
-    private fun sendAlternateScroll(towardBottom: Boolean, steps: Int) {
-        val key = menuKey(if (towardBottom) "down" else "up")
-        if (key.isNotEmpty()) onText?.invoke(key.repeat(steps.coerceAtLeast(1)))
     }
 
-    /**
-     * xterm SGR wheel. Button 64 = up, 65 = down. Used for Claude/Grok/
-     * OpenCode (and any program with DECSET mouse on). cursor-agent uses
-     * [sendAlternateScroll] instead — SGR lands in its composer.
-     */
-    private fun sendWheel(x: Float, y: Float, towardBottom: Boolean, steps: Int) {
-        if (steps <= 0) return
-        val cell = cellAt(x, y)
-        val column = ((cell?.first ?: 0) + 1).coerceIn(1, terminal.columns.coerceAtLeast(1))
-        val row = ((cell?.second ?: 0) + 1).coerceIn(1, terminal.rows.coerceAtLeast(1))
-        val button = if (towardBottom) 65 else 64
-        onText?.invoke("\u001b[<$button;$column;${row}M".repeat(steps))
-    }
-
-    /** Left press then release at the tapped cell. Column/row are 1-based. */
-    private fun sendClick(event: MotionEvent) {
-        val cell = cellAt(event.x, event.y) ?: return
-        val column = (cell.first + 1).coerceIn(1, terminal.columns.coerceAtLeast(1))
-        val row = (cell.second + 1).coerceIn(1, terminal.rows.coerceAtLeast(1))
-        onText?.invoke("\u001b[<0;$column;${row}M\u001b[<0;$column;${row}m")
-    }
-
-    /**
-     * Claude pins a jump chip just above the composer when its own transcript
-     * is scrolled up. Match iOS `viewportHasTuiJumpHint`, plus the phone
-     * "(click)" wording Claude uses when mouse is available.
-     */
-    private fun handleTuiJumpTap(event: MotionEvent): Boolean {
-        if (event.y < height * 0.45f) return false
-        val text = terminal.visibleText()
-        val tail = text.lineSequence().toList().takeLast(15).joinToString("\n")
-        val clickJump = tail.contains("Jump to bottom (click)") ||
-            Regex("""\d+ new messages? \(click\)""").containsMatchIn(tail)
-        val keyJump = tail.contains("Jump to bottom (ctrl+End)") ||
-            Regex("""\d+ new messages? \(ctrl\+End\)""").containsMatchIn(tail)
-        if (!clickJump && !keyJump) return false
-        offsetRows = 0
-        scrollRemainder = 0f
-        invalidate()
-        dismissKeyboard()
-        if (clickJump) {
-            // Chip sits in the lower grid; a miss on letterbox still needs a
-            // report — aim at the last few rows where Claude pins it.
-            if (cellAt(event.x, event.y) != null) {
-                sendClick(event)
-            } else {
-                val column = (terminal.columns / 2).coerceAtLeast(1)
-                val row = (terminal.rows - 2).coerceAtLeast(1)
-                onText?.invoke("\u001b[<0;$column;${row}M\u001b[<0;$column;${row}m")
-            }
-        }
-        // Same key iOS synthesizes for the ctrl+End chip. Claude accepts it
-        // for virtual-scroll jump even when the hint says "(click)".
-        onText?.invoke("\u001b[1;5F")
+    /** True when the gesture was consumed by the remote program. */
+    private fun forwardRemote(emulator: VtEmulator, event: MotionEvent, distanceY: Float): Boolean {
+        val mode = forwarding(emulator)
+        if (mode == AgentTerminalPolicy.Wheel.None) return false
+        panX = 0
+        if (distanceY == 0f || cellHeight <= 0) return true
+        wheelRemainder += distanceY
+        val lines = (wheelRemainder / cellHeight).toInt()
+        if (lines == 0) return true
+        val steps = min(abs(lines), WHEEL_BURST_CAP)
+        val applied = if (lines > 0) steps else -steps
+        wheelRemainder -= applied * cellHeight
+        dispatchRemoteWheel(emulator, mode, event.x, event.y, applied > 0, steps)
         return true
     }
 
-    private fun tapTargetsCursor(event: MotionEvent): Boolean {
+    /**
+     * iOS `startWheelMomentum`. A slow lift is a placed drag and sends nothing
+     * more. A flick decays into wheel bursts until friction wins. The picture
+     * stays put; Claude still repaints each burst.
+     */
+    private fun startGlide(stepsPerSecond: Float, x: Float, y: Float) {
+        if (abs(stepsPerSecond) <= GLIDE_START_STEPS_PER_SECOND) return
+        val cap = if (relayed) GLIDE_CAP_RELAY else GLIDE_CAP_LAN
+        glideRate = stepsPerSecond.coerceIn(-cap, cap)
+        glideCarry = 0f
+        glideX = x
+        glideY = y
+        removeCallbacks(glideTick)
+        post(glideTick)
+    }
+
+    private fun stopGlide() {
+        glideRate = 0f
+        glideCarry = 0f
+        removeCallbacks(glideTick)
+    }
+
+    private fun dispatchRemoteWheel(
+        emulator: VtEmulator,
+        mode: AgentTerminalPolicy.Wheel,
+        x: Float,
+        y: Float,
+        towardBottom: Boolean,
+        steps: Int,
+    ) {
+        if (steps <= 0) return
+        when (mode) {
+            AgentTerminalPolicy.Wheel.Mouse -> sendWheel(emulator, x, y, towardBottom, steps)
+            AgentTerminalPolicy.Wheel.AlternateScroll -> sendAlternateScroll(towardBottom, steps)
+            AgentTerminalPolicy.Wheel.None -> Unit
+        }
+    }
+
+    /** Cursor up/down for a full-screen program that does not track the mouse. */
+    private fun sendAlternateScroll(towardBottom: Boolean, steps: Int) {
+        val application = terminal.emulator.isCursorKeysApplicationMode()
+        val key = if (towardBottom) {
+            if (application) "\u001bOB" else "\u001b[B"
+        } else {
+            if (application) "\u001bOA" else "\u001b[A"
+        }
+        onText?.invoke(key.repeat(steps.coerceAtLeast(1)))
+    }
+
+    /** Rows of the current screen that sit above the view, plus saved scrollback. */
+    private fun maxOffset(emulator: VtEmulator): Int {
+        val history = if (emulator.alternateBufferActive) 0 else emulator.screen.activeTranscriptRows
+        val hidden = (emulator.mRows - visibleRows()).coerceAtLeast(0)
+        return hidden + history
+    }
+
+    private fun visibleRows(): Int {
+        if (cellHeight <= 0) return 1
+        return ((height - topPad) / cellHeight).coerceAtLeast(1)
+    }
+
+    private fun clampOffset(emulator: VtEmulator) {
+        offsetRows = offsetRows.coerceIn(0, maxOffset(emulator))
+    }
+
+    /** topRow for the renderer, and the Y translation that puts that row in view. */
+    private fun place(emulator: VtEmulator): Pair<Int, Int> {
+        if (forwarding(emulator) != AgentTerminalPolicy.Wheel.None) return 0 to minPanY(emulator)
+        clampOffset(emulator)
+        if (offsetRows == 0 && scrollRemainder > 0f) scrollRemainder = 0f
+        if (offsetRows == maxOffset(emulator) && scrollRemainder < 0f) scrollRemainder = 0f
+        val hidden = (emulator.mRows - visibleRows()).coerceAtLeast(0)
+        val intoHistory = (offsetRows - hidden).coerceAtLeast(0)
+        val row = -intoHistory
+        val base = if (intoHistory > 0) 0 else minPanY(emulator) + offsetRows * cellHeight
+        // Negative remainder is a finger moving down, so the picture moves down with it.
+        val slack = Math.round(-scrollRemainder)
+        return row to (base + slack)
+    }
+
+    /** Left press then release at the tapped cell. Column and row are 1-based. */
+    private fun sendClick(emulator: VtEmulator, event: MotionEvent) {
+        val cell = cellAt(event.x, event.y) ?: return
+        val column = (cell.first + 1).coerceIn(1, emulator.mColumns)
+        val row = (cell.second + 1).coerceIn(1, emulator.mRows)
+        val payload = if (emulator.isMouseProtocolSgr()) {
+            "\u001b[<0;$column;${row}M\u001b[<0;$column;${row}m"
+        } else {
+            val bytes = byteArrayOf(
+                0x1b, '['.code.toByte(), 'M'.code.toByte(),
+                32, (32 + column).toByte(), (32 + row).toByte(),
+                0x1b, '['.code.toByte(), 'M'.code.toByte(),
+                (32 + 3).toByte(), (32 + column).toByte(), (32 + row).toByte(),
+            )
+            bytes.toString(Charsets.ISO_8859_1)
+        }
+        onText?.invoke(payload)
+    }
+
+    /** Bracketed paste of the system clipboard. False when there is nothing to paste. */
+    private fun pasteClipboard(): Boolean {
+        val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return false
+        val text = try {
+            clipboard.primaryClip?.takeIf { it.itemCount > 0 }
+                ?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
+        } catch (_: Exception) {
+            return false
+        }
+        val sanitized = TerminalInput.sanitize(text)
+        if (sanitized.isEmpty()) return false
+        onText?.invoke(TerminalInput.paste(sanitized))
+        return true
+    }
+
+    private val scaler = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+        override fun onScale(detector: ScaleGestureDetector): Boolean {
+            val next = (zoom * detector.scaleFactor).coerceIn(1f, MAX_ZOOM)
+            val focusX = detector.focusX
+            val focusY = detector.focusY
+            val contentX = (focusX - zoomPanX) / zoom
+            val contentY = (focusY - zoomPanY) / zoom
+            zoom = next
+            zoomPanX = focusX - contentX * zoom
+            zoomPanY = focusY - contentY * zoom
+            clampZoom()
+            invalidate()
+            return true
+        }
+    }).also { it.isQuickScaleEnabled = false }
+
+    /** A magnified picture stays inside the view. At 1× the pan is zero. */
+    private fun clampZoom() {
+        if (zoom <= 1f || width <= 0 || height <= 0) {
+            zoom = 1f
+            zoomPanX = 0f
+            zoomPanY = 0f
+            return
+        }
+        val minX = -(zoom - 1f) * width
+        val minY = -(zoom - 1f) * height
+        zoomPanX = zoomPanX.coerceIn(minX, 0f)
+        zoomPanY = zoomPanY.coerceIn(minY, 0f)
+    }
+
+    /**
+     * Drag that starts on the cursor. A shell only follows the finger along
+     * that row. A full-screen program follows it in both directions.
+     * Mouse-tracking programs keep the pointer.
+     */
+    private fun wantsCursorDrag(emulator: VtEmulator, dx: Float, dy: Float): Boolean {
+        if (!downOnCursor || selecting || offsetRows != 0 || emulator.isMouseTrackingActive()) return false
+        if (emulator.isAlternateBufferActive()) return true
+        return abs(dx) > abs(dy)
+    }
+
+    private fun moveCursor(emulator: VtEmulator, event: MotionEvent) {
+        val cell = cellAt(event.x, event.y) ?: return
+        val step = CursorMotion.step(
+            fromCol = placedCol,
+            fromRow = placedRow,
+            toCol = cell.first,
+            toRow = cell.second,
+            allowRows = emulator.isAlternateBufferActive(),
+            applicationCursor = emulator.isCursorKeysApplicationMode(),
+        )
+        if (step.keys.isEmpty()) return
+        placedCol = step.col
+        placedRow = step.row
+        onText?.invoke(step.keys)
+    }
+
+    private fun tapTargetsCursor(emulator: VtEmulator, event: MotionEvent): Boolean {
         val cell = cellAt(event.x, event.y) ?: return false
-        val (cr, _) = terminal.cursor()
-        return abs(cell.second - cr) <= 1
+        return kotlin.math.abs(cell.second - emulator.cursorRow) <= 1
+    }
+
+    private fun sendWheel(emulator: VtEmulator, x: Float, y: Float, towardBottom: Boolean, steps: Int) {
+        val cell = cellAt(x, y)
+        val column = ((cell?.first ?: 0) + 1).coerceIn(1, emulator.mColumns)
+        val row = ((cell?.second ?: 0) + 1).coerceIn(1, emulator.mRows)
+        val button = if (towardBottom) VtEmulator.MOUSE_WHEELDOWN_BUTTON else VtEmulator.MOUSE_WHEELUP_BUTTON
+        // iOS always sends SGR for a guessed wheel, before the program has enabled tracking.
+        val sgr = emulator.isMouseProtocolSgr() || !emulator.isMouseTrackingActive()
+        val payload = if (sgr) {
+            "\u001b[<$button;$column;${row}M".repeat(steps)
+        } else {
+            val code = ByteArray(6 * steps)
+            var index = 0
+            repeat(steps) {
+                code[index++] = 0x1b
+                code[index++] = '['.code.toByte()
+                code[index++] = 'M'.code.toByte()
+                code[index++] = (32 + button).toByte()
+                code[index++] = (32 + column).toByte()
+                code[index++] = (32 + row).toByte()
+            }
+            code.toString(Charsets.ISO_8859_1)
+        }
+        onText?.invoke(payload)
+    }
+
+    /** Pins the cursor row to the bottom of the view. The finger never moves this. */
+    private fun minPanY(emulator: VtEmulator): Int {
+        val contentHeight = topPad + emulator.mRows * cellHeight
+        return min(0, height - contentHeight)
+    }
+
+    private fun horizontalShift(emulator: VtEmulator): Int {
+        val contentWidth = (emulator.mColumns * cellWidth).roundToInt()
+        val minPan = min(0, width - contentWidth)
+        if (panX < minPan) panX = minPan
+        if (panX > 0) panX = 0
+        return panX
     }
 
     private fun cellAt(x: Float, y: Float): Pair<Int, Int>? {
-        val w = drawCellW.coerceAtLeast(1f)
-        val h = drawCellH.coerceAtLeast(1f)
-        val c = ((x - drawOriginX) / w).toInt()
-        val r = ((y - drawOriginY) / h).toInt()
-        if (c !in 0 until terminal.columns || r !in 0 until terminal.rows) return null
-        return c to r
+        val emulator = terminal.emulator
+        val placed = place(emulator)
+        val viewX = (x - zoomPanX) / zoom
+        val viewY = (y - zoomPanY) / zoom
+        val contentX = viewX - horizontalShift(emulator)
+        val contentY = viewY - placed.second
+        val localRow = ((contentY - topPad) / cellHeight).toInt()
+        if (localRow < 0 || localRow >= emulator.mRows) return null
+        val col = (contentX / cellWidth).toInt()
+        if (col < 0 || col >= emulator.mColumns) return null
+        return col to (placed.first + localRow)
     }
 
-    private fun inSelection(c: Int, r: Int): Boolean {
-        val top = min(selR1, selR2)
-        val bottom = max(selR1, selR2)
-        if (r !in top..bottom) return false
-        val left = if (r == top) min(selC1, selC2) else 0
-        val right = if (r == bottom) max(selC1, selC2) else terminal.columns - 1
-        return c in left..right
+    /** Selects the word under the finger, or the whole line when the cell is blank. */
+    private fun selectWord(event: MotionEvent) {
+        val cell = cellAt(event.x, event.y) ?: return
+        val row = cell.second
+        val cols = terminal.emulator.mColumns
+        val col = cell.first.coerceIn(0, cols - 1)
+        fun occupied(column: Int): Boolean {
+            val text = terminal.emulator.getSelectedText(column, row, column, row)
+            return text.isNotEmpty() && !text[0].isWhitespace()
+        }
+        var start = col
+        var end = col
+        if (occupied(col)) {
+            while (start > 0 && occupied(start - 1)) start--
+            while (end < cols - 1 && occupied(end + 1)) end++
+        } else {
+            start = 0
+            end = cols - 1
+        }
+        selX1 = start
+        selY1 = row
+        selX2 = end
+        selY2 = row
+        if (!selecting) {
+            selecting = true
+            onSelectionChanged?.invoke(true)
+        }
+        invalidate()
     }
 
-    private fun maxOffset(): Int = terminal.scrollbackLines()
-
-    private fun clampOffset() {
-        offsetRows = offsetRows.coerceIn(0, maxOffset())
+    private fun selectionContains(event: MotionEvent): Boolean {
+        val args = selectionArgs() ?: return false
+        val cell = cellAt(event.x, event.y) ?: return false
+        val row = cell.second
+        val col = cell.first
+        if (row < args[0] || row > args[1]) return false
+        val startCol = if (row == args[0]) args[2] else 0
+        val endCol = if (row == args[1]) args[3] else terminal.emulator.mColumns - 1
+        return col in startCol..endCol
     }
 
-    private fun rgb(color: Int): Int =
-        if (color ushr 24 == 0) 0xFF000000.toInt() or (color and 0xFFFFFF) else color
-
-    private fun isWideGlyph(ch: Char): Boolean {
-        val code = ch.code
-        return code in 0x1100..0x115F ||
-            code in 0x2E80..0xA4CF ||
-            code in 0xAC00..0xD7A3 ||
-            code in 0xF900..0xFAFF ||
-            code in 0xFE10..0xFE19 ||
-            code in 0xFE30..0xFE6F ||
-            code in 0xFF00..0xFF60 ||
-            code in 0xFFE0..0xFFE6
+    /** y1, y2, x1, x2 in emulator coordinates, ordered. */
+    private fun selectionArgs(): IntArray? {
+        if (!selecting) return null
+        val swap = selY1 > selY2 || (selY1 == selY2 && selX1 > selX2)
+        return if (swap) {
+            intArrayOf(selY2, selY1, selX2, selX1)
+        } else {
+            intArrayOf(selY1, selY2, selX1, selX2)
+        }
     }
 
-    private fun dp(v: Float): Float = v * resources.displayMetrics.density
+    private companion object {
+        const val CANVAS = 0xFF1A1B1D.toInt()
+        /** iOS `maximumMouseWheelEventsPerGestureTick`. */
+        const val WHEEL_BURST_CAP = 8
+        const val GLIDE_START_STEPS_PER_SECOND = 6f
+        const val GLIDE_STOP_STEPS_PER_SECOND = 3f
+        const val GLIDE_CAP_LAN = 90f
+        const val GLIDE_CAP_RELAY = 45f
+        const val GLIDE_FRICTION_LAN = 0.92f
+        const val GLIDE_FRICTION_RELAY = 0.90f
+        const val GLIDE_BURST_RELAY = 5
+        const val GLIDE_TICK_MS = 50L
+        const val GLIDE_TICK_SECONDS = 0.05f
+        const val MAX_ZOOM = 3f
+    }
+}
+
+/**
+ * Composing text stays here until the IME finishes it. A keyboard that
+ * holds a whole English word must still deliver that word when Enter
+ * arrives, instead of dropping the composition.
+ */
+private class TerminalInputConnection(private val terminal: HostTerminalView) : BaseInputConnection(terminal, false) {
+    private var composing = ""
+
+    override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
+        val raw = text?.toString().orEmpty()
+        val pending = composing
+        composing = ""
+        // Enter that only replaces the composition still has to send the word.
+        if (pending.isNotEmpty() && raw.all { it == '\n' || it == '\r' }) terminal.emitCommitted(pending)
+        if (raw.isNotEmpty()) terminal.emitCommitted(raw)
+        return true
+    }
+
+    override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean {
+        composing = text?.toString().orEmpty()
+        return true
+    }
+
+    override fun finishComposingText(): Boolean {
+        val pending = composing
+        composing = ""
+        if (pending.isNotEmpty()) terminal.emitCommitted(pending)
+        return true
+    }
+
+    override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
+        if (composing.isNotEmpty()) {
+            val drop = beforeLength.coerceIn(0, composing.length)
+            composing = composing.dropLast(drop)
+            return true
+        }
+        val event = KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DEL)
+        repeat(beforeLength.coerceAtLeast(0)) { terminal.handleTerminalKey(KeyEvent.KEYCODE_DEL, event) }
+        return true
+    }
+
+    override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean =
+        deleteSurroundingText(beforeLength, afterLength)
+
+    override fun sendKeyEvent(event: KeyEvent): Boolean {
+        if (event.action != KeyEvent.ACTION_DOWN) return true
+        if (composing.isNotEmpty() && (event.keyCode == KeyEvent.KEYCODE_DEL || event.keyCode == KeyEvent.KEYCODE_FORWARD_DEL)) {
+            composing = composing.dropLast(1)
+            return true
+        }
+        if (composing.isNotEmpty()) {
+            val pending = composing
+            composing = ""
+            terminal.emitCommitted(pending)
+        }
+        terminal.handleTerminalKey(event.keyCode, event)
+        return true
+    }
+
+    override fun getTextBeforeCursor(length: Int, flags: Int): CharSequence = ""
+
+    override fun getTextAfterCursor(length: Int, flags: Int): CharSequence = ""
 }

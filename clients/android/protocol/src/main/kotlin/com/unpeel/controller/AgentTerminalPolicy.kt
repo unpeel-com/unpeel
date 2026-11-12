@@ -13,16 +13,11 @@ object AgentTerminalPolicy {
         None,
         /** SGR (or classic) wheel reports. */
         Mouse,
-        /** Cursor up/down, application form when DECCKM is on. */
+        /** Cursor up/down, application form when DECCKM is on. Alt screen only. */
         AlternateScroll,
     }
 
-    // Agents that consume SGR wheel for their own transcript.
     private val remoteMouseWheelProviders = setOf("claude", "grok", "opencode")
-
-    // Agents that must not receive remote wheel or ↑/↓ (both hit the composer).
-    // Phone scrolls local VT history — same model as Mac Ghostty for Cursor.
-    private val wheelEchoProviders = setOf("cursor-agent", "cursor")
 
     private val navMarkers = listOf("to navigate", "↑/↓", "↑ ↓", "▲/▼", "arrow keys")
     private val selectMarkers = listOf(
@@ -38,12 +33,15 @@ object AgentTerminalPolicy {
     )
 
     fun prefersRemoteMouseWheel(providerID: String?, command: String, activeRuntimeID: String?): Boolean {
-        return identityMatches(providerID, command, activeRuntimeID, remoteMouseWheelProviders)
-    }
-
-    /** cursor-agent: clicks ok, wheel becomes `[<65;…M` in the prompt. */
-    fun echoesMouseWheel(providerID: String?, command: String, activeRuntimeID: String?): Boolean {
-        return identityMatches(providerID, command, activeRuntimeID, wheelEchoProviders)
+        val runtime = activeRuntimeID?.lowercase()
+        if (runtime != null && runtime in remoteMouseWheelProviders) return true
+        val provider = providerID.orEmpty().lowercase()
+        if (provider.isNotEmpty() && provider in remoteMouseWheelProviders) return true
+        val head = command.trim().split(Regex("\\s+")).firstOrNull()
+            ?.substringAfterLast('/')
+            ?.lowercase()
+            .orEmpty()
+        return head.isNotEmpty() && head in remoteMouseWheelProviders
     }
 
     fun wheelForwarding(
@@ -52,40 +50,11 @@ object AgentTerminalPolicy {
         alternateScreen: Boolean,
         sawMouseOrAlternateDisable: Boolean,
         prefersRemoteMouseWheel: Boolean,
-        echoesMouseWheel: Boolean = false,
     ): Wheel {
-        // Two remote paths (stock Android / iOS):
-        //   Mouse           → SGR wheel (DECSET 1000/1002/1003) — Claude/Grok
-        //   AlternateScroll → ↑/↓ keys (DEC 1007) — mouse-less alt screen
-        // cursor-agent: neither. SGR lands in the composer as `[<65;…M`, and
-        // ↑/↓ walks composer history ("previous prompt"). Mac scrolls Ghostty
-        // local scrollback; the phone must do the same (Wheel.None).
-        if (echoesMouseWheel) return Wheel.None
         if (mouseTracking) return Wheel.Mouse
         if (alternateScreen) return Wheel.AlternateScroll
         if (modesKnown) return Wheel.None
-        return if (prefersRemoteMouseWheel && !sawMouseOrAlternateDisable) {
-            Wheel.Mouse
-        } else {
-            Wheel.None
-        }
-    }
-
-    private fun identityMatches(
-        providerID: String?,
-        command: String,
-        activeRuntimeID: String?,
-        names: Set<String>,
-    ): Boolean {
-        val runtime = activeRuntimeID?.lowercase()
-        if (runtime != null && runtime in names) return true
-        val provider = providerID.orEmpty().lowercase()
-        if (provider.isNotEmpty() && provider in names) return true
-        val head = command.trim().split(Regex("\\s+")).firstOrNull()
-            ?.substringAfterLast('/')
-            ?.lowercase()
-            .orEmpty()
-        return head.isNotEmpty() && head in names
+        return if (prefersRemoteMouseWheel && !sawMouseOrAlternateDisable) Wheel.Mouse else Wheel.None
     }
 
     /** Phone gate: a footer is not enough. At least two numbered choices must be visible. */

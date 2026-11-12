@@ -16,7 +16,28 @@ class ScreenBuffer(
 
     val scrollbackLines: Int get() = scrollback.size
 
+    /** Termux-shaped alias used by the Unpeel HostTerminalView scroll math. */
+    val activeTranscriptRows: Int get() = scrollback.size
+
     fun cell(row: Int, col: Int): Cell = grid[row][col]
+
+    /**
+     * Row 0 is the top of the live screen; negative rows walk into scrollback
+     * (same convention as Termux getSelectedText / render topRow).
+     */
+    fun cellAtTranscript(row: Int, col: Int): Cell {
+        if (col !in 0 until cols) return Cell()
+        return when {
+            row < 0 -> {
+                val idx = scrollback.size + row
+                if (idx !in scrollback.indices) return Cell()
+                val line = scrollback.elementAt(idx)
+                if (col < line.size) line[col] else Cell()
+            }
+            row in 0 until rows -> grid[row][col]
+            else -> Cell()
+        }
+    }
 
     fun visibleCell(rowFromTop: Int, col: Int, scrollOffset: Int): Cell {
         val absolute = scrollback.size - scrollOffset + rowFromTop

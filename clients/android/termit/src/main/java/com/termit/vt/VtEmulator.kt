@@ -28,6 +28,26 @@ class VtEmulator(
     var applicationCursorKeys = false
         private set
 
+    // --- Termux-shaped surface used by Unpeel's HostTerminal / HostTerminalView ---
+    val mColumns: Int get() = screen.cols
+    val mRows: Int get() = screen.rows
+
+    fun isMouseTrackingActive(): Boolean = mouseTrackingActive
+    fun isAlternateBufferActive(): Boolean = alternateBufferActive
+    fun isCursorKeysApplicationMode(): Boolean = applicationCursorKeys
+    /** We always emit SGR mouse sequences from the Unpeel view. */
+    fun isMouseProtocolSgr(): Boolean = true
+    fun getSelectedText(x1: Int, y1: Int, x2: Int, y2: Int): String = selectedTextAbs(x1, y1, x2, y2)
+    fun setCursorBlinkState(@Suppress("UNUSED_PARAMETER") on: Boolean) {}
+    fun setCursorBlinkingEnabled(@Suppress("UNUSED_PARAMETER") on: Boolean) {}
+    fun append(data: ByteArray, length: Int) = feed(data, 0, length)
+
+    companion object {
+        const val MOUSE_LEFT_BUTTON = 0
+        const val MOUSE_WHEELUP_BUTTON = 64
+        const val MOUSE_WHEELDOWN_BUTTON = 65
+    }
+
     private val style = CellStyle()
     private var state = State.GROUND
     private val csiParams = IntArray(16)
@@ -120,6 +140,26 @@ class VtEmulator(
             for (c in rowLeft..rowRight) {
                 val ch = screen.visibleCell(r, c.coerceIn(0, screen.cols - 1), scrollOffset).char
                 if (ch != '\u0000') sb.append(ch)
+            }
+            if (r < bottom) sb.append('\n')
+        }
+        return sb.toString().trimEnd()
+    }
+
+    /** Selection in Termux coordinates (negative rows = scrollback). */
+    fun selectedTextAbs(c1: Int, r1: Int, c2: Int, r2: Int): String {
+        val top = minOf(r1, r2)
+        val bottom = maxOf(r1, r2)
+        val left = minOf(c1, c2)
+        val right = maxOf(c1, c2)
+        val sb = StringBuilder()
+        for (r in top..bottom) {
+            val rowLeft = if (r == top) left else 0
+            val rowRight = if (r == bottom) right else screen.cols - 1
+            for (c in rowLeft..rowRight) {
+                val ch = screen.cellAtTranscript(r, c.coerceIn(0, screen.cols - 1)).char
+                if (ch != '\u0000' && ch != ' ') sb.append(ch)
+                else if (ch == ' ') sb.append(' ')
             }
             if (r < bottom) sb.append('\n')
         }

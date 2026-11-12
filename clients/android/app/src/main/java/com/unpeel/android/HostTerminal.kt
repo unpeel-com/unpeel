@@ -1,66 +1,70 @@
 package com.unpeel.android
 
+import com.termit.vt.VtEmulator
 import com.unpeel.controller.TerminalModeSignals
-import com.unpeel.controller.VtScreen
 
 /**
  * Remote-only terminal. Bytes come from the Host journal.
- * Display VT is [VtScreen] (wide chars, 256/truecolor, alt buffer).
+ * Display VT is termit's [VtEmulator] (replaces the old Termux emulator).
  */
 class HostTerminal(
-    private val replies: (ByteArray) -> Unit,
-    private val onCopy: (String) -> Unit,
+    @Suppress("UNUSED_PARAMETER") private val replies: (ByteArray) -> Unit,
+    @Suppress("UNUSED_PARAMETER") private val onCopy: (String) -> Unit,
 ) {
     var onFrame: (() -> Unit)? = null
+        internal set
 
-    var screen = VtScreen(80, 24)
+    var emulator: VtEmulator
         private set
 
-    val columns: Int get() = screen.cols
-    val rows: Int get() = screen.rows
+    val columns: Int get() = emulator.mColumns
+    val rows: Int get() = emulator.mRows
 
     private var live = false
     private var appliedCanvas = CANVAS
+
     private val modes = TerminalModeSignals()
 
+    /** True after a host mode preamble was fed. Output alone is not a snapshot. */
     val hostModeSnapshot: Boolean get() = modes.hostModeSnapshot
-    val sawMouseOrAlternateDisable: Boolean get() = modes.sawMouseOrAlternateDisable
-    val mouseTrackingActive: Boolean get() = modes.mouseTracking
-    val alternateBufferActive: Boolean get() = modes.alternateScreen
-    val applicationCursorKeys: Boolean get() = modes.applicationCursorKeys
 
+    /** The fed bytes turned mouse tracking or the alternate screen off, or reset the terminal. */
+    val sawMouseOrAlternateDisable: Boolean get() = modes.sawMouseOrAlternateDisable
+
+    /** Scrollback rows the view had parked when another session took the screen. */
     var parkedScroll: Int = 0
 
+    init {
+        emulator = VtEmulator(80, 24, TRANSCRIPT_ROWS)
+    }
+
+    /**
+     * Drop the screen and start a new grid. Does not talk to the Host.
+     * A path switch passes notify false, then feeds the replacement in the
+     * same turn, so the view keeps the last frame until that paint.
+     */
     fun prepare(columns: Int, rows: Int, notify: Boolean = true) {
         live = false
         modes.reset()
-        screen = VtScreen(columns.coerceIn(2, 300), rows.coerceIn(2, 120))
+        emulator = VtEmulator(columns.coerceIn(2, 300), rows.coerceIn(2, 120), TRANSCRIPT_ROWS)
         if (notify) onFrame?.invoke()
     }
 
+    /** Terminal frame color. OpenCode and Grok send a hex; everyone else stays on the default. */
     fun applyCanvas(argb: Int) {
+        if (argb == appliedCanvas) return
         appliedCanvas = argb
-        // Session chrome / provider hex → VT default background (and a readable FG).
-        val bg = argb and 0xFFFFFF
-        val fg = readableFg(bg)
-        screen.setDefaults(fg, bg)
     }
 
-    private fun readableFg(bg: Int): Int {
-        val r = (bg shr 16) and 0xff
-        val g = (bg shr 8) and 0xff
-        val b = bg and 0xff
-        val luma = 0.2126 * r + 0.7152 * g + 0.0722 * b
-        return if (luma < 140) 0xD0D0D0 else 0x1A1B1D
-    }
-
-    fun canvasColor(): Int = appliedCanvas
-
+    /**
+     * Reflow the current screen to a new grid. Does not replay the journal,
+     * so a row change cannot paint a second copy of the same frame.
+     */
     fun resizeGrid(columns: Int, rows: Int) {
         val cols = columns.coerceIn(2, 300)
         val lines = rows.coerceIn(2, 120)
-        if (cols == screen.cols && lines == screen.rows) return
-        screen.resize(cols, lines)
+        if (cols == emulator.mColumns && lines == emulator.mRows) return
+        emulator.resize(cols, lines)
         onFrame?.invoke()
     }
 
@@ -69,85 +73,18 @@ class HostTerminal(
         if (hostSnapshot) modes.markHostSnapshot()
         modes.feed(bytes)
         this.live = live
-        screen.feed(bytes)
+        // termit's lean VT does not currently emit DA / cursor-report replies.
+        emulator.append(bytes, bytes.size)
         if (notify) onFrame?.invoke()
     }
 
-    fun updateCellSize(width: Int, height: Int) = Unit
-
-    fun visibleText(): String =
-        screen.snapshot().joinToString("\n") { row ->
-            row.joinToString("") { cell ->
-                if (cell.ch == '\u0000') "" else cell.ch.toString()
-            }.trimEnd()
-        }
-
-    fun selectedText(c1: Int, r1: Int, c2: Int, r2: Int, scrollOffset: Int): String {
-        val frame = frame(scrollOffset)
-        val top = minOf(r1, r2)
-        val bottom = maxOf(r1, r2)
-        val sb = StringBuilder()
-        for (r in top..bottom) {
-            val left = if (r == top) minOf(c1, c2) else 0
-            val right = if (r == bottom) maxOf(c1, c2) else frame.cols - 1
-            for (c in left..right.coerceAtLeast(left)) {
-                val ch = frame.cell(r, c).ch
-                if (ch != '\u0000') sb.append(ch)
-            }
-            if (r < bottom) sb.append('\n')
-        }
-        return sb.toString().trimEnd()
-    }
-
-    /** One paint frame: scrollback + live grid. Avoid per-cell snapshot(). */
-    fun frame(scrollOffset: Int): TerminalFrame {
-        val history = screen.scrollback()
-        val grid = screen.snapshot()
-        val (cr, cc) = screen.cursor()
-        return TerminalFrame(history, grid, scrollOffset.coerceIn(0, history.size), cr, cc)
-    }
-
-    fun scrollbackLines(): Int = screen.scrollback().size
-
-    fun cursor(): Pair<Int, Int> = screen.cursor()
-
-    fun replyFromEmulator(data: ByteArray) {
-        if (!live || data.isEmpty()) return
-        replies(data)
-    }
-
-    fun copyText(text: String) {
-        if (text.isNotEmpty()) onCopy(text)
+    fun updateCellSize(width: Int, height: Int) {
+        // Pixel cell size is owned by the view; VtEmulator is cell-grid only.
+        if (width <= 0 || height <= 0) return
     }
 
     companion object {
+        private const val TRANSCRIPT_ROWS = 2000
         const val CANVAS = 0xFF1A1B1D.toInt()
-    }
-}
-
-data class TerminalFrame(
-    val history: List<List<VtScreen.Cell>>,
-    val grid: List<List<VtScreen.Cell>>,
-    val scrollOffset: Int,
-    val cursorRow: Int,
-    val cursorCol: Int,
-) {
-    val rows: Int get() = grid.size
-    val cols: Int get() = grid.firstOrNull()?.size ?: 0
-
-    fun cell(rowFromTop: Int, col: Int): VtScreen.Cell {
-        val absolute = history.size - scrollOffset + rowFromTop
-        return when {
-            absolute < history.size -> {
-                val line = history[absolute]
-                if (col in line.indices) line[col]
-                else VtScreen.Cell(' ', VtScreen.DEFAULT_FG, VtScreen.DEFAULT_BG, false, false)
-            }
-            else -> {
-                val gr = absolute - history.size
-                if (gr in grid.indices && col in grid[gr].indices) grid[gr][col]
-                else VtScreen.Cell(' ', VtScreen.DEFAULT_FG, VtScreen.DEFAULT_BG, false, false)
-            }
-        }
     }
 }

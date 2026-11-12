@@ -1099,27 +1099,17 @@ class Controller(context: Context) {
             } ?: return SocketStream.Fallback
             if (generation != outputGeneration || openSessionID != sessionID) return SocketStream.Stop
             if (hello.sessionId != sessionID) return SocketStream.Fallback
-            val helloCols = hello.cols
-            if (!fresh && helloCols != null && helloCols != screen.columns) {
-                // Mac often restores desktop columns when the user focuses
-                // another session. Re-claim the phone grid and restart without
-                // blanking the painted frame into a desktop-width flash.
+            if (!fresh && hello.cols != null && hello.cols != screen.columns) {
+                slot?.outputOffset = null
                 slot?.coherent = false
-                if (desiredColumns >= 20 && kotlin.math.abs(helloCols - desiredColumns) > 2) {
-                    fitPhone(desiredColumns, desiredRows.coerceAtLeast(8), force = true)
-                }
+                slot?.replayDone = false
                 return SocketStream.Restart
             }
             var pendingReset = fresh || hello.rebased ||
                 (slot?.outputOffset != null && hello.startOffset != slot.outputOffset)
             if (pendingReset && !fresh) {
-                // Keep the last frame up — the skeleton cover is only for a
-                // session that has nothing painted yet (Mac session switches
-                // used to flash "从头刷" here).
-                if (slot?.replayDone != true) {
-                    sessionPreparing = true
-                    openingFrameReady = false
-                }
+                sessionPreparing = true
+                openingFrameReady = false
                 slot?.coherent = false
             }
             var expectBaseline = hello.snapshot && pendingReset
@@ -1357,16 +1347,10 @@ class Controller(context: Context) {
         val screen = slot?.terminal ?: terminal
         val refit = columns != null && rows != null
         if (columns != null && rows != null) {
-            // Column change needs a journal replay, but blanking into the
-            // prepare cover is what looked like "从头刷" when Mac switched
-            // sessions and restored desktop width. Keep the old frame until
-            // the Host snapshot replaces it in one paint.
-            val hadPicture = slot?.replayDone == true
-            sessionPreparing = !hadPicture
+            // The cached grid cannot wrap a new column count. Cover the blank reset.
+            sessionPreparing = true
             openingFrameReady = false
-            if (!hadPicture) {
-                screen.prepare(columns, rows)
-            }
+            screen.prepare(columns, rows)
             slot?.outputOffset = null
             slot?.replayDone = false
             slot?.coherent = false
@@ -1451,13 +1435,11 @@ class Controller(context: Context) {
                     if (replay && requested != null && chunk.modePreamble == null) {
                         // The held offset fell out of the journal. Ask for a fresh tail,
                         // which is the request that carries the mode preamble.
-                        if (slot?.replayDone != true && !holdingPicture) {
-                            sessionPreparing = true
-                            openingFrameReady = false
-                        }
+                        sessionPreparing = true
+                        openingFrameReady = false
                         slot?.coherent = false
                         offset = null
-                        holdingPicture = slot?.replayDone == true || holdingPicture
+                        holdingPicture = false
                         continue
                     }
                     if (replay && holdingPicture) {

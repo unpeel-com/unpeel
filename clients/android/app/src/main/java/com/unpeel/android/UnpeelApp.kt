@@ -8,6 +8,10 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.Uri
+import android.view.inputmethod.InputMethodManager
+import androidx.activity.BackEventCompat
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -30,9 +34,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -87,8 +93,18 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.Canvas
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Brush
@@ -123,6 +139,7 @@ import com.unpeel.controller.TerminalInput
 import com.unpeel.controller.canNotifyWhenDone
 import com.unpeel.controller.canStopSession
 import com.unpeel.controller.folderColorArgb
+import com.unpeel.controller.isInlineSidebarProject
 import com.unpeel.controller.resumeOffer
 import com.unpeel.controller.sidebarEntries
 import com.unpeel.controller.sidebarIndex
@@ -133,6 +150,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.cancellation.CancellationException
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 private val Frame = Color(0xFF121314)
@@ -174,6 +193,9 @@ fun UnpeelApp(controller: Controller) {
         if (activity != null) lock.onForeground(activity)?.let { credential.launch(it) }
     }
     val chrome = hostChrome(controller.snapshot?.hostTintHue)
+    // The session screen is the root. A system back swipe must not finish the
+    // activity. The terminal screen replaces that gesture with the drawer.
+    BackHandler { }
     MaterialTheme(colorScheme = darkColorScheme(background = chrome, surface = Sheet, primary = Foreground)) {
         Box(Modifier.fillMaxSize().background(chrome).windowInsetsPadding(WindowInsets.statusBars)) {
             if (controller.selectedHost == null) {
@@ -206,6 +228,7 @@ private fun TerminalHome(
     var drawerPosition by remember { mutableFloatStateOf(0f) }
     var drawerDragging by remember { mutableStateOf(false) }
     var drawerOpen by remember { mutableStateOf(false) }
+    var terminalSelecting by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val session = controller.snapshot?.sessions?.firstOrNull { it.id == controller.openSessionID }
@@ -223,6 +246,7 @@ private fun TerminalHome(
         pickFile.launch(arrayOf("*/*"))
     }
     LaunchedEffect(controller.openSessionID) {
+        terminalSelecting = false
         if (controller.openSessionID != null) {
             drawerDragging = false
             drawerOpen = false
@@ -232,44 +256,94 @@ private fun TerminalHome(
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val drawerWidth = minOf(360.dp, maxOf(286.dp, maxWidth * 0.88f))
         val drawerPx = with(LocalDensity.current) { drawerWidth.toPx() }.coerceAtLeast(1f)
+        val revealCommitPx = with(LocalDensity.current) { 90.dp.toPx() }
+        val view = LocalView.current
+        val allowReveal = rememberUpdatedState(sheet == null && !locked && !drawerOpen && !terminalSelecting)
+        // iOS opens the sidebar from a rightward drag in the left 15%. Android's
+        // system back is that same swipe and would finish this root activity.
+        PredictiveBackHandler(enabled = !locked && sheet == null) { progress ->
+            if (terminalSelecting) {
+                progress.collect { }
+                return@PredictiveBackHandler
+            }
+            val wasOpen = drawerOpen
+            var fromLeft = !wasOpen
+            try {
+                progress.collect { event ->
+                    fromLeft = event.swipeEdge == BackEventCompat.EDGE_LEFT
+                    drawerDragging = true
+                    when {
+                        wasOpen -> drawerPosition = drawerPx * (1f - event.progress.coerceIn(0f, 1f))
+                        fromLeft -> drawerPosition = event.touchX.coerceIn(0f, drawerPx)
+                    }
+                }
+                drawerDragging = false
+                when {
+                    wasOpen -> drawerOpen = false
+                    fromLeft -> {
+                        drawerOpen = true
+                        view.context.getSystemService(InputMethodManager::class.java)
+                            ?.hideSoftInputFromWindow(view.windowToken, 0)
+                    }
+                    else -> drawerOpen = false
+                }
+            } catch (_: CancellationException) {
+                drawerDragging = false
+                drawerOpen = wasOpen
+            }
+        }
         LaunchedEffect(drawerOpen, drawerDragging, drawerPx) {
             if (drawerDragging) return@LaunchedEffect
             val target = if (drawerOpen) drawerPx else 0f
             if (drawerPosition == target) return@LaunchedEffect
             animate(drawerPosition, target, animationSpec = tween(220)) { value, _ -> drawerPosition = value }
         }
-        fun dragBy(amount: Float) {
+        fun closeBy(totalX: Float) {
             drawerDragging = true
-            drawerPosition = (drawerPosition + amount).coerceIn(0f, drawerPx)
+            drawerPosition = (drawerPx + totalX).coerceIn(0f, drawerPx)
         }
-        fun releaseDrawer() {
-            drawerOpen = drawerPosition > drawerPx * 0.4f
+        fun releaseClose(dismiss: Boolean) {
             drawerDragging = false
+            drawerOpen = !dismiss
         }
-        Box(Modifier.fillMaxSize()) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .revealSessionsDrawer(
+                    allow = { allowReveal.value },
+                    commitPx = revealCommitPx,
+                    onMove = { total ->
+                        drawerDragging = true
+                        drawerPosition = total.coerceIn(0f, drawerPx)
+                    },
+                    onFinish = { total ->
+                        drawerDragging = false
+                        if (total > revealCommitPx) {
+                            drawerOpen = true
+                            view.context.getSystemService(InputMethodManager::class.java)
+                                ?.hideSoftInputFromWindow(view.windowToken, 0)
+                        } else {
+                            drawerOpen = false
+                        }
+                    },
+                ),
+        ) {
             if (session == null) {
                 EmptyTerminal(disconnected = controller.snapshot == null, hostName = controller.selectedHost?.macName) {
                     drawerOpen = true
                 }
             } else {
-                TerminalSurface(controller, session, onSessions = { drawerOpen = true }, onSheet = { kind ->
-                    if (kind == HomeSheet.Organize) organizeID = session.id
-                    sheet = kind
-                })
-            }
-            Box(
-                Modifier
-                    .fillMaxHeight()
-                    .width(28.dp)
-                    .pointerInput(drawerPx) {
-                        detectHorizontalDragGestures(
-                            onDragStart = { drawerDragging = true },
-                            onHorizontalDrag = { _, amount -> dragBy(amount) },
-                            onDragEnd = { releaseDrawer() },
-                            onDragCancel = { releaseDrawer() },
-                        )
+                TerminalSurface(
+                    controller,
+                    session,
+                    onSessions = { drawerOpen = true },
+                    onSheet = { kind ->
+                        if (kind == HomeSheet.Organize) organizeID = session.id
+                        sheet = kind
                     },
-            )
+                    onSelectionChanged = { terminalSelecting = it },
+                )
+            }
             val progress = (drawerPosition / drawerPx).coerceIn(0f, 1f)
             if (progress > 0f) {
                 Box(
@@ -293,8 +367,8 @@ private fun TerminalHome(
                     controller = controller,
                     selectedID = controller.openSessionID,
                     width = drawerWidth,
-                    onDrag = ::dragBy,
-                    onRelease = ::releaseDrawer,
+                    onDrag = ::closeBy,
+                    onRelease = ::releaseClose,
                     onClose = {
                         drawerDragging = false
                         drawerOpen = false
@@ -429,6 +503,7 @@ private fun TerminalSurface(
     session: SessionSummary,
     onSessions: () -> Unit,
     onSheet: (HomeSheet) -> Unit,
+    onSelectionChanged: (Boolean) -> Unit = {},
 ) {
     val project = controller.snapshot?.projects?.firstOrNull { it.id == session.projectID }
     var ctrlArmed by remember { mutableStateOf(false) }
@@ -511,6 +586,7 @@ private fun TerminalSurface(
             onControlUsed = { ctrlArmed = false },
             revealChrome = !chromeVisible,
             onRevealChrome = { chromeVisible = true },
+            onSelectionChanged = onSelectionChanged,
         )
         Column(Modifier.windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
         controller.error?.let { message ->
@@ -541,6 +617,129 @@ private fun TerminalSurface(
                 TerminalKey("Ctrl", 12, armed = ctrlArmed) { ctrlArmed = !ctrlArmed }
             }
         }
+        }
+    }
+}
+
+/**
+ * iOS `acceptsSidebarReveal`: a rightward drag that starts in the left 15% of
+ * the session and is clearly horizontal opens the drawer. Anything else is
+ * left for the terminal, including vertical scroll and text selection.
+ */
+@Composable
+private fun Modifier.revealSessionsDrawer(
+    allow: () -> Boolean,
+    commitPx: Float,
+    onMove: (Float) -> Unit,
+    onFinish: (Float) -> Unit,
+): Modifier {
+    val allowState = rememberUpdatedState(allow)
+    val moveState = rememberUpdatedState(onMove)
+    val finishState = rememberUpdatedState(onFinish)
+    return pointerInput(commitPx) {
+        val slop = 18.dp.toPx()
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            if (!allowState.value() || down.position.x > size.width * 0.15f) return@awaitEachGesture
+            var totalX = 0f
+            var totalY = 0f
+            var claimed = false
+            var last = down.position
+            while (true) {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                totalX += change.position.x - last.x
+                totalY += change.position.y - last.y
+                last = change.position
+                if (!claimed) {
+                    val pastSlop = abs(totalX) >= slop || abs(totalY) >= slop
+                    if (!pastSlop) {
+                        if (!change.pressed) break
+                        continue
+                    }
+                    val horizontal = totalX > 0f && abs(totalX) > abs(totalY) * 1.3f
+                    if (!horizontal || !allowState.value()) return@awaitEachGesture
+                    claimed = true
+                }
+                moveState.value(totalX)
+                change.consume()
+                if (!change.pressed) {
+                    finishState.value(totalX)
+                    break
+                }
+            }
+        }
+    }
+}
+
+/**
+ * iOS `closeDrag`: a horizontal drag on the open drawer follows the finger.
+ * The first move past 12dp decides once. Vertical stays a list scroll. A
+ * leftward drag of 80dp, or a flick that would carry 180dp, dismisses.
+ * Anything shorter springs back open.
+ */
+@Composable
+private fun Modifier.closeSessionsDrawer(
+    onMove: (Float) -> Unit,
+    onFinish: (Boolean) -> Unit,
+    onSlideLock: (Boolean) -> Unit,
+): Modifier {
+    val moveState = rememberUpdatedState(onMove)
+    val finishState = rememberUpdatedState(onFinish)
+    val lockState = rememberUpdatedState(onSlideLock)
+    return pointerInput(Unit) {
+        val slop = 12.dp.toPx()
+        val dismissPx = 80.dp.toPx()
+        val predictedPx = 180.dp.toPx()
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            val tracker = VelocityTracker()
+            tracker.addPosition(down.uptimeMillis, Offset.Zero)
+            var totalX = 0f
+            var totalY = 0f
+            var decided = false
+            var slide = false
+            var finished = false
+            try {
+                while (true) {
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                    // position is local to the drawer, and the drawer moves
+                    // under the finger. previousPosition is already in this
+                    // event's coordinates, so the difference is the finger,
+                    // not the drawer's own shift. Subtracting a stored point
+                    // from the last event made a slow drag shake left and right.
+                    val previous = change.previousPosition
+                    if (previous != Offset.Unspecified) {
+                        totalX += change.position.x - previous.x
+                        totalY += change.position.y - previous.y
+                    }
+                    tracker.addPosition(change.uptimeMillis, Offset(totalX, totalY))
+                    if (!decided) {
+                        if (abs(totalX) < slop && abs(totalY) < slop) {
+                            if (!change.pressed) break
+                            continue
+                        }
+                        decided = true
+                        slide = abs(totalX) > abs(totalY)
+                        if (!slide) break
+                        lockState.value(true)
+                    }
+                    moveState.value(kotlin.math.min(0f, totalX))
+                    change.consume()
+                    if (!change.pressed) {
+                        val predicted = totalX + tracker.calculateVelocity().x * 0.15f
+                        finished = true
+                        finishState.value(totalX < -dismissPx || predicted < -predictedPx)
+                        break
+                    }
+                }
+            } finally {
+                if (slide) {
+                    lockState.value(false)
+                    if (!finished) finishState.value(false)
+                }
+            }
         }
     }
 }
@@ -623,6 +822,7 @@ private fun ColumnScope.TerminalGrid(
     onControlUsed: () -> Unit,
     revealChrome: Boolean = false,
     onRevealChrome: () -> Unit = {},
+    onSelectionChanged: (Boolean) -> Unit = {},
 ) {
     val density = LocalDensity.current
     val imeBottom = WindowInsets.ime.getBottom(density)
@@ -642,6 +842,7 @@ private fun ColumnScope.TerminalGrid(
     LaunchedEffect(controller.openSessionID) {
         surface?.clearSelection()
         selecting = false
+        onSelectionChanged(false)
     }
     LaunchedEffect(controller.openSessionID, gridSize, imeBottom, cellW, cellH, topPad, controller.connection) {
         if (gridSize.width < 48 || gridSize.height < 48 || cellW <= 0f || cellH <= 0f) return@LaunchedEffect
@@ -670,23 +871,24 @@ private fun ColumnScope.TerminalGrid(
                     cellW = view.cellWidth
                     cellH = view.cellHeight.toFloat()
                     topPad = view.topPad.toFloat()
-                    view.onSelectionChanged = { selecting = it }
+                    view.onSelectionChanged = {
+                        selecting = it
+                        onSelectionChanged(it)
+                    }
                 }
             },
             update = { view ->
                 surface = view
-                view.onSelectionChanged = { selecting = it }
+                view.onSelectionChanged = {
+                    selecting = it
+                    onSelectionChanged(it)
+                }
                 view.onMenuChanged = { active ->
                     if (active && !menuActive) view.dismissKeyboard()
                     menuActive = active
                 }
                 view.relayed = controller.usingRelay
                 view.prefersRemoteWheel = AgentTerminalPolicy.prefersRemoteMouseWheel(
-                    openSession?.providerID,
-                    openSession?.command.orEmpty(),
-                    openSession?.activeRuntimeID,
-                )
-                view.echoesMouseWheel = AgentTerminalPolicy.echoesMouseWheel(
                     openSession?.providerID,
                     openSession?.command.orEmpty(),
                     openSession?.activeRuntimeID,
@@ -827,7 +1029,7 @@ private fun SessionDrawer(
     selectedID: String?,
     width: Dp,
     onDrag: (Float) -> Unit,
-    onRelease: () -> Unit,
+    onRelease: (Boolean) -> Unit,
     onClose: () -> Unit,
     onWorkspaces: () -> Unit,
     onNewSession: (ProjectSummary) -> Unit,
@@ -835,6 +1037,8 @@ private fun SessionDrawer(
     onOrganizeProject: (ProjectSummary) -> Unit,
 ) {
     val snapshot = controller.snapshot
+    val listScroll = rememberScrollState()
+    var slideLock by remember { mutableStateOf(false) }
     var expanded by remember { mutableStateOf(setOf<String>()) }
     var openFolder by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(selectedID, snapshot?.projects, snapshot?.sessions) {
@@ -845,26 +1049,34 @@ private fun SessionDrawer(
         if (folderID != null) openFolder = folderID
         expanded = expanded + listOfNotNull(projectID, project?.parentProjectID, parent?.parentProjectID)
     }
-    Column(
+    Box(
         Modifier
             .fillMaxHeight()
             .width(width)
+            .shadow(22.dp, RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp), clip = false)
             .clip(RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp))
             .background(hostChrome(snapshot?.hostTintHue))
-            .pointerInput(Unit) {
-                detectHorizontalDragGestures(
-                    onHorizontalDrag = { _, amount -> onDrag(amount) },
-                    onDragEnd = { onRelease() },
-                    onDragCancel = { onRelease() },
-                )
-            },
+            .closeSessionsDrawer(
+                onMove = onDrag,
+                onFinish = onRelease,
+                onSlideLock = { slideLock = it },
+            ),
     ) {
+    Column(Modifier.fillMaxSize()) {
         WorkspaceHeader(controller, onWorkspaces)
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 8.dp)) {
+        Column(
+            Modifier
+                .weight(1f)
+                .sidebarListFade()
+                .verticalScroll(listScroll, enabled = !slideLock)
+                .padding(start = 8.dp, end = 8.dp, top = 16.dp, bottom = 40.dp),
+        ) {
             if (snapshot == null) {
-                Text(controller.connection, color = Muted, fontSize = 13.sp, modifier = Modifier.padding(16.dp))
+                SidebarDisconnected(controller.connection)
             } else {
                 val index = sidebarIndex(snapshot)
+                val approvalIDs = snapshot.pendingApprovals.mapNotNull { it.targetSessionID ?: it.callerSessionID }.toSet()
+                val tintHue = snapshot.hostTintHue
                 val worktrees = snapshot.experimentalWorktreesEnabled
                 index.folderGroups.forEach { group ->
                     val open = openFolder == group.folder.id
@@ -879,13 +1091,13 @@ private fun SessionDrawer(
                         colorID = group.folder.colorID,
                         open = open,
                         count = memberSessions.size,
-                        attention = !open && memberSessions.any { it.activity == "blocked" },
+                        attention = !open && memberSessions.any { it.activity == "blocked" || it.id in approvalIDs },
                         onToggle = { openFolder = if (open) null else group.folder.id },
                     )
                     if (open) {
                         group.projects.forEach { project ->
                             ProjectBlock(
-                                project, index, worktrees, expanded, selectedID,
+                                project, index, worktrees, expanded, selectedID, approvalIDs, tintHue,
                                 onToggle = { id -> expanded = expanded.toggle(id) },
                                 onNewSession = onNewSession,
                                 onOpen = {
@@ -900,7 +1112,7 @@ private fun SessionDrawer(
                 }
                 index.looseProjects.forEach { project ->
                     ProjectBlock(
-                        project, index, worktrees, expanded, selectedID,
+                        project, index, worktrees, expanded, selectedID, approvalIDs, tintHue,
                         onToggle = { id -> expanded = expanded.toggle(id) },
                         onNewSession = onNewSession,
                         onOpen = {
@@ -913,19 +1125,14 @@ private fun SessionDrawer(
                 }
             }
         }
-        val context = LocalContext.current
-        Text(
-            "反馈与问题",
-            color = Muted,
-            fontSize = 14.sp,
-            modifier = Modifier
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                .border(width = 1.dp, color = Hairline)
-                .clickable {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/orgs/unpeel-com/discussions")))
-                }
-                .padding(horizontal = 16.dp, vertical = 16.dp),
+        SidebarFeedbackFooter()
+    }
+        Box(
+            Modifier
+                .align(Alignment.CenterEnd)
+                .fillMaxHeight()
+                .width(1.dp)
+                .background(Color.White.copy(alpha = 0.10f)),
         )
     }
 }
@@ -963,53 +1170,92 @@ private fun BoxScope.LinkNotice(connection: String) {
     )
 }
 
+/**
+ * Pinned drawer header, the same row as iOS `SidebarWorkspaceHeader`.
+ * The workspace name leads. A healthy direct connection stays quiet.
+ * Tap opens the workspace sheet. There is no separate Host button.
+ */
 @Composable
 private fun WorkspaceHeader(controller: Controller, onClick: () -> Unit) {
-    val title = controller.selectedHost?.macName ?: controller.snapshot?.macName ?: "Host"
-    val failing = controller.snapshot == null && controller.connection != "正在连接" && controller.connection != "未配对"
-    val hostCount = controller.hosts.size
-    val link = when {
-        controller.snapshot == null -> if (failing) "连接中断" else "正在连接…"
-        controller.usingRelay -> "经由 Link"
+    val snapshot = controller.snapshot
+    val current = snapshot?.workspaces?.firstOrNull { it.isCurrent } ?: snapshot?.workspaces?.firstOrNull()
+    val title = current?.name?.takeIf { it.isNotBlank() }
+        ?: snapshot?.macName
+        ?: controller.selectedHost?.macName
+        ?: "工作区"
+    val failing = snapshot == null && controller.connection != "正在连接" && controller.connection != "未配对"
+    val subtitle = when {
+        snapshot == null -> when (controller.connection) {
+            "未配对" -> "未配对"
+            "正在连接" -> "正在连接…"
+            else -> "连接中断"
+        }
+        controller.usingRelay -> "经由 Unpeel Remote"
         else -> null
-    }
-    val subtitle = buildString {
-        append(if (hostCount > 1) "$hostCount 台 Host · 点按切换" else "点按切换 Host")
-        if (link != null) append(" · ").append(link)
     }
     Row(
         Modifier
-            .padding(start = 8.dp, end = 8.dp, top = 12.dp)
-            .clip(RoundedCornerShape(14.dp))
+            .padding(start = 8.dp, end = 8.dp, top = 14.dp)
+            .clip(RoundedCornerShape(9.dp))
             .background(Hover)
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 12.dp),
+            .padding(start = 9.dp, end = 9.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            Modifier.size(10.dp).clip(CircleShape).background(
-                when {
-                    failing -> Attention
-                    controller.snapshot == null -> Muted.copy(alpha = 0.5f)
-                    else -> Color(0xFF3DDC84)
-                },
-            ),
-        )
-        Spacer(Modifier.width(10.dp))
-        Column(Modifier.weight(1f)) {
-            Text(title, color = Foreground, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(subtitle, color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (failing) {
+            WifiSlash(16.dp, Attention)
+        } else {
+            Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) {
+                WorkspaceTintDot(current?.tintHue)
+            }
         }
-        Text(
-            "切换",
-            color = Foreground,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier
-                .clip(RoundedCornerShape(12.dp))
-                .background(Color.White.copy(alpha = 0.10f))
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-        )
+        Spacer(Modifier.width(7.dp))
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    title,
+                    color = Foreground,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                when (current?.kind) {
+                    "ssh" -> {
+                        Spacer(Modifier.width(5.dp))
+                        SvgIcon("terminal", 9.dp, tint = Muted)
+                    }
+                    "paired" -> {
+                        Spacer(Modifier.width(5.dp))
+                        ServerMark(9.dp, Muted)
+                    }
+                }
+            }
+            if (subtitle != null) {
+                Text(subtitle, color = Muted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        if (snapshot != null) {
+            Spacer(Modifier.width(6.dp))
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(percent = 50))
+                    .background(Hover)
+                    .height(18.dp)
+                    .padding(horizontal = 6.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    snapshot.sessions.size.toString(),
+                    color = Muted,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
+        }
+        Spacer(Modifier.width(6.dp))
+        ChevronUpDown(Muted)
     }
 }
 
@@ -1020,6 +1266,8 @@ private fun ProjectBlock(
     worktreesEnabled: Boolean,
     expanded: Set<String>,
     selectedID: String?,
+    approvalIDs: Set<String>,
+    tintHue: Double?,
     depth: Int = 0,
     onToggle: (String) -> Unit,
     onNewSession: (ProjectSummary) -> Unit,
@@ -1035,46 +1283,85 @@ private fun ProjectBlock(
         index.hoistedSessionIDs,
         worktreesEnabled,
     )
+    fun sessionNeedsAttention(session: SessionSummary) =
+        session.activity == "blocked" || session.id in approvalIDs
     val attention = rows.any { entry ->
         when (entry) {
-            is SidebarEntry.Session -> entry.session.activity == "blocked"
-            is SidebarEntry.Project -> index.sessionsByProject[entry.project.id].orEmpty().any { it.activity == "blocked" }
+            is SidebarEntry.Session -> sessionNeedsAttention(entry.session)
+            is SidebarEntry.Project -> index.sessionsByProject[entry.project.id].orEmpty().any(::sessionNeedsAttention)
         }
     }
     val tint = folderColorArgb(project.colorID)?.let { Color(it) } ?: Muted
+    val child = isInlineSidebarProject(project)
+    val leading = if (child) (18 + (depth - 1).coerceAtLeast(0) * 14).dp else (7 + depth * 14).dp
     Row(
         Modifier
             .fillMaxWidth()
-            .height(48.dp)
-            .padding(start = (depth * 14).dp)
+            .heightIn(min = 32.dp)
+            .padding(start = leading, top = 2.dp, end = 7.dp, bottom = 2.dp)
             .combinedClickable(onClick = { onToggle(project.id) }, onLongClick = { onOrganizeProject(project) }),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(if (open) "▾" else "▸", color = tint, fontSize = 16.sp, modifier = Modifier.width(22.dp))
-        Text(
-            project.name,
-            color = if (project.isGroup) Foreground else Foreground.copy(alpha = 0.62f),
-            fontSize = 16.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        if (attention) Box(Modifier.padding(end = 8.dp).size(8.dp).clip(CircleShape).background(Attention))
-        if (project.pinned == true) Text("📌", fontSize = 12.sp, modifier = Modifier.padding(end = 4.dp))
-        val branch = project.worktreeBranch ?: project.gitBranch
-        if (!branch.isNullOrEmpty() && branch != project.name) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(end = 4.dp)) {
-                BranchMark(12.dp, Muted.copy(alpha = 0.55f))
-                Spacer(Modifier.width(3.dp))
-                Text(branch, color = Muted.copy(alpha = 0.55f), fontSize = 12.sp, fontFamily = FontFamily.Monospace, maxLines = 1, modifier = Modifier.widthIn(max = 96.dp))
+        Box(Modifier.size(if (child) 12.dp else 22.dp), contentAlignment = Alignment.Center) {
+            if (child) {
+                SidebarChevron(open, tint, 12.dp)
+            } else if (!SvgIcon(if (open) "folder-open" else "folder-closed", 18.dp, tint = tint)) {
+                SidebarChevron(open, tint, 12.dp)
+            }
+            if (attention) {
+                Box(
+                    Modifier.align(Alignment.TopEnd).offset(x = 1.dp, y = (-1).dp).size(14.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(Modifier.size(14.dp).clip(CircleShape).background(Attention.copy(alpha = 0.20f)))
+                    Box(Modifier.size(6.dp).clip(CircleShape).background(Attention))
+                }
+            }
+        }
+        Spacer(Modifier.width(7.dp))
+        // Name, pin, and branch stay together on the left. Only this cluster
+        // is flexible, so the add button keeps one trailing edge on every row.
+        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                project.name,
+                color = if (project.isGroup) Foreground else Foreground.copy(alpha = 0.62f),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            if (project.pinned == true) {
+                Spacer(Modifier.width(4.dp))
+                if (!SvgIcon("pin", 11.dp, tint = Muted)) Text("📌", fontSize = 11.sp)
+            }
+            val branch = project.worktreeBranch ?: project.gitBranch
+            if (!branch.isNullOrEmpty() && branch != project.name) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 4.dp)) {
+                    BranchMark(12.dp, Muted.copy(alpha = 0.55f))
+                    Spacer(Modifier.width(3.dp))
+                    Text(
+                        branch,
+                        color = Muted.copy(alpha = 0.55f),
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1,
+                        modifier = Modifier.widthIn(max = 104.dp),
+                    )
+                }
             }
         }
         if (!project.isGroup) {
+            Spacer(Modifier.width(4.dp))
             Box(
-                Modifier.size(36.dp).clip(CircleShape).clickable { onNewSession(project) },
+                Modifier
+                    .size(28.dp)
+                    .clip(RoundedCornerShape(9.dp))
+                    .background(Hover.copy(alpha = Hover.alpha * 0.44f))
+                    .clickable { onNewSession(project) },
                 contentAlignment = Alignment.Center,
             ) {
-                Text("+", color = Foreground, fontSize = 22.sp)
+                if (!SvgIcon("plus", 17.dp, tint = Muted)) Text("+", color = Muted, fontSize = 16.sp)
             }
         }
     }
@@ -1084,11 +1371,14 @@ private fun ProjectBlock(
                 is SidebarEntry.Session -> SessionLine(
                     entry.session,
                     entry.session.id == selectedID,
+                    needsAttention = sessionNeedsAttention(entry.session),
+                    tintHue = tintHue,
+                    depth = depth + 1,
                     onOpen = { onOpen(entry.session) },
                     onOrganize = { onOrganize(entry.session) },
                 )
                 is SidebarEntry.Project -> ProjectBlock(
-                    entry.project, index, worktreesEnabled, expanded, selectedID, depth + 1,
+                    entry.project, index, worktreesEnabled, expanded, selectedID, approvalIDs, tintHue, depth + 1,
                     onToggle = onToggle,
                     onNewSession = onNewSession,
                     onOpen = onOpen,
@@ -1101,49 +1391,77 @@ private fun ProjectBlock(
 }
 
 @Composable
-private fun SessionLine(session: SessionSummary, selected: Boolean, onOpen: () -> Unit, onOrganize: () -> Unit) {
+private fun SessionLine(
+    session: SessionSummary,
+    selected: Boolean,
+    needsAttention: Boolean,
+    tintHue: Double?,
+    depth: Int,
+    onOpen: () -> Unit,
+    onOrganize: () -> Unit,
+) {
+    val blocked = session.status == "running" && (needsAttention || session.activity == "blocked")
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(start = 8.dp, top = 4.dp, bottom = 4.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(if (selected) ActiveRow else Color.Transparent)
+            .padding(start = (11 + (depth - 1).coerceAtLeast(0) * 14).dp, top = 2.dp, end = 9.dp, bottom = 2.dp)
+            .heightIn(min = 32.dp)
+            .clip(RoundedCornerShape(9.dp))
+            .background(if (selected) selectedRowTint(tintHue) else Color.Transparent)
             .combinedClickable(onClick = onOpen, onLongClick = onOrganize)
-            .padding(horizontal = 10.dp, vertical = 10.dp),
+            .padding(vertical = 2.dp)
+            .graphicsLayer { alpha = if (session.status == "exited") 0.82f else 1f },
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(22.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(18.dp), contentAlignment = Alignment.Center) {
             when {
-                session.status == "running" && session.activity == "blocked" ->
-                    Box(Modifier.size(8.dp).clip(CircleShape).background(Attention))
-                session.status == "running" && (session.activity == "working" || session.activity == "starting") ->
+                blocked -> {
+                    Box(Modifier.size(14.dp).clip(CircleShape).background(Attention.copy(alpha = 0.20f)))
+                    Box(Modifier.size(6.dp).clip(CircleShape).background(Attention))
+                }
+                session.status == "running" && session.activity == "working" ->
                     BrailleSpinner(rgb(session.spinnerColorHex ?: 0xB9BDC9))
-                session.unread -> Box(Modifier.size(8.dp).clip(CircleShape).background(Unread))
+                session.unread -> Box(Modifier.size(7.dp).clip(CircleShape).background(Unread))
             }
         }
-        Spacer(Modifier.width(6.dp))
-        ToolLogo(
-            command = session.command,
-            providerID = session.providerID,
-            activeRuntimeID = session.activeRuntimeID,
-            running = session.status == "running",
-            size = 28.dp,
-        )
+        Spacer(Modifier.width(8.dp))
+        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                session.title.ifEmpty { session.command },
+                color = if (session.status == "exited") Muted else Foreground,
+                fontSize = 14.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            if (session.pinned) {
+                Spacer(Modifier.width(4.dp))
+                if (!SvgIcon("pin", 11.dp, tint = Muted)) Text("📌", fontSize = 11.sp)
+            }
+        }
+        Spacer(Modifier.width(4.dp))
+        if (session.notifyWhenDone) {
+            if (!SvgIcon("bell", 11.dp, tint = Muted)) Text("🔔", fontSize = 11.sp)
+            Spacer(Modifier.width(4.dp))
+        }
         Text(
-            session.title.ifEmpty { session.command },
-            color = if (session.status == "exited") Muted else Foreground,
-            fontSize = 16.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f).padding(start = 10.dp, end = 8.dp),
-        )
-        if (session.notifyWhenDone) Text("🔔", fontSize = 12.sp, modifier = Modifier.padding(end = 6.dp))
-        if (session.pinned) Text("📌", fontSize = 14.sp, modifier = Modifier.padding(end = 8.dp))
-        Text(
-            if (session.activity == "blocked") "blocked" else relativeAge(session.updatedAtUnixMs),
+            if (blocked) "blocked" else relativeAge(session.updatedAtUnixMs),
             color = Muted,
-            fontSize = 12.sp,
+            fontSize = 10.sp,
+            fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
+            modifier = Modifier.widthIn(min = 24.dp),
+            textAlign = TextAlign.End,
         )
+        Spacer(Modifier.width(5.dp))
+        Box(Modifier.size(14.dp), contentAlignment = Alignment.Center) {
+            ToolLogo(
+                command = session.command,
+                providerID = session.providerID,
+                activeRuntimeID = session.activeRuntimeID,
+                running = session.status == "running",
+                size = 12.dp,
+            )
+        }
     }
 }
 
@@ -1183,9 +1501,9 @@ private fun HostSheet(
     val context = LocalContext.current
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = Sheet) {
         Column(Modifier.padding(horizontal = 18.dp, vertical = 8.dp).verticalScroll(rememberScrollState())) {
-            Text("Host", color = Foreground, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+            Text("工作区", color = Foreground, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(6.dp))
-            Text("一台手机可以记住多台 Mac。点一台切换，下面可以再配一台。", color = Muted, fontSize = 13.sp)
+            Text("每个配对是一个工作区。点一行切换，下面可以再配一台。", color = Muted, fontSize = 13.sp)
             Spacer(Modifier.height(14.dp))
             controller.hosts.forEach { host ->
                 val selected = host.macID == controller.selectedHost?.macID
@@ -1217,7 +1535,7 @@ private fun HostSheet(
             val workspaces = controller.snapshot?.workspaces.orEmpty()
             if (workspaces.size > 1) {
                 Spacer(Modifier.height(16.dp))
-                Text("这台 Host 上的工作区", color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                Text("这台 Mac 上的工作区", color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(6.dp))
                 workspaces.forEach { workspace ->
                     Row(
@@ -1782,20 +2100,231 @@ private fun FolderHeader(
 ) {
     val tint = folderColorArgb(colorID)?.let { Color(it) } ?: Muted
     Row(
-        Modifier.fillMaxWidth().height(36.dp).clickable(onClick = onToggle).padding(horizontal = 6.dp),
+        Modifier.fillMaxWidth().heightIn(min = 30.dp).clickable(onClick = onToggle).padding(start = 6.dp, end = 9.dp, top = 8.dp, bottom = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(if (open) "▾" else "▸", color = tint, fontSize = 12.sp, modifier = Modifier.width(16.dp))
-        Text(name.uppercase(), color = Foreground, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, modifier = Modifier.weight(1f))
-        if (attention) Box(Modifier.padding(end = 6.dp).size(6.dp).clip(CircleShape).background(Attention))
+        SidebarChevron(open, tint, 12.dp)
+        Spacer(Modifier.width(6.dp))
+        Text(name.uppercase(), color = Foreground, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (attention) {
+            Spacer(Modifier.width(6.dp))
+            Box(Modifier.size(6.dp).clip(CircleShape).background(Attention))
+        }
+        Spacer(Modifier.weight(1f))
         if (!open && count > 0) {
-            Text(
-                count.toString(),
-                color = Muted,
-                fontSize = 11.sp,
-                modifier = Modifier.clip(RoundedCornerShape(9.dp)).background(Hover).padding(horizontal = 6.dp, vertical = 2.dp),
+            Box(
+                Modifier.clip(RoundedCornerShape(percent = 50)).background(Hover).height(18.dp).padding(horizontal = 6.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(count.toString(), color = Muted, fontSize = 11.sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SidebarFeedbackFooter() {
+    val context = LocalContext.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .drawWithContent {
+                drawContent()
+                drawLine(
+                    Color.White.copy(alpha = 0.08f),
+                    start = Offset.Zero,
+                    end = Offset(size.width, 0f),
+                    strokeWidth = 1.dp.toPx(),
+                )
+            }
+            .clickable {
+                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/orgs/unpeel-com/discussions")))
+            }
+            .padding(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        FeedbackMark(Muted)
+        Spacer(Modifier.width(8.dp))
+        Text("反馈与问题", color = Muted, fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+        ExternalArrow(Muted.copy(alpha = 0.7f))
+    }
+}
+
+@Composable
+private fun SidebarDisconnected(connection: String) {
+    val unpaired = connection == "未配对"
+    val connecting = connection == "正在连接"
+    Column(
+        Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 36.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            when {
+                unpaired -> "未配对"
+                connecting -> "正在连接…"
+                else -> "连接中断"
+            },
+            color = Foreground,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Spacer(Modifier.height(10.dp))
+        Text(
+            when {
+                unpaired -> "先配对一台 Mac，会话才会出现在这里。"
+                connecting -> "正在连接这台 Mac。"
+                else -> "正在自动重连。Mac 恢复后，会话会重新出现。"
+            },
+            color = Muted,
+            fontSize = 12.sp,
+            textAlign = TextAlign.Center,
+        )
+        if (!unpaired) {
+            Spacer(Modifier.height(14.dp))
+            CircularProgressIndicator(color = Muted, modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+        }
+    }
+}
+
+private fun Modifier.sidebarListFade(): Modifier = drawWithContent {
+    drawContent()
+    drawRect(
+        brush = Brush.verticalGradient(
+            0f to Color.Transparent,
+            0.06f to Color.Black,
+            0.88f to Color.Black,
+            1f to Color.Transparent,
+        ),
+        blendMode = BlendMode.DstIn,
+    )
+}
+
+private fun selectedRowTint(hue: Double?): Color {
+    if (hue == null || hue.isNaN()) return ActiveRow
+    val wrapped = ((hue % 360.0) + 360.0) % 360.0
+    return Color.hsv(wrapped.toFloat(), 0.55f, 0.52f, 0.30f)
+}
+
+@Composable
+private fun WorkspaceTintDot(hue: Double?) {
+    val fill = if (hue == null || hue.isNaN()) {
+        Muted.copy(alpha = 0.4f)
+    } else {
+        val wrapped = ((hue % 360.0) + 360.0) % 360.0
+        Color.hsv(wrapped.toFloat(), 0.62f, 0.85f)
+    }
+    Box(
+        Modifier
+            .size(9.dp)
+            .clip(CircleShape)
+            .background(fill)
+            .border(0.5.dp, Color.White.copy(alpha = 0.18f), CircleShape),
+    )
+}
+
+@Composable
+private fun SidebarChevron(open: Boolean, tint: Color, size: Dp) {
+    val degrees by animateFloatAsState(if (open) 90f else 0f, tween(150), label = "chevron")
+    Canvas(Modifier.size(size).rotate(degrees)) {
+        val stroke = Stroke(width = this.size.minDimension * 0.14f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+        val w = this.size.width
+        val h = this.size.height
+        drawPath(
+            Path().apply {
+                moveTo(w * 0.34f, h * 0.24f)
+                lineTo(w * 0.66f, h * 0.50f)
+                lineTo(w * 0.34f, h * 0.76f)
+            },
+            tint,
+            style = stroke,
+        )
+    }
+}
+
+@Composable
+private fun ChevronUpDown(tint: Color) {
+    Canvas(Modifier.size(width = 10.dp, height = 12.dp)) {
+        val stroke = Stroke(width = 1.4.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+        fun chevron(y0: Float, y1: Float, y2: Float) {
+            drawPath(
+                Path().apply {
+                    moveTo(size.width * 0.15f, y0)
+                    lineTo(size.width * 0.5f, y1)
+                    lineTo(size.width * 0.85f, y2)
+                },
+                tint,
+                style = stroke,
             )
         }
+        chevron(size.height * 0.42f, size.height * 0.12f, size.height * 0.42f)
+        chevron(size.height * 0.58f, size.height * 0.88f, size.height * 0.58f)
+    }
+}
+
+@Composable
+private fun WifiSlash(box: Dp, tint: Color) {
+    Canvas(Modifier.size(box)) {
+        val stroke = Stroke(width = 1.4.dp.toPx(), cap = StrokeCap.Round)
+        drawLine(tint, Offset(size.width * 0.18f, size.height * 0.78f), Offset(size.width * 0.82f, size.height * 0.22f), strokeWidth = stroke.width, cap = StrokeCap.Round)
+        drawCircle(tint, radius = 1.3.dp.toPx(), center = Offset(size.width * 0.5f, size.height * 0.72f))
+        drawArc(
+            tint,
+            startAngle = 200f,
+            sweepAngle = 140f,
+            useCenter = false,
+            topLeft = Offset(size.width * 0.28f, size.height * 0.40f),
+            size = androidx.compose.ui.geometry.Size(size.width * 0.44f, size.height * 0.36f),
+            style = stroke,
+        )
+    }
+}
+
+@Composable
+private fun ServerMark(box: Dp, tint: Color) {
+    Canvas(Modifier.size(box)) {
+        val stroke = Stroke(width = 1.dp.toPx(), cap = StrokeCap.Round)
+        val inset = size.width * 0.12f
+        drawRoundRect(
+            tint,
+            topLeft = Offset(inset, size.height * 0.08f),
+            size = androidx.compose.ui.geometry.Size(size.width - inset * 2, size.height * 0.84f),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(1.5.dp.toPx()),
+            style = stroke,
+        )
+        drawLine(tint, Offset(inset, size.height * 0.40f), Offset(size.width - inset, size.height * 0.40f), strokeWidth = stroke.width)
+        drawLine(tint, Offset(inset, size.height * 0.64f), Offset(size.width - inset, size.height * 0.64f), strokeWidth = stroke.width)
+    }
+}
+
+@Composable
+private fun FeedbackMark(tint: Color) {
+    Canvas(Modifier.size(13.dp)) {
+        val stroke = Stroke(width = 1.3.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+        val w = size.width
+        val h = size.height
+        drawRoundRect(
+            tint,
+            topLeft = Offset(w * 0.06f, h * 0.06f),
+            size = androidx.compose.ui.geometry.Size(w * 0.88f, h * 0.68f),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx()),
+            style = stroke,
+        )
+        drawLine(tint, Offset(w * 0.22f, h * 0.74f), Offset(w * 0.18f, h * 0.94f), strokeWidth = stroke.width, cap = StrokeCap.Round)
+        drawLine(tint, Offset(w * 0.18f, h * 0.94f), Offset(w * 0.40f, h * 0.74f), strokeWidth = stroke.width, cap = StrokeCap.Round)
+        drawCircle(tint, radius = 0.8.dp.toPx(), center = Offset(w * 0.5f, h * 0.40f))
+    }
+}
+
+@Composable
+private fun ExternalArrow(tint: Color) {
+    Canvas(Modifier.size(11.dp)) {
+        val stroke = Stroke(width = 1.4.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+        val w = size.width
+        val h = size.height
+        drawLine(tint, Offset(w * 0.22f, h * 0.78f), Offset(w * 0.78f, h * 0.22f), strokeWidth = stroke.width, cap = StrokeCap.Round)
+        drawLine(tint, Offset(w * 0.42f, h * 0.22f), Offset(w * 0.78f, h * 0.22f), strokeWidth = stroke.width, cap = StrokeCap.Round)
+        drawLine(tint, Offset(w * 0.78f, h * 0.22f), Offset(w * 0.78f, h * 0.58f), strokeWidth = stroke.width, cap = StrokeCap.Round)
     }
 }
 

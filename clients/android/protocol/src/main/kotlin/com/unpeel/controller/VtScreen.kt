@@ -12,13 +12,7 @@ class VtScreen(cols: Int, rows: Int) {
     var rows = rows.coerceIn(2, 200)
         private set
 
-    data class Cell(
-        val ch: Char,
-        val fg: Int,
-        val bg: Int,
-        val bold: Boolean,
-        val dim: Boolean = false,
-    )
+    data class Cell(val ch: Char, val fg: Int, val bg: Int, val bold: Boolean)
 
     private class Grid(cols: Int, rows: Int) {
         var cells = Array(rows) { Array(cols) { Cell(' ', DEFAULT_FG, DEFAULT_BG, false) } }
@@ -36,15 +30,9 @@ class VtScreen(cols: Int, rows: Int) {
     private val grid: Grid get() = if (onAlt) alt else normal
     private val history = ArrayDeque<Array<Cell>>()
 
-    var defaultFg: Int = DEFAULT_FG
-        private set
-    var defaultBg: Int = DEFAULT_BG
-        private set
-
-    private var fg = defaultFg
-    private var bg = defaultBg
+    private var fg = DEFAULT_FG
+    private var bg = DEFAULT_BG
     private var bold = false
-    private var dim = false
     private var utf8 = ByteArray(0)
 
     private enum class Mode { GROUND, ESC, CSI, OSC }
@@ -52,25 +40,14 @@ class VtScreen(cols: Int, rows: Int) {
     private var mode = Mode.GROUND
     private val csi = StringBuilder()
     private var csiPrivate = false
-    private val osc = StringBuilder()
 
     fun resize(columns: Int, lines: Int) {
-        val nextCols = columns.coerceIn(2, 300)
-        val nextRows = lines.coerceIn(2, 200)
-        if (nextCols == cols && nextRows == rows) return
-        val keepHistory = nextCols == cols
-        val preserved = if (keepHistory) ArrayDeque(history) else ArrayDeque()
-        // Row-only refit (phone chrome / keyboard) must not throw away the
-        // transcript — that is what Mac Ghostty keeps across a resize.
-        // A column change reflows wrapping, so history cannot be reused.
-        cols = nextCols
-        rows = nextRows
+        cols = columns.coerceIn(2, 300)
+        rows = lines.coerceIn(2, 200)
         normal = Grid(cols, rows)
         alt = Grid(cols, rows)
         onAlt = false
         history.clear()
-        history.addAll(preserved)
-        while (history.size > SCROLLBACK) history.removeFirst()
         resetStyle()
         mode = Mode.GROUND
         utf8 = ByteArray(0)
@@ -78,14 +55,6 @@ class VtScreen(cols: Int, rows: Int) {
 
     fun reset() {
         resize(cols, rows)
-    }
-
-    /** Session / OSC theme defaults. Affects SGR 39/49 and freshly cleared cells. */
-    fun setDefaults(foreground: Int, background: Int) {
-        defaultFg = foreground and 0xFFFFFF
-        defaultBg = background and 0xFFFFFF
-        if (fg == DEFAULT_FG || fg == defaultFg) fg = defaultFg
-        if (bg == DEFAULT_BG || bg == defaultBg) bg = defaultBg
     }
 
     fun feed(bytes: ByteArray) {
@@ -136,10 +105,7 @@ class VtScreen(cols: Int, rows: Int) {
                         csi.clear()
                         csiPrivate = false
                     }
-                    ']'.code -> {
-                        osc.clear()
-                        mode = Mode.OSC
-                    }
+                    ']'.code -> mode = Mode.OSC
                     '7'.code -> {
                         grid.savedRow = grid.cursorRow
                         grid.savedCol = grid.cursorCol
@@ -167,65 +133,10 @@ class VtScreen(cols: Int, rows: Int) {
                 }
                 else -> mode = Mode.GROUND
             }
-            Mode.OSC -> when (code) {
-                0x07 -> {
-                    applyOsc(osc.toString())
-                    osc.clear()
-                    mode = Mode.GROUND
-                }
-                0x1B -> {
-                    applyOsc(osc.toString())
-                    osc.clear()
-                    mode = Mode.ESC
-                }
-                else -> if (osc.length < 512) osc.append(code.toChar())
+            Mode.OSC -> if (code == 0x07 || code == 0x1B) {
+                // BEL ends OSC. ESC starts the ST terminator; the next byte is ignored in GROUND via ESC state only if we stay. 0x1B here ends and we drop the following '\\' by going ESC only when it isn't ST. Treat 0x1B as end and enter ESC so '\\' is a no-op ESC final.
+                mode = if (code == 0x1B) Mode.ESC else Mode.GROUND
             }
-        }
-    }
-
-    private fun applyOsc(body: String) {
-        val split = body.indexOf(';')
-        val ps = if (split < 0) body else body.substring(0, split)
-        val pt = if (split < 0) "" else body.substring(split + 1)
-        when (ps) {
-            "10" -> parseOscColor(pt)?.let { setDefaults(it, defaultBg); fg = defaultFg }
-            "11" -> parseOscColor(pt)?.let { setDefaults(defaultFg, it); bg = defaultBg }
-            "12" -> Unit // cursor color — view draws its own caret
-            "104", "110" -> {
-                defaultFg = DEFAULT_FG
-                fg = defaultFg
-            }
-            "111" -> {
-                defaultBg = DEFAULT_BG
-                bg = defaultBg
-            }
-        }
-    }
-
-    private fun parseOscColor(spec: String): Int? {
-        val s = spec.trim().removePrefix("rgb:").removePrefix("#")
-        return when {
-            s.matches(Regex("^[0-9a-fA-F]{6}$")) -> s.toIntOrNull(16)
-            s.matches(Regex("^[0-9a-fA-F]{3}$")) -> {
-                val r = s[0].digitToInt(16) * 0x11
-                val g = s[1].digitToInt(16) * 0x11
-                val b = s[2].digitToInt(16) * 0x11
-                (r shl 16) or (g shl 8) or b
-            }
-            // xterm rgb:RRRR/GGGG/BBBB
-            s.contains('/') -> {
-                val parts = s.split('/')
-                if (parts.size != 3) return null
-                fun chan(raw: String): Int {
-                    val v = raw.toIntOrNull(16) ?: return 0
-                    return when (raw.length) {
-                        1, 2 -> v and 0xff
-                        else -> (v shr 8) and 0xff
-                    }
-                }
-                (chan(parts[0]) shl 16) or (chan(parts[1]) shl 8) or chan(parts[2])
-            }
-            else -> null
         }
     }
 
@@ -280,13 +191,9 @@ class VtScreen(cols: Int, rows: Int) {
             when (val value = values[index]) {
                 0 -> resetStyle()
                 1 -> bold = true
-                2 -> dim = true
-                22 -> {
-                    bold = false
-                    dim = false
-                }
-                39 -> fg = defaultFg
-                49 -> bg = defaultBg
+                22 -> bold = false
+                39 -> fg = DEFAULT_FG
+                49 -> bg = DEFAULT_BG
                 in 30..37 -> fg = ANSI[value - 30]
                 in 40..47 -> bg = ANSI[value - 40]
                 in 90..97 -> fg = BRIGHT[value - 90]
@@ -322,9 +229,9 @@ class VtScreen(cols: Int, rows: Int) {
             lineFeed()
         }
         if (grid.cursorRow !in 0 until rows || grid.cursorCol >= cols) return
-        grid.cells[grid.cursorRow][grid.cursorCol] = Cell(ch, fg, bg, bold, dim)
+        grid.cells[grid.cursorRow][grid.cursorCol] = Cell(ch, fg, bg, bold)
         if (width == 2 && grid.cursorCol + 1 < cols) {
-            grid.cells[grid.cursorRow][grid.cursorCol + 1] = Cell('\u0000', fg, bg, false, dim)
+            grid.cells[grid.cursorRow][grid.cursorCol + 1] = Cell('\u0000', fg, bg, false)
         }
         grid.cursorCol += width
     }
@@ -348,12 +255,8 @@ class VtScreen(cols: Int, rows: Int) {
 
     private fun scrollUp() {
         val cells = grid.cells
-        // Agent TUIs (Cursor/Claude) often scroll a primary-screen region that
-        // does not start at row 0. Classic xterm would drop those lines; the
-        // phone must keep them or local pan hits a tiny ceiling while Mac
-        // Ghostty still has the transcript.
-        if (!onAlt) {
-            history.addLast(cells[grid.scrollTop].copyOf())
+        if (!onAlt && grid.scrollTop == 0) {
+            history.addLast(cells[0].copyOf())
             while (history.size > SCROLLBACK) history.removeFirst()
         }
         for (row in grid.scrollTop until grid.scrollBottom) cells[row] = cells[row + 1]
@@ -397,17 +300,16 @@ class VtScreen(cols: Int, rows: Int) {
             else -> grid.cursorCol until cols
         }
         for (col in range) {
-            if (col in 0 until cols) grid.cells[row][col] = Cell(' ', fg, bg, false, false)
+            if (col in 0 until cols) grid.cells[row][col] = Cell(' ', fg, bg, false)
         }
     }
 
-    private fun blankRow() = Array(cols) { Cell(' ', defaultFg, defaultBg, false, false) }
+    private fun blankRow() = Array(cols) { Cell(' ', DEFAULT_FG, DEFAULT_BG, false) }
 
     private fun resetStyle() {
-        fg = defaultFg
-        bg = defaultBg
+        fg = DEFAULT_FG
+        bg = DEFAULT_BG
         bold = false
-        dim = false
     }
 
     private fun utf8Length(lead: Byte): Int {
@@ -423,12 +325,12 @@ class VtScreen(cols: Int, rows: Int) {
     companion object {
         const val DEFAULT_FG = 0xD0D0D0
         const val DEFAULT_BG = 0x1E1E1E
-        private const val SCROLLBACK = 20000
+        private const val SCROLLBACK = 1000
         private val ANSI = intArrayOf(
-            0x0C0C0C, 0xCD3131, 0x0DBC79, 0xE5E510, 0x2472C8, 0xBC3FBC, 0x11A8CD, 0xCCCCCC,
+            0x1E1E1E, 0xCD3131, 0x0DBC79, 0xE5E510, 0x2472C8, 0xBC3FBC, 0x11A8CD, 0xE5E5E5,
         )
         private val BRIGHT = intArrayOf(
-            0x766F6F, 0xF14C4C, 0x23D18B, 0xF5F543, 0x3B8EEA, 0xD670D6, 0x29B8DB, 0xFFFFFF,
+            0x666666, 0xF14C4C, 0x23D18B, 0xF5F543, 0x3B8EEA, 0xD670D6, 0x29B8DB, 0xFFFFFF,
         )
 
         private fun cube(index: Int): Int {

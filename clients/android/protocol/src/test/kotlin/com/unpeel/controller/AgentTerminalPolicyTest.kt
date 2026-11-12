@@ -94,36 +94,6 @@ class AgentTerminalPolicyTest {
     }
 
     @Test
-    fun cursorStaysOnLocalScrollbackLikeMainline() {
-        assertTrue(AgentTerminalPolicy.echoesMouseWheel(null, "cursor-agent --force", null))
-        assertTrue(AgentTerminalPolicy.echoesMouseWheel("cursor", "/bin/zsh", null))
-        assertFalse(AgentTerminalPolicy.echoesMouseWheel(null, "claude", null))
-        // No SGR (composer echo) and no ↑/↓ (composer history) — local only.
-        assertEquals(
-            AgentTerminalPolicy.Wheel.None,
-            AgentTerminalPolicy.wheelForwarding(
-                modesKnown = true,
-                mouseTracking = false,
-                alternateScreen = false,
-                sawMouseOrAlternateDisable = false,
-                prefersRemoteMouseWheel = false,
-                echoesMouseWheel = true,
-            ),
-        )
-        assertEquals(
-            AgentTerminalPolicy.Wheel.None,
-            AgentTerminalPolicy.wheelForwarding(
-                modesKnown = true,
-                mouseTracking = true,
-                alternateScreen = true,
-                sawMouseOrAlternateDisable = false,
-                prefersRemoteMouseWheel = false,
-                echoesMouseWheel = true,
-            ),
-        )
-    }
-
-    @Test
     fun numberedMenuFooterShowsControls() {
         val screen = "❯ 1. Switch\n  2. Keep\n\nEnter to select · ↑/↓ to navigate · Esc to cancel"
         assertTrue(AgentTerminalPolicy.viewportHasMenuPrompt(screen))

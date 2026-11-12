@@ -13,23 +13,11 @@ class TerminalModeSignals {
     var sawMouseOrAlternateDisable: Boolean = false
         private set
 
-    var mouseTracking: Boolean = false
-        private set
-
-    var alternateScreen: Boolean = false
-        private set
-
-    var applicationCursorKeys: Boolean = false
-        private set
-
     private var pending = ByteArray(0)
 
     fun reset() {
         hostModeSnapshot = false
         sawMouseOrAlternateDisable = false
-        mouseTracking = false
-        alternateScreen = false
-        applicationCursorKeys = false
         pending = ByteArray(0)
     }
 
@@ -53,9 +41,6 @@ class TerminalModeSignals {
             }
             if (data[index + 1] == RIS) {
                 sawMouseOrAlternateDisable = true
-                mouseTracking = false
-                alternateScreen = false
-                applicationCursorKeys = false
                 index += 2
                 continue
             }
@@ -107,16 +92,10 @@ class TerminalModeSignals {
     }
 
     private fun note(mode: Int, enabled: Boolean) {
-        when (mode) {
-            1 -> applicationCursorKeys = enabled
-            9, 1000, 1002, 1003 -> {
-                mouseTracking = enabled
-                sawMouseOrAlternateDisable = !enabled
-            }
-            47, 1047, 1049 -> {
-                alternateScreen = enabled
-                sawMouseOrAlternateDisable = !enabled
-            }
+        if (mode == 9 || mode == 47 || mode == 1000 || mode == 1002 || mode == 1003 ||
+            mode == 1047 || mode == 1049
+        ) {
+            sawMouseOrAlternateDisable = !enabled
         }
     }
 

@@ -109,6 +109,7 @@ class ProtocolTest {
         assertEquals(true, snapshot.sessions.single().pinned)
         assertEquals(1L, snapshot.sessions.single().updatedAtUnixMs)
         assertEquals("default", snapshot.workspaces.single().name)
+        assertNull(snapshot.workspaces.single().tintHue)
         assertNull(snapshot.hostTintHue)
         assertFalse(snapshot.experimentalWorktreesEnabled)
         assertNull(snapshot.sessions.single().capabilities)
@@ -146,6 +147,7 @@ class ProtocolTest {
         val index = sidebarIndex(snapshot)
         assertEquals(listOf("p"), index.folderGroups.single().projects.map { it.id })
         assertEquals(listOf("loose"), index.looseProjects.map { it.id })
+        assertEquals(listOf("f", "empty"), snapshot.folders.map { it.id })
         assertEquals(setOf("s2"), index.hoistedSessionIDs)
         assertEquals(setOf("wt", "grp"), index.childrenByParent["p"].orEmpty().map { it.id }.toSet())
         assertEquals(setOf("s1", "s2"), index.sessionsByProject["p"].orEmpty().map { it.id }.toSet())
@@ -191,6 +193,33 @@ class ProtocolTest {
     }
 
     @Test
+    fun sidebarKeepsHostArrayOrderAheadOfSortOrder() {
+        val snapshot = BootstrapJson.parse(
+            """
+            {"folders":[
+               {"id":"later","name":"Later","sortOrder":0},
+               {"id":"sooner","name":"Sooner","sortOrder":9}
+             ],
+             "projects":[
+               {"id":"z","name":"Z","sortOrder":0},
+               {"id":"a","name":"A","folderID":"sooner","sortOrder":5},
+               {"id":"m","name":"M","folderID":"sooner","sortOrder":1},
+               {"id":"child-b","name":"B","parentProjectID":"z","worktreeBranch":"b","sortOrder":0},
+               {"id":"child-a","name":"A","parentProjectID":"z","worktreeBranch":"a","sortOrder":3}
+             ],
+             "sessions":[]}
+            """.trimIndent(),
+        )
+        assertEquals(listOf("later", "sooner"), snapshot.folders.map { it.id })
+        assertEquals(listOf("z", "a", "m", "child-b", "child-a"), snapshot.projects.map { it.id })
+        val index = sidebarIndex(snapshot)
+        assertEquals(listOf("z"), index.looseProjects.map { it.id })
+        assertEquals(listOf("sooner"), index.folderGroups.map { it.folder.id })
+        assertEquals(listOf("a", "m"), index.folderGroups.single().projects.map { it.id })
+        assertEquals(listOf("child-b", "child-a"), index.childrenByParent["z"].orEmpty().map { it.id })
+    }
+
+    @Test
     fun terminalAddressesCellsAndKeepsTheHostGrid() {
         val screen = VtScreen(10, 4)
         screen.feed("\u001b[2J\u001b[1;1H\u001b[32mhi".toByteArray())
@@ -230,46 +259,6 @@ class ProtocolTest {
         assertEquals('\u0000', row[1].ch)
         assertEquals('a', row[2].ch)
         assertEquals(3, screen.cursor().second)
-    }
-
-    @Test
-    fun oscAndSetDefaultsUpdateThemeColors() {
-        val screen = VtScreen(4, 2)
-        screen.setDefaults(0xEEEEEE, 0x112233)
-        assertEquals(0xEEEEEE, screen.defaultFg)
-        assertEquals(0x112233, screen.defaultBg)
-        screen.feed("\u001b]11;#ff00aa\u0007".toByteArray())
-        assertEquals(0xff00aa, screen.defaultBg)
-        screen.feed("\u001b[39m\u001b[49mX".toByteArray())
-        val cell = screen.snapshot()[0][0]
-        assertEquals('X', cell.ch)
-        assertEquals(0xEEEEEE, cell.fg)
-        assertEquals(0xff00aa, cell.bg)
-    }
-
-    @Test
-    fun scrollRegionStillFeedsPhoneHistory() {
-        val screen = VtScreen(4, 4)
-        // DECSTBM: scroll rows 2-4 (1-based) — Cursor-style transcript band.
-        screen.feed("\u001b[2;4r\u001b[4;1H".toByteArray())
-        repeat(6) { screen.feed("L$it\r\n".toByteArray()) }
-        val hist = screen.scrollback()
-        assertTrue(hist.size >= 3)
-        assertTrue(hist.any { row -> row[0].ch == 'L' })
-    }
-
-    @Test
-    fun dimAndTruecolorArePreserved() {
-        val screen = VtScreen(8, 2)
-        screen.feed("\u001b[2m\u001b[38;2;120;120;120mdim\u001b[0m".toByteArray())
-        val cell = screen.snapshot()[0][0]
-        assertEquals('d', cell.ch)
-        assertTrue(cell.dim)
-        assertEquals(0x787878, cell.fg)
-        screen.feed("\u001b[1;1H\u001b[38;5;244mgray".toByteArray())
-        assertEquals(false, screen.snapshot()[0][0].dim)
-        // 244 → grayscale ramp
-        assertEquals(0x808080, screen.snapshot()[0][0].fg)
     }
 
     @Test
