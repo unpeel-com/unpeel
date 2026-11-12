@@ -1,11 +1,20 @@
 package com.unpeel.android
 
+import android.os.Handler
+import android.os.Looper
+import android.view.Choreographer
 import com.termit.vt.VtEmulator
 import com.unpeel.controller.TerminalModeSignals
 
 /**
  * Remote-only terminal. Bytes come from the Host journal.
- * Display VT is termit's [VtEmulator] (replaces the old Termux emulator).
+ *
+ * Present policy while Cursor (or any TUI) redraws hard:
+ * 1. VT always consumes every byte.
+ * 2. Full wipe / alt-screen / DEC 2026 → freeze the last good bitmap.
+ * 3. Keep freezing through the flood; debounce a quiet window.
+ * 4. When quiet, snap once to live — no multi-frame reverse wipe
+ *    (that wipe, repeated on every Cursor tick, was the 刷刷刷).
  */
 class HostTerminal(
     @Suppress("UNUSED_PARAMETER") private val replies: (ByteArray) -> Unit,
@@ -14,63 +23,137 @@ class HostTerminal(
     var onFrame: (() -> Unit)? = null
         internal set
 
+    /**
+     * View hooks: [onHoldFrame] keeps the last coherent pixels;
+     * [onRevealProgress] is 0 while frozen and 1 when live again.
+     */
+    var onHoldFrame: (() -> Unit)? = null
+    var onRevealProgress: ((Float) -> Unit)? = null
+
     var emulator: VtEmulator
         private set
 
     val columns: Int get() = emulator.mColumns
     val rows: Int get() = emulator.mRows
 
+    /** True while the view should keep the frozen bitmap (not live VT). */
+    val holdingFrame: Boolean get() = holdArmed
+
     private var live = false
     private var appliedCanvas = CANVAS
 
     private val modes = TerminalModeSignals()
 
-    /** True after a host mode preamble was fed. Output alone is not a snapshot. */
     val hostModeSnapshot: Boolean get() = modes.hostModeSnapshot
-
-    /** The fed bytes turned mouse tracking or the alternate screen off, or reset the terminal. */
     val sawMouseOrAlternateDisable: Boolean get() = modes.sawMouseOrAlternateDisable
-
-    /** Scrollback rows the view had parked when another session took the screen. */
     var parkedScroll: Int = 0
 
-    init {
-        emulator = VtEmulator(80, 24, TRANSCRIPT_ROWS).also {
-            it.setDefaultBackground(CANVAS)
+    private val paintHandler = Handler(Looper.getMainLooper())
+    private var paintDirty = false
+    private var frameScheduled = false
+    private var holdArmed = false
+    private var settleGeneration = 0
+
+    private val frameCallback = Choreographer.FrameCallback {
+        frameScheduled = false
+        if (emulator.synchronizedOutput) return@FrameCallback
+        // Frozen until settle snaps us live.
+        if (holdArmed) return@FrameCallback
+        if (!paintDirty) return@FrameCallback
+        paintDirty = false
+        onFrame?.invoke()
+        if (paintDirty) scheduleFrame()
+    }
+
+    private val settleRunnable = Runnable {
+        if (!holdArmed) return@Runnable
+        if (emulator.synchronizedOutput) {
+            // Wait for ?2026l — onSynchronizedOutputEnd restarts settle.
+            return@Runnable
         }
+        // One shot to live. No bottom→top scrub.
+        holdArmed = false
+        emulator.clearPresentHold()
+        paintDirty = true
+        onRevealProgress?.invoke(1f)
+        scheduleFrame()
+    }
+
+    init {
+        emulator = newEmulator(80, 24)
+    }
+
+    private fun newEmulator(columns: Int, rows: Int): VtEmulator =
+        VtEmulator(columns, rows, TRANSCRIPT_ROWS).also { emu ->
+            emu.setDefaultBackground(appliedCanvas)
+            emu.onPresentHold = {
+                paintHandler.post {
+                    beginHold()
+                    armSettle()
+                }
+            }
+            emu.onSynchronizedOutputEnd = {
+                paintHandler.post {
+                    paintDirty = true
+                    armSettle()
+                }
+            }
+        }
+
+    private fun beginHold() {
+        if (holdArmed) return
+        holdArmed = true
+        onHoldFrame?.invoke()
+        onRevealProgress?.invoke(0f)
+    }
+
+    private fun armSettle() {
+        val gen = ++settleGeneration
+        paintHandler.removeCallbacks(settleRunnable)
+        paintHandler.postDelayed({
+            if (gen != settleGeneration) return@postDelayed
+            settleRunnable.run()
+        }, SETTLE_MS)
     }
 
     /**
-     * Drop the screen and start a new grid. Does not talk to the Host.
-     * A path switch passes notify false, then feeds the replacement in the
-     * same turn, so the view keeps the last frame until that paint.
+     * Arm the view freeze before a mid-session rebuild. Used when the phone
+     * claims letterbox and the column count changes — keep last pixels up
+     * instead of the prepare cover flash.
      */
-    fun prepare(columns: Int, rows: Int, notify: Boolean = true) {
-        live = false
-        modes.reset()
-        emulator = VtEmulator(columns.coerceIn(2, 300), rows.coerceIn(2, 120), TRANSCRIPT_ROWS).also {
-            it.setDefaultBackground(appliedCanvas)
-        }
-        if (notify) onFrame?.invoke()
+    fun holdPresent() {
+        beginHold()
     }
 
-    /** Terminal frame color. OpenCode and Grok send a hex; everyone else stays on the default. */
+    fun prepare(columns: Int, rows: Int, notify: Boolean = true, holdPixels: Boolean = false) {
+        live = false
+        modes.reset()
+        settleGeneration++
+        paintHandler.removeCallbacks(settleRunnable)
+        if (holdPixels) {
+            beginHold()
+        } else {
+            holdArmed = false
+            onRevealProgress?.invoke(1f)
+        }
+        emulator = newEmulator(columns.coerceIn(2, 300), rows.coerceIn(2, 120))
+        if (notify) publishFrame()
+    }
+
     fun applyCanvas(argb: Int) {
         if (argb == appliedCanvas) return
         appliedCanvas = argb
         emulator.setDefaultBackground(argb)
+        // Host App color / provider theme changed — repaint, don't keep a stale freeze.
+        publishFrame()
     }
 
-    /**
-     * Reflow the current screen to a new grid. Does not replay the journal,
-     * so a row change cannot paint a second copy of the same frame.
-     */
     fun resizeGrid(columns: Int, rows: Int) {
         val cols = columns.coerceIn(2, 300)
         val lines = rows.coerceIn(2, 120)
         if (cols == emulator.mColumns && lines == emulator.mRows) return
         emulator.resize(cols, lines)
-        onFrame?.invoke()
+        publishFrame()
     }
 
     fun feed(bytes: ByteArray, live: Boolean, notify: Boolean = true, hostSnapshot: Boolean = false) {
@@ -78,18 +161,55 @@ class HostTerminal(
         if (hostSnapshot) modes.markHostSnapshot()
         modes.feed(bytes)
         this.live = live
-        // termit's lean VT does not currently emit DA / cursor-report replies.
         emulator.append(bytes, bytes.size)
-        if (notify) onFrame?.invoke()
+        if (!notify) return
+        paintDirty = true
+        if (emulator.synchronizedOutput || emulator.presentHold || holdArmed) {
+            // Mid-repaint: keep the frozen frame; every new chunk pushes settle out.
+            if (emulator.presentHold) beginHold()
+            armSettle()
+            return
+        }
+        scheduleFrame()
+    }
+
+    fun publishFrame() {
+        paintDirty = false
+        holdArmed = false
+        settleGeneration++
+        paintHandler.removeCallbacks(settleRunnable)
+        if (frameScheduled) {
+            Choreographer.getInstance().removeFrameCallback(frameCallback)
+            frameScheduled = false
+        }
+        emulator.clearPresentHold()
+        onRevealProgress?.invoke(1f)
+        val paint = onFrame
+        if (paint != null && Looper.myLooper() == Looper.getMainLooper()) {
+            paint.invoke()
+        } else {
+            paintHandler.post { onFrame?.invoke() }
+        }
+    }
+
+    private fun scheduleFrame() {
+        if (frameScheduled) return
+        frameScheduled = true
+        Choreographer.getInstance().postFrameCallback(frameCallback)
     }
 
     fun updateCellSize(width: Int, height: Int) {
-        // Pixel cell size is owned by the view; VtEmulator is cell-grid only.
         if (width <= 0 || height <= 0) return
     }
 
     companion object {
         private const val TRANSCRIPT_ROWS = 2000
+        /**
+         * Quiet window after a wipe/flood before showing live VT.
+         * Cursor redraws often pause ~16–80ms between ED2 bursts — 40ms was
+         * short enough to start a reveal every tick (刷刷刷).
+         */
+        private const val SETTLE_MS = 160L
         const val CANVAS = 0xFF1A1B1D.toInt()
     }
 }

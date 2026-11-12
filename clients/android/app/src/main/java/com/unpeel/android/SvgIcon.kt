@@ -2,11 +2,13 @@ package com.unpeel.android
 
 import android.content.Context
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -16,6 +18,8 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
@@ -85,29 +89,42 @@ internal fun BranchMark(size: Dp, tint: Color) {
     SvgIcon("branch", size, tint = tint, rotation = 90f)
 }
 
+/**
+ * Draw a shared SVG asset with an optional tint. Each call gets its own Box +
+ * keyed Canvas so folder-open/closed rows do not share one render node and
+ * freeze on the first tint (the old "only the first folder is colored" bug).
+ */
 @Composable
 internal fun SvgIcon(asset: String, size: Dp, tint: Color? = null, rotation: Float = 0f): Boolean {
     val context = LocalContext.current
     val picture = remember(asset) { loadSvg(context, asset) } ?: return false
-    Canvas(Modifier.size(size).rotate(rotation)) {
-        val sx = this.size.width / picture.width
-        val sy = this.size.height / picture.height
-        scale(sx, sy, pivot = Offset.Zero) {
-            translate(left = -picture.minX, top = -picture.minY) {
-                picture.shapes.forEach { shape ->
-                    val fill = shape.fill?.let { tint ?: it }
-                    val stroke = shape.stroke?.let { tint ?: it }
-                    if (fill != null) drawPath(shape.path, fill)
-                    if (stroke != null) {
-                        drawPath(
-                            shape.path,
-                            stroke,
-                            style = Stroke(
-                                width = shape.strokeWidth,
-                                cap = shape.cap,
-                                join = shape.join,
-                            ),
-                        )
+    val tintKey = tint?.toArgb() ?: 0
+    key(asset, tintKey, size, rotation) {
+        Box(
+            Modifier
+                .size(size)
+                .graphicsLayer { rotationZ = rotation },
+        ) {
+            Canvas(Modifier.fillMaxSize()) {
+                val fillColor = tint
+                val sx = this.size.width / picture.width
+                val sy = this.size.height / picture.height
+                scale(sx, sy, pivot = Offset.Zero) {
+                    translate(left = -picture.minX, top = -picture.minY) {
+                        picture.shapes.forEach { shape ->
+                            shape.fill?.let { drawPath(shape.path, fillColor ?: it) }
+                            shape.stroke?.let { stroke ->
+                                drawPath(
+                                    shape.path,
+                                    fillColor ?: stroke,
+                                    style = Stroke(
+                                        width = shape.strokeWidth,
+                                        cap = shape.cap,
+                                        join = shape.join,
+                                    ),
+                                )
+                            }
+                        }
                     }
                 }
             }

@@ -3,7 +3,6 @@ package com.termit.ui
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
-import android.graphics.Typeface
 import android.text.InputType
 import android.util.AttributeSet
 import android.view.KeyEvent
@@ -27,7 +26,7 @@ class TerminalView @JvmOverloads constructor(
     defStyleAttr: Int = 0,
 ) : View(context, attrs, defStyleAttr) {
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        typeface = Typeface.MONOSPACE
+        typeface = TermitFonts.regular(context)
         textSize = sp(14f)
     }
     private val bgPaint = Paint()

@@ -1,5 +1,9 @@
 package com.termit.vt
 
+/**
+ * Circular transcript + live screen, Termux-shaped.
+ * Full-screen [scrollUp] is O(cols); region / insert-delete line ops copy within margins.
+ */
 class ScreenBuffer(
     cols: Int,
     rows: Int,
@@ -11,95 +15,229 @@ class ScreenBuffer(
         private set
 
     private val scrollbackLimit = scrollbackLimit.coerceAtLeast(0)
-    private val scrollback = ArrayDeque<Array<Cell>>()
-    private var grid: Array<Array<Cell>> = freshGrid(this.cols, this.rows)
+    private var totalRows: Int = (this.rows + this.scrollbackLimit).coerceAtLeast(this.rows)
+    private var lines: Array<Array<Cell>> = Array(totalRows) { freshRow(this.cols) }
 
-    val scrollbackLines: Int get() = scrollback.size
+    /** Index of the top visible screen row inside [lines]. */
+    private var screenFirst = 0
+
+    /** How many rows above the screen are readable scrollback. */
+    private var activeTranscript = 0
+
+    /** DECSTBM inclusive margins (external screen rows). */
+    var scrollTop: Int = 0
+        private set
+    var scrollBottom: Int = this.rows - 1
+        private set
+
+    val scrollbackLines: Int get() = activeTranscript
 
     /** Termux-shaped alias used by the Unpeel HostTerminalView scroll math. */
-    val activeTranscriptRows: Int get() = scrollback.size
+    val activeTranscriptRows: Int get() = activeTranscript
 
-    fun cell(row: Int, col: Int): Cell = grid[row][col]
+    private fun internal(externalRow: Int): Int {
+        var i = screenFirst + externalRow
+        val n = totalRows
+        i %= n
+        if (i < 0) i += n
+        return i
+    }
+
+    fun cell(row: Int, col: Int): Cell = lines[internal(row)][col]
 
     /**
      * Row 0 is the top of the live screen; negative rows walk into scrollback
      * (same convention as Termux getSelectedText / render topRow).
      */
     fun cellAtTranscript(row: Int, col: Int): Cell {
-        if (col !in 0 until cols) return Cell()
-        return when {
-            row < 0 -> {
-                val idx = scrollback.size + row
-                if (idx !in scrollback.indices) return Cell()
-                val line = scrollback.elementAt(idx)
-                if (col < line.size) line[col] else Cell()
-            }
-            row in 0 until rows -> grid[row][col]
-            else -> Cell()
-        }
+        if (col !in 0 until cols) return BLANK
+        if (row < -activeTranscript || row >= rows) return BLANK
+        return lines[internal(row)][col]
     }
 
     fun visibleCell(rowFromTop: Int, col: Int, scrollOffset: Int): Cell {
-        val absolute = scrollback.size - scrollOffset + rowFromTop
-        return when {
-            absolute < scrollback.size -> {
-                val line = scrollback.elementAt(absolute)
-                if (col < line.size) line[col] else Cell()
-            }
-            else -> {
-                val r = absolute - scrollback.size
-                if (r in 0 until rows && col in 0 until cols) grid[r][col] else Cell()
-            }
-        }
+        val absolute = activeTranscript - scrollOffset + rowFromTop
+        val external = absolute - activeTranscript
+        return cellAtTranscript(external, col)
+    }
+
+    fun setScrollRegion(top: Int, bottom: Int) {
+        scrollTop = top.coerceIn(0, rows - 1)
+        scrollBottom = bottom.coerceIn(scrollTop, rows - 1)
+    }
+
+    fun resetScrollRegion() {
+        scrollTop = 0
+        scrollBottom = rows - 1
     }
 
     fun resize(newCols: Int, newRows: Int) {
         val c = newCols.coerceAtLeast(1)
         val r = newRows.coerceAtLeast(1)
         if (c == cols && r == rows) return
-        val next = freshGrid(c, r)
+        val nextTotal = (r + scrollbackLimit).coerceAtLeast(r)
+        val next = Array(nextTotal) { freshRow(c) }
         val copyRows = minOf(rows, r)
         val copyCols = minOf(cols, c)
         for (y in 0 until copyRows) {
-            for (x in 0 until copyCols) {
-                next[y][x].copyFrom(grid[y][x])
-            }
+            val src = lines[internal(y)]
+            val dst = next[y]
+            for (x in 0 until copyCols) dst[x].copyFrom(src[x])
         }
         cols = c
         rows = r
-        grid = next
+        totalRows = nextTotal
+        lines = next
+        screenFirst = 0
+        activeTranscript = 0
+        resetScrollRegion()
     }
 
     fun clearAll() {
-        for (y in 0 until rows) {
-            for (x in 0 until cols) grid[y][x].reset()
-        }
+        for (y in 0 until rows) clearRow(internal(y))
+    }
+
+    /** CSI 3J — wipe scrollback history. */
+    fun clearScrollback() {
+        activeTranscript = 0
     }
 
     fun clearFrom(row: Int, col: Int) {
-        for (x in col until cols) grid[row][x].reset()
-        for (y in row + 1 until rows) {
-            for (x in 0 until cols) grid[y][x].reset()
-        }
+        val line = lines[internal(row)]
+        for (x in col until cols) line[x].reset()
+        for (y in row + 1 until rows) clearRow(internal(y))
+    }
+
+    /** CSI J mode 1 — clear from origin through cursor (inclusive). */
+    fun clearAbove(row: Int, col: Int) {
+        for (y in 0 until row) clearRow(internal(y))
+        val line = lines[internal(row)]
+        for (x in 0..col.coerceIn(0, cols - 1)) line[x].reset()
     }
 
     fun clearLineFrom(row: Int, col: Int) {
-        for (x in col until cols) grid[row][x].reset()
+        val line = lines[internal(row)]
+        for (x in col until cols) line[x].reset()
     }
 
+    fun clearLineTo(row: Int, col: Int) {
+        val line = lines[internal(row)]
+        for (x in 0..col.coerceIn(0, cols - 1)) line[x].reset()
+    }
+
+    fun clearLine(row: Int) {
+        clearRow(internal(row))
+    }
+
+    /** Push top of region; blank bottom of region. Full screen uses the ring. */
     fun scrollUp() {
-        if (scrollbackLimit > 0) {
-            val saved = Array(cols) { Cell() }
-            for (x in 0 until cols) saved[x].copyFrom(grid[0][x])
-            scrollback.addLast(saved)
-            while (scrollback.size > scrollbackLimit) scrollback.removeFirst()
+        if (scrollTop == 0 && scrollBottom == rows - 1) {
+            scrollUpFull()
+            return
         }
-        for (y in 0 until rows - 1) {
-            for (x in 0 until cols) grid[y][x].copyFrom(grid[y + 1][x])
-        }
-        for (x in 0 until cols) grid[rows - 1][x].reset()
+        shiftRegionUp(scrollTop, scrollBottom)
     }
 
-    private fun freshGrid(c: Int, r: Int): Array<Array<Cell>> =
-        Array(r) { Array(c) { Cell() } }
+    /** Insert blank at top of region; drop bottom. */
+    fun scrollDown() {
+        if (scrollTop == 0 && scrollBottom == rows - 1) {
+            scrollDownFull()
+            return
+        }
+        shiftRegionDown(scrollTop, scrollBottom)
+    }
+
+    /** CSI L — insert [count] blank lines at [atRow], pushing down within the scroll region. */
+    fun insertLines(atRow: Int, count: Int) {
+        if (atRow !in scrollTop..scrollBottom) return
+        val n = count.coerceAtLeast(1).coerceAtMost(scrollBottom - atRow + 1)
+        repeat(n) { shiftRegionDown(atRow, scrollBottom) }
+    }
+
+    /** CSI M — delete [count] lines at [atRow], pulling up within the scroll region. */
+    fun deleteLines(atRow: Int, count: Int) {
+        if (atRow !in scrollTop..scrollBottom) return
+        val n = count.coerceAtLeast(1).coerceAtMost(scrollBottom - atRow + 1)
+        repeat(n) { shiftRegionUp(atRow, scrollBottom) }
+    }
+
+    /** CSI @ — insert blank cells at (row, col). */
+    fun insertChars(row: Int, col: Int, count: Int) {
+        if (row !in 0 until rows || col !in 0 until cols) return
+        val n = count.coerceAtLeast(1)
+        val line = lines[internal(row)]
+        for (x in cols - 1 downTo col + n) {
+            if (x - n >= col) line[x].copyFrom(line[x - n])
+        }
+        for (x in col until (col + n).coerceAtMost(cols)) line[x].reset()
+    }
+
+    /** CSI P — delete cells at (row, col), shifting left. */
+    fun deleteChars(row: Int, col: Int, count: Int) {
+        if (row !in 0 until rows || col !in 0 until cols) return
+        val n = count.coerceAtLeast(1)
+        val line = lines[internal(row)]
+        var x = col
+        while (x + n < cols) {
+            line[x].copyFrom(line[x + n])
+            x++
+        }
+        while (x < cols) {
+            line[x].reset()
+            x++
+        }
+    }
+
+    /** CSI X — erase [count] cells from (row, col) without shifting. */
+    fun eraseChars(row: Int, col: Int, count: Int) {
+        if (row !in 0 until rows || col !in 0 until cols) return
+        val line = lines[internal(row)]
+        val end = (col + count.coerceAtLeast(1)).coerceAtMost(cols)
+        for (x in col until end) line[x].reset()
+    }
+
+    private fun scrollUpFull() {
+        if (scrollbackLimit > 0) {
+            if (activeTranscript < scrollbackLimit) activeTranscript++
+        }
+        screenFirst = (screenFirst + 1) % totalRows
+        clearRow(internal(rows - 1))
+    }
+
+    private fun scrollDownFull() {
+        screenFirst = (screenFirst - 1 + totalRows) % totalRows
+        if (activeTranscript > 0) activeTranscript--
+        clearRow(internal(0))
+    }
+
+    private fun shiftRegionUp(top: Int, bottom: Int) {
+        for (y in top until bottom) {
+            copyExternalRow(y + 1, y)
+        }
+        clearRow(internal(bottom))
+    }
+
+    private fun shiftRegionDown(top: Int, bottom: Int) {
+        for (y in bottom downTo top + 1) {
+            copyExternalRow(y - 1, y)
+        }
+        clearRow(internal(top))
+    }
+
+    private fun copyExternalRow(from: Int, to: Int) {
+        val src = lines[internal(from)]
+        val dst = lines[internal(to)]
+        for (x in 0 until cols) dst[x].copyFrom(src[x])
+    }
+
+    private fun clearRow(internalRow: Int) {
+        val line = lines[internalRow]
+        for (x in 0 until cols) line[x].reset()
+    }
+
+    private fun freshRow(c: Int): Array<Cell> = Array(c) { Cell() }
+
+    companion object {
+        private val BLANK = Cell()
+    }
 }

@@ -2,7 +2,7 @@ package com.termit.vt
 
 /**
  * Lean VT100/ANSI subset for remote Unpeel Host streams.
- * Not Ghostty-grade; enough to paint agent TUI frames on Android.
+ * Enough for agent TUIs: margins, insert/delete line/char, erase, OSC colors.
  */
 class VtEmulator(
     cols: Int = 80,
@@ -31,12 +31,43 @@ class VtEmulator(
         private set
     var applicationCursorKeys = false
         private set
+    /** DECSET 25 — when false the block cursor is hidden regardless of blink. */
+    var cursorDisplayEnabled = true
+        private set
+    /** DECSET 7 — DECAWM. Ghostty snapshots and Cursor redraws depend on this. */
+    var autoWrap = true
+        private set
+    /** DECSET 6 — DECOM. CUP / home are relative to the scroll region. */
+    var originMode = false
+        private set
+    /**
+     * DECSET 2026 — synchronized output. Grid still updates; the view should
+     * not present until this clears (same gate Ghostty uses).
+     */
+    var synchronizedOutput = false
+        private set
+    /**
+     * Set after a full wipe / alt-screen enter — presenting mid-repaint is what
+     * made Termux look mosaic. The host freezes the last good frame until the
+     * stream settles, then reverse-fills from the bottom.
+     */
+    var presentHold = false
+        private set
 
     /** Host-bound replies (DA/DSR/cursor reports). */
     var onReply: ((ByteArray) -> Unit)? = null
     var onBell: (() -> Unit)? = null
     var onTitle: ((String) -> Unit)? = null
     var onCopy: ((String) -> Unit)? = null
+    /** Fired when synchronized output ends (`?2026l`) so the host can paint once. */
+    var onSynchronizedOutputEnd: (() -> Unit)? = null
+    /** Fired when [presentHold] rises — host should snapshot the last good frame. */
+    var onPresentHold: (() -> Unit)? = null
+
+    private var savedCursorRow = 0
+    private var savedCursorCol = 0
+    private var savedStyle = CellStyle()
+    private var blinkLit = true
 
     // --- Termux-shaped surface used by Unpeel's HostTerminal / HostTerminalView ---
     val mColumns: Int get() = screen.cols
@@ -47,10 +78,29 @@ class VtEmulator(
     fun isCursorKeysApplicationMode(): Boolean = applicationCursorKeys
     fun isMouseProtocolSgr(): Boolean = mouseProtocolSgr
     fun isBracketedPasteMode(): Boolean = bracketedPaste
-    fun getSelectedText(x1: Int, y1: Int, x2: Int, y2: Int): String = selectedTextAbs(x1, y1, x2, y2)
-    fun setCursorBlinkState(@Suppress("UNUSED_PARAMETER") on: Boolean) {}
+    fun shouldCursorBeVisible(): Boolean = cursorDisplayEnabled && blinkLit
+    fun getSelectedText(x1: Int, y1: Int, x2: Int, y2: Int): String {
+        if (x1 == 0 && y1 == 0 && x2 >= mColumns && y2 >= mRows) {
+            val cached = fullScreenText
+            if (cached != null && fullScreenTextGen == generation) return cached
+            val built = selectedTextAbs(0, 0, mColumns, mRows)
+            fullScreenText = built
+            fullScreenTextGen = generation
+            return built
+        }
+        return selectedTextAbs(x1, y1, x2, y2)
+    }
+    fun setCursorBlinkState(on: Boolean) {
+        blinkLit = on
+    }
     fun setCursorBlinkingEnabled(@Suppress("UNUSED_PARAMETER") on: Boolean) {}
     fun append(data: ByteArray, length: Int) = feed(data, 0, length)
+
+    var generation: Long = 0L
+        private set
+
+    private var fullScreenText: String? = null
+    private var fullScreenTextGen: Long = -1L
 
     companion object {
         const val MOUSE_LEFT_BUTTON = 0
@@ -67,7 +117,6 @@ class VtEmulator(
     private var utf8Expected = 0
     private var utf8Codepoint = 0
 
-    /** Live indexed palette (0..258), same shape as Termux TerminalColors.mCurrentColors. */
     val colors: IntArray = com.termit.ui.AnsiColors.buildDefaultPalette()
 
     fun setDefaultBackground(argb: Int) {
@@ -83,6 +132,7 @@ class VtEmulator(
         alternate.resize(cols, rows)
         cursorRow = cursorRow.coerceIn(0, screen.rows - 1)
         cursorCol = cursorCol.coerceIn(0, screen.cols - 1)
+        bumpGeneration()
     }
 
     fun reset() {
@@ -96,14 +146,41 @@ class VtEmulator(
         mouseProtocolSgr = false
         bracketedPaste = false
         applicationCursorKeys = false
+        cursorDisplayEnabled = true
+        autoWrap = true
+        originMode = false
+        synchronizedOutput = false
+        presentHold = false
         cursorRow = 0
         cursorCol = 0
+        savedCursorRow = 0
+        savedCursorCol = 0
+        savedStyle = CellStyle()
         style.reset()
         state = State.GROUND
         utf8Expected = 0
+        blinkLit = true
+        bumpGeneration()
+    }
+
+    fun clearPresentHold() {
+        presentHold = false
+    }
+
+    private fun armPresentHold() {
+        if (presentHold) return
+        presentHold = true
+        onPresentHold?.invoke()
+    }
+
+    private fun bumpGeneration() {
+        generation++
+        fullScreenText = null
     }
 
     fun feed(data: ByteArray, offset: Int = 0, length: Int = data.size - offset) {
+        if (length <= 0) return
+        bumpGeneration()
         var i = offset
         val end = offset + length
         while (i < end) {
@@ -169,7 +246,6 @@ class VtEmulator(
         return sb.toString().trimEnd()
     }
 
-    /** Selection in Termux coordinates (negative rows = scrollback). */
     fun selectedTextAbs(c1: Int, r1: Int, c2: Int, r2: Int): String {
         val top = minOf(r1, r2)
         val bottom = maxOf(r1, r2)
@@ -198,6 +274,10 @@ class VtEmulator(
                 0x09 -> tab()
                 0x0a, 0x0b, 0x0c -> lineFeed()
                 0x0d -> carriageReturn()
+                0x18, 0x1a -> {
+                    // CAN / SUB — cancel sequence, stay ground
+                    state = State.GROUND
+                }
                 0x1b -> state = State.ESCAPE
                 else -> if (b >= 0x20) putCodePoint(b)
             }
@@ -212,13 +292,43 @@ class VtEmulator(
                     oscBuffer = StringBuilder()
                     state = State.OSC
                 }
+                'P'.code -> state = State.DCS // swallow until ST
+                // G0/G1 designate — consume the next intermediate (e.g. ESC ( B)
+                '('.code, ')'.code, '*'.code, '+'.code -> state = State.ESC_IGNORE_ONE
                 'c'.code -> {
                     reset()
                     state = State.GROUND
                 }
-                '7'.code, '8'.code, 'D'.code, 'E'.code, 'M'.code -> state = State.GROUND
+                '7'.code -> {
+                    saveCursor()
+                    state = State.GROUND
+                }
+                '8'.code -> {
+                    restoreCursor()
+                    state = State.GROUND
+                }
+                'D'.code -> {
+                    index()
+                    state = State.GROUND
+                }
+                'E'.code -> {
+                    carriageReturn()
+                    index()
+                    state = State.GROUND
+                }
+                'M'.code -> {
+                    reverseIndex()
+                    state = State.GROUND
+                }
                 else -> state = State.GROUND
             }
+            State.ESC_IGNORE_ONE -> state = State.GROUND
+            State.DCS -> when (b) {
+                0x1b -> state = State.DCS_ESC
+                0x07 -> state = State.GROUND
+                else -> Unit
+            }
+            State.DCS_ESC -> state = State.GROUND // ESC \ (ST) or any final
             State.CSI_PARAM -> when (b) {
                 '?'.code -> if (csiParamCount == 0 && csiParams[0] == 0) csiPrivate = true
                 in '0'.code..'9'.code -> {
@@ -246,7 +356,7 @@ class VtEmulator(
                     state = State.GROUND
                 }
                 0x1b -> state = State.OSC_ESC
-                else -> if (oscBuffer.length < 1024) oscBuffer.append(b.toChar())
+                else -> if (oscBuffer.length < 2048) oscBuffer.append(b.toChar())
             }
             State.OSC_ESC -> {
                 if (b == '\\'.code) finishOsc()
@@ -263,47 +373,126 @@ class VtEmulator(
                 for (i in 0 until count) {
                     when (csiParams[i]) {
                         1 -> applicationCursorKeys = enabled
+                        6 -> {
+                            originMode = enabled
+                            // DECOM on: home into the region; off: absolute home.
+                            cursorRow = if (enabled) screen.scrollTop else 0
+                            cursorCol = 0
+                        }
+                        7 -> autoWrap = enabled
                         9, 1000, 1002, 1003 -> mouseTrackingActive = enabled
                         1006 -> mouseProtocolSgr = enabled
                         2004 -> bracketedPaste = enabled
+                        25 -> cursorDisplayEnabled = enabled
                         47, 1047, 1049 -> setAlt(enabled)
+                        2026 -> {
+                            val was = synchronizedOutput
+                            synchronizedOutput = enabled
+                            if (enabled) armPresentHold()
+                            if (was && !enabled) onSynchronizedOutputEnd?.invoke()
+                        }
                     }
                 }
             }
             return
         }
         when (final) {
-            'A' -> cursorRow = (cursorRow - param(0, 1)).coerceAtLeast(0)
-            'B' -> cursorRow = (cursorRow + param(0, 1)).coerceAtMost(screen.rows - 1)
+            'A' -> cursorRow = (cursorRow - param(0, 1)).coerceAtLeast(screen.scrollTop)
+            'B' -> cursorRow = (cursorRow + param(0, 1)).coerceAtMost(screen.scrollBottom)
             'C' -> cursorCol = (cursorCol + param(0, 1)).coerceAtMost(screen.cols - 1)
             'D' -> cursorCol = (cursorCol - param(0, 1)).coerceAtLeast(0)
             'H', 'f' -> {
-                cursorRow = (param(0, 1) - 1).coerceIn(0, screen.rows - 1)
-                cursorCol = (param(1, 1) - 1).coerceIn(0, screen.cols - 1)
-            }
-            'J' -> when (param(0, 0)) {
-                0 -> screen.clearFrom(cursorRow, cursorCol)
-                2, 3 -> {
-                    screen.clearAll()
-                    cursorRow = 0
-                    cursorCol = 0
+                val row = param(0, 1) - 1
+                val col = param(1, 1) - 1
+                if (originMode) {
+                    cursorRow = (screen.scrollTop + row).coerceIn(screen.scrollTop, screen.scrollBottom)
+                    cursorCol = col.coerceIn(0, screen.cols - 1)
+                } else {
+                    cursorRow = row.coerceIn(0, screen.rows - 1)
+                    cursorCol = col.coerceIn(0, screen.cols - 1)
                 }
             }
-            'K' -> when (param(0, 0)) {
-                0 -> screen.clearLineFrom(cursorRow, cursorCol)
-                2 -> screen.clearLineFrom(cursorRow, 0)
+            'J' -> eraseDisplay(param(0, 0))
+            'K' -> eraseLine(param(0, 0))
+            'L' -> screen.insertLines(cursorRow, param(0, 1))
+            'M' -> screen.deleteLines(cursorRow, param(0, 1))
+            '@' -> screen.insertChars(cursorRow, cursorCol, param(0, 1))
+            'P' -> screen.deleteChars(cursorRow, cursorCol, param(0, 1))
+            'X' -> screen.eraseChars(cursorRow, cursorCol, param(0, 1))
+            'S' -> repeat(param(0, 1)) { screen.scrollUp() }
+            'T' -> repeat(param(0, 1)) { screen.scrollDown() }
+            'r' -> {
+                val top = (param(0, 1) - 1).coerceIn(0, screen.rows - 1)
+                val bottomParam = if (csiParamCount >= 2) csiParams[1] else 0
+                val bottom = ((if (bottomParam == 0) screen.rows else bottomParam) - 1)
+                    .coerceIn(top, screen.rows - 1)
+                screen.setScrollRegion(top, bottom)
+                cursorRow = top
+                cursorCol = 0
             }
             'm' -> applySgr()
             'G' -> cursorCol = (param(0, 1) - 1).coerceIn(0, screen.cols - 1)
             'd' -> cursorRow = (param(0, 1) - 1).coerceIn(0, screen.rows - 1)
-            // Device Status Report / cursor position — Host expects a reply.
+            's' -> saveCursor()
+            'u' -> restoreCursor()
             'n' -> when (param(0, 0)) {
                 5 -> reply("\u001b[0n")
                 6 -> reply("\u001b[${cursorRow + 1};${cursorCol + 1}R")
             }
-            // Primary DA
             'c' -> if (param(0, 0) == 0) reply("\u001b[?6c")
         }
+    }
+
+    private fun eraseDisplay(mode: Int) {
+        when (mode) {
+            0 -> screen.clearFrom(cursorRow, cursorCol)
+            1 -> screen.clearAbove(cursorRow, cursorCol)
+            2 -> {
+                // Hold first so the view can keep the last presented pixels.
+                armPresentHold()
+                screen.clearAll() // xterm: do not move cursor
+            }
+            3 -> {
+                armPresentHold()
+                screen.clearAll()
+                screen.clearScrollback()
+            }
+        }
+    }
+
+    private fun eraseLine(mode: Int) {
+        when (mode) {
+            0 -> screen.clearLineFrom(cursorRow, cursorCol)
+            1 -> screen.clearLineTo(cursorRow, cursorCol)
+            2 -> screen.clearLine(cursorRow)
+        }
+    }
+
+    private fun saveCursor() {
+        savedCursorRow = cursorRow
+        savedCursorCol = cursorCol
+        savedStyle = style.copy()
+    }
+
+    private fun restoreCursor() {
+        cursorRow = savedCursorRow.coerceIn(0, screen.rows - 1)
+        cursorCol = savedCursorCol.coerceIn(0, screen.cols - 1)
+        style.fg = savedStyle.fg
+        style.bg = savedStyle.bg
+        style.bold = savedStyle.bold
+        style.underline = savedStyle.underline
+        style.inverse = savedStyle.inverse
+        style.dim = savedStyle.dim
+    }
+
+    /** ESC D — move down one line, scroll if at bottom of region. */
+    private fun index() {
+        if (cursorRow >= screen.scrollBottom) screen.scrollUp() else cursorRow++
+    }
+
+    /** ESC M — move up one line, scroll down if at top of region. */
+    private fun reverseIndex() {
+        if (cursorRow <= screen.scrollTop) screen.scrollDown() else cursorRow--
     }
 
     private fun finishOsc() {
@@ -314,8 +503,13 @@ class VtEmulator(
         val pt = if (semi < 0) "" else body.substring(semi + 1)
         when (ps) {
             "0", "2" -> onTitle?.invoke(pt)
+            "4" -> applyOscPalette(pt)
+            "10" -> parseColorSpec(pt)?.let { setDefaultForeground(it) }
+            "11" -> parseColorSpec(pt)?.let { setDefaultBackground(it) }
+            "12" -> parseColorSpec(pt)?.let {
+                colors[com.termit.ui.AnsiColors.INDEX_CURSOR] = it or 0xff000000.toInt()
+            }
             "52" -> {
-                // OSC 52 clipboard: Pc;Pd — ignore Pc, take Pd if present.
                 val payload = pt.substringAfter(';', pt)
                 if (payload.isNotEmpty() && payload != "?") {
                     runCatching {
@@ -327,6 +521,46 @@ class VtEmulator(
         }
     }
 
+    /** OSC 4;c;spec[;c;spec…] */
+    private fun applyOscPalette(body: String) {
+        val parts = body.split(';')
+        var i = 0
+        while (i + 1 < parts.size) {
+            val idx = parts[i].toIntOrNull() ?: break
+            val spec = parts[i + 1]
+            i += 2
+            if (idx !in 0..255) continue
+            parseColorSpec(spec)?.let { colors[idx] = it or 0xff000000.toInt() }
+        }
+    }
+
+    private fun parseColorSpec(spec: String): Int? {
+        val s = spec.trim()
+        if (s.isEmpty() || s == "?") return null
+        if (s.startsWith("#") && s.length >= 7) {
+            val hex = s.substring(1, 7)
+            return hex.toIntOrNull(16)?.let { 0xff000000.toInt() or it }
+        }
+        // rgb:rrr/ggg/bbb or rgbi:…
+        if (s.startsWith("rgb:", ignoreCase = true)) {
+            val channels = s.substring(4).split('/')
+            if (channels.size != 3) return null
+            fun ch(raw: String): Int {
+                val v = raw.trim().toIntOrNull(16) ?: return 0
+                return when (raw.length) {
+                    1 -> (v * 0xff) / 0xf
+                    2 -> v
+                    else -> (v * 0xff) / 0xffff.coerceAtLeast(1)
+                }.coerceIn(0, 255)
+            }
+            val r = ch(channels[0])
+            val g = ch(channels[1])
+            val b = ch(channels[2])
+            return 0xff000000.toInt() or (r shl 16) or (g shl 8) or b
+        }
+        return null
+    }
+
     private fun reply(text: String) {
         onReply?.invoke(text.toByteArray(Charsets.UTF_8))
     }
@@ -336,12 +570,20 @@ class VtEmulator(
             alternateBufferActive = enabled
             return
         }
-        onAlt = enabled
-        alternateBufferActive = enabled
         if (enabled) {
+            armPresentHold()
+            saveCursor()
+            onAlt = true
+            alternateBufferActive = true
             alternate.clearAll()
+            alternate.resetScrollRegion()
             cursorRow = 0
             cursorCol = 0
+        } else {
+            armPresentHold()
+            onAlt = false
+            alternateBufferActive = false
+            restoreCursor()
         }
     }
 
@@ -398,26 +640,41 @@ class VtEmulator(
 
     private fun putCodePoint(cp: Int) {
         val width = WcWidth.width(cp)
-        if (width <= 0) return // combining / non-spacing: ignore for now
+        if (width <= 0) return
         if (cursorCol + width > screen.cols) {
-            carriageReturn()
-            lineFeed()
+            if (autoWrap) {
+                carriageReturn()
+                lineFeed()
+            } else {
+                // DECAWM off: stay on this line; next write clamps into the last cells.
+                cursorCol = (screen.cols - width).coerceAtLeast(0)
+            }
         }
         if (cursorRow !in 0 until screen.rows || cursorCol >= screen.cols) return
-        // Cell grid is UTF-16 char sized; non-BMP becomes U+FFFD but keeps wcwidth.
         val ch = if (cp in 0..0xFFFF) cp.toChar() else '\uFFFD'
-        val cell = screen.cell(cursorRow, cursorCol)
+        val row = cursorRow
+        val col = cursorCol
+
+        if (col > 0 && screen.cell(row, col).char == '\u0000') {
+            screen.cell(row, col - 1).reset()
+        }
+        if (col + 1 < screen.cols && screen.cell(row, col + 1).char == '\u0000') {
+            screen.cell(row, col + 1).reset()
+        }
+
+        val cell = screen.cell(row, col)
         cell.char = ch
         cell.applyStyle(style)
-        if (width == 2 && cursorCol + 1 < screen.cols) {
-            val cont = screen.cell(cursorRow, cursorCol + 1)
+        if (width == 2 && col + 1 < screen.cols) {
+            val cont = screen.cell(row, col + 1)
             cont.char = '\u0000'
             cont.applyStyle(style)
         }
-        cursorCol += width
+        cursorCol = col + width
     }
 
     private fun backspace() {
+        if (cursorCol > screen.cols) cursorCol = screen.cols
         if (cursorCol > 0) cursorCol--
     }
 
@@ -431,14 +688,21 @@ class VtEmulator(
     }
 
     private fun lineFeed() {
-        if (cursorRow >= screen.rows - 1) {
+        if (cursorRow >= screen.scrollBottom) {
             screen.scrollUp()
-        } else {
+        } else if (cursorRow < screen.rows - 1) {
             cursorRow++
         }
     }
 
     private enum class State {
-        GROUND, ESCAPE, CSI_PARAM, OSC, OSC_ESC
+        GROUND,
+        ESCAPE,
+        ESC_IGNORE_ONE,
+        CSI_PARAM,
+        OSC,
+        OSC_ESC,
+        DCS,
+        DCS_ESC,
     }
 }

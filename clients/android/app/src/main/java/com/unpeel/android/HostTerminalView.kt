@@ -4,7 +4,9 @@ import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Paint
 import android.text.InputType
 import android.util.TypedValue
 import android.view.HapticFeedbackConstants
@@ -115,6 +117,24 @@ class HostTerminalView(
     private var zoom = 1f
     private var zoomPanX = 0f
     private var zoomPanY = 0f
+    /**
+     * Another phone owns the Host letterbox. Scale this view so that shared
+     * grid fills our width — no resize-desktop, just local fit.
+     */
+    var fitWidthToSharedGrid: Boolean = false
+        set(value) {
+            if (field == value) return
+            field = value
+            zoom = 1f
+            zoomPanX = 0f
+            zoomPanY = 0f
+            if (value && width > 0 && height > 0) {
+                val scale = widthFitScale(terminal.emulator)
+                val scaledH = contentHeightPx(terminal.emulator) * scale
+                if (scaledH > height) zoomPanY = height - scaledH
+            }
+            invalidate()
+        }
     private var pinching = false
     private var downX = 0f
     private var downY = 0f
@@ -124,6 +144,13 @@ class HostTerminalView(
     private var placedCol = 0
     private var placedRow = 0
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
+
+    /** Last coherent present — kept on screen while VT mid-repaints (anti-mosaic). */
+    private var lastGoodBitmap: Bitmap? = null
+    private var freezeActive = false
+    /** 0 = show only [lastGoodBitmap]; 1 = fully live. Grows bottom→top while revealing. */
+    private var revealProgress = 1f
+    private val bitmapPaint = Paint(Paint.FILTER_BITMAP_FLAG)
 
     private val frameListener: () -> Unit = {
         noteEmulator(terminal.emulator)
@@ -222,8 +249,8 @@ class HostTerminalView(
                 moveCursor(emulator, e2)
                 return true
             }
-            // A magnified view pans under one finger. Pinch back to 1 to scroll.
-            if (zoom > 1f) {
+            // Magnified, or shared-grid taller than this phone after width-fit.
+            if (zoom > 1f || sharedGridOverflows()) {
                 zoomPanX -= distanceX
                 zoomPanY -= distanceY
                 clampZoom()
@@ -265,7 +292,7 @@ class HostTerminalView(
         val textPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 16f, resources.displayMetrics)
             .roundToInt()
             .coerceAtLeast(8)
-        val metrics = TerminalMetrics(textPx)
+        val metrics = TerminalMetrics(context, textPx)
         renderer = metrics.renderer
         cellWidth = metrics.fontWidth.coerceAtLeast(1f)
         cellHeight = metrics.fontLineSpacing.coerceAtLeast(1)
@@ -283,14 +310,30 @@ class HostTerminalView(
         if (switching && this.terminal.onFrame === frameListener) {
             this.terminal.parkedScroll = offsetRows
             this.terminal.onFrame = null
+            this.terminal.onHoldFrame = null
+            this.terminal.onRevealProgress = null
         }
         this.terminal = terminal
         terminal.onFrame = frameListener
+        terminal.onHoldFrame = {
+            // Keep the last coherent pixels; VT may already be wiping.
+            freezeActive = true
+            revealProgress = 0f
+            postInvalidateOnAnimation()
+        }
+        terminal.onRevealProgress = { progress ->
+            // Host snaps 0 ↔ 1 only (no multi-frame reverse wipe).
+            revealProgress = if (progress >= 1f) 1f else 0f
+            if (revealProgress >= 1f) freezeActive = false
+            postInvalidateOnAnimation()
+        }
         terminal.updateCellSize(cellWidth.roundToInt(), cellHeight)
         if (!switching) return
         noteEmulator(terminal.emulator)
         offsetRows = terminal.parkedScroll.coerceAtLeast(0)
         clampOffset(terminal.emulator)
+        freezeActive = false
+        revealProgress = 1f
         postInvalidateOnAnimation()
     }
 
@@ -477,20 +520,60 @@ class HostTerminalView(
     override fun onDraw(canvas: Canvas) {
         val emulator = terminal.emulator
         noteEmulator(emulator)
+        val held = lastGoodBitmap
+        if (freezeActive && revealProgress < 1f && held != null && !held.isRecycled) {
+            // Hold last coherent present through Cursor ED2 / sync floods.
+            canvas.drawBitmap(held, 0f, 0f, bitmapPaint)
+            return
+        }
+        // Live path: render into lastGood, then blit — next hold already has 首帧.
+        val bmp = ensureLastGood()
+        if (bmp != null) {
+            renderLiveInto(Canvas(bmp), emulator)
+            canvas.drawBitmap(bmp, 0f, 0f, bitmapPaint)
+        } else {
+            renderLiveInto(canvas, emulator)
+        }
+    }
+
+    private fun ensureLastGood(): Bitmap? {
+        if (width <= 0 || height <= 0) return null
+        var bmp = lastGoodBitmap
+        if (bmp == null || bmp.width != width || bmp.height != height || bmp.isRecycled) {
+            bmp?.recycle()
+            bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            lastGoodBitmap = bmp
+        }
+        return bmp
+    }
+
+    private fun renderLiveInto(canvas: Canvas, emulator: VtEmulator) {
         canvas.drawColor(canvasColor)
+        clampZoom()
+        val scale = displayScale(emulator)
         canvas.save()
         canvas.translate(zoomPanX, zoomPanY)
-        canvas.scale(zoom, zoom)
+        canvas.scale(scale, scale)
         canvas.save()
         val placed = place(emulator)
         topRow = placed.first
         val shift = if (forwarding(emulator) != AgentTerminalPolicy.Wheel.None) {
             panX = 0
             0
+        } else if (fitWidthToSharedGrid) {
+            // Width-fit already fills the view; don't also pan the grid.
+            panX = 0
+            0
         } else {
             horizontalShift(emulator)
         }
-        canvas.translate(shift.toFloat(), placed.second.toFloat())
+        // Follower vertical pin is zoomPanY; skip place()'s bottom-pin translate.
+        val y = if (fitWidthToSharedGrid) {
+            if (placed.first < 0 || offsetRows != 0) placed.second else 0
+        } else {
+            placed.second
+        }
+        canvas.translate(shift.toFloat(), y.toFloat())
         val sel = selectionArgs()
         if (sel == null) {
             renderer.render(emulator, canvas, topRow, -1, -1, -1, -1, blinkOn)
@@ -499,6 +582,34 @@ class HostTerminalView(
         }
         canvas.restore()
         canvas.restore()
+    }
+
+    /** Pinch zoom on top of optional shared-grid width fit. */
+    private fun displayScale(emulator: VtEmulator): Float = widthFitScale(emulator) * zoom
+
+    private fun widthFitScale(emulator: VtEmulator): Float {
+        if (!fitWidthToSharedGrid || width <= 0 || cellWidth <= 0f) return 1f
+        val contentW = emulator.mColumns * cellWidth
+        if (contentW <= 1f) return 1f
+        return (width / contentW).coerceIn(0.55f, 1.85f)
+    }
+
+    private fun contentHeightPx(emulator: VtEmulator): Float =
+        topPad + emulator.mRows * cellHeight.toFloat()
+
+    private fun sharedGridOverflows(): Boolean {
+        if (!fitWidthToSharedGrid || height <= 0) return false
+        return contentHeightPx(terminal.emulator) * displayScale(terminal.emulator) > height + 0.5f
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        if (!fitWidthToSharedGrid || w <= 0 || h <= 0) return
+        zoom = 1f
+        zoomPanX = 0f
+        val scale = widthFitScale(terminal.emulator)
+        val scaledH = contentHeightPx(terminal.emulator) * scale
+        zoomPanY = if (scaledH > h) h - scaledH else 0f
     }
 
     private fun publishMenu() {
@@ -683,14 +794,19 @@ class HostTerminalView(
 
     private val scaler = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
         override fun onScale(detector: ScaleGestureDetector): Boolean {
-            val next = (zoom * detector.scaleFactor).coerceIn(1f, MAX_ZOOM)
+            val emulator = terminal.emulator
+            val fit = widthFitScale(emulator)
+            val oldScale = fit * zoom
+            if (oldScale <= 0f) return false
+            val nextZoom = (zoom * detector.scaleFactor).coerceIn(1f, MAX_ZOOM)
             val focusX = detector.focusX
             val focusY = detector.focusY
-            val contentX = (focusX - zoomPanX) / zoom
-            val contentY = (focusY - zoomPanY) / zoom
-            zoom = next
-            zoomPanX = focusX - contentX * zoom
-            zoomPanY = focusY - contentY * zoom
+            val contentX = (focusX - zoomPanX) / oldScale
+            val contentY = (focusY - zoomPanY) / oldScale
+            zoom = nextZoom
+            val newScale = fit * zoom
+            zoomPanX = focusX - contentX * newScale
+            zoomPanY = focusY - contentY * newScale
             clampZoom()
             invalidate()
             return true
@@ -699,16 +815,30 @@ class HostTerminalView(
 
     /** A magnified picture stays inside the view. At 1× the pan is zero. */
     private fun clampZoom() {
-        if (zoom <= 1f || width <= 0 || height <= 0) {
-            zoom = 1f
-            zoomPanX = 0f
-            zoomPanY = 0f
+        if (width <= 0 || height <= 0) return
+        val emulator = terminal.emulator
+        if (!fitWidthToSharedGrid) {
+            if (zoom <= 1f) {
+                zoom = 1f
+                zoomPanX = 0f
+                zoomPanY = 0f
+                return
+            }
+            val minX = -(zoom - 1f) * width
+            val minY = -(zoom - 1f) * height
+            zoomPanX = zoomPanX.coerceIn(minX, 0f)
+            zoomPanY = zoomPanY.coerceIn(minY, 0f)
             return
         }
-        val minX = -(zoom - 1f) * width
-        val minY = -(zoom - 1f) * height
-        zoomPanX = zoomPanX.coerceIn(minX, 0f)
-        zoomPanY = zoomPanY.coerceIn(minY, 0f)
+        if (zoom < 1f) zoom = 1f
+        zoomPanX = 0f
+        val scale = displayScale(emulator)
+        val scaledH = contentHeightPx(emulator) * scale
+        if (scaledH <= height) {
+            zoomPanY = 0f
+        } else {
+            zoomPanY = zoomPanY.coerceIn(height - scaledH, 0f)
+        }
     }
 
     /**
@@ -770,6 +900,8 @@ class HostTerminalView(
 
     /** Pins the cursor row to the bottom of the view. The finger never moves this. */
     private fun minPanY(emulator: VtEmulator): Int {
+        // Width-fit follower pins via zoomPanY instead.
+        if (fitWidthToSharedGrid) return 0
         val contentHeight = topPad + emulator.mRows * cellHeight
         return min(0, height - contentHeight)
     }
@@ -785,10 +917,18 @@ class HostTerminalView(
     private fun cellAt(x: Float, y: Float): Pair<Int, Int>? {
         val emulator = terminal.emulator
         val placed = place(emulator)
-        val viewX = (x - zoomPanX) / zoom
-        val viewY = (y - zoomPanY) / zoom
-        val contentX = viewX - horizontalShift(emulator)
-        val contentY = viewY - placed.second
+        val scale = displayScale(emulator)
+        if (scale <= 0f) return null
+        val viewX = (x - zoomPanX) / scale
+        val viewY = (y - zoomPanY) / scale
+        val shift = if (fitWidthToSharedGrid) 0 else horizontalShift(emulator)
+        val yOff = if (fitWidthToSharedGrid) {
+            if (placed.first < 0 || offsetRows != 0) placed.second else 0
+        } else {
+            placed.second
+        }
+        val contentX = viewX - shift
+        val contentY = viewY - yOff
         val localRow = ((contentY - topPad) / cellHeight).toInt()
         if (localRow < 0 || localRow >= emulator.mRows) return null
         val col = (contentX / cellWidth).toInt()

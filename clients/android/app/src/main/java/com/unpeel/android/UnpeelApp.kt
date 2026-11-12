@@ -522,9 +522,8 @@ private fun TerminalSurface(
         }
     }
     DisposableEffect(session.id) { onDispose { controller.releasePhoneFit() } }
-    // Hidden per session. A new session shows its title again. The bar leaves
-    // the layout when it collapses, so the phone grid picks up the extra rows
-    // once the height settles. A swipe on the terminal itself stays scroll.
+    // Title bar owns layout space. Collapse grows the grid and re-fits the
+    // Host PTY so top rows are never covered — terminals put important UI there.
     var chromeVisible by remember(session.id) { mutableStateOf(true) }
     Column(Modifier.fillMaxSize()) {
         AnimatedVisibility(
@@ -532,52 +531,52 @@ private fun TerminalSurface(
             enter = expandVertically(animationSpec = tween(180)) + fadeIn(tween(180)),
             exit = shrinkVertically(animationSpec = tween(180)) + fadeOut(tween(120)),
         ) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .collapseWhenSwipedUp { chromeVisible = false }
-                .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            GlassButton(onClick = onSessions) { Text("≡", color = Foreground, fontSize = 18.sp) }
-            Column(
-                Modifier.weight(1f).padding(horizontal = 8.dp).combinedClickable(onClick = {}, onLongClick = { onSheet(HomeSheet.Organize) }),
-                horizontalAlignment = Alignment.CenterHorizontally,
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .collapseWhenSwipedUp { chromeVisible = false }
+                    .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(session.title.ifEmpty { session.command }, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                val branch = session.worktreeBranch ?: project?.gitBranch
-                if (!project?.name.isNullOrEmpty() || !branch.isNullOrEmpty()) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (!project?.name.isNullOrEmpty()) {
-                            Text(project?.name.orEmpty(), color = Color.White.copy(alpha = 0.55f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 120.dp))
-                        }
-                        if (!branch.isNullOrEmpty()) {
-                            if (!project?.name.isNullOrEmpty()) Spacer(Modifier.width(4.dp))
-                            BranchMark(11.dp, Color.White.copy(alpha = 0.55f))
-                            Spacer(Modifier.width(2.dp))
-                            Text(branch, color = Color.White.copy(alpha = 0.55f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 96.dp))
+                GlassButton(onClick = onSessions) { Text("≡", color = Foreground, fontSize = 18.sp) }
+                Column(
+                    Modifier.weight(1f).padding(horizontal = 8.dp).combinedClickable(onClick = {}, onLongClick = { onSheet(HomeSheet.Organize) }),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(session.title.ifEmpty { session.command }, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    val branch = session.worktreeBranch ?: project?.gitBranch
+                    if (!project?.name.isNullOrEmpty() || !branch.isNullOrEmpty()) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (!project?.name.isNullOrEmpty()) {
+                                Text(project?.name.orEmpty(), color = Color.White.copy(alpha = 0.55f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 120.dp))
+                            }
+                            if (!branch.isNullOrEmpty()) {
+                                if (!project?.name.isNullOrEmpty()) Spacer(Modifier.width(4.dp))
+                                BranchMark(11.dp, Color.White.copy(alpha = 0.55f))
+                                Spacer(Modifier.width(2.dp))
+                                Text(branch, color = Color.White.copy(alpha = 0.55f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 96.dp))
+                            }
                         }
                     }
                 }
-            }
-            if (AgentCatalog.isAgent(session.providerID, session.command)) {
-                val pulse by animateFloatAsState(if (controller.galleryPulse) 1.12f else 1f, label = "gallery")
-                Box(Modifier.graphicsLayer { scaleX = pulse; scaleY = pulse }) {
-                    GlassButton(onClick = {
-                        controller.loadArtifacts()
-                        onSheet(HomeSheet.Gallery)
-                    }) {
-                        Text("▣", color = if (controller.galleryPulse) Attention else Foreground, fontSize = 16.sp)
+                if (AgentCatalog.isAgent(session.providerID, session.command)) {
+                    val pulse by animateFloatAsState(if (controller.galleryPulse) 1.12f else 1f, label = "gallery")
+                    Box(Modifier.graphicsLayer { scaleX = pulse; scaleY = pulse }) {
+                        GlassButton(onClick = {
+                            controller.loadArtifacts()
+                            onSheet(HomeSheet.Gallery)
+                        }) {
+                            Text("▣", color = if (controller.galleryPulse) Attention else Foreground, fontSize = 16.sp)
+                        }
                     }
+                    Spacer(Modifier.width(8.dp))
                 }
-                Spacer(Modifier.width(8.dp))
+                val spinning = controller.snapshot?.sessions?.any { it.activity == "working" || it.activity == "starting" } == true
+                val blocked = controller.snapshot?.sessions?.any { it.activity == "blocked" } == true
+                GlassButton(onClick = { onSheet(HomeSheet.Activity) }) {
+                    if (spinning) BrailleSpinner(if (blocked) Attention else Foreground) else Text("🔔", fontSize = 14.sp)
+                }
             }
-            val spinning = controller.snapshot?.sessions?.any { it.activity == "working" || it.activity == "starting" } == true
-            val blocked = controller.snapshot?.sessions?.any { it.activity == "blocked" } == true
-            GlassButton(onClick = { onSheet(HomeSheet.Activity) }) {
-                if (spinning) BrailleSpinner(if (blocked) Attention else Foreground) else Text("🔔", fontSize = 14.sp)
-            }
-        }
         }
         TerminalGrid(
             controller,
@@ -837,13 +836,16 @@ private fun ColumnScope.TerminalGrid(
     var menuActive by remember { mutableStateOf(false) }
     var surface by remember { mutableStateOf<HostTerminalView?>(null) }
     val openSession = controller.snapshot?.sessions?.firstOrNull { it.id == controller.openSessionID }
-    val canvas = terminalCanvas(openSession?.terminalBackgroundHex)
+    // Provider theme hex wins; otherwise wash the default canvas with Host App color
+    // (same contract as iOS TerminalChrome / Mac Theme.appTinted).
+    val canvas = terminalCanvas(openSession?.terminalBackgroundHex, controller.snapshot?.hostTintHue)
     val shownTerminal = controller.terminal
     LaunchedEffect(controller.openSessionID) {
         surface?.clearSelection()
         selecting = false
         onSelectionChanged(false)
     }
+    // Chrome leaving/entering layout changes gridSize → re-fit Host PTY.
     LaunchedEffect(controller.openSessionID, gridSize, imeBottom, cellW, cellH, topPad, controller.connection) {
         if (gridSize.width < 48 || gridSize.height < 48 || cellW <= 0f || cellH <= 0f) return@LaunchedEffect
         delay(120)
@@ -857,8 +859,6 @@ private fun ColumnScope.TerminalGrid(
     Box(
         Modifier
             .weight(1f)
-            // The embedded Android view draws above Compose. Without this clip it
-            // covers the title row and that band is just the terminal color.
             .clipToBounds()
             .background(Color(canvas)),
     ) {
@@ -895,6 +895,7 @@ private fun ColumnScope.TerminalGrid(
                 )
                 shownTerminal.applyCanvas(canvas)
                 view.canvasColor = canvas
+                view.fitWidthToSharedGrid = controller.followingSharedFit
                 view.bind(shownTerminal)
                 view.onText = { controller.sendRaw(it) }
                 view.controlArmed = controlArmed
@@ -947,6 +948,20 @@ private fun ColumnScope.TerminalGrid(
                 TerminalKey("▼") { surface?.menuKey("down")?.let(controller::sendRaw) }
                 TerminalKey("esc", 11) { surface?.menuKey("escape")?.let(controller::sendRaw) }
                 TerminalKey("⏎") { surface?.menuKey("enter")?.let(controller::sendRaw) }
+            }
+        }
+        // Another phone owns the letterbox — offer a one-tap claim. Owners hide this.
+        if (controller.followingSharedFit && !selecting && !controller.sessionPreparing) {
+            TextButton(
+                onClick = controller::claimPhoneFit,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .zIndex(2f)
+                    .padding(10.dp)
+                    .background(Color(0xF01A1B1D), RoundedCornerShape(18.dp))
+                    .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(18.dp)),
+            ) {
+                Text("适配本机", color = Foreground, fontSize = 13.sp)
             }
         }
         if (controller.sessionPreparing) {
@@ -1003,9 +1018,14 @@ private fun TerminalPrepareCover(canvas: Int, modifier: Modifier = Modifier) {
     }
 }
 
-private fun terminalCanvas(hex: Int?): Int {
-    if (hex == null) return HostTerminal.CANVAS
-    return 0xFF000000.toInt() or (hex and 0xFFFFFF)
+/**
+ * Terminal surface color. A per-session [hex] from the Mac (OpenCode/Grok)
+ * wins unchanged; otherwise the default canvas is Host-tint washed so App
+ * color shows on the phone the way it does on Mac/iOS.
+ */
+private fun terminalCanvas(hex: Int?, tintHue: Double?): Int {
+    if (hex != null) return 0xFF000000.toInt() or (hex and 0xFFFFFF)
+    return hostTintedArgb(0x1A1B1D, tintHue)
 }
 
 /**
@@ -1294,6 +1314,7 @@ private fun ProjectBlock(
     val tint = folderColorArgb(project.colorID)?.let { Color(it) } ?: Muted
     val child = isInlineSidebarProject(project)
     val leading = if (child) (18 + (depth - 1).coerceAtLeast(0) * 14).dp else (7 + depth * 14).dp
+    val folderAsset = if (open) "folder-open" else "folder-closed"
     Row(
         Modifier
             .fillMaxWidth()
@@ -1305,7 +1326,7 @@ private fun ProjectBlock(
         Box(Modifier.size(if (child) 12.dp else 22.dp), contentAlignment = Alignment.Center) {
             if (child) {
                 SidebarChevron(open, tint, 12.dp)
-            } else if (!SvgIcon(if (open) "folder-open" else "folder-closed", 18.dp, tint = tint)) {
+            } else if (!SvgIcon(folderAsset, 18.dp, tint = tint)) {
                 SidebarChevron(open, tint, 12.dp)
             }
             if (attention) {
@@ -2328,10 +2349,42 @@ private fun ExternalArrow(tint: Color) {
     }
 }
 
-private fun hostChrome(hue: Double?): Color {
-    if (hue == null || hue.isNaN()) return Frame
-    val wrapped = ((hue % 360.0) + 360.0) % 360.0
-    return Color.hsl(wrapped.toFloat(), 0.18f, 0.10f)
+/** Near-black frame behind the terminal — Mac/iOS `0x121314`, Host-tint washed. */
+private fun hostChrome(hue: Double?): Color = Color(hostTintedArgb(0x121314, hue))
+
+/**
+ * Mac `Theme.appTinted` / iOS `TerminalChrome.hostTinted`: keep the base
+ * brightness, push hue to the workspace App color with a brightness-scaled
+ * saturation wash. Nil hue returns the neutral hex untouched.
+ */
+private fun hostTintedArgb(rgb: Int, tintHue: Double?): Int {
+    val base = rgb and 0xFFFFFF
+    if (tintHue == null || tintHue.isNaN()) return 0xFF000000.toInt() or base
+    val red = ((base shr 16) and 0xFF) / 255.0
+    val green = ((base shr 8) and 0xFF) / 255.0
+    val blue = (base and 0xFF) / 255.0
+    val brightness = maxOf(red, green, blue)
+    val delta = brightness - minOf(red, green, blue)
+    val saturation = if (brightness == 0.0) 0.0 else delta / brightness
+    val wash = maxOf(saturation, minOf(0.5, 0.615 - 0.59 * brightness))
+    var hueUnit = (tintHue / 360.0)
+    hueUnit -= kotlin.math.floor(hueUnit)
+    val h = hueUnit * 6.0
+    val sector = kotlin.math.floor(h)
+    val f = h - sector
+    val p = brightness * (1.0 - wash)
+    val q = brightness * (1.0 - wash * f)
+    val t = brightness * (1.0 - wash * (1.0 - f))
+    val (r, g, b) = when (sector.toInt() % 6) {
+        0 -> Triple(brightness, t, p)
+        1 -> Triple(q, brightness, p)
+        2 -> Triple(p, brightness, t)
+        3 -> Triple(p, q, brightness)
+        4 -> Triple(t, p, brightness)
+        else -> Triple(brightness, p, q)
+    }
+    fun channel(v: Double): Int = (v * 255.0).toInt().coerceIn(0, 255)
+    return 0xFF000000.toInt() or (channel(r) shl 16) or (channel(g) shl 8) or channel(b)
 }
 
 private fun canPasteArtifact(kind: String, name: String): Boolean {
