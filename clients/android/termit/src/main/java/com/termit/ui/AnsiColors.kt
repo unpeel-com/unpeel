@@ -49,9 +49,10 @@ object AnsiColors {
             palette[bright]
         }
         if (!dim) return argb
-        val r = (argb shr 16) and 0xff
-        val g = (argb shr 8) and 0xff
-        val b = argb and 0xff
-        return 0xff000000.toInt() or ((r / 2) shl 16) or ((g / 2) shl 8) or (b / 2)
+        // xterm / libvte dim: each channel * 2/3
+        val r = ((argb shr 16) and 0xff) * 2 / 3
+        val g = ((argb shr 8) and 0xff) * 2 / 3
+        val b = (argb and 0xff) * 2 / 3
+        return 0xff000000.toInt() or (r shl 16) or (g shl 8) or b
     }
 }

@@ -2,6 +2,7 @@ package com.termit.ui
 
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.Rect
 import android.graphics.Typeface
 import com.termit.vt.Cell
 import com.termit.vt.CellStyle
@@ -9,7 +10,9 @@ import com.termit.vt.VtEmulator
 
 /**
  * Renders a [VtEmulator] grid into a [Canvas].
- * Row baselines match Termux TerminalRenderer (first baseline = ascentPad + lineSpacing).
+ * Geometry matches Termux [TerminalRenderer]: row cursor `y` grows by
+ * lineSpacing each row; glyph baseline is `y - fontLineSpacingAndAscent`;
+ * non-default backgrounds fill `y - lineSpacing .. y`.
  */
 class TerminalRenderer(
     textSize: Int,
@@ -19,10 +22,13 @@ class TerminalRenderer(
         this.typeface = typeface
         this.textSize = textSize.toFloat()
     }
-    private val bgPaint = Paint()
-    private val cursorPaint = Paint().apply {
-        style = Paint.Style.FILL
+    private val fallbackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        this.typeface = Typeface.DEFAULT
+        this.textSize = textSize.toFloat()
     }
+    private val bgPaint = Paint()
+    private val cursorPaint = Paint().apply { style = Paint.Style.FILL }
+    private val inkBounds = Rect()
 
     val fontWidth: Float = textPaint.measureText("X").coerceAtLeast(1f)
     val fontLineSpacing: Int = kotlin.math.ceil(textPaint.fontSpacing.toDouble()).toInt().coerceAtLeast(1)
@@ -42,7 +48,6 @@ class TerminalRenderer(
         val cols = emulator.mColumns
         val rows = emulator.mRows
         val palette = emulator.colors
-        // Termux: heightOffset starts at ascentPad, then += lineSpacing before each row.
         var y = fontLineSpacingAndAscent.toFloat()
         for (r in 0 until rows) {
             y += fontLineSpacing
@@ -62,16 +67,14 @@ class TerminalRenderer(
                 drawRun(canvas, cell, palette, c, y, widthCells, selected)
                 c += widthCells
             }
-            if (cursorVisible && row == emulator.cursorRow) {
+            if (cursorVisible && row == emulator.cursorRow && emulator.cursorCol in 0 until cols) {
                 cursorPaint.color = AnsiColors.resolve(AnsiColors.INDEX_CURSOR, palette)
                 val left = emulator.cursorCol * fontWidth
-                val top = y - fontLineSpacingAndAscent
-                canvas.drawRect(left, top, left + fontWidth, top + fontLineSpacing, cursorPaint)
-                if (emulator.cursorCol in 0 until cols) {
-                    val cell = emulator.screen.cellAtTranscript(row, emulator.cursorCol)
-                    if (cell.char != '\u0000') {
-                        drawRun(canvas, cell, palette, emulator.cursorCol, y, 1, selected = false, forceFg = true)
-                    }
+                val cursorHeight = (fontLineSpacingAndAscent - fontAscent).toFloat()
+                canvas.drawRect(left, y - cursorHeight, left + fontWidth, y, cursorPaint)
+                val cell = emulator.screen.cellAtTranscript(row, emulator.cursorCol)
+                if (cell.char != '\u0000') {
+                    drawRun(canvas, cell, palette, emulator.cursorCol, y, 1, selected = false, forceFg = true)
                 }
             }
         }
@@ -82,13 +85,13 @@ class TerminalRenderer(
         cell: Cell,
         palette: IntArray,
         column: Int,
-        baselineY: Float,
+        y: Float,
         widthCells: Int,
         selected: Boolean,
         forceFg: Boolean = false,
     ) {
         var fg = AnsiColors.resolve(cell.fg, palette, bold = cell.bold, dim = cell.dim)
-        var bg = AnsiColors.resolve(cell.bg, palette, bold = false, dim = false)
+        var bg = AnsiColors.resolve(cell.bg, palette)
         if (cell.inverse) {
             val tmp = fg
             fg = bg
@@ -98,29 +101,44 @@ class TerminalRenderer(
             bg = 0xFF3A5F8A.toInt()
             fg = 0xFFFFFFFF.toInt()
         }
+
         val left = column * fontWidth
-        val top = baselineY - fontLineSpacingAndAscent
         val right = left + fontWidth * widthCells
-        // Default background: skip fill so the view's canvasColor shows through
-        // (matches Termux painting default bg from the palette that Host sets to CANVAS).
-        val isDefaultBg = !selected && !cell.inverse && cell.bg == CellStyle.DEFAULT_BG
-        if (!isDefaultBg) {
+        val defaultBg = AnsiColors.resolve(AnsiColors.INDEX_BG, palette)
+        if (selected || cell.inverse || bg != defaultBg) {
+            // Termux: only non-default backgrounds; rect is [y - lineSpacing, y].
             bgPaint.color = bg
-            canvas.drawRect(left, top, right, top + fontLineSpacing, bgPaint)
+            canvas.drawRect(left, y - fontLineSpacing, right, y, bgPaint)
         }
+
         val ch = cell.char
-        if (forceFg || (ch != ' ' && ch != '\u0000')) {
-            textPaint.color = fg
-            textPaint.isFakeBoldText = cell.bold
-            textPaint.isUnderlineText = cell.underline
-            val expected = fontWidth * widthCells
-            val measured = textPaint.measureText(ch.toString())
-            canvas.save()
-            if (measured > expected + 0.5f) {
-                canvas.scale(expected / measured, 1f, left, baselineY)
+        if (!forceFg && (ch == ' ' || ch == '\u0000')) return
+
+        textPaint.color = fg
+        textPaint.isFakeBoldText = cell.bold
+        textPaint.isUnderlineText = cell.underline
+        val paint = textPaint
+        val glyph = ch.toString()
+        paint.getTextBounds(glyph, 0, glyph.length, inkBounds)
+        val inkWidth = (inkBounds.right - inkBounds.left).toFloat().coerceAtLeast(1f)
+        val cellW = right - left
+        var drawX = left
+        val textY = y - fontLineSpacingAndAscent
+        var saved = false
+        if (inkWidth > 1f && (inkBounds.left < -0.5f || inkBounds.right > cellW + 0.5f)) {
+            val scale = minOf(1f, cellW / inkWidth)
+            drawX = left + (cellW - inkBounds.left - inkBounds.right) * 0.5f
+            if (scale < 0.999f) {
+                val cx = left + cellW * 0.5f
+                val cy = y - fontLineSpacing * 0.5f
+                canvas.save()
+                canvas.translate(cx, cy)
+                canvas.scale(scale, scale)
+                canvas.translate(-cx, -cy)
+                saved = true
             }
-            canvas.drawText(ch.toString(), left, baselineY, textPaint)
-            canvas.restore()
         }
+        canvas.drawText(glyph, drawX, textY, paint)
+        if (saved) canvas.restore()
     }
 }
