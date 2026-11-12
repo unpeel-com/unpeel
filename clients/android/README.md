@@ -19,3 +19,7 @@ clients/android/gradlew -p clients/android :protocol:test :app:assembleDebug
 Debug APK: `clients/android/app/build/outputs/apk/debug/app-debug.apk`.
 If a user-level Gradle init script redirects Maven to an unreachable mirror,
 run that command with a clean `GRADLE_USER_HOME`.
+
+CI (Actions → **Android APK**) builds the same debug APK and attaches it as a
+workflow artifact — no GitHub Release is created. Trigger with
+`workflow_dispatch`, or push to `android/termit` under `clients/android/`.
