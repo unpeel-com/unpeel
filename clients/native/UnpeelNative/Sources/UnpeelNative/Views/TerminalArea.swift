@@ -612,7 +612,7 @@ struct RestartRecommendedBar: View {
             }
             .buttonStyle(.plain)
             .onHover { dismissHovering = $0 }
-            .accessibilityLabel("Dismiss recommendation")
+            .accessibilityLabel(L10n.t("Dismiss recommendation"))
         }
         .padding(.horizontal, 12)
         .frame(height: 36)
@@ -641,11 +641,11 @@ struct ResumeFailedBar: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Text("Couldn't resume the conversation")
+            Text(L10n.t("Couldn't resume the conversation"))
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(Theme.foreground)
                 .lineLimit(1)
-            Text("Its history no longer exists on disk, so the agent can only start over.")
+            Text(L10n.t("Its history no longer exists on disk, so the agent can only start over."))
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.mutedForeground)
                 .lineLimit(1)
@@ -655,7 +655,7 @@ struct ResumeFailedBar: View {
                 HStack(spacing: 5) {
                     Image(systemName: "plus.circle")
                         .font(.system(size: 10, weight: .semibold))
-                    Text("Start fresh")
+                    Text(L10n.t("Start fresh"))
                         .font(.system(size: 11, weight: .semibold))
                 }
                 .foregroundStyle(Theme.foreground)
@@ -672,7 +672,7 @@ struct ResumeFailedBar: View {
             }
             .buttonStyle(.plain)
             .onHover { freshHovering = $0 }
-            .accessibilityLabel("Start a fresh session")
+            .accessibilityLabel(L10n.t("Start a fresh session"))
 
             Button(action: onDismiss) {
                 Image(systemName: "xmark")
@@ -687,7 +687,7 @@ struct ResumeFailedBar: View {
             }
             .buttonStyle(.plain)
             .onHover { dismissHovering = $0 }
-            .accessibilityLabel("Dismiss resume failure notice")
+            .accessibilityLabel(L10n.t("Dismiss resume failure notice"))
         }
         .padding(.horizontal, 12)
         .frame(height: 36)
@@ -1146,7 +1146,7 @@ struct TerminalScrollToBottomButton: View {
             .allowsHitTesting(model.visible)
             .animation(.easeOut(duration: 0.2), value: model.visible)
             .padding(8)
-            .accessibilityLabel("Scroll to bottom")
+            .accessibilityLabel(L10n.t("Scroll to bottom"))
     }
 
     @ViewBuilder
@@ -1187,10 +1187,10 @@ struct EmptyStateView: View {
         VStack(spacing: 16) {
             PixelMascotView(size: 56)
             VStack(spacing: 8) {
-                Text("No session selected")
+                Text(L10n.t("No session selected"))
                     .font(.system(size: 14))
                     .foregroundStyle(Theme.mutedForeground)
-                Text("Pick a session in the sidebar, or hit + on a project")
+                Text(L10n.t("Pick a session in the sidebar, or hit + on a project"))
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.foreground.opacity(0.35))
             }
@@ -1416,7 +1416,7 @@ struct DeadSessionView: View {
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(Theme.foreground)
                 .lineLimit(1)
-            Text("Session exited")
+            Text(L10n.t("Session exited"))
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.mutedForeground)
             // GlassButton under the label (App.svelte:1524-1528).
@@ -1439,10 +1439,10 @@ struct DeadSessionView: View {
                 HStack(spacing: 6) {
                     BrailleSpinner(color: Theme.toolSpinnerColor(forCommand: session.command))
                         .frame(width: 14, height: 14)
-                    Text("Resuming")
+                    Text(L10n.t("Resuming"))
                 }
             } else {
-                Text("Resume")
+                Text(L10n.t("Resume"))
             }
         }
         .disabled(isRestarting)

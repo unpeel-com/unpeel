@@ -277,6 +277,6 @@ private struct LauncherRow: View {
             hovering = $0
             hoverChanged($0)
         }
-        .help("Start \(preset.label)")
+        .help(L10n.format("Start %@", preset.label))
     }
 }

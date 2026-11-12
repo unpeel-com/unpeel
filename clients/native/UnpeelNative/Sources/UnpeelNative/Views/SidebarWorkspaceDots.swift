@@ -459,7 +459,7 @@ private struct WorkspaceDot: View {
             hoverChanged(inside)
         }
         .help(tooltip)
-        .accessibilityLabel("Switch to workspace \(name)")
+        .accessibilityLabel(L10n.format("Switch to workspace %@", name))
         .animation(.easeInOut(duration: 0.12), value: hovering)
     }
 }
@@ -1762,7 +1762,7 @@ private struct SidebarPooledListBody: View {
             VStack(alignment: .leading, spacing: 0) {
                 if let content {
                     if content.groups.isEmpty {
-                        Text("No projects yet")
+                        Text(L10n.t("No projects yet"))
                             .font(Theme.rowLabelFont)
                             .foregroundStyle(Theme.mutedForeground)
                             .padding(EdgeInsets(

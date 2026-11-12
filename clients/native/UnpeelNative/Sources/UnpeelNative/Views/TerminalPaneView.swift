@@ -1350,13 +1350,13 @@ struct TerminalPaneContainer: View {
             paneHeader(
                 pane: pane,
                 entry: nil,
-                title: "Session unavailable",
+                title: L10n.t("Session unavailable"),
                 background: background
             )
             ZStack {
                 Color(nsColor: background)
                     .opacity(transparency.surfaceOpacity)
-                Text("Session unavailable")
+                Text(L10n.t("Session unavailable"))
                     .font(Theme.sessionLabelFont)
                     .foregroundStyle(Theme.mutedForeground)
             }
@@ -1770,7 +1770,7 @@ struct TerminalPaneContainer: View {
         }
         .frame(width: 26, height: Theme.sessionRowHeight)
         .contentShape(Rectangle())
-        .help("More")
+        .help(L10n.t("More"))
     }
 
     /// Native menu twin of the former SwiftUI `Menu`. SwiftUI always anchors
@@ -2098,7 +2098,7 @@ private struct PaneMoreMenuButton<Label: View>: View {
         .buttonStyle(.plain)
         .compatFocusEffectDisabled()
         .background(PaneMoreMenuAnchor(controller: controller))
-        .accessibilityLabel("More")
+        .accessibilityLabel(L10n.t("More"))
     }
 }
 
@@ -2225,7 +2225,7 @@ struct PaneFitToDesktopButton: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .animation(.easeInOut(duration: 0.12), value: hovering)
-        .help("Terminal fitted to another device (\(grid.cols)×\(grid.rows)) — fit to desktop")
-        .accessibilityLabel("Fit to desktop")
+        .help(L10n.format("Terminal fitted to another device (%ld×%ld) — fit to desktop", grid.cols, grid.rows))
+        .accessibilityLabel(L10n.t("Fit to desktop"))
     }
 }

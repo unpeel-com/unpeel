@@ -203,7 +203,7 @@ struct CommandPaletteOverlay: View {
 
     private func palette(listMaxHeight: CGFloat) -> some View {
         VStack(spacing: 0) {
-            TextField("Search sessions, projects, commands…", text: $query)
+            TextField(L10n.t("Search sessions, projects, commands…"), text: $query)
                 .textFieldStyle(.plain)
                 .font(.system(size: 16))
                 .focused($searchFocused)
@@ -216,7 +216,7 @@ struct CommandPaletteOverlay: View {
             Divider()
 
             if results.isEmpty {
-                Text("No matches")
+                Text(L10n.t("No matches"))
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.mutedForeground)
                     .frame(maxWidth: .infinity)
@@ -443,7 +443,7 @@ struct CommandPaletteOverlay: View {
         PaletteItem(
             id: "command:all-sessions",
             kind: .command,
-            title: "All sessions",
+            title: L10n.t("All sessions"),
             subtitle: "⇧⌘R",
             keywords: "recent activity history",
             action: { store.openRecentActivity() }
@@ -484,8 +484,8 @@ struct CommandPaletteOverlay: View {
                 items.append(PaletteItem(
                     id: "preset:\(preset.id)",
                     kind: .launch,
-                    title: "New session: \(preset.label)",
-                    subtitle: "in \(projectName)",
+                    title: L10n.format("New session: %@", preset.label),
+                    subtitle: L10n.format("in %@", projectName),
                     keywords: preset.command,
                     iconCommand: preset.command,
                     action: { [preset] in
@@ -500,7 +500,7 @@ struct CommandPaletteOverlay: View {
             // ⌘T new terminal is a local-host launch too.
             items.append(PaletteItem(
                 id: "command:new-terminal", kind: .command,
-                title: "New Terminal", subtitle: "⌘T", keywords: "shell blank",
+                title: L10n.t("New Terminal"), subtitle: "⌘T", keywords: "shell blank",
                 action: { store.launchDefaultTerminal() }
             ))
         }
@@ -508,12 +508,12 @@ struct CommandPaletteOverlay: View {
         // App commands that work in every scope.
         items.append(PaletteItem(
             id: "command:toggle-sidebar", kind: .command,
-            title: "Toggle Sidebar", subtitle: "⌘B", keywords: "hide show",
+            title: L10n.t("Toggle Sidebar"), subtitle: "⌘B", keywords: "hide show",
             action: { store.sidebarCollapsed.toggle() }
         ))
         items.append(PaletteItem(
             id: "command:settings", kind: .command,
-            title: "Settings", subtitle: "⌘,", keywords: "preferences",
+            title: L10n.t("Settings"), subtitle: "⌘,", keywords: "preferences",
             action: { store.openSettings(tab: nil) }
         ))
         return items
@@ -539,9 +539,9 @@ struct CommandPaletteOverlay: View {
         }
         // Top tiers mirror the Recent-activity dropdown: blocked leads
         // (actionable), then working (any workspace), then unread-finished.
-        tier("Blocked", globalBlockedItems)
-        tier("Active", globalActiveItems)
-        tier("Done", globalDoneItems)
+        tier(L10n.t("Blocked"), globalBlockedItems)
+        tier(L10n.t("Active"), globalActiveItems)
+        tier(L10n.t("Done"), globalDoneItems)
         // The current scope's idle recents stay close to home. Sessions the
         // activity tiers already show (a working/blocked/unread row of this
         // workspace) are excluded so they never appear twice.
@@ -760,7 +760,7 @@ struct SessionSwitcherOverlay: View {
                     }
                 }
 
-                Text("⌃Tab cycle · release ⌃ to switch · esc cancel")
+                Text(L10n.t("⌃Tab cycle · release ⌃ to switch · esc cancel"))
                     .font(.system(size: 10))
                     .foregroundStyle(Theme.mutedForeground)
                     .opacity(0.8)

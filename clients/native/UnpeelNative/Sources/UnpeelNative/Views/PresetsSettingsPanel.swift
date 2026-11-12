@@ -13,7 +13,7 @@ struct EditorButton: View {
 
     var body: some View {
         styled(
-            Button(title, role: variant == .danger ? .destructive : nil, action: action)
+            Button(L10n.t(title), role: variant == .danger ? .destructive : nil, action: action)
         )
         .controlSize(size == .small ? .small : .regular)
         .disabled(disabled)

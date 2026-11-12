@@ -2188,7 +2188,7 @@ struct ProjectRowView: View {
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture { onToggle() }
-        .help("Drag anywhere on the row to reorder")
+        .help(L10n.t("Drag anywhere on the row to reorder"))
         // Project context menu (openProjectMenu, ProjectItem.svelte:818-941).
         // Order: New session · [Rename…] · [Folder color] · [Sort] · [New worktree…] ·
         // [New group…] · [Move to ▸ Workspace] · [Stop all] ·
@@ -2565,7 +2565,7 @@ struct QuickPresetStrip: View {
                 )
         )
         .background(HoverReporter { plusHovering = $0 })
-        .help("New session")
+        .help(L10n.t("New session"))
     }
 }
 
@@ -2694,7 +2694,7 @@ private struct QuickPresetButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .help("Start \(preset.label)")
+        .help(L10n.format("Start %@", preset.label))
     }
 }
 
@@ -2728,7 +2728,7 @@ private struct QuickPresetMenuChip: View {
                 .fill(hovering ? Theme.hoverRow : .clear)
         )
         .background(HoverReporter { hovering = $0 })
-        .help("Start \(group.displayName)…")
+        .help(L10n.format("Start %@…", group.displayName))
     }
 }
 
@@ -3403,8 +3403,8 @@ struct SessionRowView: View {
 
     private var inlineResumeHelp: String {
         switch resumePresentation {
-        case .resumeAgent: return "Resume agent in this terminal"
-        default: return "Resume session (continues the conversation)"
+        case .resumeAgent: return L10n.t("Resume agent in this terminal")
+        default: return L10n.t("Resume session (continues the conversation)")
         }
     }
 
@@ -3520,7 +3520,7 @@ private struct RemoveActionButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .help("Remove session")
+        .help(L10n.t("Remove session"))
     }
 }
 
@@ -3528,7 +3528,7 @@ private struct RemoveActionButton: View {
 /// Phosphor "arrow-clockwise" glyph, muted →
 /// foreground + fg-10% bg on hover (same treatment as StopActionButton).
 private struct RestartActionButton: View {
-    var help = "Resume session (continues the conversation)"
+    var help = L10n.t("Resume session (continues the conversation)")
     let action: () -> Void
 
     @State private var hovering = false
@@ -3638,7 +3638,7 @@ private struct SessionCommandIconStack: View {
                     )
                 }
                 .buttonStyle(.plain)
-                .help(item.isRepresentative ? "Focus representative pane" : "Focus pane")
+                .help(item.isRepresentative ? L10n.t("Focus representative pane") : L10n.t("Focus pane"))
                 .transition(
                     .asymmetric(
                         insertion: .identity,
@@ -3657,7 +3657,7 @@ private struct SessionCommandIconStack: View {
         .opacity(0.9)
         .frame(height: 20)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Multi-pane view with \(items.count) sessions")
+        .accessibilityLabel(L10n.format("Multi-pane view with %ld sessions", items.count))
     }
 }
 

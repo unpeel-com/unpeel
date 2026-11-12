@@ -694,7 +694,7 @@ struct TitlebarNewSessionMenu: View {
         )
         .background(HoverReporter { hovering = $0 })
         .animation(.easeInOut(duration: 0.12), value: hovering)
-        .help("New session")
+        .help(L10n.t("New session"))
     }
 }
 
@@ -1046,7 +1046,7 @@ private struct TitlebarActivityMenuRow: View {
                         .truncationMode(.tail)
                     Group {
                         if let alertBody, !alertBody.isEmpty {
-                            Text("Alert · \(alertBody)")
+                            Text(L10n.format("Alert · %@", alertBody))
                                 .foregroundStyle(Theme.mutedForeground)
                                 .truncationMode(.tail)
                         } else {
@@ -1071,18 +1071,18 @@ private struct TitlebarActivityMenuRow: View {
 
                 // Trailing: CLI logo while working or finished, else status.
                 if blocked {
-                    Text("Blocked")
+                    Text(L10n.t("Blocked"))
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(Theme.attention)
                 } else if unread, alertBody != nil {
-                    Text("Alert")
+                    Text(L10n.t("Alert"))
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(Theme.unread)
                 } else if working || unread {
                     ToolIconView(command: command, size: 16)
                         .frame(width: 16, height: 16)
                 } else if status == "Starting" || status == "Restarting" || status == "Resuming" {
-                    Text(status)
+                    Text(L10n.t(status))
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.mutedForeground)
                 }

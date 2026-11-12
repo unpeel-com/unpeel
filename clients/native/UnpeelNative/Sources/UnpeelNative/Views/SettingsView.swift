@@ -3622,7 +3622,7 @@ struct ShareWorkspaceSheet: View {
                         .font(.system(size: 34))
                         .foregroundStyle(.green)
                     VStack(alignment: .leading, spacing: 5) {
-                        Text("\(pairedDeviceName) paired with \(workspaceName)")
+                        Text(L10n.format("%@ paired with %@", pairedDeviceName, workspaceName))
                             .font(.system(size: 13, weight: .semibold))
                         Text(L10n.t("The displayed one-time code has been consumed."))
                             .font(.system(size: 12))

@@ -51,8 +51,8 @@ struct SessionGalleryButton: View {
             }
             .buttonStyle(.plain)
             .onHover { hovering = $0 }
-            .help("Session gallery")
-            .accessibilityLabel("Session gallery")
+            .help(L10n.t("Session gallery"))
+            .accessibilityLabel(L10n.t("Session gallery"))
             .popover(isPresented: $showingGallery, arrowEdge: .bottom) {
                 SessionGalleryPanel(
                     sessionID: sessionID,
@@ -88,8 +88,8 @@ struct SessionGalleryButton: View {
             .buttonStyle(.plain)
             .background(SessionScreenshotMenuAnchor(controller: screenshotMenu))
             .onHover { chevronHovering = $0 }
-            .help("Take screenshot")
-            .accessibilityLabel("Take screenshot")
+            .help(L10n.t("Take screenshot"))
+            .accessibilityLabel(L10n.t("Take screenshot"))
         }
         .frame(height: ghost ? 22 : 26)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -252,7 +252,7 @@ struct SessionGalleryPanel: View {
     private var gallery: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Session gallery")
+                Text(L10n.t("Session gallery"))
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Theme.foreground)
                 Spacer()
@@ -290,10 +290,10 @@ struct SessionGalleryPanel: View {
             Image(systemName: "photo.on.rectangle")
                 .font(.system(size: 28, weight: .light))
                 .foregroundStyle(Theme.mutedForeground)
-            Text("No images yet")
+            Text(L10n.t("No images yet"))
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(Theme.mutedForeground)
-            Text("Screenshots the agent's browser and computer tools capture — and images added from your phone — show up here.")
+            Text(L10n.t("Screenshots the agent's browser and computer tools capture — and images added from your phone — show up here."))
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.foreground.opacity(0.4))
                 .multilineTextAlignment(.center)
@@ -317,7 +317,7 @@ struct SessionGalleryPanel: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Back to gallery")
+                .accessibilityLabel(L10n.t("Back to gallery"))
                 Text(artifact.name)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(Theme.foreground)
@@ -407,9 +407,9 @@ struct SessionGalleryPanel: View {
                                 .contentShape(Circle())
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("Arrow color")
+                        .accessibilityLabel(L10n.t("Arrow color"))
                     }
-                    Text("Drag on the image to draw")
+                    Text(L10n.t("Drag on the image to draw"))
                         .font(.system(size: 10.5))
                         .foregroundStyle(Theme.mutedForeground)
                         .lineLimit(1)
@@ -423,7 +423,7 @@ struct SessionGalleryPanel: View {
                 }
             } else if cropMode {
                 HStack(spacing: 8) {
-                    Text("Drag on the image to select the crop")
+                    Text(L10n.t("Drag on the image to select the crop"))
                         .font(.system(size: 10.5))
                         .foregroundStyle(Theme.mutedForeground)
                         .lineLimit(1)
@@ -452,7 +452,7 @@ struct SessionGalleryPanel: View {
                     }
                     Spacer(minLength: 0)
                     if hasEdits {
-                        Text("Add to prompt attaches the annotated copy")
+                        Text(L10n.t("Add to prompt attaches the annotated copy"))
                             .font(.system(size: 10.5))
                             .foregroundStyle(Theme.mutedForeground)
                             .lineLimit(1)
@@ -747,7 +747,7 @@ private struct GalleryActionButton: View {
             HStack(spacing: 5) {
                 Image(systemName: systemImage)
                     .font(.system(size: 10, weight: .semibold))
-                Text(title)
+                Text(L10n.t(title))
                     .font(.system(size: 11, weight: .semibold))
             }
             .foregroundStyle(destructive ? Color.red.opacity(0.9) : Theme.foreground)
