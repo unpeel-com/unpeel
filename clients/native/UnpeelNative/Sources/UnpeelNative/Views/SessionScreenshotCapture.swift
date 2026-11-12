@@ -33,9 +33,9 @@ enum SessionScreenshotCapture {
 
         var title: String {
             switch self {
-            case .area: return "Capture area"
-            case .window: return "Capture window"
-            case .screen: return "Capture full screen"
+            case .area: return L10n.t("Capture area")
+            case .window: return L10n.t("Capture window")
+            case .screen: return L10n.t("Capture full screen")
             }
         }
 

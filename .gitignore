@@ -38,6 +38,10 @@ clients/native/tools/ht
 
 # Swift/Xcode build outputs (clients/native, clients/ios, clients/shared)
 clients/*/*/.build
+
+# Compiled from Localizable.xcstrings by clients/native/sync-localizations.sh.
+# xcstringstool writes a binary plist whose bytes change on every run.
+clients/native/UnpeelNative/Sources/UnpeelNative/Resources/zh-Hans.lproj/
 clients/*/*/.derived
 clients/*/*/.swiftpm
 clients/ios/UnpeelIOS/.deriveddata

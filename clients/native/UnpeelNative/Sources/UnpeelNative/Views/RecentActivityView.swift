@@ -47,7 +47,7 @@ struct RecentActivityView: View {
         Group {
             let jobs = store.activeJobSessions
             if !jobs.isEmpty {
-                sectionLabel("Active")
+                sectionLabel(L10n.t("Active"))
                 ForEach(jobs) { session in
                     RecentActivityRow(
                         title: cardTitle(session.label),
@@ -133,10 +133,10 @@ struct RecentActivityView: View {
             Image(systemName: "bell")
                 .font(.system(size: 30, weight: .medium))
                 .foregroundStyle(Theme.mutedForeground.opacity(0.7))
-            Text("No recent activity")
+            Text(L10n.t("No recent activity"))
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(Theme.foreground)
-            Text("Session starts, finishes, input requests, and App alerts will appear here.")
+            Text(L10n.t("Session starts, finishes, input requests, and App alerts will appear here."))
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.mutedForeground)
         }
@@ -145,7 +145,7 @@ struct RecentActivityView: View {
     }
 
     private func sectionLabel(_ text: String) -> some View {
-        Text(text)
+        Text(L10n.t(text))
             .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(Theme.mutedForeground)
             .padding(.horizontal, 10)
@@ -155,7 +155,10 @@ struct RecentActivityView: View {
 
     private func cardTitle(_ raw: String) -> String {
         let title = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        return title.isEmpty ? "Untitled session" : title
+        if title.isEmpty || title == "Untitled session" {
+            return L10n.t("Untitled session")
+        }
+        return title
     }
 
     // MARK: - Grouping / formatting
@@ -199,14 +202,14 @@ struct RecentActivityView: View {
         age: String,
         done: Bool = false
     ) -> String {
-        let when = age == "now" ? "just now" : "\(age) ago"
+        let when = age == "now" ? L10n.t("just now") : L10n.format("%@ ago", age)
         switch kind {
-        case .started: return "Started \(when)"
-        case .needsInput: return "Needed input \(when)"
-        case .finished: return done ? "Done \(when)" : "Finished \(when)"
-        case .exited: return "Exited \(when)"
+        case .started: return L10n.format("Started %@", when)
+        case .needsInput: return L10n.format("Needed input %@", when)
+        case .finished: return done ? L10n.format("Done %@", when) : L10n.format("Finished %@", when)
+        case .exited: return L10n.format("Exited %@", when)
         case .alert:
-            return message.map { "\($0) · \(when)" } ?? "Alerted \(when)"
+            return message.map { L10n.format("%@ · %@", $0, when) } ?? L10n.format("Alerted %@", when)
         }
     }
 
@@ -271,7 +274,7 @@ private struct RecentActivityRow: View {
                         .foregroundStyle(Theme.mutedForeground)
                         .lineLimit(1)
                 }
-                Text(event)
+                Text(L10n.t(event))
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.mutedForeground)
                     .lineLimit(1)

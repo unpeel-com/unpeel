@@ -102,7 +102,10 @@ struct WorkspaceActivityMenuSlice: Equatable {
         let title = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if !title.isEmpty { return title }
         let fallback = fallback.trimmingCharacters(in: .whitespacesAndNewlines)
-        return fallback.isEmpty ? "Untitled session" : fallback
+        if fallback.isEmpty || fallback == "Untitled session" {
+            return L10n.t("Untitled session")
+        }
+        return fallback
     }
 
     private static func statusLabel(_ session: RemoteSessionSummary) -> String {

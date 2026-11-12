@@ -153,7 +153,7 @@ struct ProjectSidebarView: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .help("Cancel")
+                    .help(L10n.t("Cancel"))
                 }
             }
             .padding(.horizontal, 8)

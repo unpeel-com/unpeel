@@ -12,6 +12,7 @@ import SwiftUI
 /// feature gate is still `sessionsMcp`; nothing here drives a restart.
 struct SessionsAccessSections: View {
     @ObservedObject var store: UnpeelStore
+    @ObservedObject private var localization = LocalizationStore.shared
 
     var body: some View {
         Group {
@@ -28,19 +29,21 @@ struct SessionsAccessSections: View {
     /// another session goes through the policy below.
     private var accessModelSection: some View {
         Section {
-            Text("Every session can read every other session. Writing to another session "
-                + "follows the setting below — by default Unpeel asks you the first time and "
-                + "remembers your answer per pair. Sidebar groups are organizational only, "
-                + "and agents never create or close sessions unless you right-click one and "
-                + "set its Agent access to Create & remove.")
+            Text(L10n.t(
+                "Every session can read every other session. Writing to another session "
+                    + "follows the setting below — by default Unpeel asks you the first time and "
+                    + "remembers your answer per pair. Sidebar groups are organizational only, "
+                    + "and agents never create or close sessions unless you right-click one and "
+                    + "set its Agent access to Create & remove."))
                 .font(.system(size: 13))
                 .foregroundStyle(Theme.mutedForeground)
                 .fixedSize(horizontal: false, vertical: true)
         } header: {
             SettingsSectionHeader(
-                title: "Sessions",
-                description: "How agent sessions can see and control each other. Reads are open; "
-                    + "writes follow the policy below."
+                title: L10n.t("Sessions"),
+                description: L10n.t(
+                    "How agent sessions can see and control each other. Reads are open; "
+                        + "writes follow the policy below.")
             )
         }
     }
@@ -68,12 +71,13 @@ struct SessionsAccessSections: View {
                     .controlSize(.small)
                 } label: {
                     VStack(alignment: .leading, spacing: 1) {
-                        Text("Let sessions create worktrees")
+                        Text(L10n.t("Let sessions create worktrees"))
                             .font(.system(size: 13))
                             .foregroundStyle(Theme.foreground)
-                        Text("Agents can prepare isolated git worktrees as child projects "
-                            + "in the sidebar. Launching sessions into them is still up to "
-                            + "you. Applies immediately.")
+                        Text(L10n.t(
+                            "Agents can prepare isolated git worktrees as child projects "
+                                + "in the sidebar. Launching sessions into them is still up to "
+                                + "you. Applies immediately."))
                             .font(.system(size: 11))
                             .foregroundStyle(Theme.mutedForeground)
                             .fixedSize(horizontal: false, vertical: true)
@@ -102,7 +106,7 @@ struct SessionsAccessSections: View {
                 .fixedSize()
             } label: {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Writing to other sessions")
+                    Text(L10n.t("Writing to other sessions"))
                         .font(.system(size: 13))
                         .foregroundStyle(Theme.foreground)
                     Text(store.mcpNonChildWriteAccess.detail)
@@ -113,8 +117,8 @@ struct SessionsAccessSections: View {
             }
         } header: {
             SettingsSectionHeader(
-                title: "Write access",
-                description: "What happens when a session writes to another session."
+                title: L10n.t("Write access"),
+                description: L10n.t("What happens when a session writes to another session.")
             )
         }
     }
@@ -138,14 +142,15 @@ struct SessionsAccessSections: View {
                 .controlSize(.small)
             } label: {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Add browser screenshots automatically")
+                    Text(L10n.t("Add browser screenshots automatically"))
                         .font(.system(size: 13))
                         .foregroundStyle(Theme.foreground)
                     Text(store.mcpAutoAddBrowserScreenshots
-                        ? "Browser MCP screenshots appear in the current session's gallery."
-                        : "Browser captures stay out of the gallery until an agent adds a "
-                            + "selected image with Sessions use. Explicit phone screenshot "
-                            + "requests are still added.")
+                        ? L10n.t("Browser MCP screenshots appear in the current session's gallery.")
+                        : L10n.t(
+                            "Browser captures stay out of the gallery until an agent adds a "
+                                + "selected image with Sessions use. Explicit phone screenshot "
+                                + "requests are still added."))
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
@@ -153,8 +158,8 @@ struct SessionsAccessSections: View {
             }
         } header: {
             SettingsSectionHeader(
-                title: "Gallery",
-                description: "Choose whether Browser MCP captures are published as they are taken."
+                title: L10n.t("Gallery"),
+                description: L10n.t("Choose whether Browser MCP captures are published as they are taken.")
             )
         }
     }
@@ -165,15 +170,16 @@ struct SessionsAccessSections: View {
         Section {
             let pairs = approvedPairs
             if pairs.isEmpty {
-                Text("No approved sessions. When you allow a write from the approval "
-                    + "dialog, the pair appears here.")
+                Text(L10n.t(
+                    "No approved sessions. When you allow a write from the approval "
+                        + "dialog, the pair appears here."))
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 ForEach(pairs, id: \.id) { pair in
                     LabeledContent {
-                        Button("Revoke") {
+                        Button(L10n.t("Revoke")) {
                             store.revokeMcpWriteApproval(
                                 caller: pair.caller, target: pair.target
                             )
@@ -185,7 +191,7 @@ struct SessionsAccessSections: View {
                                 + "\(store.sessionDisplayName(pair.target))")
                                 .font(.system(size: 13))
                                 .foregroundStyle(Theme.foreground)
-                            Text("Can type into the session without asking.")
+                            Text(L10n.t("Can type into the session without asking."))
                                 .font(.system(size: 11))
                                 .foregroundStyle(Theme.mutedForeground)
                         }
@@ -194,9 +200,10 @@ struct SessionsAccessSections: View {
             }
         } header: {
             SettingsSectionHeader(
-                title: "Approved sessions",
-                description: "Write approvals you've granted. Each lives until either "
-                    + "session is removed."
+                title: L10n.t("Approved sessions"),
+                description: L10n.t(
+                    "Write approvals you've granted. Each lives until either "
+                        + "session is removed.")
             )
         }
     }
@@ -213,15 +220,16 @@ struct SessionsAccessSections: View {
         Section {
             let approvals = approvedApps
             if approvals.isEmpty {
-                Text("No approved Apps. An agent asks before it starts an App panel "
-                    + "for the first time.")
+                Text(L10n.t(
+                    "No approved Apps. An agent asks before it starts an App panel "
+                        + "for the first time."))
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 ForEach(approvals, id: \.id) { approval in
                     LabeledContent {
-                        Button("Revoke") {
+                        Button(L10n.t("Revoke")) {
                             store.revokeMcpAppOpenApproval(
                                 caller: approval.caller, appID: approval.appID
                             )
@@ -233,7 +241,7 @@ struct SessionsAccessSections: View {
                                 + approval.appID)
                                 .font(.system(size: 13))
                                 .foregroundStyle(Theme.foreground)
-                            Text("Can start this App as a companion panel without asking.")
+                            Text(L10n.t("Can start this App as a companion panel without asking."))
                                 .font(.system(size: 11))
                                 .foregroundStyle(Theme.mutedForeground)
                         }
@@ -242,8 +250,8 @@ struct SessionsAccessSections: View {
             }
         } header: {
             SettingsSectionHeader(
-                title: "Approved Apps",
-                description: "App-panel launch approvals you've granted to agent sessions."
+                title: L10n.t("Approved Apps"),
+                description: L10n.t("App-panel launch approvals you've granted to agent sessions.")
             )
         }
     }

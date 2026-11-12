@@ -30,13 +30,13 @@ struct RemoteFolderPicker: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Select project folder").font(.headline)
+            Text(L10n.t("Select project folder")).font(.headline)
             HStack {
                 Button { if let parent = page?.parent { load(parent) } } label: {
                     Image(systemName: "arrow.up")
-                }.disabled(busy || page?.parent == nil).accessibilityLabel("Parent folder")
-                TextField("Folder path", text: $path).onSubmit { load(path) }
-                Button("Go") { load(path) }.disabled(busy)
+                }.disabled(busy || page?.parent == nil).accessibilityLabel(L10n.t("Parent folder"))
+                TextField(L10n.t("Folder path"), text: $path).onSubmit { load(path) }
+                Button(L10n.t("Go")) { load(path) }.disabled(busy)
             }
             List(entries) { entry in
                 Button { load(entry.path) } label: {
@@ -46,24 +46,24 @@ struct RemoteFolderPicker: View {
             .overlay { if busy { ProgressView().controlSize(.small) } }
             if let error { Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled) }
             HStack {
-                Toggle("Show hidden folders", isOn: $showHidden)
+                Toggle(L10n.t("Show hidden folders"), isOn: $showHidden)
                     .onChange(of: showHidden) { _ in load(page?.path ?? path) }
                 Spacer()
-                if page?.next != nil { Button("More") { load(page?.path ?? path, more: true) }.disabled(busy) }
-                Button("New Folder") { showNewFolder = true }
+                if page?.next != nil { Button(L10n.t("More")) { load(page?.path ?? path, more: true) }.disabled(busy) }
+                Button(L10n.t("New Folder")) { showNewFolder = true }
                     .disabled(busy || page == nil || !runtime.supportsHostOperation("filesystem.directories.create"))
             }
             if showNewFolder {
                 HStack {
-                    TextField("Folder name", text: $newFolderName)
-                    Button("Create") { createFolder() }
+                    TextField(L10n.t("Folder name"), text: $newFolderName)
+                    Button(L10n.t("Create")) { createFolder() }
                         .disabled(busy || newFolderName.isEmpty || newFolderName.contains("/") || newFolderName == "." || newFolderName == "..")
                 }
             }
             HStack {
                 Spacer()
-                Button("Cancel") { complete(nil) }.keyboardShortcut(.cancelAction)
-                Button("Add Project") { if let page { complete(page.path) } }
+                Button(L10n.t("Cancel")) { complete(nil) }.keyboardShortcut(.cancelAction)
+                Button(L10n.t("Add Project")) { if let page { complete(page.path) } }
                     .keyboardShortcut(.defaultAction).disabled(busy || page == nil || error != nil)
             }
         }

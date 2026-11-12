@@ -7,6 +7,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+"$HERE/sync-localizations.sh"
 "$HERE/build-rust-bridge.sh" debug
 cd "$HERE/UnpeelNative"
 swift test "$@"

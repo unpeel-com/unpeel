@@ -80,9 +80,9 @@ enum ThemePreference: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .system: return "System"
-        case .light: return "Light"
-        case .dark: return "Dark"
+        case .system: return L10n.t("System")
+        case .light: return L10n.t("Light")
+        case .dark: return L10n.t("Dark")
         }
     }
 
@@ -112,14 +112,14 @@ enum ProjectFolderColor: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .sky: return "Sky"
-        case .blue: return "Blue"
-        case .violet: return "Violet"
-        case .rose: return "Rose"
-        case .amber: return "Amber"
-        case .moss: return "Moss"
-        case .teal: return "Teal"
-        case .graphite: return "Graphite"
+        case .sky: return L10n.t("Sky")
+        case .blue: return L10n.t("Blue")
+        case .violet: return L10n.t("Violet")
+        case .rose: return L10n.t("Rose")
+        case .amber: return L10n.t("Amber")
+        case .moss: return L10n.t("Moss")
+        case .teal: return L10n.t("Teal")
+        case .graphite: return L10n.t("Graphite")
         }
     }
 
@@ -208,14 +208,14 @@ enum AppTint: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .none: return "Default"
-        case .peel: return "Peel"
-        case .amber: return "Amber"
-        case .green: return "Green"
-        case .teal: return "Teal"
-        case .blue: return "Blue"
-        case .indigo: return "Indigo"
-        case .violet: return "Violet"
+        case .none: return L10n.t("Default")
+        case .peel: return L10n.t("Peel")
+        case .amber: return L10n.t("Amber")
+        case .green: return L10n.t("Green")
+        case .teal: return L10n.t("Teal")
+        case .blue: return L10n.t("Blue")
+        case .indigo: return L10n.t("Indigo")
+        case .violet: return L10n.t("Violet")
         }
     }
 

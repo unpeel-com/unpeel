@@ -20,6 +20,7 @@ let nativeBridgeRoot = repoRoot
 
 let package = Package(
     name: "UnpeelNative",
+    defaultLocalization: "en",
     platforms: [
         .macOS(.v13),
     ],
@@ -66,6 +67,9 @@ let package = Package(
                 .copy("Resources/MascotFrame1.png"),
                 .copy("Resources/MascotFrame2.png"),
                 .copy("Resources/MascotFrame3.png"),
+                // sync-localizations.sh compiles the String Catalog. SwiftPM does not
+                // turn .xcstrings into .lproj for this executable target.
+                .copy("Resources/zh-Hans.lproj"),
             ],
             linkerSettings: [
                 .unsafeFlags(

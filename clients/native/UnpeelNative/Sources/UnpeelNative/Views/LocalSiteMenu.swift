@@ -62,10 +62,10 @@ struct LocalSiteChip: View {
             .onHover { leftHovering = $0 }
             .help(
                 urls.count == 1
-                    ? "Open \(urls.first ?? "") in browser"
-                    : "Local sites (\(urls.count))"
+                    ? L10n.format("Open %@ in browser", urls.first ?? "")
+                    : L10n.format("Local sites (%ld)", urls.count)
             )
-            .accessibilityLabel("Open local site")
+            .accessibilityLabel(L10n.t("Open local site"))
 
             Rectangle()
                 .fill(Theme.foreground.opacity(0.10))
@@ -86,8 +86,8 @@ struct LocalSiteChip: View {
             .buttonStyle(.plain)
             .background(LocalSiteMenuAnchor(controller: controller))
             .onHover { rightHovering = $0 }
-            .help("Choose local site")
-            .accessibilityLabel("Choose local site")
+            .help(L10n.t("Choose local site"))
+            .accessibilityLabel(L10n.t("Choose local site"))
         }
         .frame(height: 26)
         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
@@ -129,10 +129,10 @@ struct ProjectLinkButton: View {
         .onHover { hovering = $0 }
         .help(
             urls.count == 1
-                ? "Open \(urls.first ?? "") in browser"
-                : "Local sites (\(urls.count))"
+                ? L10n.format("Open %@ in browser", urls.first ?? "")
+                : L10n.format("Local sites (%ld)", urls.count)
         )
-        .accessibilityLabel("Open local site")
+        .accessibilityLabel(L10n.t("Open local site"))
         .animation(.easeInOut(duration: 0.12), value: hovering)
     }
 }
@@ -178,7 +178,7 @@ final class LocalSiteMenuController: NSObject {
             menu.addItem(.separator())
             for server in stoppable {
                 let item = NSMenuItem(
-                    title: "Stop \(server.label)",
+                    title: L10n.format("Stop %@", server.label),
                     action: #selector(handleStop(_:)),
                     keyEquivalent: ""
                 )

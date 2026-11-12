@@ -83,7 +83,7 @@ struct SessionLauncherView: View {
     @ViewBuilder
     private var presetList: some View {
         if filteredPresets.isEmpty {
-            Text("No matching presets")
+            Text(L10n.t("No matching presets"))
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.mutedForeground)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -131,7 +131,7 @@ struct SessionLauncherView: View {
         Button {
             store.openSettings(tab: .agents)
         } label: {
-            Text("Manage Agents…")
+            Text(L10n.t("Manage Agents…"))
                 .font(.system(size: 11))
         }
         .buttonStyle(.plain)
@@ -143,7 +143,7 @@ struct SessionLauncherView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(Theme.mutedForeground)
-            TextField("Search presets…", text: $query)
+            TextField(L10n.t("Search presets…"), text: $query)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
                 .focused($searchFocused)
@@ -277,6 +277,6 @@ private struct LauncherRow: View {
             hovering = $0
             hoverChanged($0)
         }
-        .help("Start \(preset.label)")
+        .help(L10n.format("Start %@", preset.label))
     }
 }

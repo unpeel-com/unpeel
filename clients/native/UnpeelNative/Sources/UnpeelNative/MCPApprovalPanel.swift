@@ -102,7 +102,7 @@ struct McpApprovalPaneOverlay: View {
                     .foregroundStyle(Theme.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
                 if moreWaiting > 0 {
-                    Text("\(moreWaiting) more waiting")
+                    Text(L10n.format("%ld more waiting", moreWaiting))
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.mutedForeground.opacity(0.7))
                 }
@@ -178,7 +178,7 @@ private struct McpApprovalDialogButton: View {
 
     var body: some View {
         styled(
-            Button(label, action: action)
+            Button(L10n.t(label), action: action)
                 .controlSize(.regular)
         )
     }

@@ -176,17 +176,17 @@ struct RemoteScopeEmptySidebarView: View {
                 Image(systemName: emptyStateIcon)
                     .font(.system(size: 24, weight: .light))
                     .foregroundStyle(presentation.tint)
-                Text(presentation.shortLabel == "Connected" ? hostName : presentation.shortLabel)
+                Text(presentation.shortLabel == "Connected" ? hostName : L10n.t(presentation.shortLabel))
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Theme.foreground)
                 if isConnectedAndEmpty {
-                    Text("No projects yet. Projects added on \(hostName) appear here.")
+                    Text(L10n.format("No projects yet. Projects added on %@ appear here.", hostName))
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.mutedForeground)
                         .multilineTextAlignment(.center)
                         .lineLimit(4)
                 } else {
-                    Text(presentation.message ?? "Loading Sessions from \(hostName)…")
+                    Text(presentation.message.map { L10n.t($0) } ?? L10n.format("Loading Sessions from %@…", hostName))
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.mutedForeground)
                         .multilineTextAlignment(.center)
@@ -199,7 +199,7 @@ struct RemoteScopeEmptySidebarView: View {
                         .multilineTextAlignment(.center)
                         .padding(.top, 6)
                     if let onLearnMore {
-                        Button("About Unpeel Link", action: onLearnMore)
+                        Button(L10n.t("About Unpeel Link"), action: onLearnMore)
                             .buttonStyle(.link)
                             .font(.system(size: 11, weight: .medium))
                     }
@@ -495,9 +495,9 @@ enum RemoteHostReachabilityHint {
             return nil
         }
         if !linkAllowed {
-            return "Direct connections only reach this Mac on the same network, or on a Tailscale network shared by both Macs. This Host is scoped to Direct only — allow Unpeel Link for it in Settings ▸ Remote (and enroll Link on that Mac) to reach it from anywhere."
+            return L10n.t("Direct connections only reach this Mac on the same network, or on a Tailscale network shared by both Macs. This Host is scoped to Direct only — allow Unpeel Link for it in Settings ▸ Remote (and enroll Link on that Mac) to reach it from anywhere.")
         }
-        return "Not reachable directly, and Unpeel Link is not carrying it either. From another network this needs Link enrolled on that Mac (Unpeel ▸ Settings ▸ Remote), or a Tailscale network shared by both Macs."
+        return L10n.t("Not reachable directly, and Unpeel Link is not carrying it either. From another network this needs Link enrolled on that Mac (Unpeel ▸ Settings ▸ Remote), or a Tailscale network shared by both Macs.")
     }
 }
 
@@ -519,7 +519,7 @@ struct RemoteHostConnectionBanner: View {
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(banner.tint)
                 }
-                Text(banner.message)
+                Text(L10n.t(banner.message))
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Theme.mutedForeground)
                     .lineLimit(2)
@@ -533,7 +533,7 @@ struct RemoteHostConnectionBanner: View {
                         .lineLimit(3)
                         .fixedSize(horizontal: false, vertical: true)
                     if let onLearnMore {
-                        Button("About Unpeel Link", action: onLearnMore)
+                        Button(L10n.t("About Unpeel Link"), action: onLearnMore)
                             .buttonStyle(.link)
                             .font(.system(size: 11, weight: .medium))
                             .fixedSize()
@@ -603,7 +603,7 @@ struct HostServiceStatusBanner: View {
                 if startingVisible {
                     row(
                         icon: nil,
-                        message: "Host service starting…",
+                        message: L10n.t("Host service starting…"),
                         tint: Theme.accent,
                         showsProgress: true,
                         retry: false
@@ -612,7 +612,7 @@ struct HostServiceStatusBanner: View {
             case .unavailable:
                 row(
                     icon: "exclamationmark.triangle",
-                    message: "Host service unavailable — terminals cannot be created until it answers.",
+                    message: L10n.t("Host service unavailable — terminals cannot be created until it answers."),
                     tint: Theme.danger,
                     showsProgress: false,
                     retry: true
@@ -653,13 +653,13 @@ struct HostServiceStatusBanner: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(tint)
             }
-            Text(message)
+            Text(L10n.t(message))
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(Theme.mutedForeground)
                 .lineLimit(2)
             Spacer(minLength: 0)
             if retry {
-                Button("Retry") { service.retryNow() }
+                Button(L10n.t("Retry")) { service.retryNow() }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
             }

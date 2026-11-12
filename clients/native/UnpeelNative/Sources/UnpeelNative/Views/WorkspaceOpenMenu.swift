@@ -128,8 +128,8 @@ private struct WorkspaceOpenSplitButton: View {
             }
             .buttonStyle(.plain)
             .onHover { leftHovering = $0 }
-            .help("Open in \(target.title)")
-            .accessibilityLabel("Open in \(target.title)")
+            .help(L10n.format("Open in %@", target.title))
+            .accessibilityLabel(L10n.format("Open in %@", target.title))
 
             divider
 
@@ -144,8 +144,8 @@ private struct WorkspaceOpenSplitButton: View {
             .buttonStyle(.plain)
             .background(WorkspaceMenuAnchor(controller: controller))
             .onHover { rightHovering = $0 }
-            .help("Choose app")
-            .accessibilityLabel("Choose app")
+            .help(L10n.t("Choose app"))
+            .accessibilityLabel(L10n.t("Choose app"))
         }
         .frame(height: 26)
         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))

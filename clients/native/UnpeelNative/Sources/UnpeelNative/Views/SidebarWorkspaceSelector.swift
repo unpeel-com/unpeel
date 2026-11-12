@@ -126,7 +126,7 @@ struct WorkspacePickerPanel: View {
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.mutedForeground)
                 .frame(width: 18)
-            Text("Manage Workspaces…")
+            Text(L10n.t("Manage Workspaces…"))
                 .font(Theme.rowLabelFont)
                 .foregroundStyle(Theme.foreground)
             Spacer(minLength: 8)
@@ -175,9 +175,9 @@ struct WorkspacePickerPanel: View {
     private func tagFor(_ row: WorkspaceListRowModel) -> String? {
         switch row.kind {
         case let .local(_, _, isCurrentInstance, isRunning):
-            return isRunning && !isCurrentInstance ? "Running" : nil
+            return isRunning && !isCurrentInstance ? L10n.t("Running") : nil
         case .paired, .ssh:
-            return "Remote"
+            return L10n.t("Remote")
         }
     }
 
@@ -186,7 +186,7 @@ struct WorkspacePickerPanel: View {
     /// knowing, not worth a badge.
     private func quietTagFor(_ row: WorkspaceListRowModel) -> String? {
         if case .local(_, true, _, _) = row.kind {
-            return "Default"
+            return L10n.t("Default")
         }
         return nil
     }
@@ -464,10 +464,10 @@ private struct WorkspacePickerRow: View {
         )
         .contextMenu {
             if let openInNewWindow {
-                Button("Open in New Window", action: openInNewWindow)
+                Button(L10n.t("Open in New Window"), action: openInNewWindow)
             }
             if let rename {
-                Button("Rename…", action: rename)
+                Button(L10n.t("Rename…"), action: rename)
             }
         }
         .help(rename == nil ? title : "Double-click or right-click to rename")

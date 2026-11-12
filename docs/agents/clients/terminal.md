@@ -55,6 +55,22 @@ the boundary as VT bytes, not shared library structs.
   its open file descriptor; the normal **Reload Terminal** recommendation
   upgrades it to bounded journaling.
 - The native app keeps a small LRU cache of live surfaces and pre-warms on hover (see the surface cache in `clients/native`); evicted-then-remounted surfaces rebuild from the replay tail plus new live output.
+- **UI language (2026-11-11).** Settings ▸ Appearance ▸ Language picks
+  System / English / 简体中文 for the Mac Controller chrome (menus, Settings,
+  sidebar copy). It is a Controller-local preference
+  (`unpeel.native.appLanguage` in the shared AppDefaults suite — never
+  `app-state.json`, never the Host protocol). System follows macOS preferred
+  languages (`zh-Hans` / `zh-CN` / bare `zh` → Simplified Chinese; Traditional
+  Chinese falls back to English until a table exists). System does not
+  replace the Mac locale, so dates and numbers keep the region; English or
+  简体中文 sets it. Source strings live in
+  Apple String Catalog `clients/native/UnpeelNative/Localization/Localizable.xcstrings`
+  (English keys); `clients/native/sync-localizations.sh` compiles
+  `zh-Hans.lproj` at build time. That folder is gitignored. `build-app.sh`
+  and `test-native.sh` run the script.
+  Runtime lookup is `L10n` over `ModuleResources.bundle` — never
+  `Bundle.module` (executable-target accessor bakes `.build` paths; see
+  `ModuleResources.swift` / `build-app.sh`). Missing keys fall back to English.
 - **Terminal font (2026-09-07).** Settings ▸ Appearance ▸ Terminal font
   picks the family (this Mac's monospaced faces, plus anything named
   mono/code so duospaced CJK fonts such as Sarasa Mono K appear) and the

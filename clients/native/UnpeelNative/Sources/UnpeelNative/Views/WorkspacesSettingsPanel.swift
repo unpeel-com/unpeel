@@ -19,6 +19,7 @@ import UnpeelShared
 
 struct WorkspacesSettingsPanel: View {
     @ObservedObject var store: UnpeelStore
+    @ObservedObject private var localization = LocalizationStore.shared
     /// Opens Settings ▸ Remote (home of the Unpeel Link section since the
     /// standalone Link tab merged into it, 2026-08-13) from the unlicensed
     /// upsell.
@@ -55,9 +56,15 @@ struct WorkspacesSettingsPanel: View {
         let linkEnabled: Bool
 
         var label: String {
-            guard deviceCount > 0 else { return "Not shared" }
-            let devices = deviceCount == 1 ? "1 device" : "\(deviceCount) devices"
-            return "\(devices) · Link \(linkEnabled ? "on" : "off")"
+            guard deviceCount > 0 else { return L10n.t("Not shared") }
+            let devices = deviceCount == 1
+                ? L10n.t("1 device")
+                : L10n.format("%ld devices", deviceCount)
+            return L10n.format(
+                "%1$@ · Link %2$@",
+                devices,
+                linkEnabled ? L10n.t("on") : L10n.t("off")
+            )
         }
     }
 
@@ -93,14 +100,14 @@ struct WorkspacesSettingsPanel: View {
             Form {
                 Section {} header: {
                     SettingsPaneHeader(
-                        title: "Workspaces",
+                        title: L10n.t("Workspaces"),
                         description: RemoteHostFeature.pickerEnabled
-                            ? "Every workspace this app can be in — on this Mac and "
-                                + "on remote machines. Selecting one scopes the whole "
-                                + "app to it; drag to reorder."
-                            : "Every workspace on this Mac has its own sessions, projects, "
-                                + "presets, and settings. Selecting one scopes this window to it; "
-                                + "drag to reorder."
+                            ? L10n.t(
+                                "Every workspace this app can be in — on this Mac and on remote machines. Selecting one scopes the whole app to it; drag to reorder."
+                            )
+                            : L10n.t(
+                                "Every workspace on this Mac has its own sessions, projects, presets, and settings. Selecting one scopes this window to it; drag to reorder."
+                            )
                     )
                     .padding(.bottom, 4)
                 }
@@ -135,15 +142,15 @@ struct WorkspacesSettingsPanel: View {
             RemoteHostPairingSheet(store: store, hostName: pairControllerHostName)
         }
         .alert(
-            "Rename workspace",
+            L10n.t("Rename workspace"),
             isPresented: Binding(
                 get: { renameTarget != nil },
                 set: { if !$0 { renameTarget = nil } }
             ),
             presenting: renameTarget
         ) { target in
-            TextField("Name", text: $renameText)
-            Button("Rename") {
+            TextField(L10n.t("Name"), text: $renameText)
+            Button(L10n.t("Rename")) {
                 switch target {
                 case .defaultWorkspace:
                     UnpeelWorkspaceContext.renameDefaultWorkspace(to: renameText)
@@ -155,12 +162,12 @@ struct WorkspacesSettingsPanel: View {
                 refresh()
                 NotificationCenter.default.post(name: .unpeelWorkspaceListChanged, object: nil)
             }
-            Button("Cancel", role: .cancel) {}
+            Button(L10n.t("Cancel"), role: .cancel) {}
         } message: { _ in
-            Text("Shows in the menu bar and on paired phones. The phone name fully updates after the workspace restarts.")
+            Text(L10n.t("Shows in the menu bar and on paired phones. The phone name fully updates after the workspace restarts."))
         }
         .confirmationDialog(
-            "Remove \(removalCandidate?.name ?? "workspace")?",
+            L10n.format("Remove %@?", removalCandidate?.name ?? L10n.t("workspace")),
             isPresented: Binding(
                 get: { removalCandidate != nil },
                 set: { if !$0 { removalCandidate = nil } }
@@ -168,21 +175,24 @@ struct WorkspacesSettingsPanel: View {
             titleVisibility: .visible,
             presenting: removalCandidate
         ) { workspace in
-            Button("Remove from list", role: .destructive) {
+            Button(L10n.t("Remove from list"), role: .destructive) {
                 UnpeelWorkspaceRegistry.remove(id: workspace.id, deleteData: false)
                 refresh()
                 NotificationCenter.default.post(name: .unpeelWorkspaceListChanged, object: nil)
             }
-            Button("Remove and delete its data", role: .destructive) {
+            Button(L10n.t("Remove and delete its data"), role: .destructive) {
                 UnpeelWorkspaceRegistry.remove(id: workspace.id, deleteData: true)
                 refresh()
                 NotificationCenter.default.post(name: .unpeelWorkspaceListChanged, object: nil)
             }
-            Button("Cancel", role: .cancel) {}
+            Button(L10n.t("Cancel"), role: .cancel) {}
         } message: { workspace in
             Text(
-                "\"Remove from list\" keeps \(workspace.name)'s data at \(workspace.home) so you can "
-                    + "re-add it later. Deleting its data also unpairs any phones paired with it."
+                L10n.format(
+                    "\"Remove from list\" keeps %1$@'s data at %2$@ so you can re-add it later. Deleting its data also unpairs any phones paired with it.",
+                    workspace.name,
+                    workspace.home
+                )
             )
         }
     }
@@ -214,7 +224,7 @@ struct WorkspacesSettingsPanel: View {
                     } label: {
                         Label(
                             RemoteHostFeature.pickerEnabled
-                                ? "Add Workspace…" : "New Workspace…",
+                                ? L10n.t("Add Workspace…") : L10n.t("New Workspace…"),
                             systemImage: "plus"
                         )
                     }
@@ -229,14 +239,14 @@ struct WorkspacesSettingsPanel: View {
             }
         } header: {
             SettingsSectionHeader(
-                title: "All workspaces",
+                title: L10n.t("All workspaces"),
                 description: RemoteHostFeature.pickerEnabled
-                    ? "Click the color dot to set a workspace's color, or the ⋯ menu "
-                        + "to rename or remove it. Drag to reorder — the sidebar "
-                        + "switcher matches. Add Workspace… covers this Mac, pairing, and SSH."
-                    : "Click a workspace to select it. Set each one's color with its dot, "
-                        + "use the ⋯ menu to rename or remove it, and drag to reorder — "
-                        + "the sidebar switcher matches."
+                    ? L10n.t(
+                        "Click the color dot to set a workspace's color, or the ⋯ menu to rename or remove it. Drag to reorder — the sidebar switcher matches. Add Workspace… covers this Mac, pairing, and SSH."
+                    )
+                    : L10n.t(
+                        "Click a workspace to select it. Set each one's color with its dot, use the ⋯ menu to rename or remove it, and drag to reorder — the sidebar switcher matches."
+                    )
             )
         }
     }
@@ -267,12 +277,12 @@ struct WorkspacesSettingsPanel: View {
             }
 
             if sharingSummary(for: row) != nil {
-                Button("Share…") {
+                Button(L10n.t("Share…")) {
                     store.openSettings(tab: .mobile)
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-                .help("Open \(row.name)'s Remote Control settings")
+                .help(L10n.format("Open %1$@'s Remote Control settings", row.name))
             }
 
             rowMenu(row)
@@ -298,7 +308,7 @@ struct WorkspacesSettingsPanel: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Set \(row.name)'s color")
+        .help(L10n.format("Set %1$@'s color", row.name))
         .popover(
             isPresented: Binding(
                 get: { tintPopoverRowID == row.id },
@@ -332,7 +342,7 @@ struct WorkspacesSettingsPanel: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("More…")
+        .help(L10n.t("More…"))
     }
 
     @ViewBuilder
@@ -340,15 +350,15 @@ struct WorkspacesSettingsPanel: View {
         switch row.kind {
         case let .local(record, isDefault, _, isRunning):
             if isDefault || record != nil {
-                Button("Rename…") {
+                Button(L10n.t("Rename…")) {
                     beginRename(record.map { .record($0) } ?? .defaultWorkspace)
                 }
             }
             if let record {
                 Divider()
-                Button("Remove…", role: .destructive) {
+                Button(L10n.t("Remove…"), role: .destructive) {
                     if isRunning {
-                        errorMessage = "Quit \(record.name) before removing it."
+                        errorMessage = L10n.format("Quit %@ before removing it.", record.name)
                     } else {
                         removalCandidate = record
                     }
@@ -356,25 +366,25 @@ struct WorkspacesSettingsPanel: View {
             }
         case .paired(let host):
             if canAddPhone(to: host) {
-                Button("Add iPhone or iPad…") {
+                Button(L10n.t("Add iPhone or iPad…")) {
                     pairControllerHostName = host.name
                     pairControllerPresented = true
                 }
             }
-            Button("Rename…") {
+            Button(L10n.t("Rename…")) {
                 beginRename(.remote(id: host.hostID, name: host.name))
             }
             Divider()
-            Button("Forget Workspace", role: .destructive) {
+            Button(L10n.t("Forget Workspace"), role: .destructive) {
                 store.forgetHost(host.hostID)
                 refresh()
             }
         case .ssh(let host):
-            Button("Rename…") {
+            Button(L10n.t("Rename…")) {
                 beginRename(.remote(id: host.id, name: host.name))
             }
             Divider()
-            Button("Forget Workspace", role: .destructive) {
+            Button(L10n.t("Forget Workspace"), role: .destructive) {
                 store.forgetHost(host.id)
                 refresh()
             }
@@ -532,16 +542,17 @@ struct WorkspacesSettingsPanel: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(Theme.mutedForeground)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Extra workspaces require Unpeel Link")
+                    Text(L10n.t("Extra workspaces require Unpeel Link"))
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Theme.foreground)
-                    Text("Unpeel Link adds workspaces, remote control from your iPhone, and "
-                        + "Unpeel Remote access from anywhere — $59 per seat per year.")
+                    Text(L10n.t(
+                        "Unpeel Link adds workspaces, remote control from your iPhone, and Unpeel Remote access from anywhere — $59 per seat per year."
+                    ))
                         .font(.system(size: 12))
                         .foregroundStyle(Theme.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
                     if let onOpenPro {
-                        Button("Open Unpeel Link Settings", action: onOpenPro)
+                        Button(L10n.t("Open Unpeel Link Settings"), action: onOpenPro)
                             .controlSize(.small)
                             .padding(.top, 4)
                     }
@@ -569,10 +580,11 @@ struct WorkspacesSettingsPanel: View {
                 .padding(.vertical, 2)
             } header: {
                 SettingsSectionHeader(
-                    title: "App color for \(row.name)",
-                    description: "Washes \(row.name)'s window chrome and shows on "
-                        + "its paired phones. Any other workspace's color is set "
-                        + "from its row's dot in the list above."
+                    title: L10n.format("App color for %@", row.name),
+                    description: L10n.format(
+                        "Washes %1$@'s window chrome and shows on its paired phones. Any other workspace's color is set from its row's dot in the list above.",
+                        row.name
+                    )
                 )
             }
         }
@@ -649,10 +661,10 @@ struct WorkspacesSettingsPanel: View {
             || UnpeelWorkspaceLauncher.runningPid(home: defaultHome) != nil
         rows.append(WorkspaceListRowModel(
             id: WorkspaceListOrder.localKey(home: defaultHome.path),
-            name: UnpeelWorkspaceContext.defaultWorkspaceName ?? "Personal",
+            name: UnpeelWorkspaceContext.defaultWorkspaceName ?? L10n.t("Personal"),
             detail: defaultHome.path,
             icon: "desktopcomputer",
-            badge: defaultIsCurrent ? "This instance" : defaultRunning ? "Running" : nil,
+            badge: defaultIsCurrent ? L10n.t("This instance") : defaultRunning ? L10n.t("Running") : nil,
             home: normalizedDefault,
             // The default instance's tint lives in `.standard` (no UNPEEL_HOME).
             tint: defaultIsCurrent
@@ -681,7 +693,7 @@ struct WorkspacesSettingsPanel: View {
                 name: record.name,
                 detail: record.home,
                 icon: "desktopcomputer",
-                badge: isCurrent ? "This instance" : isRunning ? "Running" : nil,
+                badge: isCurrent ? L10n.t("This instance") : isRunning ? L10n.t("Running") : nil,
                 home: normalized,
                 tint: isCurrent ? store.appTint : localStoredTint(home: record.home),
                 kind: .local(
@@ -701,7 +713,7 @@ struct WorkspacesSettingsPanel: View {
                 name: URL(fileURLWithPath: currentHome).lastPathComponent,
                 detail: currentHome,
                 icon: "desktopcomputer",
-                badge: "This instance",
+                badge: L10n.t("This instance"),
                 home: currentHome,
                 tint: store.appTint,
                 kind: .local(
@@ -731,7 +743,7 @@ struct WorkspacesSettingsPanel: View {
                 name: host.name,
                 detail: detail,
                 icon: hostDeviceIcon(kind: liveSnapshot?.hostDeviceKind),
-                badge: "Remote",
+                badge: L10n.t("Remote"),
                 home: nil,
                 tint: RemoteWorkspaceTint.get(host.hostID),
                 kind: .paired(host)
@@ -741,9 +753,9 @@ struct WorkspacesSettingsPanel: View {
             rows.append(WorkspaceListRowModel(
                 id: WorkspaceListOrder.sshKey(id: host.id),
                 name: host.name,
-                detail: "SSH · \(host.destination)",
+                detail: L10n.format("SSH · %@", host.destination),
                 icon: "terminal",
-                badge: "Remote",
+                badge: L10n.t("Remote"),
                 home: nil,
                 tint: RemoteWorkspaceTint.get(host.id),
                 kind: .ssh(host)

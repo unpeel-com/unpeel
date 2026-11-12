@@ -16,9 +16,24 @@
 
 import SwiftUI
 
+/// System keeps the Mac's own locale, so en_GB and nb_NO still format dates
+/// and numbers for that region. An explicit language sets the locale.
+private struct ChosenLanguageLocale: ViewModifier {
+    @ObservedObject var localization: LocalizationStore
+
+    func body(content: Content) -> some View {
+        if localization.preference == .system {
+            content
+        } else {
+            content.environment(\.locale, localization.effectiveLocale)
+        }
+    }
+}
+
 struct RootView: View {
     @ObservedObject var store: UnpeelStore
     @ObservedObject var cache: SurfaceCache
+    @ObservedObject private var localization = LocalizationStore.shared
 
     @AppStorage("unpeel.sidebar.width") private var savedSidebarWidth: Double = Double(Theme.sidebarDefaultWidth)
     /// Live value during a resizer drag — plain @State so each drag frame
@@ -116,6 +131,11 @@ struct RootView: View {
             // as sidebar rows, so they can sort the split or land at an exact
             // sidebar insertion gap with one continuous gesture.
             .environment(\.sidebarSessionDragController, sessionDragController)
+            .modifier(ChosenLanguageLocale(localization: localization))
+            .environmentObject(localization)
+            // Force chrome that reads L10n at body-eval time to rebuild when
+            // Settings ▸ Appearance ▸ Language changes.
+            .id(localization.revision)
             // Layout measures from the window top (DESIGN.md: 38px custom
             // titlebar inside the content), not from the AppKit titlebar
             // inset. Applied after the overlays so the toggle button lands
@@ -328,7 +348,7 @@ struct RootView: View {
         HStack(spacing: 4) {
             TitlebarIconButton(
                 icon: .sidebarToggle,
-                help: store.sidebarCollapsed ? "Show sidebar (⌘B)" : "Hide sidebar (⌘B)"
+                help: store.sidebarCollapsed ? L10n.t("Show sidebar (⌘B)") : L10n.t("Hide sidebar (⌘B)")
             ) {
                 store.sidebarCollapsed.toggle()
             }
@@ -368,7 +388,7 @@ struct RootView: View {
                 // While a full-content page covers the workspace, "+" (new
                 // session) is the wrong verb — offer the way back instead.
                 if store.settingsVisible || store.recentActivityVisible {
-                    TitlebarIconButton(icon: .back, help: "Back to workspace") {
+                    TitlebarIconButton(icon: .back, help: L10n.t("Back to workspace")) {
                         if store.settingsVisible { store.closeSettings() }
                         store.recentActivityVisible = false
                     }
@@ -674,7 +694,7 @@ struct TitlebarNewSessionMenu: View {
         )
         .background(HoverReporter { hovering = $0 })
         .animation(.easeInOut(duration: 0.12), value: hovering)
-        .help("New session")
+        .help(L10n.t("New session"))
     }
 }
 
@@ -864,7 +884,7 @@ struct ActivityMenuList: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     if rowCount == 0 {
-                        Text("No active sessions")
+                        Text(L10n.t("No active sessions"))
                             .font(.system(size: 13))
                             .foregroundStyle(Theme.mutedForeground.opacity(0.72))
                             .padding(.horizontal, 14)
@@ -947,7 +967,7 @@ private struct ActivityMenuFooterRow: View {
     var body: some View {
         Button(action: onSelect) {
             HStack(spacing: 8) {
-                Text(title)
+                Text(L10n.t(title))
                     .font(.system(size: 13))
                     .foregroundStyle(hovering ? Theme.foreground : Theme.mutedForeground)
                 Spacer(minLength: 0)
@@ -1026,7 +1046,7 @@ private struct TitlebarActivityMenuRow: View {
                         .truncationMode(.tail)
                     Group {
                         if let alertBody, !alertBody.isEmpty {
-                            Text("Alert · \(alertBody)")
+                            Text(L10n.format("Alert · %@", alertBody))
                                 .foregroundStyle(Theme.mutedForeground)
                                 .truncationMode(.tail)
                         } else {
@@ -1051,18 +1071,18 @@ private struct TitlebarActivityMenuRow: View {
 
                 // Trailing: CLI logo while working or finished, else status.
                 if blocked {
-                    Text("Blocked")
+                    Text(L10n.t("Blocked"))
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(Theme.attention)
                 } else if unread, alertBody != nil {
-                    Text("Alert")
+                    Text(L10n.t("Alert"))
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(Theme.unread)
                 } else if working || unread {
                     ToolIconView(command: command, size: 16)
                         .frame(width: 16, height: 16)
                 } else if status == "Starting" || status == "Restarting" || status == "Resuming" {
-                    Text(status)
+                    Text(L10n.t(status))
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.mutedForeground)
                 }

@@ -897,7 +897,7 @@ private struct SidebarEmptyProjectsView: View {
             Button {
                 onAddProject()
             } label: {
-                Label("Add Project", systemImage: "folder")
+                Label(L10n.t("Add Project"), systemImage: "folder")
                     .font(.system(size: 13, weight: .semibold))
             }
             .buttonStyle(.borderedProminent)
@@ -1570,7 +1570,7 @@ struct ProjectNodeView: View {
             // the inactive-preview window still reads as empty here.
             if pinnedItems.isEmpty && mixedItems.isEmpty {
                 EmptySessionsPlaceholderRow(
-                    label: node.sessions.isEmpty ? "No sessions yet." : "No active sessions.",
+                    label: node.sessions.isEmpty ? L10n.t("No sessions yet.") : L10n.t("No active sessions."),
                     depth: depth,
                     indentBase: 28,
                     menuPresets: store.displayAvailablePresets,
@@ -2051,8 +2051,8 @@ struct ProjectRowView: View {
 
             Spacer(minLength: 4)
 
-            ConfirmPillButton(label: "Cancel", destructive: false, action: onCancelRemove)
-            ConfirmPillButton(label: "Remove", destructive: true, action: onConfirmRemove)
+            ConfirmPillButton(label: L10n.t("Cancel"), destructive: false, action: onCancelRemove)
+            ConfirmPillButton(label: L10n.t("Remove"), destructive: true, action: onConfirmRemove)
         }
         .padding(EdgeInsets(top: 2, leading: rowLeading, bottom: 2, trailing: 5))
         .frame(minHeight: 28)
@@ -2188,7 +2188,7 @@ struct ProjectRowView: View {
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture { onToggle() }
-        .help("Drag anywhere on the row to reorder")
+        .help(L10n.t("Drag anywhere on the row to reorder"))
         // Project context menu (openProjectMenu, ProjectItem.svelte:818-941).
         // Order: New session · [Rename…] · [Folder color] · [Sort] · [New worktree…] ·
         // [New group…] · [Move to ▸ Workspace] · [Stop all] ·
@@ -2199,39 +2199,39 @@ struct ProjectRowView: View {
             if (isChildFolder && showsOrganizationVerbs)
                 || (node.project.acceptsSessionDrop && canPin) {
                 if isChildFolder, showsOrganizationVerbs {
-                    Button("Rename") {
+                    Button(L10n.t("Rename")) {
                         onRenameWorktree()
                     }
                 }
                 if node.project.acceptsSessionDrop, canPin {
-                    Button(isPinned ? "Unpin" : "Pin") {
+                    Button(isPinned ? L10n.t("Unpin") : L10n.t("Pin")) {
                         onSetPinned(!isPinned)
                     }
                 }
                 Divider()
             }
-            Menu("New session") {
+            Menu(L10n.t("New session")) {
                 let split = splitPresetsForNewSessionMenu(menuPresets)
-                Button("Terminal") { onLaunchPreset(.newTerminal) }
+                Button(L10n.t("Terminal")) { onLaunchPreset(.newTerminal) }
                 if !split.agents.isEmpty || showsLocalProjectVerbs {
                     Divider()
-                    Section("Agents") {
+                    Section(L10n.t("Agents")) {
                         ForEach(split.agents) { preset in
                             Button(preset.label) { onLaunchPreset(preset) }
                         }
                         if showsLocalProjectVerbs {
-                            Button("Manage Agents…") { onManagePresets() }
+                            Button(L10n.t("Manage Agents…")) { onManagePresets() }
                         }
                     }
                 }
                 if !split.plugins.isEmpty || showsLocalProjectVerbs {
                     Divider()
-                    Section("Plugins") {
+                    Section(L10n.t("Plugins")) {
                         ForEach(split.plugins) { preset in
                             Button(preset.label) { onLaunchPreset(preset) }
                         }
                         if showsLocalProjectVerbs {
-                            Button("Manage Plugins…") { onManagePlugins() }
+                            Button(L10n.t("Manage Plugins…")) { onManagePlugins() }
                         }
                     }
                 }
@@ -2240,15 +2240,15 @@ struct ProjectRowView: View {
             // neutral so nesting reads by indent, not tint (decided
             // 2026-08-13 after a group picked up a color by accident).
             if node.project.parentProjectID == nil, showsOrganizationVerbs, canRenameProject {
-                Button("Rename…") { onRenameProject() }
+                Button(L10n.t("Rename…")) { onRenameProject() }
             }
             if node.project.parentProjectID == nil, showsOrganizationVerbs {
-                Menu("Folder color") {
+                Menu(L10n.t("Folder color")) {
                     Button {
                         onSetFolderColor(nil)
                     } label: {
                         FolderColorMenuRow(
-                            title: "Default",
+                            title: L10n.t("Default"),
                             color: nil,
                             isSelected: folderColor == nil
                         )
@@ -2273,25 +2273,25 @@ struct ProjectRowView: View {
             // order survives a switch back. Scoped local workspaces flip it
             // through the Host `project.organization.set` carrier.
             if showsOrganizationVerbs {
-            Menu("Sort sessions") {
-                Picker("Sort sessions", selection: Binding(
+            Menu(L10n.t("Sort sessions")) {
+                Picker(L10n.t("Sort sessions"), selection: Binding(
                     get: { isDateSorted },
                     set: { onSetSessionDateSorted($0) }
                 )) {
-                    Text("Custom order").tag(false)
-                    Text("Recently updated").tag(true)
+                    Text(L10n.t("Custom order")).tag(false)
+                    Text(L10n.t("Recently updated")).tag(true)
                 }
                 .pickerStyle(.inline)
                 .labelsHidden()
             }
             }
             if showsWorktreeCreate {
-                Button("New worktree…") {
+                Button(L10n.t("New worktree…")) {
                     onCreateWorktree()
                 }
             }
             if node.project.parentProjectID == nil, showsOrganizationVerbs {
-                Button("New group…") {
+                Button(L10n.t("New group…")) {
                     onCreateGroup()
                 }
             }
@@ -2299,8 +2299,8 @@ struct ProjectRowView: View {
             // local workspace on this Mac. Hidden for groups/worktrees and
             // when this Mac only has one workspace.
             if !workspaceMoveTargets.isEmpty {
-                Menu("Move to") {
-                    Menu("Workspace") {
+                Menu(L10n.t("Move to")) {
+                    Menu(L10n.t("Workspace")) {
                         ForEach(workspaceMoveTargets) { target in
                             Button(target.name) { onMoveToWorkspace(target) }
                         }
@@ -2308,7 +2308,7 @@ struct ProjectRowView: View {
                 }
             }
             if hasLiveSessions {
-                Button("Stop all") {
+                Button(L10n.t("Stop all")) {
                     onStopAll()
                 }
             }
@@ -2336,10 +2336,10 @@ struct ProjectRowView: View {
             // target list the titlebar dropdown used to hold.
             if showsFilesystemVerbs {
                 Divider()
-                Button("Reveal in Finder") {
+                Button(L10n.t("Reveal in Finder")) {
                     onRevealInFinder()
                 }
-                Menu("Open in") {
+                Menu(L10n.t("Open in")) {
                     let groups = WorkspaceOpenTarget.availableMenuGroups()
                     ForEach(Array(groups.enumerated()), id: \.offset) { index, targets in
                         if index > 0 {
@@ -2371,13 +2371,13 @@ struct ProjectRowView: View {
                 if showsOrganizationVerbs {
                     Divider()
                     if isWorktreeChild {
-                        Button("Remove worktree", role: .destructive) {
+                        Button(L10n.t("Remove worktree"), role: .destructive) {
                             onRemoveWorktree()
                         }
                     } else {
                         // Groups re-file their sessions under the parent before
                         // the organizational record is removed.
-                        Button("Remove group", role: .destructive) {
+                        Button(L10n.t("Remove group"), role: .destructive) {
                             onRemoveGroup()
                         }
                     }
@@ -2385,7 +2385,7 @@ struct ProjectRowView: View {
             } else if showsFilesystemVerbs {
                 // Plain project Remove runs local-against the scoped home.
                 Divider()
-                Button("Remove", role: .destructive) {
+                Button(L10n.t("Remove"), role: .destructive) {
                     onRequestRemove()
                 }
             }
@@ -2565,7 +2565,7 @@ struct QuickPresetStrip: View {
                 )
         )
         .background(HoverReporter { plusHovering = $0 })
-        .help("New session")
+        .help(L10n.t("New session"))
     }
 }
 
@@ -2638,7 +2638,7 @@ func newSessionMenuContent(
     // Agents, with their manage entry at the bottom of the same list.
     if !split.agents.isEmpty || showsManagePresets {
         Divider()
-        Section("Agents") {
+        Section(L10n.t("Agents")) {
             ForEach(split.agents) { preset in
                 PresetMenuButton(preset: preset) {
                     onLaunch(preset)
@@ -2648,7 +2648,7 @@ func newSessionMenuContent(
                 Button {
                     onManagePresets()
                 } label: {
-                    Text("Manage Agents…")
+                    Text(L10n.t("Manage Agents…"))
                 }
             }
         }
@@ -2656,7 +2656,7 @@ func newSessionMenuContent(
     // Plugins, likewise.
     if !split.plugins.isEmpty || (showsManagePresets && onManagePlugins != nil) {
         Divider()
-        Section("Plugins") {
+        Section(L10n.t("Plugins")) {
             ForEach(split.plugins) { preset in
                 PresetMenuButton(preset: preset) {
                     onLaunch(preset)
@@ -2666,7 +2666,7 @@ func newSessionMenuContent(
                 Button {
                     onManagePlugins()
                 } label: {
-                    Text("Manage Plugins…")
+                    Text(L10n.t("Manage Plugins…"))
                 }
             }
         }
@@ -2694,7 +2694,7 @@ private struct QuickPresetButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .help("Start \(preset.label)")
+        .help(L10n.format("Start %@", preset.label))
     }
 }
 
@@ -2728,7 +2728,7 @@ private struct QuickPresetMenuChip: View {
                 .fill(hovering ? Theme.hoverRow : .clear)
         )
         .background(HoverReporter { hovering = $0 })
-        .help("Start \(group.displayName)…")
+        .help(L10n.format("Start %@…", group.displayName))
     }
 }
 
@@ -3157,11 +3157,11 @@ struct SessionRowView: View {
     private var regularContextMenuItems: some View {
         // Same first item as the Svelte session context menu
         // (session-menu-rename, ProjectItem.svelte:1038-1043).
-        Button("Rename") {
+        Button(L10n.t("Rename")) {
             onBeginEdit()
         }
         if canPin {
-            Button(isPinned ? "Unpin" : "Pin") {
+            Button(isPinned ? L10n.t("Unpin") : L10n.t("Pin")) {
                 onSetPinned(!isPinned)
             }
         }
@@ -3170,12 +3170,12 @@ struct SessionRowView: View {
         // TUI/phone find them in that top group like any other group. The
         // counterpart un-files a sidebar member back to its own project.
         if let onMoveToProjectSidebar {
-            Button("Pin to global project sidebar") {
+            Button(L10n.t("Pin to global project sidebar")) {
                 onMoveToProjectSidebar()
             }
         }
         if let onMoveToMainArea {
-            Button("Unpin from global project sidebar") {
+            Button(L10n.t("Unpin from global project sidebar")) {
                 onMoveToMainArea()
             }
         }
@@ -3183,7 +3183,7 @@ struct SessionRowView: View {
         // using a shared project-override marker, so the TUI and phone see
         // the same placement. Worktrees require restart/resume.
         if !moveTargets.isEmpty {
-            Menu("Move to") {
+            Menu(L10n.t("Move to")) {
                 ForEach(moveTargets) { target in
                     Button(target.name) { onMoveTo(target.id) }
                 }
@@ -3193,7 +3193,7 @@ struct SessionRowView: View {
         // hook, or menu detection tripping on look-alike screen text) —
         // otherwise nothing short of answering/restarting clears it.
         if session.status == .attention, canClearAttention {
-            Button("Clear attention") {
+            Button(L10n.t("Clear attention")) {
                 onClearAttention()
             }
         }
@@ -3206,16 +3206,16 @@ struct SessionRowView: View {
             // the existing terminal. A stopped Session uses the legacy
             // replacement operation and presents that honestly as Resume.
             if resumePresentation == .resumeAgent {
-                Button("Resume Agent") {
+                Button(L10n.t("Resume Agent")) {
                     onResume()
                 }
             } else if resumePresentation == .resumeSession {
-                Button("Resume") {
+                Button(L10n.t("Resume")) {
                     onResume()
                 }
             }
             if let onRestartApp {
-                Button("Restart App") {
+                Button(L10n.t("Restart App")) {
                     onRestartApp()
                 }
             }
@@ -3223,7 +3223,7 @@ struct SessionRowView: View {
         // "Notify when done" — push a phone notification when this session
         // next finishes a turn (paired iPhone with notifications on).
         if canNotifyWhenDone {
-            Toggle("Notify when done", isOn: Binding(
+            Toggle(L10n.t("Notify when done"), isOn: Binding(
                 get: { notifyWhenDone },
                 set: { onSetNotifyWhenDone($0) }
             ))
@@ -3237,7 +3237,7 @@ struct SessionRowView: View {
         }
         // Every Unpeel Session has an id. It is useful beyond agent/MCP
         // features, so keep it as a direct session-level action.
-        Button("Copy session ID") {
+        Button(L10n.t("Copy session ID")) {
             copyToPasteboard("Unpeel Session ID: \(session.id)")
         }
         Divider()
@@ -3247,14 +3247,17 @@ struct SessionRowView: View {
         // confirm first. Only live resumable launches offer it; for the
         // rest, Remove below is the sole clear-it-out verb.
         if canStop {
-            Button("Stop") {
+            Button(L10n.t("Stop")) {
                 onStop()
             }
         }
         // Remove stays the explicit destructive verb: it deletes Unpeel's
         // session directory (terminal output and artifacts). Provider
         // transcripts stay in the agent's own storage.
-        Button(session.isLive ? "Remove session" : "Remove from list", role: .destructive) {
+        Button(
+            session.isLive ? L10n.t("Remove session") : L10n.t("Remove from list"),
+            role: .destructive
+        ) {
             onRequestRemove()
         }
     }
@@ -3262,8 +3265,8 @@ struct SessionRowView: View {
     /// What this agent may do to other sessions through Unpeel's tools.
     /// Applies live: the MCP host re-reads the role on every call.
     private func agentAccessMenu(current: McpRole) -> some View {
-        Menu("Agent access") {
-            Picker("Agent access", selection: Binding(
+        Menu(L10n.t("Agent access")) {
+            Picker(L10n.t("Agent access"), selection: Binding(
                 get: { current },
                 set: { onSetAgentAccessRole($0) }
             )) {
@@ -3276,25 +3279,25 @@ struct SessionRowView: View {
             Divider()
             Text(current.detail)
         }
-        .help("What this agent may do to other sessions through Unpeel's tools")
+        .help(L10n.t("What this agent may do to other sessions through Unpeel's tools"))
     }
 
     @ViewBuilder
     private func copyTranscriptMenu(sessionID: String) -> some View {
         // Content toggles still come from Settings ▸ Transcripts; 0 means
         // the complete provider conversation.
-        Menu("Copy transcript") {
-            Button("Last 20 entries") {
+        Menu(L10n.t("Copy transcript")) {
+            Button(L10n.t("Last 20 entries")) {
                 onCopyTranscript(sessionID, 20)
             }
-            Button("Last 50 entries") {
+            Button(L10n.t("Last 50 entries")) {
                 onCopyTranscript(sessionID, 50)
             }
-            Button("Whole conversation") {
+            Button(L10n.t("Whole conversation")) {
                 onCopyTranscript(sessionID, 0)
             }
         }
-        .help("Copy the conversation as Markdown, using your Settings ▸ Transcripts content options")
+        .help(L10n.t("Copy the conversation as Markdown, using your Settings ▸ Transcripts content options"))
     }
 
     private func copyToPasteboard(_ value: String) {
@@ -3306,15 +3309,15 @@ struct SessionRowView: View {
     /// Remove + Cancel. Esc or clicking anywhere else cancels.
     private var confirmRemoveRow: some View {
         HStack(spacing: 7) {
-            Text(session.isLive ? "Remove session?" : "Remove from list?")
+            Text(session.isLive ? L10n.t("Remove session?") : L10n.t("Remove from list?"))
                 .font(Theme.rowLabelFont)
                 .foregroundStyle(Theme.foreground)
                 .lineLimit(1)
 
             Spacer(minLength: 4)
 
-            ConfirmPillButton(label: "Cancel", destructive: false, action: onCancelRemove)
-            ConfirmPillButton(label: "Remove", destructive: true, action: onConfirmRemove)
+            ConfirmPillButton(label: L10n.t("Cancel"), destructive: false, action: onCancelRemove)
+            ConfirmPillButton(label: L10n.t("Remove"), destructive: true, action: onConfirmRemove)
         }
         .padding(EdgeInsets(top: 2, leading: indentBase + CGFloat(depth) * 14, bottom: 2, trailing: 5))
         .frame(minHeight: Theme.sessionRowHeight)
@@ -3331,15 +3334,15 @@ struct SessionRowView: View {
     /// asking). Same inline pattern as the remove confirm.
     private var confirmStopRow: some View {
         HStack(spacing: 7) {
-            Text("Stop?")
+            Text(L10n.t("Stop?"))
                 .font(Theme.rowLabelFont)
                 .foregroundStyle(Theme.foreground)
                 .lineLimit(1)
 
             Spacer(minLength: 4)
 
-            ConfirmPillButton(label: "Cancel", destructive: false, action: onCancelStop)
-            ConfirmPillButton(label: "Stop", destructive: true, action: onConfirmStop)
+            ConfirmPillButton(label: L10n.t("Cancel"), destructive: false, action: onCancelStop)
+            ConfirmPillButton(label: L10n.t("Stop"), destructive: true, action: onConfirmStop)
         }
         .padding(EdgeInsets(top: 2, leading: indentBase + CGFloat(depth) * 14, bottom: 2, trailing: 5))
         .frame(minHeight: Theme.sessionRowHeight)
@@ -3400,8 +3403,8 @@ struct SessionRowView: View {
 
     private var inlineResumeHelp: String {
         switch resumePresentation {
-        case .resumeAgent: return "Resume agent in this terminal"
-        default: return "Resume session (continues the conversation)"
+        case .resumeAgent: return L10n.t("Resume agent in this terminal")
+        default: return L10n.t("Resume session (continues the conversation)")
         }
     }
 
@@ -3423,7 +3426,7 @@ private struct SidebarPinnedIndicator: View {
             .foregroundStyle(Theme.foreground.opacity(0.88))
             .frame(width: 14, height: 18)
             .fixedSize()
-            .accessibilityLabel("Pinned")
+            .accessibilityLabel(L10n.t("Pinned"))
             .allowsHitTesting(false)
     }
 }
@@ -3517,7 +3520,7 @@ private struct RemoveActionButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .help("Remove session")
+        .help(L10n.t("Remove session"))
     }
 }
 
@@ -3525,7 +3528,7 @@ private struct RemoveActionButton: View {
 /// Phosphor "arrow-clockwise" glyph, muted →
 /// foreground + fg-10% bg on hover (same treatment as StopActionButton).
 private struct RestartActionButton: View {
-    var help = "Resume session (continues the conversation)"
+    var help = L10n.t("Resume session (continues the conversation)")
     let action: () -> Void
 
     @State private var hovering = false
@@ -3635,7 +3638,7 @@ private struct SessionCommandIconStack: View {
                     )
                 }
                 .buttonStyle(.plain)
-                .help(item.isRepresentative ? "Focus representative pane" : "Focus pane")
+                .help(item.isRepresentative ? L10n.t("Focus representative pane") : L10n.t("Focus pane"))
                 .transition(
                     .asymmetric(
                         insertion: .identity,
@@ -3654,7 +3657,7 @@ private struct SessionCommandIconStack: View {
         .opacity(0.9)
         .frame(height: 20)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Multi-pane view with \(items.count) sessions")
+        .accessibilityLabel(L10n.format("Multi-pane view with %ld sessions", items.count))
     }
 }
 
@@ -4088,7 +4091,7 @@ struct SidebarFooter: View {
                 // One "+" for both create verbs. Add Project is a
                 // Controller-local filesystem verb, so its row hides while a
                 // remote Host is scoped; Add Workspace always applies.
-                FooterButton(icon: .addProjectPlus, help: "Add project or workspace") {
+                FooterButton(icon: .addProjectPlus, help: L10n.t("Add project or workspace")) {
                     addMenuPresented = true
                 }
                 // arrowEdge .top = the arrow sits on the button's top edge,
@@ -4098,7 +4101,7 @@ struct SidebarFooter: View {
                         if localVerbsVisible {
                             FooterAddMenuRow(
                                 icon: "folder.badge.plus",
-                                label: "Add Project…"
+                                label: L10n.t("Add Project…")
                             ) {
                                 addMenuPresented = false
                                 onAddProject()
@@ -4106,7 +4109,7 @@ struct SidebarFooter: View {
                         }
                         FooterAddMenuRow(
                             icon: "rectangle.stack.badge.plus",
-                            label: "Add Workspace…"
+                            label: L10n.t("Add Workspace…")
                         ) {
                             addMenuPresented = false
                             onAddWorkspace()
@@ -4118,12 +4121,12 @@ struct SidebarFooter: View {
             } else if localVerbsVisible {
                 // Release builds (no Host picker, no dots): the plain
                 // Add Project verb.
-                FooterButton(icon: .addProjectPlus, help: "Add Project", action: onAddProject)
+                FooterButton(icon: .addProjectPlus, help: L10n.t("Add Project"), action: onAddProject)
             }
             Spacer()
             // Collapse-all moved to the menu bar (Session ▸ Collapse All
             // Folders, ⌥⌘B) — the footer keeps only "+" / dots / settings.
-            FooterButton(icon: .settings, help: "Settings (⌘,)", action: onOpenSettings)
+            FooterButton(icon: .settings, help: L10n.t("Settings (⌘,)"), action: onOpenSettings)
         }
         .padding(EdgeInsets(top: 0, leading: 13, bottom: 9.5, trailing: 13))
     }

@@ -52,7 +52,11 @@ struct ViewerAvatarsView: View {
             }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(viewers.count) viewing device\(viewers.count == 1 ? "" : "s")")
+        .accessibilityLabel(
+            viewers.count == 1
+                ? L10n.format("%ld viewing device", viewers.count)
+                : L10n.format("%ld viewing devices", viewers.count)
+        )
         .accessibilityValue(viewers.map(\.displayName).joined(separator: ", "))
     }
 
@@ -82,8 +86,8 @@ private struct ViewerAvatarChip: View {
             .frame(width: size, height: size)
             .background(Circle().fill(chipColor))
             .overlay(Circle().strokeBorder(chipBorderColor, lineWidth: 1))
-            .help("\(viewer.displayName) — viewing this terminal")
-            .accessibilityLabel("\(viewer.displayName), viewing this terminal")
+            .help(L10n.format("%@ — viewing this terminal", viewer.displayName))
+            .accessibilityLabel(L10n.format("%@, viewing this terminal", viewer.displayName))
     }
 
     private var initials: String {

@@ -15,18 +15,20 @@ import SwiftUI
 /// its feature gate (`sessionsMcp`, `browserMcp`).
 struct AgentAccessSettingsPanel: View {
     @ObservedObject var store: UnpeelStore
+    @ObservedObject private var localization = LocalizationStore.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Form {
                 Section {} header: {
                     SettingsPaneHeader(
-                        title: "Agent access",
-                        description: "What connected agents may do through Unpeel's tools: read and "
-                            + "type into your other sessions, drive a real browser, prepare "
-                            + "worktrees, and publish to the gallery. Reads are open; every write "
-                            + "follows the policies here. This is a cooperative policy for agents "
-                            + "using Unpeel's tools, not a sandbox."
+                        title: L10n.t("Agent access"),
+                        description: L10n.t(
+                            "What connected agents may do through Unpeel's tools: read and "
+                                + "type into your other sessions, drive a real browser, prepare "
+                                + "worktrees, and publish to the gallery. Reads are open; every write "
+                                + "follows the policies here. This is a cooperative policy for agents "
+                                + "using Unpeel's tools, not a sandbox.")
                     )
                     .padding(.bottom, 4)
                 }
@@ -39,7 +41,8 @@ struct AgentAccessSettingsPanel: View {
                 }
                 if !UnpeelFeatureFlags.isEnabled(.sessionsMcp), !UnpeelFeatureFlags.isEnabled(.browserMcp) {
                     Section {
-                        Text("Turn on Sessions use or Browser use under Features to configure agent access.")
+                        Text(L10n.t(
+                            "Turn on Sessions use or Browser use under Features to configure agent access."))
                             .font(.system(size: 13))
                             .foregroundStyle(Theme.mutedForeground)
                     }
