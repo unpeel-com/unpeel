@@ -526,7 +526,7 @@ class HostTerminalView(
             canvas.drawBitmap(held, 0f, 0f, bitmapPaint)
             return
         }
-        // Live path: render into lastGood, then blit — next hold already has 首帧.
+        // Live path: render into lastGood, then blit — next hold already has frame 0.
         val bmp = ensureLastGood()
         if (bmp != null) {
             renderLiveInto(Canvas(bmp), emulator)

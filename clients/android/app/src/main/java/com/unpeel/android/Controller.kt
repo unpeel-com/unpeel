@@ -78,7 +78,7 @@ class Controller(context: Context) {
     /**
      * Another phone already letterboxed this session. We paint that shared
      * grid and never POST resize-desktop — two phones fighting over cols/rows
-     * is the infinite 刷刷刷 with Mac + phone A + phone B. The terminal view
+     * is the infinite flicker with Mac + phone A + phone B. The terminal view
      * width-fits that foreign grid locally so this phone still fills the screen.
      */
     var followingSharedFit by mutableStateOf(false)
@@ -518,7 +518,7 @@ class Controller(context: Context) {
                 // Replaying the journal on a row-only change paints the same
                 // frame twice and leaves the Grok screen as a short, miscolored
                 // block. A new column count has to replay; rows just reflow.
-                // Mid-session claim: freeze last pixels — no prepare-cover 刷.
+                // Mid-session claim: freeze last pixels — no prepare-cover flash.
                 if (terminal.columns != cols) {
                     // iOS: settle metrics, one HTTP tail, resume live.
                     // Old path restarted WS for a second baseline and felt
@@ -1534,7 +1534,7 @@ class Controller(context: Context) {
         if (generation != outputGeneration) return false
         // Silent until the bytes are in hand, then one paint. An empty
         // snapshot still publishes the cleared screen. Mid-session baselines
-        // hold the previous present so reclaim/reconnect does not 刷.
+        // hold the previous present so reclaim/reconnect does not flash.
         screen.prepare(
             columns,
             rows,

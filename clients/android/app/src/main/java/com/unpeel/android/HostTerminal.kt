@@ -14,7 +14,11 @@ import com.unpeel.controller.TerminalModeSignals
  * 2. Full wipe / alt-screen / DEC 2026 → freeze the last good bitmap.
  * 3. Keep freezing through the flood; debounce a quiet window.
  * 4. When quiet, snap once to live — no multi-frame reverse wipe
- *    (that wipe, repeated on every Cursor tick, was the 刷刷刷).
+ *    (that wipe, repeated on every Cursor tick, was the flicker).
+ *
+ * Live scroll is different: Grok/Claude ED2 every wheel tick already
+ * rebuilds the frame inside one append. Freezing for settle just
+ * steps the scroll — paint immediately and skip the hold.
  */
 class HostTerminal(
     @Suppress("UNUSED_PARAMETER") private val replies: (ByteArray) -> Unit,
@@ -88,6 +92,8 @@ class HostTerminal(
             emu.setDefaultBackground(appliedCanvas)
             emu.onPresentHold = {
                 paintHandler.post {
+                    // Live ED2 is painted in feed(); do not re-arm a settle freeze.
+                    if (live && !emu.synchronizedOutput) return@post
                     beginHold()
                     armSettle()
                 }
@@ -105,6 +111,15 @@ class HostTerminal(
         holdArmed = true
         onHoldFrame?.invoke()
         onRevealProgress?.invoke(0f)
+    }
+
+    private fun releaseHoldForLivePaint() {
+        if (!holdArmed && !emulator.presentHold) return
+        holdArmed = false
+        settleGeneration++
+        paintHandler.removeCallbacks(settleRunnable)
+        emulator.clearPresentHold()
+        onRevealProgress?.invoke(1f)
     }
 
     private fun armSettle() {
@@ -164,8 +179,19 @@ class HostTerminal(
         emulator.append(bytes, bytes.size)
         if (!notify) return
         paintDirty = true
-        if (emulator.synchronizedOutput || emulator.presentHold || holdArmed) {
-            // Mid-repaint: keep the frozen frame; every new chunk pushes settle out.
+        if (emulator.synchronizedOutput) {
+            beginHold()
+            armSettle()
+            return
+        }
+        if (live) {
+            // Wheel-driven TUI redraw: show the frame this chunk built.
+            releaseHoldForLivePaint()
+            scheduleFrame()
+            return
+        }
+        if (emulator.presentHold || holdArmed) {
+            // Replay wipe floods: keep last good pixels until quiet.
             if (emulator.presentHold) beginHold()
             armSettle()
             return
@@ -206,8 +232,7 @@ class HostTerminal(
         private const val TRANSCRIPT_ROWS = 2000
         /**
          * Quiet window after a wipe/flood before showing live VT.
-         * Cursor redraws often pause ~16–80ms between ED2 bursts — 40ms was
-         * short enough to start a reveal every tick (刷刷刷).
+         * Replay / DEC 2026 Cursor floods still need this debounce.
          */
         private const val SETTLE_MS = 160L
         const val CANVAS = 0xFF1A1B1D.toInt()
