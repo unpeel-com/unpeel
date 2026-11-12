@@ -23,10 +23,20 @@ class VtEmulator(
 
     var mouseTrackingActive = false
         private set
+    var mouseProtocolSgr = false
+        private set
+    var bracketedPaste = false
+        private set
     var alternateBufferActive = false
         private set
     var applicationCursorKeys = false
         private set
+
+    /** Host-bound replies (DA/DSR/cursor reports). */
+    var onReply: ((ByteArray) -> Unit)? = null
+    var onBell: (() -> Unit)? = null
+    var onTitle: ((String) -> Unit)? = null
+    var onCopy: ((String) -> Unit)? = null
 
     // --- Termux-shaped surface used by Unpeel's HostTerminal / HostTerminalView ---
     val mColumns: Int get() = screen.cols
@@ -35,8 +45,8 @@ class VtEmulator(
     fun isMouseTrackingActive(): Boolean = mouseTrackingActive
     fun isAlternateBufferActive(): Boolean = alternateBufferActive
     fun isCursorKeysApplicationMode(): Boolean = applicationCursorKeys
-    /** We always emit SGR mouse sequences from the Unpeel view. */
-    fun isMouseProtocolSgr(): Boolean = true
+    fun isMouseProtocolSgr(): Boolean = mouseProtocolSgr
+    fun isBracketedPasteMode(): Boolean = bracketedPaste
     fun getSelectedText(x1: Int, y1: Int, x2: Int, y2: Int): String = selectedTextAbs(x1, y1, x2, y2)
     fun setCursorBlinkState(@Suppress("UNUSED_PARAMETER") on: Boolean) {}
     fun setCursorBlinkingEnabled(@Suppress("UNUSED_PARAMETER") on: Boolean) {}
@@ -83,6 +93,8 @@ class VtEmulator(
         onAlt = false
         alternateBufferActive = false
         mouseTrackingActive = false
+        mouseProtocolSgr = false
+        bracketedPaste = false
         applicationCursorKeys = false
         cursorRow = 0
         cursorCol = 0
@@ -102,10 +114,10 @@ class VtEmulator(
                     if (b and 0xc0 == 0x80) {
                         utf8Codepoint = (utf8Codepoint shl 6) or (b and 0x3f)
                         utf8Expected--
-                        if (utf8Expected == 0) putChar(utf8Codepoint.toChar())
+                        if (utf8Expected == 0) putCodePoint(utf8Codepoint)
                     } else {
                         utf8Expected = 0
-                        putChar('?')
+                        putCodePoint('?'.code)
                         i--
                     }
                 }
@@ -122,7 +134,7 @@ class VtEmulator(
                     utf8Expected = 3
                     utf8Codepoint = b and 0x07
                 }
-                else -> putChar('?')
+                else -> putCodePoint('?'.code)
             }
         }
     }
@@ -180,13 +192,14 @@ class VtEmulator(
     private fun consumeByte(b: Int) {
         when (state) {
             State.GROUND -> when (b) {
-                0x00, 0x07 -> Unit
+                0x00 -> Unit
+                0x07 -> onBell?.invoke()
                 0x08 -> backspace()
                 0x09 -> tab()
                 0x0a, 0x0b, 0x0c -> lineFeed()
                 0x0d -> carriageReturn()
                 0x1b -> state = State.ESCAPE
-                else -> if (b >= 0x20) putChar(b.toChar())
+                else -> if (b >= 0x20) putCodePoint(b)
             }
             State.ESCAPE -> when (b) {
                 '['.code -> {
@@ -228,11 +241,17 @@ class VtEmulator(
                 else -> state = State.GROUND
             }
             State.OSC -> when (b) {
-                0x07 -> state = State.GROUND
+                0x07 -> {
+                    finishOsc()
+                    state = State.GROUND
+                }
                 0x1b -> state = State.OSC_ESC
                 else -> if (oscBuffer.length < 1024) oscBuffer.append(b.toChar())
             }
-            State.OSC_ESC -> state = State.GROUND
+            State.OSC_ESC -> {
+                if (b == '\\'.code) finishOsc()
+                state = State.GROUND
+            }
         }
     }
 
@@ -245,6 +264,8 @@ class VtEmulator(
                     when (csiParams[i]) {
                         1 -> applicationCursorKeys = enabled
                         9, 1000, 1002, 1003 -> mouseTrackingActive = enabled
+                        1006 -> mouseProtocolSgr = enabled
+                        2004 -> bracketedPaste = enabled
                         47, 1047, 1049 -> setAlt(enabled)
                     }
                 }
@@ -275,7 +296,39 @@ class VtEmulator(
             'm' -> applySgr()
             'G' -> cursorCol = (param(0, 1) - 1).coerceIn(0, screen.cols - 1)
             'd' -> cursorRow = (param(0, 1) - 1).coerceIn(0, screen.rows - 1)
+            // Device Status Report / cursor position — Host expects a reply.
+            'n' -> when (param(0, 0)) {
+                5 -> reply("\u001b[0n")
+                6 -> reply("\u001b[${cursorRow + 1};${cursorCol + 1}R")
+            }
+            // Primary DA
+            'c' -> if (param(0, 0) == 0) reply("\u001b[?6c")
         }
+    }
+
+    private fun finishOsc() {
+        val body = oscBuffer.toString()
+        oscBuffer = StringBuilder()
+        val semi = body.indexOf(';')
+        val ps = if (semi < 0) body else body.substring(0, semi)
+        val pt = if (semi < 0) "" else body.substring(semi + 1)
+        when (ps) {
+            "0", "2" -> onTitle?.invoke(pt)
+            "52" -> {
+                // OSC 52 clipboard: Pc;Pd — ignore Pc, take Pd if present.
+                val payload = pt.substringAfter(';', pt)
+                if (payload.isNotEmpty() && payload != "?") {
+                    runCatching {
+                        val bytes = android.util.Base64.decode(payload, android.util.Base64.DEFAULT)
+                        onCopy?.invoke(bytes.toString(Charsets.UTF_8))
+                    }
+                }
+            }
+        }
+    }
+
+    private fun reply(text: String) {
+        onReply?.invoke(text.toByteArray(Charsets.UTF_8))
     }
 
     private fun setAlt(enabled: Boolean) {
@@ -343,13 +396,16 @@ class VtEmulator(
         return if (v == 0 && default != 0) default else v
     }
 
-    private fun putChar(ch: Char) {
-        val width = if (ch.isWide()) 2 else 1
+    private fun putCodePoint(cp: Int) {
+        val width = WcWidth.width(cp)
+        if (width <= 0) return // combining / non-spacing: ignore for now
         if (cursorCol + width > screen.cols) {
             carriageReturn()
             lineFeed()
         }
         if (cursorRow !in 0 until screen.rows || cursorCol >= screen.cols) return
+        // Cell grid is UTF-16 char sized; non-BMP becomes U+FFFD but keeps wcwidth.
+        val ch = if (cp in 0..0xFFFF) cp.toChar() else '\uFFFD'
         val cell = screen.cell(cursorRow, cursorCol)
         cell.char = ch
         cell.applyStyle(style)
@@ -385,21 +441,4 @@ class VtEmulator(
     private enum class State {
         GROUND, ESCAPE, CSI_PARAM, OSC, OSC_ESC
     }
-}
-
-/** East-Asian wide glyphs occupy two cells; continuation is `\u0000`. */
-private fun Char.isWide(): Boolean {
-    val code = code
-    return code in 0x1100..0x115F ||
-        code in 0x2329..0x232A ||
-        code in 0x2E80..0xA4CF ||
-        code in 0xAC00..0xD7A3 ||
-        code in 0xF900..0xFAFF ||
-        code in 0xFE10..0xFE19 ||
-        code in 0xFE30..0xFE6F ||
-        code in 0xFF00..0xFF60 ||
-        code in 0xFFE0..0xFFE6 ||
-        code in 0x1F300..0x1F64F ||
-        code in 0x1F900..0x1F9FF ||
-        code in 0x20000..0x3FFFD
 }

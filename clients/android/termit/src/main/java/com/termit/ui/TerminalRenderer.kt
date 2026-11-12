@@ -117,6 +117,15 @@ class TerminalRenderer(
         textPaint.color = fg
         textPaint.isFakeBoldText = cell.bold
         textPaint.isUnderlineText = cell.underline
+
+        // Phone mono fonts either lack Braille or put the ink on the left of
+        // the em-square, so adjacent cells look uneven. Draw a regular 2×4 grid.
+        val cp = ch.code
+        if (cp in 0x2800..0x28FF) {
+            drawBraille(canvas, cp, left, y - fontLineSpacing, right - left, fontLineSpacing.toFloat())
+            return
+        }
+
         val paint = textPaint
         val glyph = ch.toString()
         paint.getTextBounds(glyph, 0, glyph.length, inkBounds)
@@ -140,5 +149,46 @@ class TerminalRenderer(
         }
         canvas.drawText(glyph, drawX, textY, paint)
         if (saved) canvas.restore()
+    }
+
+    /**
+     * U+2800 Braille Patterns: bit0=dot1 … bit7=dot8. Layout inside one cell:
+     * ```
+     * 1 4
+     * 2 5
+     * 3 6
+     * 7 8
+     * ```
+     */
+    private fun drawBraille(
+        canvas: Canvas,
+        code: Int,
+        left: Float,
+        top: Float,
+        width: Float,
+        height: Float,
+    ) {
+        val bits = code - 0x2800
+        if (bits == 0) return
+        val insetX = width * 0.22f
+        val insetY = height * 0.14f
+        val colGap = width - insetX * 2f
+        val rowGap = height - insetY * 2f
+        val radius = minOf(width, height) * 0.11f
+        val dots = intArrayOf(
+            /*1*/ 0, 0, /*2*/ 0, 1, /*3*/ 0, 2, /*4*/ 1, 0,
+            /*5*/ 1, 1, /*6*/ 1, 2, /*7*/ 0, 3, /*8*/ 1, 3,
+        )
+        var bit = 0
+        while (bit < 8) {
+            if ((bits shr bit) and 1 != 0) {
+                val col = dots[bit * 2]
+                val row = dots[bit * 2 + 1]
+                val cx = left + insetX + col * colGap
+                val cy = top + insetY + row * (rowGap / 3f)
+                canvas.drawCircle(cx, cy, radius, textPaint)
+            }
+            bit++
+        }
     }
 }
