@@ -124,16 +124,16 @@ class PairingRejected(message: String) : IllegalArgumentException(message)
  * and a `/mobile` direct route. The checks match the iOS Controller.
  */
 fun acceptPairingResponse(json: JSONObject, payload: PairingPayload, deviceID: String): PairingResult {
-    if (json.optInt("protocolVersion", -1) != 1) throw PairingRejected("协议版本不兼容")
+    if (json.optInt("protocolVersion", -1) != 1) throw PairingRejected("Incompatible protocol version")
     val macID = json.optString("macID")
-    if (macID != payload.macID) throw PairingRejected("Host 身份不匹配")
+    if (macID != payload.macID) throw PairingRejected("Host identity mismatch")
     val endpoint = json.optString("endpoint")
-    if (!sameResource(endpoint, payload.endpoint)) throw PairingRejected("配对地址不匹配")
+    if (!sameResource(endpoint, payload.endpoint)) throw PairingRejected("Pairing endpoint mismatch")
     val direct = json.optString("directEndpoint").ifEmpty { null }
-    if (direct != null && !validDirectEndpoint(direct)) throw PairingRejected("直连地址无效")
-    if (json.optString("deviceID") != deviceID) throw PairingRejected("设备身份不匹配")
+    if (direct != null && !validDirectEndpoint(direct)) throw PairingRejected("Invalid direct endpoint")
+    if (json.optString("deviceID") != deviceID) throw PairingRejected("Device identity mismatch")
     val authToken = json.optString("authToken")
-    val relay = json.optJSONObject("relayCredentials") ?: throw PairingRejected("配对凭据无效")
+    val relay = json.optJSONObject("relayCredentials") ?: throw PairingRejected("Invalid pairing credentials")
     val relayURL = relay.optString("relayURL")
     val relayToken = relay.optString("relayToken")
     val e2eKeyB64 = relay.optString("e2eKeyB64")
@@ -146,7 +146,7 @@ fun acceptPairingResponse(json: JSONObject, payload: PairingPayload, deviceID: S
         e2eKey == null ||
         e2eKey.size != 32
     ) {
-        throw PairingRejected("配对凭据无效")
+        throw PairingRejected("Invalid pairing credentials")
     }
     return PairingResult(
         protocolVersion = 1,

@@ -50,6 +50,8 @@ class HostTerminalView(
     var onMenuChanged: ((Boolean) -> Unit)? = null
     /** Claude, Grok, or OpenCode, for the wheel guess before modes arrive. */
     var prefersRemoteWheel: Boolean = false
+    /** cursor-agent: clicks ok; wheel/arrows must stay local scrollback. */
+    var echoesMouseWheel: Boolean = false
     /** Link relay. iOS shortens the release glide on that path. */
     var relayed: Boolean = false
     var canvasColor: Int = CANVAS
@@ -249,24 +251,22 @@ class HostTerminalView(
                 moveCursor(emulator, e2)
                 return true
             }
-            // Magnified, or shared-grid taller than this phone after width-fit.
-            if (zoom > 1f || sharedGridOverflows()) {
-                zoomPanX -= distanceX
-                zoomPanY -= distanceY
-                clampZoom()
-                invalidate()
-                return true
-            }
             // Finger down (negative distance) moves toward older rows.
-            // The picture shifts with the finger immediately; a whole row
-            // is committed only after the finger has travelled one cell.
+            // Remote wheel first; then local scrollback (Cursor); pan last
+            // when the shared grid is taller than this phone after width-fit.
             if (forwardRemote(emulator, e2, distanceY)) return true
             if (distanceY != 0f && cellHeight > 0) {
                 scrollRemainder += distanceY
                 applyScrollLines(emulator)
             }
-            panX -= distanceX.toInt()
-            horizontalShift(emulator)
+            if (zoom > 1f || sharedGridOverflows()) {
+                zoomPanX -= distanceX
+                zoomPanY -= distanceY
+                clampZoom()
+            } else {
+                panX -= distanceX.toInt()
+                horizontalShift(emulator)
+            }
             invalidate()
             return true
         }
@@ -659,6 +659,7 @@ class HostTerminalView(
             alternateScreen = emulator.isAlternateBufferActive(),
             sawMouseOrAlternateDisable = terminal.sawMouseOrAlternateDisable,
             prefersRemoteMouseWheel = prefersRemoteWheel,
+            echoesMouseWheel = echoesMouseWheel,
         )
     }
 
@@ -729,7 +730,8 @@ class HostTerminalView(
 
     /** Rows of the current screen that sit above the view, plus saved scrollback. */
     private fun maxOffset(emulator: VtEmulator): Int {
-        val history = if (emulator.alternateBufferActive) 0 else emulator.screen.activeTranscriptRows
+        // Alt-screen scrollback is real on this client (cursor-agent local flick).
+        val history = emulator.screen.activeTranscriptRows
         val hidden = (emulator.mRows - visibleRows()).coerceAtLeast(0)
         return hidden + history
     }

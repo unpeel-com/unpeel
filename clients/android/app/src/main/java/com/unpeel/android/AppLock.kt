@@ -42,18 +42,18 @@ class AppLock(context: Context) {
     fun onForeground(activity: Activity): Intent? {
         if (!locked || autoPrompted || authInFlight) return null
         autoPrompted = true
-        return begin(activity, "解锁 Unpeel") { ok -> if (ok) unlock() }
+        return begin(activity, "Unlock Unpeel") { ok -> if (ok) unlock() }
     }
 
     fun unlock(activity: Activity): Intent? {
         if (!locked || authInFlight) return null
-        return begin(activity, "解锁 Unpeel") { ok -> if (ok) unlock() }
+        return begin(activity, "Unlock Unpeel") { ok -> if (ok) unlock() }
     }
 
     /** Confirms the method works before the next background depends on it. */
     fun arm(activity: Activity): Intent? {
         if (enabled || authInFlight) return null
-        return begin(activity, "确认后，离开应用时会锁上 Unpeel") { ok ->
+        return begin(activity, "Confirm to lock Unpeel when you leave the app") { ok ->
             if (!ok) return@begin
             enabled = true
             locked = false
@@ -85,7 +85,7 @@ class AppLock(context: Context) {
         if (authInFlight) return null
         val keyguard = activity.getSystemService(KeyguardManager::class.java)
         if (keyguard?.isDeviceSecure != true) {
-            lastError = "这台手机没有指纹、面容或锁屏密码"
+            lastError = "This phone has no fingerprint, face, or screen lock"
             onResult(false)
             return null
         }
@@ -99,7 +99,7 @@ class AppLock(context: Context) {
         val intent = keyguard.createConfirmDeviceCredentialIntent("Unpeel", reason)
         if (intent == null) {
             authInFlight = false
-            lastError = "这台手机没有锁屏密码"
+            lastError = "This phone has no screen lock"
             onResult(false)
             return null
         }

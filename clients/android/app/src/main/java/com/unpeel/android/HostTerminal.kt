@@ -18,7 +18,9 @@ import com.unpeel.controller.TerminalModeSignals
  *
  * Live scroll is different: Grok/Claude ED2 every wheel tick already
  * rebuilds the frame inside one append. Freezing for settle just
- * steps the scroll — paint immediately and skip the hold.
+ * steps the scroll — paint immediately and skip the hold. Cursor's
+ * DEC 2026 brackets still hold mid-frame, then snap on ?2026l (no
+ * extra settle delay on the live path).
  */
 class HostTerminal(
     @Suppress("UNUSED_PARAMETER") private val replies: (ByteArray) -> Unit,
@@ -72,7 +74,9 @@ class HostTerminal(
     private val settleRunnable = Runnable {
         if (!holdArmed) return@Runnable
         if (emulator.synchronizedOutput) {
-            // Wait for ?2026l — onSynchronizedOutputEnd restarts settle.
+            // Still inside ?2026h — retry; do not drop the settle chain
+            // or a missing end callback freezes the bitmap forever.
+            armSettle()
             return@Runnable
         }
         // One shot to live. No bottom→top scrub.
@@ -101,7 +105,13 @@ class HostTerminal(
             emu.onSynchronizedOutputEnd = {
                 paintHandler.post {
                     paintDirty = true
-                    armSettle()
+                    if (live) {
+                        // Cursor scroll: bracket closed — show the frame now.
+                        releaseHoldForLivePaint()
+                        scheduleFrame()
+                    } else {
+                        armSettle()
+                    }
                 }
             }
         }
@@ -180,12 +190,13 @@ class HostTerminal(
         if (!notify) return
         paintDirty = true
         if (emulator.synchronizedOutput) {
+            // Mid DEC 2026 bracket — keep last good pixels until ?2026l.
             beginHold()
             armSettle()
             return
         }
         if (live) {
-            // Wheel-driven TUI redraw: show the frame this chunk built.
+            // Wheel-driven TUI redraw / closed sync bracket: show this frame.
             releaseHoldForLivePaint()
             scheduleFrame()
             return
@@ -232,7 +243,7 @@ class HostTerminal(
         private const val TRANSCRIPT_ROWS = 2000
         /**
          * Quiet window after a wipe/flood before showing live VT.
-         * Replay / DEC 2026 Cursor floods still need this debounce.
+         * Replay still needs this debounce; live DEC 2026 snaps on ?2026l.
          */
         private const val SETTLE_MS = 160L
         const val CANVAS = 0xFF1A1B1D.toInt()

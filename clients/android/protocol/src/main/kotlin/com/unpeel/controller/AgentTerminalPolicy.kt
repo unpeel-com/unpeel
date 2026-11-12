@@ -19,6 +19,14 @@ object AgentTerminalPolicy {
 
     private val remoteMouseWheelProviders = setOf("claude", "grok", "opencode")
 
+    /**
+     * cursor-agent enables mouse for clicks (Run Everything, etc.) but echoes
+     * SGR wheel into the composer as `[<65;…M`. Arrow-key alt-scroll is also
+     * wrong — it steps prompt history. Phone and Mac each scroll local
+     * scrollback (Ghostty on Mac); there is no PTY wheel sync like Claude.
+     */
+    private val wheelEchoProviders = setOf("cursor", "cursor-agent")
+
     private val navMarkers = listOf("to navigate", "↑/↓", "↑ ↓", "▲/▼", "arrow keys")
     private val selectMarkers = listOf(
         "to select", "to confirm", "to choose", "enter to", "esc to cancel", "return to",
@@ -33,15 +41,12 @@ object AgentTerminalPolicy {
     )
 
     fun prefersRemoteMouseWheel(providerID: String?, command: String, activeRuntimeID: String?): Boolean {
-        val runtime = activeRuntimeID?.lowercase()
-        if (runtime != null && runtime in remoteMouseWheelProviders) return true
-        val provider = providerID.orEmpty().lowercase()
-        if (provider.isNotEmpty() && provider in remoteMouseWheelProviders) return true
-        val head = command.trim().split(Regex("\\s+")).firstOrNull()
-            ?.substringAfterLast('/')
-            ?.lowercase()
-            .orEmpty()
-        return head.isNotEmpty() && head in remoteMouseWheelProviders
+        return identityMatches(providerID, command, activeRuntimeID, remoteMouseWheelProviders)
+    }
+
+    /** cursor-agent: clicks ok, wheel becomes `[<65;…M` in the prompt. */
+    fun echoesMouseWheel(providerID: String?, command: String, activeRuntimeID: String?): Boolean {
+        return identityMatches(providerID, command, activeRuntimeID, wheelEchoProviders)
     }
 
     fun wheelForwarding(
@@ -50,11 +55,31 @@ object AgentTerminalPolicy {
         alternateScreen: Boolean,
         sawMouseOrAlternateDisable: Boolean,
         prefersRemoteMouseWheel: Boolean,
+        echoesMouseWheel: Boolean = false,
     ): Wheel {
-        if (mouseTracking) return Wheel.Mouse
-        if (alternateScreen) return Wheel.AlternateScroll
-        if (modesKnown) return Wheel.None
+        // Even with DECSET 1000 on (for clicks), echo agents must not receive
+        // SGR wheel or arrow alt-scroll — local Ghostty-scale scrollback only.
+        if (mouseTracking && !echoesMouseWheel) return Wheel.Mouse
+        if (alternateScreen && !echoesMouseWheel) return Wheel.AlternateScroll
+        if (modesKnown || echoesMouseWheel) return Wheel.None
         return if (prefersRemoteMouseWheel && !sawMouseOrAlternateDisable) Wheel.Mouse else Wheel.None
+    }
+
+    private fun identityMatches(
+        providerID: String?,
+        command: String,
+        activeRuntimeID: String?,
+        names: Set<String>,
+    ): Boolean {
+        val runtime = activeRuntimeID?.lowercase()
+        if (runtime != null && runtime in names) return true
+        val provider = providerID.orEmpty().lowercase()
+        if (provider.isNotEmpty() && provider in names) return true
+        val head = command.trim().split(Regex("\\s+")).firstOrNull()
+            ?.substringAfterLast('/')
+            ?.lowercase()
+            .orEmpty()
+        return head.isNotEmpty() && head in names
     }
 
     /** Phone gate: a footer is not enough. At least two numbered choices must be visible. */

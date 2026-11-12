@@ -83,6 +83,25 @@ class AgentTerminalPolicyTest {
     }
 
     @Test
+    fun cursorEchoAgentStaysOnLocalScrollback() {
+        // Mouse on for clicks, alt screen up — still local only.
+        assertEquals(
+            AgentTerminalPolicy.Wheel.None,
+            AgentTerminalPolicy.wheelForwarding(
+                modesKnown = true,
+                mouseTracking = true,
+                alternateScreen = true,
+                sawMouseOrAlternateDisable = false,
+                prefersRemoteMouseWheel = false,
+                echoesMouseWheel = true,
+            ),
+        )
+        assertTrue(AgentTerminalPolicy.echoesMouseWheel(null, "cursor-agent --force", null))
+        assertTrue(AgentTerminalPolicy.echoesMouseWheel("cursor", "/bin/zsh", null))
+        assertFalse(AgentTerminalPolicy.echoesMouseWheel(null, "claude", null))
+    }
+
+    @Test
     fun onlyClaudeGrokAndOpenCodeAreGuessed() {
         assertTrue(AgentTerminalPolicy.prefersRemoteMouseWheel(null, "/bin/zsh", "Claude"))
         assertTrue(AgentTerminalPolicy.prefersRemoteMouseWheel("claude", "/bin/zsh", null))

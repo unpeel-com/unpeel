@@ -11,7 +11,9 @@ class VtEmulator(
 ) {
     private val scrollbackLimit = scrollbackLimit.coerceAtLeast(0)
     private var primary = ScreenBuffer(cols, rows, this.scrollbackLimit)
-    private var alternate = ScreenBuffer(cols, rows, scrollbackLimit = 0)
+    // Phone remote clients keep alt-screen scrollback so cursor-agent (local
+    // scroll only — no SGR wheel) can flick through lines that scrolled off.
+    private var alternate = ScreenBuffer(cols, rows, this.scrollbackLimit)
     private var onAlt = false
 
     val screen: ScreenBuffer get() = if (onAlt) alternate else primary

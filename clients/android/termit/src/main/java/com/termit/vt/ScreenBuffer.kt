@@ -211,10 +211,32 @@ class ScreenBuffer(
     }
 
     private fun shiftRegionUp(top: Int, bottom: Int) {
+        // DECSTBM scroll: keep the line leaving the top of the region in
+        // scrollback so Cursor-style TUIs stay flickable on the phone.
+        if (scrollbackLimit > 0 && top == scrollTop) {
+            pushExternalRowToScrollback(top)
+        }
         for (y in top until bottom) {
             copyExternalRow(y + 1, y)
         }
         clearRow(internal(bottom))
+    }
+
+    /**
+     * Copy [externalRow] into scrollback. Does not move the live screen
+     * window — [shiftRegionUp] still slides the region afterward.
+     */
+    private fun pushExternalRowToScrollback(externalRow: Int) {
+        if (scrollbackLimit <= 0) return
+        val dest = if (activeTranscript < scrollbackLimit) {
+            internal(-activeTranscript - 1)
+        } else {
+            // Ring full: overwrite the oldest history row.
+            internal(-activeTranscript)
+        }
+        val src = lines[internal(externalRow)]
+        for (x in 0 until cols) lines[dest][x].copyFrom(src[x])
+        if (activeTranscript < scrollbackLimit) activeTranscript++
     }
 
     private fun shiftRegionDown(top: Int, bottom: Int) {

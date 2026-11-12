@@ -441,18 +441,18 @@ private fun TerminalHome(
                     sheet = null
                     val id = organizeID ?: controller.openSessionID
                     if (id != null) controller.sessionAction(id, "remove")
-                }) { Text("移除", color = Attention) }
+                }) { Text("Remove", color = Attention) }
             },
-            dismissButton = { TextButton(onClick = { confirmingRemove = false }) { Text("取消") } },
-            title = { Text("移除这个会话") },
-            text = { Text("正在运行的进程会先停掉。会话从列表里消失，对话本身还在。") },
+            dismissButton = { TextButton(onClick = { confirmingRemove = false }) { Text("Cancel") } },
+            title = { Text("Remove this session") },
+            text = { Text("Running processes will stop first. The session leaves the list; the conversation itself stays.") },
             containerColor = Sheet,
         )
     }
     controller.artifactImage?.let { bitmap ->
         AlertDialog(
             onDismissRequest = controller::dismissArtifact,
-            confirmButton = { TextButton(onClick = controller::dismissArtifact) { Text("关闭") } },
+            confirmButton = { TextButton(onClick = controller::dismissArtifact) { Text("Close") } },
             text = { Image(bitmap = bitmap.asImageBitmap(), contentDescription = null) },
             containerColor = Sheet,
         )
@@ -484,14 +484,14 @@ private fun EmptyTerminal(disconnected: Boolean, hostName: String?, onOpen: () -
         }
         Spacer(Modifier.height(18.dp))
         Text(
-            if (disconnected) "正在连接 ${hostName ?: "Host"}…" else "打开会话",
+            if (disconnected) "Connecting ${hostName ?: "Host"}…" else "Open sessions",
             color = Foreground.copy(alpha = 0.62f),
             fontSize = 15.sp,
         )
         if (!disconnected) {
             Spacer(Modifier.height(16.dp))
             TextButton(onClick = onOpen) {
-                Text("会话列表", color = Foreground, fontWeight = FontWeight.SemiBold)
+                Text("Sessions", color = Foreground, fontWeight = FontWeight.SemiBold)
             }
         }
     }
@@ -591,7 +591,7 @@ private fun TerminalSurface(
         controller.error?.let { message ->
             Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(message, color = Color(0xFFE85D5D), fontSize = 12.sp, modifier = Modifier.weight(1f), maxLines = 2)
-                TextButton(onClick = controller::dismissError) { Text("关闭") }
+                TextButton(onClick = controller::dismissError) { Text("Close") }
             }
         }
         if (session.status == "exited" && session.capabilities?.restart == true) {
@@ -893,6 +893,11 @@ private fun ColumnScope.TerminalGrid(
                     openSession?.command.orEmpty(),
                     openSession?.activeRuntimeID,
                 )
+                view.echoesMouseWheel = AgentTerminalPolicy.echoesMouseWheel(
+                    openSession?.providerID,
+                    openSession?.command.orEmpty(),
+                    openSession?.activeRuntimeID,
+                )
                 shownTerminal.applyCanvas(canvas)
                 view.canvasColor = canvas
                 view.fitWidthToSharedGrid = controller.followingSharedFit
@@ -933,9 +938,9 @@ private fun ColumnScope.TerminalGrid(
                     .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(18.dp)),
             ) {
                 TextButton(onClick = {
-                    if (surface?.copySelection() != true) controller.reportError("没有可复制的文字")
-                }) { Text("复制", color = Foreground) }
-                TextButton(onClick = { surface?.clearSelection() }) { Text("取消", color = Muted) }
+                    if (surface?.copySelection() != true) controller.reportError("Nothing to copy")
+                }) { Text("Copy", color = Foreground) }
+                TextButton(onClick = { surface?.clearSelection() }) { Text("Cancel", color = Muted) }
             }
         }
         if (menuActive && imeBottom == 0) {
@@ -961,7 +966,7 @@ private fun ColumnScope.TerminalGrid(
                     .background(Color(0xF01A1B1D), RoundedCornerShape(18.dp))
                     .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(18.dp)),
             ) {
-                Text("适配本机", color = Foreground, fontSize = 13.sp)
+                Text("Fit to this phone", color = Foreground, fontSize = 13.sp)
             }
         }
         if (controller.sessionPreparing) {
@@ -1003,7 +1008,7 @@ private fun TerminalPrepareCover(canvas: Int, modifier: Modifier = Modifier) {
     ) {
         val lineWidth = (maxWidth - 64.dp).coerceAtLeast(0.dp)
         Column(Modifier.padding(start = 32.dp, end = 32.dp, top = 22.dp).graphicsLayer { this.alpha = alpha }) {
-            Text("正在准备", color = Color.White.copy(alpha = 0.72f), fontSize = 13.sp)
+            Text("Preparing", color = Color.White.copy(alpha = 0.72f), fontSize = 13.sp)
             Spacer(Modifier.height(18.dp))
             fractions.forEach { fraction ->
                 Box(
@@ -1161,8 +1166,8 @@ private fun SessionDrawer(
 @Composable
 private fun BoxScope.LinkNotice(connection: String) {
     val text = when (connection) {
-        "局域网" -> "已连接局域网"
-        "公网" -> "已连接公网"
+        "LAN" -> "Connected on LAN"
+        "Public" -> "Connected on public network"
         else -> null
     }
     var visible by remember { mutableStateOf(false) }
@@ -1202,15 +1207,15 @@ private fun WorkspaceHeader(controller: Controller, onClick: () -> Unit) {
     val title = current?.name?.takeIf { it.isNotBlank() }
         ?: snapshot?.macName
         ?: controller.selectedHost?.macName
-        ?: "工作区"
-    val failing = snapshot == null && controller.connection != "正在连接" && controller.connection != "未配对"
+        ?: "Workspaces"
+    val failing = snapshot == null && controller.connection != "Connecting" && controller.connection != "Unpaired"
     val subtitle = when {
         snapshot == null -> when (controller.connection) {
-            "未配对" -> "未配对"
-            "正在连接" -> "正在连接…"
-            else -> "连接中断"
+            "Unpaired" -> "Unpaired"
+            "Connecting" -> "Connecting…"
+            else -> "Disconnected"
         }
-        controller.usingRelay -> "经由 Unpeel Remote"
+        controller.usingRelay -> "Via Unpeel Remote"
         else -> null
     }
     Row(
@@ -1500,12 +1505,12 @@ private fun ApprovalOverlay(approval: PendingApproval, more: Int, onAnswer: (Str
             Text(approval.body, color = Muted, fontSize = 13.sp)
             if (more > 0) {
                 Spacer(Modifier.height(6.dp))
-                Text("还有 $more 个在等", color = Muted.copy(alpha = 0.7f), fontSize = 11.sp)
+                Text("$more more waiting", color = Muted.copy(alpha = 0.7f), fontSize = 11.sp)
             }
             Spacer(Modifier.height(14.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                TextButton(onClick = { onAnswer(approval.id, false) }, modifier = Modifier.weight(1f)) { Text("不允许") }
-                Button(onClick = { onAnswer(approval.id, true) }, modifier = Modifier.weight(1f)) { Text("允许") }
+                TextButton(onClick = { onAnswer(approval.id, false) }, modifier = Modifier.weight(1f)) { Text("Don’t allow") }
+                Button(onClick = { onAnswer(approval.id, true) }, modifier = Modifier.weight(1f)) { Text("Allow") }
             }
         }
     }
@@ -1522,9 +1527,9 @@ private fun HostSheet(
     val context = LocalContext.current
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = Sheet) {
         Column(Modifier.padding(horizontal = 18.dp, vertical = 8.dp).verticalScroll(rememberScrollState())) {
-            Text("工作区", color = Foreground, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+            Text("Workspaces", color = Foreground, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(6.dp))
-            Text("每个配对是一个工作区。点一行切换，下面可以再配一台。", color = Muted, fontSize = 13.sp)
+            Text("Each pairing is a workspace. Tap a row to switch, or pair another Mac below.", color = Muted, fontSize = 13.sp)
             Spacer(Modifier.height(14.dp))
             controller.hosts.forEach { host ->
                 val selected = host.macID == controller.selectedHost?.macID
@@ -1543,20 +1548,20 @@ private fun HostSheet(
                     }) {
                         Text(host.macName, color = Foreground, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(
-                            if (selected) "当前 · ${host.endpoint}" else host.endpoint,
+                            if (selected) "Current · ${host.endpoint}" else host.endpoint,
                             color = Muted,
                             fontSize = 13.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
-                    TextButton(onClick = { controller.forget(host.macID) }) { Text("忘记", color = Attention, fontSize = 15.sp) }
+                    TextButton(onClick = { controller.forget(host.macID) }) { Text("Forget", color = Attention, fontSize = 15.sp) }
                 }
             }
             val workspaces = controller.snapshot?.workspaces.orEmpty()
             if (workspaces.size > 1) {
                 Spacer(Modifier.height(16.dp))
-                Text("这台 Mac 上的工作区", color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                Text("Workspaces on this Mac", color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(6.dp))
                 workspaces.forEach { workspace ->
                     Row(
@@ -1573,17 +1578,17 @@ private fun HostSheet(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(workspace.name, color = Foreground, fontSize = 16.sp, modifier = Modifier.weight(1f))
-                        if (workspace.isCurrent) Text("当前", color = Muted, fontSize = 13.sp)
+                        if (workspace.isCurrent) Text("Current", color = Muted, fontSize = 13.sp)
                     }
                 }
             }
             Spacer(Modifier.height(16.dp))
-            Text("安全", color = Foreground, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            Text("Security", color = Foreground, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(6.dp))
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("离开时锁定", color = Foreground, fontSize = 15.sp)
-                    Text("指纹、面容，或锁屏密码", color = Muted, fontSize = 12.sp)
+                    Text("Lock when leaving", color = Foreground, fontSize = 15.sp)
+                    Text("Fingerprint, Face ID, or screen lock", color = Muted, fontSize = 12.sp)
                 }
                 val activity = context as? Activity
                 Switch(
@@ -1598,7 +1603,7 @@ private fun HostSheet(
                 Text(it, color = Attention, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
             }
             Spacer(Modifier.height(16.dp))
-            Text("添加另一台", color = Foreground, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            Text("Add another", color = Foreground, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(8.dp))
             PairFields(controller, context)
             Spacer(Modifier.height(24.dp))
@@ -1613,10 +1618,10 @@ private fun ActivitySheet(controller: Controller, onDismiss: () -> Unit, onSelec
     val projects = controller.snapshot?.projects.orEmpty().associateBy { it.id }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = Color(0xFF16171C)) {
         Column(Modifier.padding(horizontal = 12.dp).verticalScroll(rememberScrollState())) {
-            ActivityGroup("等待处理", sessions.filter { it.activity == "blocked" }, projects, onSelect)
-            ActivityGroup("正在运行", sessions.filter { it.activity == "working" || it.activity == "starting" }, projects, onSelect)
-            ActivityGroup("最近", sessions.filter { it.activity != "blocked" && it.activity != "working" && it.activity != "starting" }.take(12), projects, onSelect)
-            if (sessions.isEmpty()) Text("没有正在进行的会话", color = Muted, modifier = Modifier.padding(18.dp), fontSize = 13.sp)
+            ActivityGroup("Waiting", sessions.filter { it.activity == "blocked" }, projects, onSelect)
+            ActivityGroup("Running", sessions.filter { it.activity == "working" || it.activity == "starting" }, projects, onSelect)
+            ActivityGroup("Recent", sessions.filter { it.activity != "blocked" && it.activity != "working" && it.activity != "starting" }.take(12), projects, onSelect)
+            if (sessions.isEmpty()) Text("No active sessions", color = Muted, modifier = Modifier.padding(18.dp), fontSize = 13.sp)
             Spacer(Modifier.height(24.dp))
         }
     }
@@ -1649,13 +1654,13 @@ private fun ActivityGroup(title: String, sessions: List<SessionSummary>, project
 private fun GallerySheet(controller: Controller, onPickFile: () -> Unit, onDismiss: () -> Unit) {
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Sheet) {
         Column(Modifier.padding(horizontal = 16.dp).verticalScroll(rememberScrollState())) {
-            Text("截图和图库", color = Foreground, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-            TextButton(onClick = controller::requestScreenshot) { Text("现在截一张", color = Foreground) }
+            Text("Screenshots & library", color = Foreground, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+            TextButton(onClick = controller::requestScreenshot) { Text("Capture now", color = Foreground) }
             TextButton(onClick = {
                 onPickFile()
                 onDismiss()
-            }) { Text("附上文件", color = Foreground) }
-            if (controller.artifacts.isEmpty()) Text("还没有截图。", color = Muted, fontSize = 13.sp)
+            }) { Text("Attach a file", color = Foreground) }
+            if (controller.artifacts.isEmpty()) Text("No screenshots yet.", color = Muted, fontSize = 13.sp)
             controller.artifacts.forEach { artifact ->
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     TextButton(
@@ -1668,7 +1673,7 @@ private fun GallerySheet(controller: Controller, onPickFile: () -> Unit, onDismi
                         TextButton(onClick = {
                             controller.pasteArtifact(artifact.kind, artifact.name)
                             onDismiss()
-                        }) { Text("贴上", color = Foreground) }
+                        }) { Text("Paste", color = Foreground) }
                     }
                 }
             }
@@ -1690,14 +1695,14 @@ private fun OrganizeSheet(controller: Controller, session: SessionSummary, onDis
     val showTranscript = AgentCatalog.supportsTranscript(session.providerID, session.command)
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Sheet) {
         Column(Modifier.padding(horizontal = 18.dp).verticalScroll(rememberScrollState())) {
-            Text("编辑会话", color = Foreground, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+            Text("Edit session", color = Foreground, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(10.dp))
             OutlinedTextField(value = title, onValueChange = { title = it }, singleLine = true, modifier = Modifier.fillMaxWidth())
             if (showNotify) {
                 Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text("完成后通知", color = Foreground, fontSize = 15.sp)
-                        Text("这一轮结束时提醒你", color = Muted, fontSize = 12.sp)
+                        Text("Notify when done", color = Foreground, fontSize = 15.sp)
+                        Text("Alert you when this turn finishes", color = Muted, fontSize = 12.sp)
                     }
                     Switch(checked = notify, onCheckedChange = { notify = it })
                 }
@@ -1717,21 +1722,21 @@ private fun OrganizeSheet(controller: Controller, session: SessionSummary, onDis
                         }
                     },
                     enabled = title.isNotBlank(),
-                ) { Text("保存") }
+                ) { Text("Save") }
                 TextButton(onClick = { controller.organize(session.id, pinned = !session.pinned) }) {
-                    Text(if (session.pinned) "取消置顶" else "置顶")
+                    Text(if (session.pinned) "Unpin" else "Pin")
                 }
             }
             if (showTranscript) {
-                Text("复制记录", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
+                Text("Copy transcript", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
                 Row {
-                    listOf(20 to "最近 20 条", 50 to "最近 50 条", 0 to "全部").forEach { (entries, label) ->
+                    listOf(20 to "Last 20", 50 to "Last 50", 0 to "All").forEach { (entries, label) ->
                         TextButton(onClick = {
                             controller.copyTranscript(session.id, entries) { markdown, failure ->
                                 if (markdown != null) {
                                     val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
                                     clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("transcript", markdown))
-                                    note = "已复制为 Markdown"
+                                    note = "Copied as Markdown"
                                 } else {
                                     note = failure
                                 }
@@ -1744,18 +1749,18 @@ private fun OrganizeSheet(controller: Controller, session: SessionSummary, onDis
                 ResumeOffer.Agent -> TextButton(onClick = {
                     controller.sessionAction(session.id, "resume_agent")
                     onDismiss()
-                }) { Text("恢复 Agent") }
+                }) { Text("Resume agent") }
                 ResumeOffer.Session -> TextButton(onClick = {
                     controller.sessionAction(session.id, "restart")
                     onDismiss()
-                }) { Text("恢复") }
+                }) { Text("Resume") }
                 ResumeOffer.None -> Unit
             }
             if (canStopSession(session)) {
-                TextButton(onClick = { confirmStop = true }) { Text("停止") }
+                TextButton(onClick = { confirmStop = true }) { Text("Stop") }
             }
-            TextButton(onClick = onRemove) { Text(if (session.status == "running") "移除会话" else "从列表移除", color = Attention) }
-            note?.let { Text(it, color = if (it.startsWith("已复制")) Muted else Attention, fontSize = 12.sp) }
+            TextButton(onClick = onRemove) { Text(if (session.status == "running") "Remove session" else "Remove from list", color = Attention) }
+            note?.let { Text(it, color = if (it.startsWith("Copied")) Muted else Attention, fontSize = 12.sp) }
             Text(organizeHint(session, offer), color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp, bottom = 18.dp))
         }
     }
@@ -1767,11 +1772,11 @@ private fun OrganizeSheet(controller: Controller, session: SessionSummary, onDis
                     confirmStop = false
                     controller.sessionAction(session.id, "stop")
                     onDismiss()
-                }) { Text("停止") }
+                }) { Text("Stop") }
             },
-            dismissButton = { TextButton(onClick = { confirmStop = false }) { Text("取消") } },
-            title = { Text("停止这个会话") },
-            text = { Text("进程会停掉，会话留在列表里，之后可以恢复。") },
+            dismissButton = { TextButton(onClick = { confirmStop = false }) { Text("Cancel") } },
+            title = { Text("Stop this session") },
+            text = { Text("The process stops. The session stays in the list so you can resume later.") },
             containerColor = Sheet,
         )
     }
@@ -1790,23 +1795,23 @@ private fun ProjectOrganizeSheet(controller: Controller, project: ProjectSummary
     val colors = listOf(null, "sky", "blue", "violet", "rose", "amber", "moss", "teal", "graphite")
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Sheet) {
         Column(Modifier.padding(horizontal = 18.dp).verticalScroll(rememberScrollState())) {
-            Text(if (project.isGroup) "编辑分组" else "编辑文件夹", color = Foreground, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+            Text(if (project.isGroup) "Edit group" else "Edit folder", color = Foreground, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(10.dp))
             if (!canEdit) {
-                Text("请先在 Mac 上更新 Unpeel，才能在手机上整理文件夹。", color = Muted, fontSize = 14.sp)
+                Text("Update Unpeel on the Mac first to organize folders from the phone.", color = Muted, fontSize = 14.sp)
             }
             if (canRename) {
                 OutlinedTextField(value = name, onValueChange = { name = it }, singleLine = true, modifier = Modifier.fillMaxWidth())
             }
             if (canEdit) {
-                Text("会话排序", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
+                Text("Session order", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
                 Row {
-                    TextButton(onClick = { dateSorted = false }) { Text(if (!dateSorted) "自定义顺序 ✓" else "自定义顺序") }
-                    TextButton(onClick = { dateSorted = true }) { Text(if (dateSorted) "按时间 ✓" else "按时间") }
+                    TextButton(onClick = { dateSorted = false }) { Text(if (!dateSorted) "Custom order ✓" else "Custom order") }
+                    TextButton(onClick = { dateSorted = true }) { Text(if (dateSorted) "By date ✓" else "By date") }
                 }
             }
             if (canColor) {
-                Text("颜色", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp, bottom = 6.dp))
+                Text("Color", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp, bottom = 6.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
                     colors.forEach { id ->
                         val fill = folderColorArgb(id)?.let { Color(it) }
@@ -1838,7 +1843,7 @@ private fun ProjectOrganizeSheet(controller: Controller, project: ProjectSummary
                     controller.saveProject(project.id, namePatch, colorPatch, sortPatch) { failure ->
                         if (failure == null) onDismiss() else note = failure
                     }
-                }, enabled = !canRename || name.isNotBlank()) { Text("保存") }
+                }, enabled = !canRename || name.isNotBlank()) { Text("Save") }
             }
             note?.let { Text(it, color = Attention, fontSize = 12.sp) }
             Spacer(Modifier.height(18.dp))
@@ -1852,7 +1857,7 @@ private fun PresetSheet(controller: Controller, project: ProjectSummary, onDismi
     val presets = controller.snapshot?.presets?.filter { it.enabled }.orEmpty()
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Sheet) {
         Column(Modifier.padding(horizontal = 12.dp)) {
-            Text("新建会话", color = Foreground, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 8.dp))
+            Text("New session", color = Foreground, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 8.dp))
             Text(project.name, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
             presets.forEach { preset ->
                 Row(
@@ -1875,7 +1880,7 @@ private fun PresetSheet(controller: Controller, project: ProjectSummary, onDismi
                     }
                 }
             }
-            if (presets.isEmpty()) Text("这台 Host 没有可用的预设。", color = Muted, modifier = Modifier.padding(12.dp))
+            if (presets.isEmpty()) Text("This Host has no presets available.", color = Muted, modifier = Modifier.padding(12.dp))
             Spacer(Modifier.height(20.dp))
         }
     }
@@ -1893,10 +1898,10 @@ private fun PairScreen(controller: Controller, firstRun: Boolean) {
             Text("U", color = Color(0xFFF2A05A), fontSize = 32.sp, fontWeight = FontWeight.SemiBold)
         }
         Spacer(Modifier.height(12.dp))
-        Text(if (firstRun) "配对一台工作区" else "Unpeel", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+        Text(if (firstRun) "Pair a workspace" else "Unpeel", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(16.dp))
         Text(
-            "在 Mac 上打开 Unpeel 的设置，找到手机配对，扫那里的二维码。这台手机只控制 Host，不在本地开终端。",
+            "On the Mac, open Unpeel Settings → Phone pairing, then scan the QR code. This phone only controls the Host — it doesn’t run a local terminal.",
             color = Foreground.copy(alpha = 0.72f),
             fontSize = 14.sp,
             modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Color.White.copy(alpha = 0.06f)).padding(14.dp),
@@ -1918,11 +1923,11 @@ private fun PairFields(controller: Controller, context: android.content.Context)
     }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         cameraGranted = granted
-        if (!granted) controller.reportError("需要相机权限才能扫配对码")
+        if (!granted) controller.reportError("Camera permission is required to scan a pairing code")
     }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(
-            "扫描配对码",
+            "Scan pairing code",
             color = Color.White.copy(alpha = 0.85f),
             fontSize = 14.sp,
             fontWeight = FontWeight.SemiBold,
@@ -1947,7 +1952,7 @@ private fun PairFields(controller: Controller, context: android.content.Context)
                 }
             } else {
                 Text(
-                    "需要相机权限才能扫配对码",
+                    "Camera permission is required to scan a pairing code",
                     color = Color.White.copy(alpha = 0.7f),
                     fontSize = 14.sp,
                     textAlign = TextAlign.Center,
@@ -1959,7 +1964,7 @@ private fun PairFields(controller: Controller, context: android.content.Context)
             }
         }
         Text(
-            "或粘贴配对码",
+            "Or paste a pairing code",
             color = Color.White.copy(alpha = 0.85f),
             fontSize = 14.sp,
             fontWeight = FontWeight.SemiBold,
@@ -1969,7 +1974,7 @@ private fun PairFields(controller: Controller, context: android.content.Context)
             value = code,
             onValueChange = { code = it },
             modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp),
-            placeholder = { Text("配对码", color = Color.White.copy(alpha = 0.35f), fontSize = 12.sp) },
+            placeholder = { Text("Pairing code", color = Color.White.copy(alpha = 0.35f), fontSize = 12.sp) },
             minLines = 3,
             textStyle = TextStyle(
                 color = Foreground,
@@ -1997,7 +2002,7 @@ private fun PairFields(controller: Controller, context: android.content.Context)
             if (controller.busy) {
                 CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
             } else {
-                Text("连接", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Text("Connect", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
             }
         }
         controller.error?.let { Text(it, color = Color(0xFFE85D5D), fontSize = 13.sp) }
@@ -2081,15 +2086,15 @@ private fun AppLockCover(lock: AppLock, onUnlock: () -> Unit) {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("已锁定", color = Foreground, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+        Text("Locked", color = Foreground, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(8.dp))
-        Text("验证后才能继续看会话", color = Muted, fontSize = 14.sp)
+        Text("Authenticate to keep viewing sessions", color = Muted, fontSize = 14.sp)
         lock.lastError?.let {
             Spacer(Modifier.height(8.dp))
             Text(it, color = Attention, fontSize = 13.sp)
         }
         Spacer(Modifier.height(18.dp))
-        Button(onClick = onUnlock, enabled = !lock.authInFlight) { Text(if (lock.authInFlight) "正在验证…" else "解锁") }
+        Button(onClick = onUnlock, enabled = !lock.authInFlight) { Text(if (lock.authInFlight) "Verifying…" else "Unlock") }
     }
 }
 
@@ -2105,8 +2110,8 @@ private fun ExitedRestartBar(restarting: Boolean, onRestart: () -> Unit) {
             .padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(if (restarting) "正在恢复…" else "会话已结束", color = Foreground, fontSize = 14.sp, modifier = Modifier.weight(1f))
-        TextButton(onClick = onRestart, enabled = !restarting) { Text("恢复") }
+        Text(if (restarting) "Resuming…" else "Session ended", color = Foreground, fontSize = 14.sp, modifier = Modifier.weight(1f))
+        TextButton(onClick = onRestart, enabled = !restarting) { Text("Resume") }
     }
 }
 
@@ -2167,24 +2172,24 @@ private fun SidebarFeedbackFooter() {
     ) {
         FeedbackMark(Muted)
         Spacer(Modifier.width(8.dp))
-        Text("反馈与问题", color = Muted, fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+        Text("Feedback & issues", color = Muted, fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
         ExternalArrow(Muted.copy(alpha = 0.7f))
     }
 }
 
 @Composable
 private fun SidebarDisconnected(connection: String) {
-    val unpaired = connection == "未配对"
-    val connecting = connection == "正在连接"
+    val unpaired = connection == "Unpaired"
+    val connecting = connection == "Connecting"
     Column(
         Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 36.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
             when {
-                unpaired -> "未配对"
-                connecting -> "正在连接…"
-                else -> "连接中断"
+                unpaired -> "Unpaired"
+                connecting -> "Connecting…"
+                else -> "Disconnected"
             },
             color = Foreground,
             fontSize = 14.sp,
@@ -2193,9 +2198,9 @@ private fun SidebarDisconnected(connection: String) {
         Spacer(Modifier.height(10.dp))
         Text(
             when {
-                unpaired -> "先配对一台 Mac，会话才会出现在这里。"
-                connecting -> "正在连接这台 Mac。"
-                else -> "正在自动重连。Mac 恢复后，会话会重新出现。"
+                unpaired -> "Pair a Mac first — sessions will show up here."
+                connecting -> "Connecting to this Mac."
+                else -> "Reconnecting automatically. Sessions will return when the Mac is back."
             },
             color = Muted,
             fontSize = 12.sp,
@@ -2397,14 +2402,14 @@ private fun organizeHint(session: SessionSummary, offer: ResumeOffer): String {
     val stop = canStopSession(session)
     return when {
         session.status == "running" && offer == ResumeOffer.Agent && stop ->
-            "恢复 Agent 留在这个终端里。停止后会话还在列表中，可以再恢复。移除会删掉它。"
+            "Resume agent keeps this terminal. Stop leaves the session in the list so you can resume. Remove deletes it."
         session.status == "running" && offer == ResumeOffer.Agent ->
-            "恢复 Agent 留在这个终端里。移除会停掉并删掉这个会话。"
+            "Resume agent keeps this terminal. Remove stops and deletes this session."
         session.status == "running" && stop ->
-            "停止后会话还在列表中，可以再恢复。移除会停掉并删掉它。"
-        session.status == "running" -> "这次启动没有可恢复的记录。移除会停掉并删掉它。"
-        offer == ResumeOffer.Session -> "恢复会接着这次对话。移除只是从列表里清掉。"
-        else -> "移除只是从列表里清掉。"
+            "Stop leaves the session in the list so you can resume. Remove stops and deletes it."
+        session.status == "running" -> "This launch has nothing to resume. Remove stops and deletes it."
+        offer == ResumeOffer.Session -> "Resume continues this conversation. Remove only clears it from the list."
+        else -> "Remove only clears it from the list."
     }
 }
 

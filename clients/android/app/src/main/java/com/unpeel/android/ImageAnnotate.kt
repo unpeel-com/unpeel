@@ -60,13 +60,13 @@ internal fun loadAttachment(context: android.content.Context, uri: android.net.U
     val mime = resolver.getType(uri).orEmpty()
     val bytes = try {
         resolver.openInputStream(uri)?.use { readBounded(it, 64 * 1024 * 1024) }
-            ?: return LoadedAttachment.Failed("打不开这个文件")
+            ?: return LoadedAttachment.Failed("Couldn’t open that file")
     } catch (_: AttachmentTooLarge) {
-        return LoadedAttachment.Failed("文件超过 64 MB")
+        return LoadedAttachment.Failed("File is over 64 MB")
     } catch (_: Exception) {
-        return LoadedAttachment.Failed("打不开这个文件")
+        return LoadedAttachment.Failed("Couldn’t open that file")
     }
-    if (bytes.isEmpty()) return LoadedAttachment.Failed("这个文件是空的")
+    if (bytes.isEmpty()) return LoadedAttachment.Failed("That file is empty")
     if (mime.startsWith("image/") && bytes.size <= 20 * 1024 * 1024) {
         val bitmap = decodeUploadBitmap(java.io.ByteArrayInputStream(bytes))
         if (bitmap != null) return LoadedAttachment.Image(bitmap)
@@ -206,18 +206,18 @@ internal fun ImageAnnotator(source: Bitmap, onCancel: () -> Unit, onDone: (Bitma
     val palette = listOf(Color.White, Color(0xFFE85D5D), Color(0xFFF5C16C), Color(0xFF7CB7FF), Color(0xFF7DDE92))
     Column(Modifier.fillMaxSize().background(Color(0xFF121314))) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = onCancel) { Text("取消") }
+            TextButton(onClick = onCancel) { Text("Cancel") }
             TextButton(onClick = {
                 if (strokes.isNotEmpty()) strokes.removeAt(strokes.lastIndex)
                 tick += 1
-            }) { Text("撤销") }
+            }) { Text("Undo") }
             TextButton(onClick = {
                 strokes.clear()
                 current = emptyList()
                 tick += 1
-            }) { Text("清空") }
+            }) { Text("Clear") }
             Box(Modifier.weight(1f))
-            TextButton(onClick = { onDone(flattenAnnotation(source, strokes.toList())) }) { Text("完成") }
+            TextButton(onClick = { onDone(flattenAnnotation(source, strokes.toList())) }) { Text("Done") }
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             Image(
@@ -289,7 +289,7 @@ internal fun ImageAnnotator(source: Bitmap, onCancel: () -> Unit, onDone: (Bitma
                 )
             }
             Text(
-                "橡皮",
+                "Eraser",
                 color = if (erase) Color(0xFF121314) else Color.White,
                 modifier = Modifier
                     .clip(CircleShape)

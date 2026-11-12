@@ -127,7 +127,7 @@ class Controller(context: Context) {
      * Values: color id, or null meaning "cleared to default".
      */
     private val pendingFolderColors = linkedMapOf<String, String?>()
-    var connection by mutableStateOf(if (hosts.isEmpty()) "未配对" else "正在连接")
+    var connection by mutableStateOf(if (hosts.isEmpty()) "Unpaired" else "Connecting")
         private set
     var openSessionID by mutableStateOf<String?>(null)
         private set
@@ -180,11 +180,11 @@ class Controller(context: Context) {
 
     fun pair(raw: String) {
         val payload = PairingCode.decode(raw) ?: run {
-            error = "无法识别配对码"
+            error = "Couldn’t read that pairing code"
             return
         }
         if (payload.expiresAtUnixMs <= System.currentTimeMillis()) {
-            error = "配对码已过期"
+            error = "That pairing code has expired"
             return
         }
         scope.launch {
@@ -209,7 +209,7 @@ class Controller(context: Context) {
                 saveHosts()
                 select(host.macID)
             } catch (caught: Exception) {
-                error = caught.message ?: "配对失败"
+                error = caught.message ?: "Pairing failed"
             } finally {
                 busy = false
             }
@@ -248,7 +248,7 @@ class Controller(context: Context) {
             loadPendingFolderColors()
             if (selectedHost == null) {
                 pollJob?.cancel()
-                connection = "未配对"
+                connection = "Unpaired"
             } else {
                 startPolling()
             }
@@ -716,12 +716,12 @@ class Controller(context: Context) {
 
     /** Upload a JPEG and paste its quoted Host path. Does not submit. */
     fun attachImage(jpeg: ByteArray) {
-        uploadAndPaste(jpeg, "image/jpeg", filename = null, failure = "图片上传失败")
+        uploadAndPaste(jpeg, "image/jpeg", filename = null, failure = "Couldn’t upload the image")
     }
 
     /** Upload any other file and paste its quoted Host path. Does not submit. */
     fun attachFile(bytes: ByteArray, filename: String) {
-        uploadAndPaste(bytes, "application/octet-stream", sanitizeUploadName(filename), "文件上传失败")
+        uploadAndPaste(bytes, "application/octet-stream", sanitizeUploadName(filename), "Couldn’t upload the file")
     }
 
     private fun uploadAndPaste(bytes: ByteArray, contentType: String, filename: String?, failure: String) {
@@ -732,7 +732,7 @@ class Controller(context: Context) {
         }
         val limit = if (filename == null) 4 * 1024 * 1024 else 64 * 1024 * 1024
         if (bytes.size > limit) {
-            error = if (filename == null) "图片超过 4 MB" else "文件超过 64 MB"
+            error = if (filename == null) "Image is over 4 MB" else "File is over 64 MB"
             return
         }
         scope.launch {
@@ -776,7 +776,7 @@ class Controller(context: Context) {
             if (returned.startsWith("/")) path = returned
             offset = end
         }
-        if (!path.startsWith("/")) throw HostException(0, "上传没有返回路径")
+        if (!path.startsWith("/")) throw HostException(0, "Upload returned no path")
         return path
     }
 
@@ -979,10 +979,10 @@ class Controller(context: Context) {
                     timeoutMs = 20_000,
                 )
                 val markdown = JSONObject(body).optString("markdown").trim()
-                if (markdown.isEmpty()) onResult(null, "这个会话还没有可读的记录")
+                if (markdown.isEmpty()) onResult(null, "This session has no readable transcript yet")
                 else onResult(markdown, null)
             } catch (caught: Exception) {
-                onResult(null, caught.message ?: "复制失败")
+                onResult(null, caught.message ?: "Couldn’t copy")
             } finally {
                 busy = false
             }
@@ -1048,7 +1048,7 @@ class Controller(context: Context) {
                     attachImage(jpeg.toByteArray())
                 }
             } catch (caught: Exception) {
-                error = caught.message ?: "贴上失败"
+                error = caught.message ?: "Couldn’t paste"
             } finally {
                 busy = false
             }
@@ -1190,7 +1190,7 @@ class Controller(context: Context) {
         outputJob?.cancel()
         setLink(null)
         outputDial = null
-        connection = "正在连接"
+        connection = "Connecting"
         pollJob = scope.launch {
             while (true) {
                 refreshOnce()
@@ -1211,7 +1211,7 @@ class Controller(context: Context) {
             adoptBootstrap(BootstrapJson.parse(body))
             connection = when {
                 usingRelay -> "Link"
-                usingPublic -> "公网"
+                usingPublic -> "Public"
                 else -> pathLabel(dialEndpoint ?: host.endpoint)
             }
             error = null
@@ -1225,7 +1225,7 @@ class Controller(context: Context) {
             setLink(null)
             usingPublic = false
             dialEndpoint = null
-            connection = caught.message ?: "连接中断"
+            connection = caught.message ?: "Disconnected"
         }
     }
 
@@ -1301,11 +1301,11 @@ class Controller(context: Context) {
         ).also { setLink(it) }
     }
 
-    private fun link(): HostLink = link ?: throw HostException(0, "未连接")
+    private fun link(): HostLink = link ?: throw HostException(0, "Not connected")
 
     private fun pathLabel(endpoint: String): String {
         val host = runCatching { java.net.URI(endpoint).host }.getOrNull().orEmpty()
-        return if (isPrivateHost(host)) "局域网" else "公网"
+        return if (isPrivateHost(host)) "LAN" else "Public"
     }
 
     private fun isPrivateHost(host: String): Boolean {
@@ -1941,7 +1941,7 @@ class Controller(context: Context) {
                 last = error
             }
         }
-        throw last ?: java.io.IOException("配对失败")
+        throw last ?: java.io.IOException("Pairing failed")
     }
 
     private fun exchangeAt(payload: com.unpeel.controller.PairingPayload, dial: String): JSONObject {
@@ -1982,7 +1982,7 @@ class Controller(context: Context) {
             val body = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
                 val message = runCatching { JSONObject(body).optString("error") }.getOrDefault(body)
-                throw HostException(response.code, message.ifEmpty { "配对失败" })
+                throw HostException(response.code, message.ifEmpty { "Pairing failed" })
             }
             val plain = PairingCrypto.open(
                 JSONObject(body),
