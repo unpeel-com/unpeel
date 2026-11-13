@@ -59,6 +59,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imeAnimationTarget
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -212,8 +213,6 @@ private object SessionDetailLayout {
     val cardPadV = 6.dp
 }
 
-/** Hold the open-keyboard inset through the system hide animation, then snap. */
-private const val IME_HIDE_HOLD_MS = 220L
 private val KeyFill = Color(0x1AFFFFFF)
 
 /** Classic CLI braille spinner as bitmasks (dots 1–8 → bits 0–7). No glyphs. */
@@ -743,21 +742,21 @@ private fun TerminalSurface(
             SessionDetailLayout.topChromePortrait
         }
         val density = LocalDensity.current
+        // Show: snap to imeAnimationTarget so chrome does not crawl with the
+        // interpolating inset. Hide: follow live ime down — holding the open
+        // height after target hit 0 left a near-black frame strip under the
+        // card (adjustNothing + manual padding).
         val imeTargetBottom = WindowInsets.imeAnimationTarget.getBottom(density)
-        var reservedImeBottom by remember(session.id) { mutableIntStateOf(0) }
-        LaunchedEffect(imeTargetBottom) {
-            if (imeTargetBottom > 0) {
-                reservedImeBottom = imeTargetBottom
-                return@LaunchedEffect
-            }
-            if (reservedImeBottom == 0) return@LaunchedEffect
-            delay(IME_HIDE_HOLD_MS)
-            reservedImeBottom = 0
-        }
-        val keyboardOpen = imeTargetBottom > 0
+        val imeBottom = WindowInsets.ime.getBottom(density)
+        val keyboardOpen = imeTargetBottom > 0 || imeBottom > 0
+        val imePad = if (imeTargetBottom > 0) imeTargetBottom else imeBottom
         val navBottom = WindowInsets.navigationBars.getBottom(density)
-        val imeNav = with(density) { (reservedImeBottom + navBottom).coerceAtLeast(0).toDp() }
-        val cardBottom = if (keyboardOpen) imeNav else (SessionDetailLayout.bottomInset + imeNav)
+        val imeNav = with(density) { (imePad + navBottom).coerceAtLeast(0).toDp() }
+        val cardBottom = if (imePad > 0) {
+            imeNav
+        } else {
+            SessionDetailLayout.bottomInset + with(density) { navBottom.toDp() }
+        }
         // Lighter terminal card inset into the darker frame (iOS cardFrame).
         TerminalGrid(
             controller,
