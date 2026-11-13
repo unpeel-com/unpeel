@@ -434,7 +434,6 @@ private fun TerminalHome(
                             if (kind == HomeSheet.Organize) organizeID = session.id
                             sheet = kind
                         },
-                        onAttach = ::chooseFile,
                         onSelectionChanged = { terminalSelecting = it },
                     )
                 }
@@ -714,7 +713,6 @@ private fun TerminalSurface(
     session: SessionSummary,
     onSessions: () -> Unit,
     onSheet: (HomeSheet) -> Unit,
-    onAttach: () -> Unit = {},
     onSelectionChanged: (Boolean) -> Unit = {},
 ) {
     val project = controller.snapshot?.projects?.firstOrNull { it.id == session.projectID }
@@ -769,12 +767,13 @@ private fun TerminalSurface(
         // reporting its height) would keep the blank band. Drop it once the
         // terminal is unfocused and the inset has stopped moving.
         LaunchedEffect(terminalFocused, imeBottom, imeTargetBottom, allowKeyboardInset) {
-            // Live inset already 0, but the animation target can stay at the
-            // old keyboard height (back-dismiss, or resume). Drop it once it
-            // has stopped moving. A real show fills the live inset first.
-            if (!allowKeyboardInset || imeBottom > 0 || imeTargetBottom == 0) return@LaunchedEffect
+            // Unfocused, keyboard already gone, target still reporting the
+            // old height. A show keeps focus, so this does not cut the slide.
+            if (!allowKeyboardInset || terminalFocused || imeBottom > 0 || imeTargetBottom == 0) {
+                return@LaunchedEffect
+            }
             delay(500)
-            if (imeBottom == 0) {
+            if (!terminalFocused && imeBottom == 0) {
                 allowKeyboardInset = false
                 ownsKeyboardInset = false
             }
@@ -786,21 +785,36 @@ private fun TerminalSurface(
             imeTargetPx = imeTargetBottom,
             imePx = imeBottom,
         )
+        var keyboardSpanPx by remember { mutableIntStateOf(0) }
         SideEffect {
             if (ownsKeyboardInset != keyboard.ownsInset) ownsKeyboardInset = keyboard.ownsInset
+            val span = maxOf(imeTargetBottom, imeBottom)
+            if (!keyboard.open && imeTargetBottom <= 0) {
+                if (keyboardSpanPx != 0) keyboardSpanPx = 0
+            } else if (span > keyboardSpanPx) {
+                keyboardSpanPx = span
+            }
         }
         val keyboardOpen = keyboard.open
         // IME inset already reaches the bottom of the window. Adding the
         // navigation bar on top of it left a black band and pushed the key
-        // row up over the terminal.
+        // row up over the terminal. The key row grows with the same fraction
+        // as the keyboard so it does not pop in on the first frame.
         val keyboardPad = with(density) { keyboard.padPx.toDp() }
         val navBottom = WindowInsets.navigationBars.getBottom(density)
-        val accessory = if (keyboardOpen) SessionDetailLayout.keyboardAccessory else 0.dp
-        val cardBottom = if (keyboardOpen) {
-            keyboardPad + accessory
+        val accessoryFraction = if (keyboard.padPx > 0 && keyboardSpanPx > 0) {
+            (keyboard.padPx.toFloat() / keyboardSpanPx).coerceIn(0f, 1f)
         } else {
-            SessionDetailLayout.bottomInset + with(density) { navBottom.toDp() }
+            0f
         }
+        val accessory = SessionDetailLayout.keyboardAccessory * accessoryFraction
+        // The card keeps its resting height while the keyboard moves. A new
+        // height would rasterize the grid on every frame. The picture slides
+        // up instead; rows that pass under the title or the keyboard are
+        // simply covered.
+        val restingBottom = SessionDetailLayout.bottomInset + with(density) { navBottom.toDp() }
+        val pictureShift = (keyboardPad + accessory - restingBottom - SessionDetailLayout.cardPadV)
+            .coerceAtLeast(0.dp)
         // Lighter terminal card inset into the darker frame (iOS cardFrame).
         // Top band stays fixed so the title buttons stay above the card.
         TerminalGrid(
@@ -827,10 +841,10 @@ private fun TerminalSurface(
             restarting = controller.restartingSessionID == session.id,
             restartError = controller.restartError,
             onRestart = { controller.sessionAction(session.id, "restart") },
-            bottomChromeInset = if (keyboardOpen) keyboardPad else 0.dp,
+            pictureShift = pictureShift,
             modifier = Modifier
                 .fillMaxSize()
-                .padding(top = topBand, bottom = cardBottom),
+                .padding(top = topBand, bottom = restingBottom),
         )
         // Soft dissolve under the title (iOS TerminalTopGlassVeil). Page chrome
         // is already HeaderInk; this only fades into the card.
@@ -897,12 +911,13 @@ private fun TerminalSurface(
                 }
             }
             // iOS accessory bar: only while this terminal's keyboard is up.
-            // The card is shortened by [keyboardAccessory] so these keys sit
-            // in the gap, not on top of the last rows.
-            if (keyboardOpen) {
+            // The keys sit over the picture. Covered rows are not visible.
+            if (accessoryFraction > 0f) {
                 Row(
                     Modifier
                         .fillMaxWidth()
+                        .height(accessory)
+                        .clipToBounds()
                         .horizontalScroll(rememberScrollState())
                         .padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 6.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -918,9 +933,6 @@ private fun TerminalSurface(
                     TerminalKey("esc", 11) { sendTerminalKey(controller, "escape", ctrlArmed); ctrlArmed = false }
                     TerminalKey("Tab", 12) { sendTerminalKey(controller, "tab", ctrlArmed); ctrlArmed = false }
                     TerminalKey("Ctrl", 12, armed = ctrlArmed) { ctrlArmed = !ctrlArmed }
-                    TerminalKey("/", 16) { sendTerminalKey(controller, "slash", ctrlArmed); ctrlArmed = false }
-                    TerminalKey("@", 16) { sendTerminalKey(controller, "at", ctrlArmed); ctrlArmed = false }
-                    TerminalKey("Img", 12) { onAttach() }
                 }
             }
         }
@@ -1063,6 +1075,7 @@ private fun TerminalGrid(
     restarting: Boolean = false,
     restartError: String? = null,
     onRestart: () -> Unit = {},
+    pictureShift: Dp = 0.dp,
     bottomChromeInset: Dp = 0.dp,
     modifier: Modifier = Modifier,
 ) {
@@ -1128,6 +1141,7 @@ private fun TerminalGrid(
         controller.notePhoneViewport(grid.first, grid.second, keyboardOpen = false)
     }
     val cardShape = RoundedCornerShape(SessionDetailLayout.cardCorner)
+    val pictureShiftPx = with(LocalDensity.current) { pictureShift.toPx() }
     // Lighter Surface card on the darker frame behind (iOS Ghostty card).
     Box(modifier.clipToBounds()) {
         Box(
@@ -1172,6 +1186,9 @@ private fun TerminalGrid(
                 },
                 update = { view ->
                     surface = view
+                    // Slide the already-drawn picture. translationY does not
+                    // resize the view and does not record a new display list.
+                    view.translationY = -pictureShiftPx
                     view.onSelectionChanged = {
                         selecting = it
                         onSelectionChanged(it)
@@ -3008,11 +3025,7 @@ private fun GlassButton(onClick: () -> Unit, content: @Composable () -> Unit) {
 
 private fun sendTerminalKey(controller: Controller, name: String, ctrl: Boolean) {
     val data = if (!ctrl) {
-        when (name) {
-            "slash" -> "/"
-            "at" -> "@"
-            else -> TerminalInput.key(name)
-        }
+        TerminalInput.key(name)
     } else {
         when (name) {
             "arrowUp" -> "\u001b[1;5A"
@@ -3021,8 +3034,6 @@ private fun sendTerminalKey(controller: Controller, name: String, ctrl: Boolean)
             "arrowLeft" -> "\u001b[1;5D"
             "tab" -> "\u001b[27;5;9~"
             "escape" -> "\u001b[27;5;27~"
-            "slash" -> "/"
-            "at" -> "@"
             else -> TerminalInput.key(name)
         }
     }

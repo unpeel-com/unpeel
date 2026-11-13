@@ -565,11 +565,31 @@ class HostTerminalView(
         return true
     }
 
+    /**
+     * Keyboard show/hide changes this view's height every frame. Rasterizing
+     * the grid on each of those frames is the stall. Keep the last picture
+     * and draw it again; [settleResize] paints once when the size stops.
+     */
+    private val settleResize = Runnable {
+        val bmp = lastGoodBitmap
+        if (bmp != null && !bmp.isRecycled && (bmp.width != width || bmp.height != height)) {
+            bmp.recycle()
+            lastGoodBitmap = null
+        }
+        invalidate()
+    }
+
     override fun onDraw(canvas: Canvas) {
         val emulator = terminal.emulator
         noteEmulator(emulator)
         canvas.drawColor(canvasColor)
         val held = lastGoodBitmap
+        if (held != null && !held.isRecycled && (held.width != width || held.height != height)) {
+            // Bottom-pin the previous picture. The new strip is just the
+            // frame color until the size settles and one real paint runs.
+            canvas.drawBitmap(held, 0f, (height - held.height).toFloat(), null)
+            return
+        }
         if (freezeActive && revealProgress < 1f && held != null && !held.isRecycled &&
             held.width == width && held.height == height
         ) {
@@ -655,12 +675,9 @@ class HostTerminalView(
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
-        val bmp = lastGoodBitmap
-        if (bmp != null && w > 0 && h > 0 && (bmp.width != w || bmp.height != h)) {
-            // Keyboard show/hide changes the view height. Blitting the old
-            // bitmap leaves the new area blank.
-            bmp.recycle()
-            lastGoodBitmap = null
+        if (oldw > 0 && oldh > 0 && (w != oldw || h != oldh)) {
+            removeCallbacks(settleResize)
+            postDelayed(settleResize, 48)
         }
         if (!fitWidthToSharedGrid || w <= 0 || h <= 0) return
         zoom = 1f

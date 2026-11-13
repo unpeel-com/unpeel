@@ -92,16 +92,16 @@ class TerminalRenderer(
                 textPaint.color = runFg
                 textPaint.isFakeBoldText = runBold
                 textPaint.isUnderlineText = runUnderline
-                // Per-cell draw into the padded grid — batched drawText uses the
-                // font advance, which is narrower than fontWidth and lets the next
-                // CJK cell paint over the previous Latin glyph (K arms).
-                val pad = (fontWidth - glyphAdvance) * 0.5f
-                var i = 0
-                while (i < runLen) {
-                    scratch[0] = runChars[i]
-                    canvas.drawText(scratch, 0, 1, (runCol + i) * fontWidth + pad, textY, textPaint)
-                    i++
-                }
+                // One draw for the whole run. Scale the monospace advance up to
+                // the cell pitch so the next cell (often CJK) starts on a grid
+                // boundary instead of painting over the previous glyph.
+                val scale = fontWidth / glyphAdvance
+                canvas.save()
+                canvas.clipRect(left, cellTop, right, y)
+                canvas.translate(left, 0f)
+                canvas.scale(scale, 1f)
+                canvas.drawText(runChars, 0, runLen, 0f, textY, textPaint)
+                canvas.restore()
                 runCol = -1
                 runLen = 0
                 runCells = 0

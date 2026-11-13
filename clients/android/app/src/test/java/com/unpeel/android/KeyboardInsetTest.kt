@@ -20,7 +20,7 @@ class KeyboardInsetTest {
     }
 
     @Test
-    fun showSnapsToTheTarget() {
+    fun showFollowsTheLiveInset() {
         val inset = resolveKeyboardInset(
             allow = true,
             ownsInset = false,
@@ -29,7 +29,33 @@ class KeyboardInsetTest {
             imePx = 40,
         )
         assertTrue(inset.open)
-        assertEquals(900, inset.padPx)
+        assertEquals(40, inset.padPx)
+    }
+
+    @Test
+    fun showDoesNotJumpBeforeTheKeyboardMoves() {
+        val inset = resolveKeyboardInset(
+            allow = true,
+            ownsInset = false,
+            terminalFocused = true,
+            imeTargetPx = 900,
+            imePx = 0,
+        )
+        assertFalse(inset.open)
+        assertEquals(0, inset.padPx)
+    }
+
+    @Test
+    fun hideFollowsLiveEvenIfTheTargetStaysUp() {
+        val inset = resolveKeyboardInset(
+            allow = true,
+            ownsInset = true,
+            terminalFocused = false,
+            imeTargetPx = 900,
+            imePx = 400,
+        )
+        assertTrue(inset.ownsInset)
+        assertEquals(400, inset.padPx)
     }
 
     @Test
