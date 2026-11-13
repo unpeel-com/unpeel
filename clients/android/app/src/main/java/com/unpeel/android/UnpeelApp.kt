@@ -41,6 +41,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.input.pointer.pointerInput
@@ -99,6 +100,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.Canvas
@@ -211,6 +213,8 @@ private object SessionDetailLayout {
     val cardCorner = 18.dp
     val cardPadH = 10.dp
     val cardPadV = 6.dp
+    /** Key row above the IME: 4dp top + 36dp keys + 6dp bottom. */
+    val keyboardAccessory = 46.dp
 }
 
 private val KeyFill = Color(0x1AFFFFFF)
@@ -430,6 +434,7 @@ private fun TerminalHome(
                             if (kind == HomeSheet.Organize) organizeID = session.id
                             sheet = kind
                         },
+                        onAttach = ::chooseFile,
                         onSelectionChanged = { terminalSelecting = it },
                     )
                 }
@@ -709,16 +714,31 @@ private fun TerminalSurface(
     session: SessionSummary,
     onSessions: () -> Unit,
     onSheet: (HomeSheet) -> Unit,
+    onAttach: () -> Unit = {},
     onSelectionChanged: (Boolean) -> Unit = {},
 ) {
     val project = controller.snapshot?.projects?.firstOrNull { it.id == session.projectID }
     var ctrlArmed by remember { mutableStateOf(false) }
     var terminalView by remember { mutableStateOf<HostTerminalView?>(null) }
+    // False after background/foreground until the user taps the terminal.
+    // A stuck IME inset must not keep shortening the card.
+    var allowKeyboardInset by remember { mutableStateOf(true) }
+    var terminalFocused by remember { mutableStateOf(false) }
+    var ownsKeyboardInset by remember { mutableStateOf(false) }
+    // Compose may revoke focus until this is true. Set from the tap, before
+    // the posted showSoftInput.
+    var keyboardWanted by remember { mutableStateOf(false) }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, session.id) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_START || event == Lifecycle.Event.ON_RESUME || event == Lifecycle.Event.ON_STOP) {
+            if (event == Lifecycle.Event.ON_RESUME || event == Lifecycle.Event.ON_STOP) {
+                allowKeyboardInset = false
+                ownsKeyboardInset = false
+                keyboardWanted = false
+                terminalFocused = false
                 terminalView?.dismissKeyboard()
+                terminalView?.invalidate()
+                terminalView?.rootView?.requestApplyInsets()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -729,6 +749,7 @@ private fun TerminalSurface(
     }
     DisposableEffect(session.id) { onDispose { controller.releasePhoneFit() } }
     fun dismissKeyboard() {
+        keyboardWanted = false
         terminalView?.dismissKeyboard()
     }
     val frame = hostChrome(controller.snapshot?.hostTintHue)
@@ -742,25 +763,62 @@ private fun TerminalSurface(
             SessionDetailLayout.topChromePortrait
         }
         val density = LocalDensity.current
-        // Show: snap to imeAnimationTarget so chrome does not crawl with the
-        // interpolating inset. Hide: follow live ime down — holding the open
-        // height after target hit 0 left a near-black frame strip under the
-        // card (adjustNothing + manual padding).
         val imeTargetBottom = WindowInsets.imeAnimationTarget.getBottom(density)
         val imeBottom = WindowInsets.ime.getBottom(density)
-        val keyboardOpen = imeTargetBottom > 0 || imeBottom > 0
-        val imePad = if (imeTargetBottom > 0) imeTargetBottom else imeBottom
+        // A hide that never reaches inset 0 (keyboard already gone, window still
+        // reporting its height) would keep the blank band. Drop it once the
+        // terminal is unfocused and the inset has stopped moving.
+        LaunchedEffect(terminalFocused, imeBottom, imeTargetBottom, allowKeyboardInset) {
+            // Live inset already 0, but the animation target can stay at the
+            // old keyboard height (back-dismiss, or resume). Drop it once it
+            // has stopped moving. A real show fills the live inset first.
+            if (!allowKeyboardInset || imeBottom > 0 || imeTargetBottom == 0) return@LaunchedEffect
+            delay(500)
+            if (imeBottom == 0) {
+                allowKeyboardInset = false
+                ownsKeyboardInset = false
+            }
+        }
+        val keyboard = resolveKeyboardInset(
+            allow = allowKeyboardInset,
+            ownsInset = ownsKeyboardInset,
+            terminalFocused = terminalFocused,
+            imeTargetPx = imeTargetBottom,
+            imePx = imeBottom,
+        )
+        SideEffect {
+            if (ownsKeyboardInset != keyboard.ownsInset) ownsKeyboardInset = keyboard.ownsInset
+        }
+        val keyboardOpen = keyboard.open
+        // IME inset already reaches the bottom of the window. Adding the
+        // navigation bar on top of it left a black band and pushed the key
+        // row up over the terminal.
+        val keyboardPad = with(density) { keyboard.padPx.toDp() }
         val navBottom = WindowInsets.navigationBars.getBottom(density)
-        val imeNav = with(density) { (imePad + navBottom).coerceAtLeast(0).toDp() }
-        val cardBottom = if (imePad > 0) {
-            imeNav
+        val accessory = if (keyboardOpen) SessionDetailLayout.keyboardAccessory else 0.dp
+        val cardBottom = if (keyboardOpen) {
+            keyboardPad + accessory
         } else {
             SessionDetailLayout.bottomInset + with(density) { navBottom.toDp() }
         }
         // Lighter terminal card inset into the darker frame (iOS cardFrame).
+        // Top band stays fixed so the title buttons stay above the card.
         TerminalGrid(
             controller,
-            onView = { terminalView = it },
+            onView = { view ->
+                terminalView = view
+                view.onKeyboardRequested = {
+                    keyboardWanted = true
+                    allowKeyboardInset = true
+                }
+                view.onKeyboardFocusChanged = { focused ->
+                    terminalFocused = focused
+                    // A restored focus after background is not a tap. Only a
+                    // request from showKeyboard may shorten the card again.
+                    if (focused && keyboardWanted) allowKeyboardInset = true
+                }
+            },
+            keyboardWanted = keyboardWanted,
             controlArmed = { ctrlArmed },
             onControlUsed = { ctrlArmed = false },
             onSelectionChanged = onSelectionChanged,
@@ -769,7 +827,7 @@ private fun TerminalSurface(
             restarting = controller.restartingSessionID == session.id,
             restartError = controller.restartError,
             onRestart = { controller.sessionAction(session.id, "restart") },
-            bottomChromeInset = imeNav,
+            bottomChromeInset = if (keyboardOpen) keyboardPad else 0.dp,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(top = topBand, bottom = cardBottom),
@@ -821,14 +879,16 @@ private fun TerminalSurface(
             },
             modifier = Modifier
                 .align(Alignment.TopCenter)
+                .zIndex(2f)
                 .fillMaxWidth()
                 .height(topBand),
         )
         Column(
             Modifier
                 .align(Alignment.BottomCenter)
+                .zIndex(1f)
                 .fillMaxWidth()
-                .padding(bottom = imeNav),
+                .padding(bottom = keyboardPad),
         ) {
             controller.error?.let { message ->
                 Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -836,12 +896,21 @@ private fun TerminalSurface(
                     TextButton(onClick = controller::dismissError) { Text("Close") }
                 }
             }
+            // iOS accessory bar: only while this terminal's keyboard is up.
+            // The card is shortened by [keyboardAccessory] so these keys sit
+            // in the gap, not on top of the last rows.
             if (keyboardOpen) {
                 Row(
-                    Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 6.dp),
+                    Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 6.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    TerminalKey("Paste", 12) {
+                        if (terminalView?.pasteClipboard() != true) controller.reportError("Nothing to paste")
+                    }
                     TerminalKey("◀") { sendTerminalKey(controller, "arrowLeft", ctrlArmed); ctrlArmed = false }
                     TerminalKey("▲") { sendTerminalKey(controller, "arrowUp", ctrlArmed); ctrlArmed = false }
                     TerminalKey("▼") { sendTerminalKey(controller, "arrowDown", ctrlArmed); ctrlArmed = false }
@@ -849,6 +918,9 @@ private fun TerminalSurface(
                     TerminalKey("esc", 11) { sendTerminalKey(controller, "escape", ctrlArmed); ctrlArmed = false }
                     TerminalKey("Tab", 12) { sendTerminalKey(controller, "tab", ctrlArmed); ctrlArmed = false }
                     TerminalKey("Ctrl", 12, armed = ctrlArmed) { ctrlArmed = !ctrlArmed }
+                    TerminalKey("/", 16) { sendTerminalKey(controller, "slash", ctrlArmed); ctrlArmed = false }
+                    TerminalKey("@", 16) { sendTerminalKey(controller, "at", ctrlArmed); ctrlArmed = false }
+                    TerminalKey("Img", 12) { onAttach() }
                 }
             }
         }
@@ -982,6 +1054,7 @@ private fun Modifier.closeSessionsDrawer(
 private fun TerminalGrid(
     controller: Controller,
     onView: (HostTerminalView) -> Unit,
+    keyboardWanted: Boolean = false,
     controlArmed: () -> Boolean,
     onControlUsed: () -> Unit,
     onSelectionChanged: (Boolean) -> Unit = {},
@@ -1030,11 +1103,27 @@ private fun TerminalGrid(
             controller.notePhoneViewport(0, 0, keyboardOpen = true)
         }
     }
+    // Last keyboard-up measurement. A resume can report this short height for
+    // a frame after the inset drops; fitting it shrinks the PTY and the bottom
+    // of the screen stays empty once the card grows back.
+    var restingWidth by remember(controller.openSessionID) { mutableIntStateOf(0) }
+    var restingHeight by remember(controller.openSessionID) { mutableIntStateOf(0) }
     // Chrome leaving/entering layout changes gridSize → re-fit Host PTY.
     LaunchedEffect(controller.openSessionID, gridSize, cellW, cellH, topPad, controller.connection, keyboardOpen) {
         if (keyboardOpen) return@LaunchedEffect
         if (gridSize.width < 48 || gridSize.height < 48 || cellW <= 0f || cellH <= 0f) return@LaunchedEffect
-        delay(120)
+        val rotated = restingWidth > 0 && abs(gridSize.width - restingWidth) > 48
+        val stillShort = !rotated && restingHeight > 0 && gridSize.height + 24 < restingHeight
+        if (stillShort) {
+            delay(400)
+            if (keyboardOpen || gridSize.height + 24 >= restingHeight) return@LaunchedEffect
+        } else {
+            delay(120)
+        }
+        if (keyboardOpen) return@LaunchedEffect
+        if (gridSize.width < 48 || gridSize.height < 48 || cellW <= 0f || cellH <= 0f) return@LaunchedEffect
+        restingWidth = gridSize.width
+        restingHeight = gridSize.height
         val grid = phoneFitGrid(gridSize.width, gridSize.height, cellW, cellH, topPad) ?: return@LaunchedEffect
         controller.notePhoneViewport(grid.first, grid.second, keyboardOpen = false)
     }
@@ -1060,7 +1149,14 @@ private fun TerminalGrid(
                 ),
         ) {
             AndroidView(
-                modifier = Modifier.fillMaxSize().onSizeChanged { gridSize = it }.focusProperties { canFocus = false },
+                // Focusable only after a tap sets keyboardWanted. Leaving the
+                // view focusable from the start pops the keyboard on open;
+                // canFocus = false the whole time makes that tap's request
+                // get revoked and the keyboard flash shut.
+                modifier = Modifier
+                    .fillMaxSize()
+                    .onSizeChanged { gridSize = it }
+                    .focusProperties { canFocus = keyboardWanted },
                 factory = { context ->
                     HostTerminalView(context, controller.terminal).also { view ->
                         surface = view
@@ -1080,10 +1176,9 @@ private fun TerminalGrid(
                         selecting = it
                         onSelectionChanged(it)
                     }
-                    view.onMenuChanged = { active ->
-                        if (active && !menuActive) view.dismissKeyboard()
-                        menuActive = active
-                    }
+                    // iOS shows the menu bar only while the keyboard is down.
+                    // It does not take the keyboard away when a menu appears.
+                    view.onMenuChanged = { active -> menuActive = active }
                     view.relayed = controller.usingRelay
                     view.prefersRemoteWheel = prefersRemoteWheel
                     view.echoesMouseWheel = echoesMouseWheel
@@ -2913,7 +3008,11 @@ private fun GlassButton(onClick: () -> Unit, content: @Composable () -> Unit) {
 
 private fun sendTerminalKey(controller: Controller, name: String, ctrl: Boolean) {
     val data = if (!ctrl) {
-        TerminalInput.key(name)
+        when (name) {
+            "slash" -> "/"
+            "at" -> "@"
+            else -> TerminalInput.key(name)
+        }
     } else {
         when (name) {
             "arrowUp" -> "\u001b[1;5A"
@@ -2922,6 +3021,8 @@ private fun sendTerminalKey(controller: Controller, name: String, ctrl: Boolean)
             "arrowLeft" -> "\u001b[1;5D"
             "tab" -> "\u001b[27;5;9~"
             "escape" -> "\u001b[27;5;27~"
+            "slash" -> "/"
+            "at" -> "@"
             else -> TerminalInput.key(name)
         }
     }
@@ -2931,13 +3032,15 @@ private fun sendTerminalKey(controller: Controller, name: String, ctrl: Boolean)
 @Composable
 private fun TerminalKey(label: String, textSize: Int = 14, armed: Boolean = false, onClick: () -> Unit) {
     val shape = if (label.length <= 1) CircleShape else RoundedCornerShape(percent = 50)
+    val click = rememberUpdatedState(onClick)
     Box(
         Modifier
             .height(36.dp)
             .widthIn(min = 36.dp)
             .clip(shape)
             .background(if (armed) Color(0xFF32ADE6) else Color.White.copy(alpha = 0.10f))
-            .clickable(onClick = onClick)
+            // A clickable key would take focus and dismiss the IME.
+            .pointerInput(Unit) { detectTapGestures(onTap = { click.value() }) }
             .padding(horizontal = if (label.length > 1) 10.dp else 0.dp),
         contentAlignment = Alignment.Center,
     ) {

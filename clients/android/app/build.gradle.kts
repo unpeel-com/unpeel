@@ -9,11 +9,11 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        // Distinct from ui-localization's com.unpeel.android so both can sit on one phone.
-        applicationId = "com.unpeel.android.termit"
+        // Same package as the published phone app, so this APK replaces android-0.7.7-31.
+        applicationId = "com.unpeel.android"
         minSdk = 26
         targetSdk = 35
-        versionCode = 30
+        versionCode = 32
         versionName = "0.7.7"
     }
 
@@ -70,4 +70,5 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+    testImplementation("junit:junit:4.13.2")
 }

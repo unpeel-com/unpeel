@@ -7,6 +7,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.Rect
 import android.text.InputType
 import android.util.TypedValue
 import android.view.HapticFeedbackConstants
@@ -123,6 +124,22 @@ class HostTerminalView(
      * Another phone owns the Host letterbox. Scale this view so that shared
      * grid fills our width — no resize-desktop, just local fit.
      */
+    /**
+     * Fired when this view gains or loses input focus. The terminal screen
+     * uses it to decide whether the keyboard inset belongs to this session.
+     */
+    var onKeyboardFocusChanged: ((Boolean) -> Unit)? = null
+
+    /**
+     * The screen sets this so a tap can mark the keyboard as wanted before
+     * Compose applies focus. Showing the IME in the same turn as the tap
+     * loses the race and the keyboard flashes closed.
+     */
+    var onKeyboardRequested: (() -> Unit)? = null
+
+    /** Bumped by [dismissKeyboard] so a posted show cannot run after a hide. */
+    private var showGeneration = 0
+
     var fitWidthToSharedGrid: Boolean = false
         set(value) {
             if (field == value) return
@@ -300,7 +317,9 @@ class HostTerminalView(
         topPad = metrics.fontLineSpacingAndAscent
         setBackgroundColor(CANVAS)
         importantForAutofill = IMPORTANT_FOR_AUTOFILL_NO
-        isFocusable = true
+        // Stay unfocusable until a tap asks for the keyboard. A focusable
+        // text editor here makes Compose focus it on open and pop the IME.
+        isFocusable = false
         isFocusableInTouchMode = false
         isClickable = true
         bind(terminal)
@@ -378,19 +397,47 @@ class HostTerminalView(
     }
 
     fun showKeyboard() {
+        val generation = ++showGeneration
+        onKeyboardRequested?.invoke()
+        isFocusable = true
         isFocusableInTouchMode = true
         requestFocus()
+        val imm = context.getSystemService(InputMethodManager::class.java)
+        // Flag 0 is an explicit user show. SHOW_IMPLICIT is dropped when the
+        // window's soft-input state is hidden, so the keyboard flashes shut.
+        imm?.showSoftInput(this, 0)
+        // Compose applies canFocus on the next pass. Ask again after that,
+        // or the first request is revoked and the keyboard flashes shut.
         post {
-            context.getSystemService(InputMethodManager::class.java)
-                ?.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
+            if (generation != showGeneration) return@post
+            onKeyboardRequested?.invoke()
+            post {
+                if (generation != showGeneration) return@post
+                if (!isFocused) requestFocus()
+                if (isFocused) imm?.showSoftInput(this, 0)
+            }
         }
     }
 
     fun dismissKeyboard() {
+        showGeneration++
         context.getSystemService(InputMethodManager::class.java)
             ?.hideSoftInputFromWindow(windowToken, 0)
-        clearFocus()
+        if (isFocused) clearFocus()
+        isFocusable = false
         isFocusableInTouchMode = false
+    }
+
+    /**
+     * The IME asks the focused editor to scroll itself above the keyboard.
+     * That pan slides the terminal up under the title buttons. The card
+     * already shortens from the bottom, so claim the request and do not scroll.
+     */
+    override fun requestRectangleOnScreen(rectangle: Rect, immediate: Boolean): Boolean = true
+
+    override fun onFocusChanged(gainFocus: Boolean, direction: Int, previouslyFocusedRect: android.graphics.Rect?) {
+        super.onFocusChanged(gainFocus, direction, previouslyFocusedRect)
+        onKeyboardFocusChanged?.invoke(gainFocus)
     }
 
     override fun onCheckIsTextEditor(): Boolean = true
@@ -521,8 +568,11 @@ class HostTerminalView(
     override fun onDraw(canvas: Canvas) {
         val emulator = terminal.emulator
         noteEmulator(emulator)
+        canvas.drawColor(canvasColor)
         val held = lastGoodBitmap
-        if (freezeActive && revealProgress < 1f && held != null && !held.isRecycled) {
+        if (freezeActive && revealProgress < 1f && held != null && !held.isRecycled &&
+            held.width == width && held.height == height
+        ) {
             // Hold last coherent present through Cursor ED2 / sync floods.
             canvas.drawBitmap(held, 0f, 0f, bitmapPaint)
             return
@@ -605,6 +655,13 @@ class HostTerminalView(
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
+        val bmp = lastGoodBitmap
+        if (bmp != null && w > 0 && h > 0 && (bmp.width != w || bmp.height != h)) {
+            // Keyboard show/hide changes the view height. Blitting the old
+            // bitmap leaves the new area blank.
+            bmp.recycle()
+            lastGoodBitmap = null
+        }
         if (!fitWidthToSharedGrid || w <= 0 || h <= 0) return
         zoom = 1f
         zoomPanX = 0f
@@ -781,7 +838,7 @@ class HostTerminalView(
     }
 
     /** Bracketed paste of the system clipboard. False when there is nothing to paste. */
-    private fun pasteClipboard(): Boolean {
+    fun pasteClipboard(): Boolean {
         val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return false
         val text = try {
             clipboard.primaryClip?.takeIf { it.itemCount > 0 }
