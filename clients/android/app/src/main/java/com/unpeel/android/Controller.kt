@@ -10,6 +10,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.unpeel.controller.AgentCatalog
+import com.unpeel.controller.AgentTerminalPolicy
 import com.unpeel.controller.ArtifactSummary
 import com.unpeel.controller.BootstrapJson
 import com.unpeel.controller.BootstrapSnapshot
@@ -58,9 +59,13 @@ data class SavedHost(
     val e2eKeyB64: String,
     val serverVersion: String?,
     val publicEndpoint: String? = null,
+    /** Last-known Host App tint — iOS `PairedMacRecord.tintHue`. */
+    val tintHue: Double? = null,
 )
 
 private const val SESSION_CACHE_LIMIT = 3
+/** iOS `RemotePreviewStore.unreachableGraceInterval`. */
+private const val UNREACHABLE_GRACE_MS = 8_000L
 
 class Controller(context: Context) {
     private val appContext = context.applicationContext
@@ -129,6 +134,15 @@ class Controller(context: Context) {
     private val pendingFolderColors = linkedMapOf<String, String?>()
     var connection by mutableStateOf(if (hosts.isEmpty()) "Unpaired" else "Connecting")
         private set
+    /**
+     * iOS `isUnreachable`: poll failures past the 8s grace. Young outages stay
+     * calm "Connecting…"; only persistent failure flips this.
+     */
+    var isUnreachable by mutableStateOf(false)
+        private set
+    private var outageStartedAtMs: Long? = null
+    /** One restore attempt per Host scope after bootstrap (iOS pendingScopeRestore). */
+    private var pendingScopeRestoreMacID: String? = null
     var openSessionID by mutableStateOf<String?>(null)
         private set
     /** Covers a session until its first phone-grid replay has painted. A cached session skips this. */
@@ -136,6 +150,12 @@ class Controller(context: Context) {
         private set
     /** The current opening replay has fed a chunk. A newer replay clears it. */
     private var openingFrameReady = false
+    /**
+     * First phone-grid fit waited until the opening WS baseline painted.
+     * Fitting during attach raced column-replay / row-resize and wiped the
+     * scrollback the baseline just restored (Cursor local flick).
+     */
+    private var pendingOpenFit = false
     var terminal by mutableStateOf(newTerminal())
         private set
 
@@ -177,6 +197,7 @@ class Controller(context: Context) {
 
     init {
         loadPendingFolderColors()
+        pendingScopeRestoreMacID = selectedMacID
         if (selectedHost != null) startPolling()
     }
 
@@ -227,6 +248,9 @@ class Controller(context: Context) {
         prefs.edit().putString("selected", macID).apply()
         snapshot = null
         openSessionID = null
+        isUnreachable = false
+        outageStartedAtMs = null
+        pendingScopeRestoreMacID = macID
         loadPendingFolderColors()
         startPolling()
     }
@@ -308,14 +332,17 @@ class Controller(context: Context) {
         if (openSessionID == id) return
         releasePhoneFit()
         openSessionID = id
+        persistLastSession(id)
         desiredColumns = 0
         desiredRows = 0
         keyboardOpen = false
         lastFitAttemptMs = 0L
         fitRejected = false
         followingSharedFit = false
+        pendingOpenFit = false
         val slot = rememberSession(id)
         showTerminal(slot.terminal)
+        applyLivePresentPolicy(slot.terminal, id)
         val held = slot.outputOffset
         val hasPicture = slot.replayDone && held != null
         val resume = hasPicture && slot.coherent
@@ -336,6 +363,26 @@ class Controller(context: Context) {
         startGalleryWatch(id)
     }
 
+    private fun persistLastSession(id: String) {
+        val mac = selectedMacID ?: return
+        prefs.edit().putString(lastSessionKey(mac), id).apply()
+    }
+
+    private fun lastSessionKey(macID: String) = "lastSession:$macID"
+
+    /**
+     * Cursor-style local-scroll agents keep live ED2/DEC2026 settle freeze.
+     * Claude / Grok / OpenCode paint live frames immediately.
+     */
+    private fun applyLivePresentPolicy(screen: HostTerminal, sessionID: String) {
+        val session = snapshot?.sessions?.firstOrNull { it.id == sessionID }
+        screen.holdLiveRepaints = AgentTerminalPolicy.echoesMouseWheel(
+            session?.providerID,
+            session?.command.orEmpty(),
+            session?.activeRuntimeID,
+        )
+    }
+
     fun closeSession() {
         fitWatchJob?.cancel()
         stopGalleryWatch()
@@ -344,6 +391,7 @@ class Controller(context: Context) {
         openSessionID = null
         sessionPreparing = false
         openingFrameReady = false
+        pendingOpenFit = false
         showGallery = false
         artifactImage = null
     }
@@ -392,6 +440,11 @@ class Controller(context: Context) {
 
     private fun reconcilePhoneFit(sessionID: String, observedColumns: Int, observedRows: Int) {
         if (keyboardOpen || desiredColumns < 2 || fitRejected) return
+        // Same open-attach gate as fitPhone: do not follow/refit until baseline.
+        if (sessionPreparing && !openingFrameReady) {
+            pendingOpenFit = true
+            return
+        }
         val ownedColumns = if (phoneFitSession == sessionID) phoneFitColumns else null
         val ownedRows = if (phoneFitSession == sessionID) phoneFitRows else null
 
@@ -497,6 +550,13 @@ class Controller(context: Context) {
         val active = link ?: return
         val cols = columns.coerceIn(20, 300)
         val lines = rows.coerceIn(4, 120)
+        // Cold open: viewport + fitWatch must not letterbox until the WS
+        // baseline has painted — otherwise column replay / row resize wipes
+        // the scrollback that baseline just restored (Cursor local flick).
+        if (sessionPreparing && !openingFrameReady) {
+            pendingOpenFit = true
+            return
+        }
         if (!force && !followingSharedFit &&
             phoneFitSession == sessionID && phoneFitColumns == cols && phoneFitRows == lines
         ) {
@@ -549,8 +609,9 @@ class Controller(context: Context) {
 
     /**
      * After a column letterbox: wait for Host metrics (≤800ms, like iOS),
-     * paint one HTTP snapshot, then resume the live stream at that offset.
-     * Avoids tear-down → WS hello → baseline (a second full round trip).
+     * then take a fresh WS Ghostty baseline at the new grid (scrollback
+     * included). The old HTTP journal paint was faster but rebuilt without
+     * Host scrollback — Cursor could only flick a few local rows after open.
      */
     private fun replayAfterColumnFit(
         sessionID: String,
@@ -564,11 +625,10 @@ class Controller(context: Context) {
         val screen = slot?.terminal ?: terminal
         if (soft) {
             sessionPreparing = false
-            screen.prepare(columns, rows, notify = false, holdPixels = true)
+            screen.holdPresent()
         } else {
             sessionPreparing = true
             openingFrameReady = false
-            screen.prepare(columns, rows)
         }
         slot?.outputOffset = null
         slot?.replayDone = false
@@ -577,64 +637,7 @@ class Controller(context: Context) {
             val active = runCatching { link() }.getOrNull() ?: return@launch
             pollUntilPhoneGrid(active, sessionID, columns, rows)
             if (generation != outputGeneration || openSessionID != sessionID) return@launch
-            try {
-                val body = active.get(
-                    "output",
-                    mapOf(
-                        "session_id" to sessionID,
-                        "limit" to if (usingRelay) "200000" else "524288",
-                        "wait_ms" to "0",
-                    ),
-                    timeoutMs = 10_000,
-                )
-                if (generation != outputGeneration || openSessionID != sessionID) return@launch
-                val chunk = withContext(Dispatchers.Default) { BootstrapJson.outputChunk(body) }
-                if (generation != outputGeneration) return@launch
-                val queries = TerminalQueryFilter()
-                val preamble = chunk.modePreamble
-                val visible = withContext(Dispatchers.Default) { queries.strip(chunk.data) }
-                if (generation != outputGeneration) return@launch
-                val willFeed =
-                    (preamble != null && preamble.isNotEmpty()) || visible.isNotEmpty()
-                screen.prepare(
-                    columns,
-                    rows,
-                    notify = !willFeed,
-                    holdPixels = soft || willFeed,
-                )
-                if (preamble != null && preamble.isNotEmpty() && !feedBytes(
-                        preamble,
-                        live = false,
-                        notify = false,
-                        generation = generation,
-                        hostSnapshot = true,
-                    )
-                ) {
-                    return@launch
-                }
-                if (visible.isNotEmpty() && !feedBytes(
-                        visible,
-                        live = false,
-                        notify = false,
-                        generation = generation,
-                    )
-                ) {
-                    return@launch
-                }
-                if (willFeed) screen.publishFrame()
-                slot?.outputOffset = chunk.nextOffset
-                slot?.replayDone = true
-                slot?.coherent = true
-                noteOpeningFrame(generation)
-                if (generation != outputGeneration || openSessionID != sessionID) return@launch
-                // Live tail only — do not fetch another full snapshot.
-                startOutput(sessionID, resumeOffset = chunk.nextOffset)
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                if (generation != outputGeneration || openSessionID != sessionID) return@launch
-                startOutput(sessionID, columns, rows, keepPicture = soft)
-            }
+            startOutput(sessionID, columns, rows, keepPicture = soft)
         }
     }
 
@@ -942,6 +945,60 @@ class Controller(context: Context) {
             if (changed) persistPendingFolderColors()
         }
         snapshot = overlayPendingFolderColors(parsed)
+        rememberHostTint(parsed.hostTintHue)
+        outageStartedAtMs = null
+        isUnreachable = false
+        maybeRestoreOrDefaultSession()
+    }
+
+    /**
+     * iOS launch restore: scoped last-open session, else approval/blocked/
+     * first session. Only runs once per Host scope until the next switch.
+     */
+    private fun maybeRestoreOrDefaultSession() {
+        val remote = snapshot ?: return
+        val sessions = remote.sessions
+        if (sessions.isEmpty()) return
+        val openValid = openSessionID?.let { id -> sessions.any { it.id == id } } == true
+        if (openValid) {
+            pendingScopeRestoreMacID = null
+            return
+        }
+        val mac = selectedMacID
+        if (mac != null && pendingScopeRestoreMacID == mac) {
+            pendingScopeRestoreMacID = null
+            val saved = prefs.getString(lastSessionKey(mac), null)
+            if (saved != null && sessions.any { it.id == saved }) {
+                openSession(saved)
+                return
+            }
+        } else if (openSessionID != null) {
+            // Stale id after prune — fall through to default.
+        }
+        val fallback = defaultSelectedSessionID(remote) ?: return
+        openSession(fallback)
+    }
+
+    /** iOS `defaultSelectedSessionID`: approval → blocked → first. */
+    private fun defaultSelectedSessionID(remote: BootstrapSnapshot): String? {
+        val known = remote.sessions.map { it.id }.toSet()
+        remote.pendingApprovals.firstOrNull()?.let { approval ->
+            val sid = approval.targetSessionID?.takeIf { it.isNotEmpty() }
+                ?: approval.callerSessionID.takeIf { it.isNotEmpty() }
+            if (sid != null && sid in known) return sid
+        }
+        return remote.sessions.firstOrNull { it.activity == "blocked" }?.id
+            ?: remote.sessions.firstOrNull()?.id
+    }
+
+    /** Persist live bootstrap tint onto the active pairing (iOS paired-record refresh). */
+    private fun rememberHostTint(hue: Double?) {
+        val id = selectedMacID ?: return
+        if (hue == null || hue.isNaN()) return
+        val current = hosts.firstOrNull { it.macID == id } ?: return
+        if (current.tintHue == hue) return
+        hosts = hosts.map { if (it.macID == id) it.copy(tintHue = hue) else it }
+        saveHosts()
     }
 
     private fun overlayPendingFolderColors(source: BootstrapSnapshot): BootstrapSnapshot {
@@ -1096,6 +1153,10 @@ class Controller(context: Context) {
         error = message
     }
 
+    fun clearError() {
+        error = null
+    }
+
     fun dismissArtifact() {
         artifactImage = null
     }
@@ -1247,7 +1308,12 @@ class Controller(context: Context) {
             setLink(null)
             usingPublic = false
             dialEndpoint = null
-            connection = caught.message ?: "Disconnected"
+            val now = System.currentTimeMillis()
+            val started = outageStartedAtMs ?: now.also { outageStartedAtMs = it }
+            val unreachable = now - started >= UNREACHABLE_GRACE_MS
+            isUnreachable = unreachable
+            connection = if (unreachable) "Connection lost" else "Connecting"
+            if (unreachable) error = caught.message ?: "Looking for your Mac…"
         }
     }
 
@@ -1345,6 +1411,7 @@ class Controller(context: Context) {
     private fun noteOpeningFrame(generation: Int) {
         if (generation != outputGeneration || !sessionPreparing) return
         openingFrameReady = true
+        flushPendingOpenFit()
         if (revealOpening()) return
         val sessionID = openSessionID
         scope.launch {
@@ -1355,6 +1422,16 @@ class Controller(context: Context) {
                 sessionPreparing = false
             }
         }
+    }
+
+    /** Run the open-time letterbox after the first attach frame is in. */
+    private fun flushPendingOpenFit() {
+        if (!pendingOpenFit) return
+        pendingOpenFit = false
+        if (openSessionID == null || followingSharedFit || fitRejected) return
+        if (desiredColumns < 2 || desiredRows < 2) return
+        lastFitAttemptMs = android.os.SystemClock.elapsedRealtime()
+        fitPhone(desiredColumns, desiredRows, force = false)
     }
 
     /** The cover stays up while this frame is still the desktop width. */
@@ -2040,6 +2117,7 @@ class Controller(context: Context) {
                 e2eKeyB64 = item.optString("e2eKeyB64"),
                 serverVersion = item.optString("serverVersion").ifEmpty { null },
                 publicEndpoint = item.optString("publicEndpoint").ifEmpty { null },
+                tintHue = if (item.has("tintHue") && !item.isNull("tintHue")) item.optDouble("tintHue") else null,
             )
         }
     }
@@ -2058,7 +2136,8 @@ class Controller(context: Context) {
                     .put("relayToken", host.relayToken)
                     .put("e2eKeyB64", host.e2eKeyB64)
                     .put("serverVersion", host.serverVersion)
-                    .put("publicEndpoint", host.publicEndpoint ?: JSONObject.NULL),
+                    .put("publicEndpoint", host.publicEndpoint ?: JSONObject.NULL)
+                    .put("tintHue", host.tintHue ?: JSONObject.NULL),
             )
         }
         prefs.edit().putString("hosts", array.toString()).apply()

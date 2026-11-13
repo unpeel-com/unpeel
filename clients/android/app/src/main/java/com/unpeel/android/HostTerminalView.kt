@@ -289,7 +289,8 @@ class HostTerminalView(
     })
 
     init {
-        val textPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 16f, resources.displayMetrics)
+        // iOS `phoneTerminalFontSize` = 11pt (denser than desktop 13pt).
+        val textPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 11f, resources.displayMetrics)
             .roundToInt()
             .coerceAtLeast(8)
         val metrics = TerminalMetrics(context, textPx)

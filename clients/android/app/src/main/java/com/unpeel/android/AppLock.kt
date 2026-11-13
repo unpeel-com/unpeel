@@ -18,7 +18,8 @@ import androidx.compose.runtime.setValue
  * cannot lock its owner out.
  */
 class AppLock(context: Context) {
-    private val prefs = context.applicationContext.getSharedPreferences("unpeel", Context.MODE_PRIVATE)
+    private val appContext = context.applicationContext
+    private val prefs = appContext.getSharedPreferences("unpeel", Context.MODE_PRIVATE)
     var enabled by mutableStateOf(prefs.getBoolean(KEY, false))
         private set
     var locked by mutableStateOf(enabled)
@@ -31,6 +32,26 @@ class AppLock(context: Context) {
     private var autoPrompted = false
     private var pending: ((Boolean) -> Unit)? = null
     private var cancelSignal: CancellationSignal? = null
+
+    /** iOS `AppLockManager.methodLabel` — Face ID / Touch ID / screen lock. */
+    fun methodLabel(): String {
+        val manager = appContext.getSystemService(BiometricManager::class.java) ?: return "screen lock"
+        val bio = if (Build.VERSION.SDK_INT >= 30) {
+            manager.canAuthenticate(
+                BiometricManager.Authenticators.BIOMETRIC_STRONG or
+                    BiometricManager.Authenticators.DEVICE_CREDENTIAL,
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            manager.canAuthenticate()
+        }
+        return if (bio == BiometricManager.BIOMETRIC_SUCCESS) "biometrics" else "screen lock"
+    }
+
+    fun capabilityAvailable(): Boolean {
+        val keyguard = appContext.getSystemService(KeyguardManager::class.java)
+        return keyguard?.isDeviceSecure == true
+    }
 
     fun onBackground() {
         if (!enabled || authInFlight) return

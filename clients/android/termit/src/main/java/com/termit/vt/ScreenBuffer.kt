@@ -75,6 +75,13 @@ class ScreenBuffer(
         val c = newCols.coerceAtLeast(1)
         val r = newRows.coerceAtLeast(1)
         if (c == cols && r == rows) return
+        // Phone letterbox often changes rows only. Dropping transcript here
+        // made Cursor local flick lose everything right after attach/fit.
+        if (c == cols) {
+            resizeRowsOnly(r)
+            return
+        }
+        // Column change rewraps; caller rebuilds from a Host snapshot.
         val nextTotal = (r + scrollbackLimit).coerceAtLeast(r)
         val next = Array(nextTotal) { freshRow(c) }
         val copyRows = minOf(rows, r)
@@ -91,6 +98,58 @@ class ScreenBuffer(
         screenFirst = 0
         activeTranscript = 0
         resetScrollRegion()
+    }
+
+    /**
+     * Grow/shrink height without discarding scrollback. Shrinking moves the
+     * lines that fall off the bottom of the screen into transcript (xterm-ish).
+     */
+    private fun resizeRowsOnly(newRows: Int) {
+        val r = newRows.coerceAtLeast(1)
+        if (r == rows) return
+        val oldRows = rows
+        val oldTranscript = activeTranscript
+        val depth = oldTranscript + oldRows
+        val ordered = Array(depth) { freshRow(cols) }
+        for (i in 0 until oldTranscript) {
+            copyFullRow(lines[internal(-oldTranscript + i)], ordered[i])
+        }
+        for (y in 0 until oldRows) {
+            copyFullRow(lines[internal(y)], ordered[oldTranscript + y])
+        }
+
+        val kept = ArrayList<Array<Cell>>(depth + (r - oldRows).coerceAtLeast(0))
+        if (r >= oldRows) {
+            for (i in 0 until depth) kept.add(ordered[i])
+            repeat(r - oldRows) { kept.add(freshRow(cols)) }
+        } else {
+            for (i in 0 until oldTranscript) kept.add(ordered[i])
+            for (y in r until oldRows) kept.add(ordered[oldTranscript + y])
+            while (kept.size > scrollbackLimit) kept.removeAt(0)
+            for (y in 0 until r) kept.add(ordered[oldTranscript + y])
+        }
+
+        val nextTotal = (r + scrollbackLimit).coerceAtLeast(r)
+        val next = Array(nextTotal) { freshRow(cols) }
+        val screenStart = kept.size - r
+        val newTranscript = screenStart.coerceIn(0, scrollbackLimit)
+        for (y in 0 until r) {
+            copyFullRow(kept[screenStart + y], next[y])
+        }
+        for (i in 0 until newTranscript) {
+            copyFullRow(kept[screenStart - newTranscript + i], next[nextTotal - newTranscript + i])
+        }
+        rows = r
+        totalRows = nextTotal
+        lines = next
+        screenFirst = 0
+        activeTranscript = newTranscript
+        resetScrollRegion()
+    }
+
+    private fun copyFullRow(from: Array<Cell>, to: Array<Cell>) {
+        val n = minOf(from.size, to.size)
+        for (x in 0 until n) to[x].copyFrom(from[x])
     }
 
     fun clearAll() {

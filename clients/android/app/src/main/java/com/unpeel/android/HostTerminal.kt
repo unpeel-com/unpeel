@@ -9,18 +9,18 @@ import com.unpeel.controller.TerminalModeSignals
 /**
  * Remote-only terminal. Bytes come from the Host journal.
  *
- * Present policy while Cursor (or any TUI) redraws hard:
+ * Present policy while a TUI redraws hard:
  * 1. VT always consumes every byte.
  * 2. Full wipe / alt-screen / DEC 2026 → freeze the last good bitmap.
  * 3. Keep freezing through the flood; debounce a quiet window.
- * 4. When quiet, snap once to live — no multi-frame reverse wipe
- *    (that wipe, repeated on every Cursor tick, was the flicker).
+ * 4. When quiet, snap once to live — no multi-frame reverse wipe.
  *
- * Live scroll is different: Grok/Claude ED2 every wheel tick already
- * rebuilds the frame inside one append. Freezing for settle just
- * steps the scroll — paint immediately and skip the hold. Cursor's
- * DEC 2026 brackets still hold mid-frame, then snap on ?2026l (no
- * extra settle delay on the live path).
+ * Claude / Grok / OpenCode ([holdLiveRepaints] = false): live ED2 already
+ * rebuilds inside one append — paint immediately so wheel scroll stays fluid.
+ *
+ * Cursor-style local-scroll agents ([holdLiveRepaints] = true): a tiny style
+ * change often ED2/DEC2026-repaints the whole screen; keep the settle freeze
+ * so the phone does not flash every intermediate wipe.
  */
 class HostTerminal(
     @Suppress("UNUSED_PARAMETER") private val replies: (ByteArray) -> Unit,
@@ -35,6 +35,12 @@ class HostTerminal(
      */
     var onHoldFrame: (() -> Unit)? = null
     var onRevealProgress: ((Float) -> Unit)? = null
+
+    /**
+     * Cursor / local-scroll agents: hold through live ED2 and DEC 2026.
+     * Claude / Grok / OpenCode leave this false for immediate live paint.
+     */
+    var holdLiveRepaints: Boolean = false
 
     var emulator: VtEmulator
         private set
@@ -91,13 +97,16 @@ class HostTerminal(
         emulator = newEmulator(80, 24)
     }
 
+    private fun paintLiveWithoutHold(): Boolean =
+        live && !holdLiveRepaints && !emulator.synchronizedOutput
+
     private fun newEmulator(columns: Int, rows: Int): VtEmulator =
         VtEmulator(columns, rows, TRANSCRIPT_ROWS).also { emu ->
             emu.setDefaultBackground(appliedCanvas)
             emu.onPresentHold = {
                 paintHandler.post {
-                    // Live ED2 is painted in feed(); do not re-arm a settle freeze.
-                    if (live && !emu.synchronizedOutput) return@post
+                    // Claude/Grok live ED2 paints in feed(); skip re-arming.
+                    if (live && !holdLiveRepaints && !emu.synchronizedOutput) return@post
                     beginHold()
                     armSettle()
                 }
@@ -105,8 +114,7 @@ class HostTerminal(
             emu.onSynchronizedOutputEnd = {
                 paintHandler.post {
                     paintDirty = true
-                    if (live) {
-                        // Cursor scroll: bracket closed — show the frame now.
+                    if (paintLiveWithoutHold()) {
                         releaseHoldForLivePaint()
                         scheduleFrame()
                     } else {
@@ -195,14 +203,14 @@ class HostTerminal(
             armSettle()
             return
         }
-        if (live) {
-            // Wheel-driven TUI redraw / closed sync bracket: show this frame.
+        if (paintLiveWithoutHold()) {
+            // Claude/Grok/OpenCode wheel redraw: show this frame now.
             releaseHoldForLivePaint()
             scheduleFrame()
             return
         }
         if (emulator.presentHold || holdArmed) {
-            // Replay wipe floods: keep last good pixels until quiet.
+            // Cursor live repaints + replay wipe floods: hold until quiet.
             if (emulator.presentHold) beginHold()
             armSettle()
             return
@@ -243,7 +251,7 @@ class HostTerminal(
         private const val TRANSCRIPT_ROWS = 2000
         /**
          * Quiet window after a wipe/flood before showing live VT.
-         * Replay still needs this debounce; live DEC 2026 snaps on ?2026l.
+         * Cursor live ED2 / DEC 2026 and replay still use this debounce.
          */
         private const val SETTLE_MS = 160L
         const val CANVAS = 0xFF1A1B1D.toInt()
