@@ -1,4 +1,8 @@
-@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class, androidx.compose.material3.ExperimentalMaterial3Api::class)
+@file:OptIn(
+    androidx.compose.foundation.ExperimentalFoundationApi::class,
+    androidx.compose.foundation.layout.ExperimentalLayoutApi::class,
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+)
 
 package com.unpeel.android
 
@@ -53,14 +57,13 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imeAnimationTarget
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -164,6 +167,8 @@ private val ActiveRow = Color(0x29FFFFFF)
 private val Attention = Color(0xFFF59E0B)
 private val Unread = Color(0xFF60A5FA)
 private val Hairline = Color(0x1AFFFFFF)
+/** Hold the open-keyboard inset through the system hide animation, then snap. */
+private const val IME_HIDE_HOLD_MS = 220L
 private val KeyFill = Color(0x1AFFFFFF)
 
 private val SpinnerFrames = listOf("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
@@ -578,6 +583,23 @@ private fun TerminalSurface(
                 }
             }
         }
+        // Never pad from the interpolating IME inset (per-frame AndroidView
+        // resize). Show: snap to imeAnimationTarget. Hide: hold that height
+        // through the system dismiss animation, then snap expand once.
+        val density = LocalDensity.current
+        val imeTargetBottom = WindowInsets.imeAnimationTarget.getBottom(density)
+        var reservedImeBottom by remember(session.id) { mutableIntStateOf(0) }
+        LaunchedEffect(imeTargetBottom) {
+            if (imeTargetBottom > 0) {
+                reservedImeBottom = imeTargetBottom
+                return@LaunchedEffect
+            }
+            if (reservedImeBottom == 0) return@LaunchedEffect
+            delay(IME_HIDE_HOLD_MS)
+            reservedImeBottom = 0
+        }
+        val keyboardOpen = imeTargetBottom > 0
+        val navBottom = WindowInsets.navigationBars.getBottom(density)
         TerminalGrid(
             controller,
             onView = { terminalView = it },
@@ -586,36 +608,40 @@ private fun TerminalSurface(
             revealChrome = !chromeVisible,
             onRevealChrome = { chromeVisible = true },
             onSelectionChanged = onSelectionChanged,
+            keyboardOpen = keyboardOpen,
+            // iOS overlays this on the terminal bottom — not in the IME column.
+            showExitedRestart = session.status == "exited" && session.capabilities?.restart == true,
+            restarting = controller.restartingSessionID == session.id,
+            restartError = controller.restartError,
+            onRestart = { controller.sessionAction(session.id, "restart") },
+            bottomChromeInset = with(density) { (reservedImeBottom + navBottom).coerceAtLeast(0).toDp() },
         )
-        Column(Modifier.windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
-        controller.error?.let { message ->
-            Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(message, color = Color(0xFFE85D5D), fontSize = 12.sp, modifier = Modifier.weight(1f), maxLines = 2)
-                TextButton(onClick = controller::dismissError) { Text("Close") }
+        Column(
+            Modifier.padding(
+                bottom = with(density) { (reservedImeBottom + navBottom).coerceAtLeast(0).toDp() },
+            ),
+        ) {
+            controller.error?.let { message ->
+                Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(message, color = Color(0xFFE85D5D), fontSize = 12.sp, modifier = Modifier.weight(1f), maxLines = 2)
+                    TextButton(onClick = controller::dismissError) { Text("Close") }
+                }
             }
-        }
-        if (session.status == "exited" && session.capabilities?.restart == true) {
-            ExitedRestartBar(
-                restarting = controller.restartingSessionID == session.id,
-                onRestart = { controller.sessionAction(session.id, "restart") },
-            )
-        }
-        val keyboardOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
-        if (keyboardOpen) {
-            Row(
-                Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                TerminalKey("◀") { sendTerminalKey(controller, "arrowLeft", ctrlArmed); ctrlArmed = false }
-                TerminalKey("▲") { sendTerminalKey(controller, "arrowUp", ctrlArmed); ctrlArmed = false }
-                TerminalKey("▼") { sendTerminalKey(controller, "arrowDown", ctrlArmed); ctrlArmed = false }
-                TerminalKey("▶") { sendTerminalKey(controller, "arrowRight", ctrlArmed); ctrlArmed = false }
-                TerminalKey("esc", 11) { sendTerminalKey(controller, "escape", ctrlArmed); ctrlArmed = false }
-                TerminalKey("Tab", 12) { sendTerminalKey(controller, "tab", ctrlArmed); ctrlArmed = false }
-                TerminalKey("Ctrl", 12, armed = ctrlArmed) { ctrlArmed = !ctrlArmed }
+            if (keyboardOpen) {
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TerminalKey("◀") { sendTerminalKey(controller, "arrowLeft", ctrlArmed); ctrlArmed = false }
+                    TerminalKey("▲") { sendTerminalKey(controller, "arrowUp", ctrlArmed); ctrlArmed = false }
+                    TerminalKey("▼") { sendTerminalKey(controller, "arrowDown", ctrlArmed); ctrlArmed = false }
+                    TerminalKey("▶") { sendTerminalKey(controller, "arrowRight", ctrlArmed); ctrlArmed = false }
+                    TerminalKey("esc", 11) { sendTerminalKey(controller, "escape", ctrlArmed); ctrlArmed = false }
+                    TerminalKey("Tab", 12) { sendTerminalKey(controller, "tab", ctrlArmed); ctrlArmed = false }
+                    TerminalKey("Ctrl", 12, armed = ctrlArmed) { ctrlArmed = !ctrlArmed }
+                }
             }
-        }
         }
     }
 }
@@ -822,9 +848,13 @@ private fun ColumnScope.TerminalGrid(
     revealChrome: Boolean = false,
     onRevealChrome: () -> Unit = {},
     onSelectionChanged: (Boolean) -> Unit = {},
+    keyboardOpen: Boolean = false,
+    showExitedRestart: Boolean = false,
+    restarting: Boolean = false,
+    restartError: String? = null,
+    onRestart: () -> Unit = {},
+    bottomChromeInset: Dp = 0.dp,
 ) {
-    val density = LocalDensity.current
-    val imeBottom = WindowInsets.ime.getBottom(density)
     var gridSize by remember(controller.openSessionID) { mutableStateOf(IntSize.Zero) }
     var cellW by remember { mutableFloatStateOf(0f) }
     var cellH by remember { mutableFloatStateOf(0f) }
@@ -840,19 +870,33 @@ private fun ColumnScope.TerminalGrid(
     // (same contract as iOS TerminalChrome / Mac Theme.appTinted).
     val canvas = terminalCanvas(openSession?.terminalBackgroundHex, controller.snapshot?.hostTintHue)
     val shownTerminal = controller.terminal
+    val prefersRemoteWheel = AgentTerminalPolicy.prefersRemoteMouseWheel(
+        openSession?.providerID,
+        openSession?.command.orEmpty(),
+        openSession?.activeRuntimeID,
+    )
+    val echoesMouseWheel = AgentTerminalPolicy.echoesMouseWheel(
+        openSession?.providerID,
+        openSession?.command.orEmpty(),
+        openSession?.activeRuntimeID,
+    )
     LaunchedEffect(controller.openSessionID) {
         surface?.clearSelection()
         selecting = false
         onSelectionChanged(false)
     }
+    // Latch keyboard immediately from imeAnimationTarget — do not key this
+    // effect on the interpolating ime inset (that restarted every frame).
+    LaunchedEffect(controller.openSessionID, keyboardOpen) {
+        if (keyboardOpen) {
+            controller.notePhoneViewport(0, 0, keyboardOpen = true)
+        }
+    }
     // Chrome leaving/entering layout changes gridSize → re-fit Host PTY.
-    LaunchedEffect(controller.openSessionID, gridSize, imeBottom, cellW, cellH, topPad, controller.connection) {
+    LaunchedEffect(controller.openSessionID, gridSize, cellW, cellH, topPad, controller.connection, keyboardOpen) {
+        if (keyboardOpen) return@LaunchedEffect
         if (gridSize.width < 48 || gridSize.height < 48 || cellW <= 0f || cellH <= 0f) return@LaunchedEffect
         delay(120)
-        if (imeBottom > 0) {
-            controller.notePhoneViewport(0, 0, keyboardOpen = true)
-            return@LaunchedEffect
-        }
         val grid = phoneFitGrid(gridSize.width, gridSize.height, cellW, cellH, topPad) ?: return@LaunchedEffect
         controller.notePhoneViewport(grid.first, grid.second, keyboardOpen = false)
     }
@@ -888,16 +932,8 @@ private fun ColumnScope.TerminalGrid(
                     menuActive = active
                 }
                 view.relayed = controller.usingRelay
-                view.prefersRemoteWheel = AgentTerminalPolicy.prefersRemoteMouseWheel(
-                    openSession?.providerID,
-                    openSession?.command.orEmpty(),
-                    openSession?.activeRuntimeID,
-                )
-                view.echoesMouseWheel = AgentTerminalPolicy.echoesMouseWheel(
-                    openSession?.providerID,
-                    openSession?.command.orEmpty(),
-                    openSession?.activeRuntimeID,
-                )
+                view.prefersRemoteWheel = prefersRemoteWheel
+                view.echoesMouseWheel = echoesMouseWheel
                 shownTerminal.applyCanvas(canvas)
                 view.canvasColor = canvas
                 view.fitWidthToSharedGrid = controller.followingSharedFit
@@ -943,7 +979,8 @@ private fun ColumnScope.TerminalGrid(
                 TextButton(onClick = { surface?.clearSelection() }) { Text("Cancel", color = Muted) }
             }
         }
-        if (menuActive && imeBottom == 0) {
+        // Hide with the keyboard target latch — not the interpolating ime height.
+        if (menuActive && !keyboardOpen) {
             Row(
                 Modifier.align(Alignment.BottomCenter).zIndex(2f).padding(bottom = 10.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -971,6 +1008,24 @@ private fun ColumnScope.TerminalGrid(
         }
         if (controller.sessionPreparing) {
             TerminalPrepareCover(canvas, Modifier.matchParentSize().zIndex(4f))
+        }
+        // iOS `ExitedSessionRestartBar`: floating capsule over the terminal.
+        // Explicit animation.* receiver — ColumnScope.AnimatedVisibility would
+        // otherwise win inside this ColumnScope composable.
+        androidx.compose.animation.AnimatedVisibility(
+            visible = showExitedRestart && !keyboardOpen && !selecting,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .zIndex(3f)
+                .padding(bottom = bottomChromeInset + 12.dp),
+            enter = expandVertically(tween(220), expandFrom = Alignment.Bottom) + fadeIn(tween(220)),
+            exit = shrinkVertically(tween(180), shrinkTowards = Alignment.Bottom) + fadeOut(tween(160)),
+        ) {
+            ExitedRestartBar(
+                restarting = restarting,
+                errorText = restartError,
+                onRestart = onRestart,
+            )
         }
     }
 }
@@ -1044,7 +1099,9 @@ internal fun phoneFitGrid(widthPx: Int, heightPx: Int, cellW: Float, cellH: Floa
     if (cellW <= 0f || cellH <= 0f) return null
     val columns = (widthPx / cellW).toInt()
     val rows = (innerH / cellH).toInt()
-    if (columns < 20 || rows < 8) return null
+    // Guard only the first tiny layout pass. Landscape / split-screen often
+    // lands under 8 rows — returning null left the Host on the old portrait grid.
+    if (columns < 20 || rows < 4) return null
     return columns.coerceAtMost(300) to rows.coerceAtMost(120)
 }
 
@@ -2098,20 +2155,69 @@ private fun AppLockCover(lock: AppLock, onUnlock: () -> Unit) {
     }
 }
 
+/**
+ * iOS `ExitedSessionRestartBar`: material capsule over the terminal with a
+ * status line and an accent Resume pill (spinner while in flight).
+ */
 @Composable
-private fun ExitedRestartBar(restarting: Boolean, onRestart: () -> Unit) {
+private fun ExitedRestartBar(
+    restarting: Boolean,
+    errorText: String? = null,
+    onRestart: () -> Unit,
+) {
+    val status = when {
+        restarting -> "Resuming…"
+        !errorText.isNullOrBlank() -> errorText
+        else -> "Session ended"
+    }
+    val warn = !errorText.isNullOrBlank() && !restarting
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp)
-            .clip(RoundedCornerShape(22.dp))
-            .background(Color.White.copy(alpha = 0.08f))
-            .border(1.dp, Hairline, RoundedCornerShape(22.dp))
-            .padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+            .padding(horizontal = 16.dp)
+            .shadow(14.dp, CircleShape, clip = false)
+            .clip(CircleShape)
+            .background(Color(0xE61B1C22))
+            .border(1.dp, Color.White.copy(alpha = 0.12f), CircleShape)
+            .padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(if (restarting) "Resuming…" else "Session ended", color = Foreground, fontSize = 14.sp, modifier = Modifier.weight(1f))
-        TextButton(onClick = onRestart, enabled = !restarting) { Text("Resume") }
+        Text(
+            if (warn) "!" else "⏹",
+            color = if (warn) Attention else Color.White.copy(alpha = 0.6f),
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Spacer(Modifier.width(12.dp))
+        Text(
+            status,
+            color = Color.White.copy(alpha = 0.85f),
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 2,
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(8.dp))
+        Row(
+            Modifier
+                .clip(CircleShape)
+                .background(Color(0xFF4F7CFF).copy(alpha = if (restarting) 0.7f else 1f))
+                .clickable(enabled = !restarting, onClick = onRestart)
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            if (restarting) {
+                CircularProgressIndicator(
+                    color = Color.White,
+                    strokeWidth = 2.dp,
+                    modifier = Modifier.size(14.dp),
+                )
+            } else {
+                Text("↻", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            }
+            Text("Resume", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        }
     }
 }
 

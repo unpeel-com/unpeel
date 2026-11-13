@@ -163,6 +163,8 @@ class Controller(context: Context) {
     var galleryPulse by mutableStateOf(false)
         private set
     var restartingSessionID by mutableStateOf<String?>(null)
+    /** Last resume/restart failure shown on the exited session bar (iOS `restartError`). */
+    var restartError by mutableStateOf<String?>(null)
         private set
 
     val deviceId: String
@@ -354,8 +356,17 @@ class Controller(context: Context) {
     fun notePhoneViewport(columns: Int, rows: Int, keyboardOpen: Boolean) {
         this.keyboardOpen = keyboardOpen
         if (!keyboardOpen && columns > 0 && rows > 0) {
+            val changed = desiredColumns < 2 ||
+                kotlin.math.abs(columns - desiredColumns) > 2 ||
+                kotlin.math.abs(rows - desiredRows) > 2
             desiredColumns = columns
             desiredRows = rows
+            // Orientation / chrome resize: apply now. Waiting for the 1s
+            // metrics poll left landscape on the old portrait letterbox.
+            if (changed && openSessionID != null && !followingSharedFit && !fitRejected) {
+                lastFitAttemptMs = android.os.SystemClock.elapsedRealtime()
+                fitPhone(desiredColumns, desiredRows, force = false)
+            }
         }
         revealOpening()
     }
@@ -436,8 +447,12 @@ class Controller(context: Context) {
         }
     }
 
-    /** Rough phone-letterbox width; desktop reclaim is typically ≥80 cols. */
-    private fun isPhoneShaped(columns: Int): Boolean = columns in 20..70
+    /**
+     * Rough phone-letterbox width. Landscape phones commonly land past 70
+     * columns; the old 70 cap treated them as non-phone and broke follow/fit
+     * heuristics. Desktop reclaim is still the wide Mac (≥72 / +20) path.
+     */
+    private fun isPhoneShaped(columns: Int): Boolean = columns in 20..120
 
     private fun isDesktopReclaim(observedColumns: Int, desiredColumns: Int): Boolean =
         observedColumns >= maxOf(desiredColumns + 20, 72)
@@ -445,7 +460,7 @@ class Controller(context: Context) {
     /** Adopt the Host grid without posting resize-desktop. */
     private fun followSharedGrid(sessionID: String, columns: Int, rows: Int) {
         val cols = columns.coerceIn(20, 300)
-        val lines = rows.coerceIn(8, 120)
+        val lines = rows.coerceIn(4, 120)
         followingSharedFit = true
         phoneFitSession = sessionID
         phoneFitColumns = cols
@@ -481,7 +496,7 @@ class Controller(context: Context) {
         val sessionID = openSessionID ?: return
         val active = link ?: return
         val cols = columns.coerceIn(20, 300)
-        val lines = rows.coerceIn(8, 120)
+        val lines = rows.coerceIn(4, 120)
         if (!force && !followingSharedFit &&
             phoneFitSession == sessionID && phoneFitColumns == cols && phoneFitRows == lines
         ) {
@@ -991,7 +1006,11 @@ class Controller(context: Context) {
 
     fun sessionAction(sessionID: String, action: String) {
         scope.launch {
-            if (action == "restart" || action == "resume_agent") restartingSessionID = sessionID
+            val resuming = action == "restart" || action == "resume_agent"
+            if (resuming) {
+                restartingSessionID = sessionID
+                restartError = null
+            }
             val failure = runCatching {
                 link().post(
                     "session-action",
@@ -999,7 +1018,10 @@ class Controller(context: Context) {
                 )
             }.exceptionOrNull()
             if (failure == null && action == "remove" && openSessionID == sessionID) closeSession()
-            if (failure != null) error = failure.message
+            if (failure != null) {
+                error = failure.message
+                if (resuming) restartError = failure.message
+            }
             if (restartingSessionID == sessionID) restartingSessionID = null
             refreshOnce()
         }
