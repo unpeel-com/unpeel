@@ -69,6 +69,8 @@ data class SavedHost(
 private const val SESSION_CACHE_LIMIT = 3
 /** iOS `RemotePreviewStore.unreachableGraceInterval`. */
 private const val UNREACHABLE_GRACE_MS = 8_000L
+/** How long a just-created session may be missing from bootstrap before we give up holding it. */
+private const val CREATED_SESSION_GRACE_MS = 8_000L
 
 class Controller(context: Context) {
     private val appContext = context.applicationContext
@@ -146,6 +148,14 @@ class Controller(context: Context) {
     private var outageStartedAtMs: Long? = null
     /** One restore attempt per Host scope after bootstrap (iOS pendingScopeRestore). */
     private var pendingScopeRestoreMacID: String? = null
+    /**
+     * Session we just created and opened, until a bootstrap lists it. A
+     * bootstrap that predates the Host's manifest must not fall back to an
+     * unrelated session and pull the user out of the new one (iOS
+     * `pendingCreationSelection`). Expires at [pendingCreatedDeadlineMs].
+     */
+    private var pendingCreatedSessionID: String? = null
+    private var pendingCreatedDeadlineMs = 0L
     var openSessionID by mutableStateOf<String?>(null)
         private set
     /** Covers a session until its first phone-grid replay has painted. A cached session skips this. */
@@ -941,9 +951,15 @@ class Controller(context: Context) {
                 if (initialText.isNotEmpty()) body.put("initialText", initialText)
                 val response = JSONObject(link().post("sessions", body.toString(), 20_000))
                 showCreate = false
-                openSession(response.getString("sessionID"))
+                val createdID = response.getString("sessionID")
+                // Set before opening: a bootstrap already in flight can land
+                // right after openSession and would otherwise reset the view.
+                pendingCreatedSessionID = createdID
+                pendingCreatedDeadlineMs = System.currentTimeMillis() + CREATED_SESSION_GRACE_MS
+                openSession(createdID)
                 refreshOnce()
             } catch (caught: Exception) {
+                pendingCreatedSessionID = null
                 error = caught.message
             } finally {
                 busy = false
@@ -1072,6 +1088,16 @@ class Controller(context: Context) {
     private fun maybeRestoreOrDefaultSession() {
         val remote = snapshot ?: return
         val sessions = remote.sessions
+        val created = pendingCreatedSessionID
+        if (created != null) {
+            val listed = sessions.any { it.id == created }
+            val expired = System.currentTimeMillis() > pendingCreatedDeadlineMs
+            when {
+                // Still the open session and the Host has not listed it yet: hold.
+                !listed && !expired && openSessionID == created -> return
+                else -> pendingCreatedSessionID = null
+            }
+        }
         if (sessions.isEmpty()) return
         val openValid = openSessionID?.let { id -> sessions.any { it.id == id } } == true
         if (openValid) {
