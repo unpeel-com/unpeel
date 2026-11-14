@@ -117,6 +117,8 @@ class VtEmulator(
     private var csiPrivate = false
     /** Bit i set: parameter i followed a ':' rather than a ';'. */
     private var csiColonMask = 0
+    /** An intermediate byte (0x20-0x2f) was seen: the final byte is a different command. */
+    private var csiIntermediate = false
     private var oscBuffer = StringBuilder()
     /** Last printed code point, for REP (CSI b). 0 when nothing was printed. */
     private var lastPrinted = 0
@@ -301,6 +303,7 @@ class VtEmulator(
                     csiParams[0] = 0
                     csiColonMask = 0
                     csiPrivate = false
+                    csiIntermediate = false
                     state = State.CSI_PARAM
                 }
                 ']'.code -> {
@@ -350,10 +353,19 @@ class VtEmulator(
             State.ESC_IGNORE_ONE -> state = State.GROUND
             State.DCS -> when (b) {
                 0x1b -> state = State.DCS_ESC
-                0x07 -> state = State.GROUND
+                0x07, 0x18, 0x1a -> state = State.GROUND // BEL ends it; CAN / SUB abort it
                 else -> Unit
             }
-            State.DCS_ESC -> state = State.GROUND // ESC \ (ST) or any final
+            State.DCS_ESC -> when (b) {
+                '\\'.code -> state = State.GROUND
+                // ESC followed by anything else starts a new sequence; the
+                // unterminated string is dropped, not allowed to eat that byte.
+                0x1b -> state = State.ESCAPE
+                else -> {
+                    state = State.ESCAPE
+                    consumeByte(b)
+                }
+            }
             State.CSI_PARAM -> when (b) {
                 // ECMA-48 parameter bytes 0x3C–0x3F. A leading one marks a
                 // private sequence (DEC ? modes, kitty CSI < u / CSI > n u,
@@ -377,9 +389,10 @@ class VtEmulator(
                         csiParamCount++
                     }
                 }
-                in 0x20..0x2f -> Unit
+                in 0x20..0x2f -> csiIntermediate = true
                 in 0x40..0x7e -> {
-                    execCsi(b.toChar())
+                    // CSI Ps SP q, CSI Ps $ r and CSI ! p are not CSI q / r / p.
+                    if (!csiIntermediate) execCsi(b.toChar())
                     state = State.GROUND
                 }
                 0x1b -> state = State.ESCAPE
@@ -391,11 +404,25 @@ class VtEmulator(
                     state = State.GROUND
                 }
                 0x1b -> state = State.OSC_ESC
+                0x18, 0x1a -> {
+                    oscBuffer = StringBuilder()
+                    state = State.GROUND
+                }
                 else -> if (oscBuffer.length < 2048) oscBuffer.append(b.toChar())
             }
-            State.OSC_ESC -> {
-                if (b == '\\'.code) finishOsc()
-                state = State.GROUND
+            State.OSC_ESC -> when (b) {
+                '\\'.code -> {
+                    finishOsc()
+                    state = State.GROUND
+                }
+                0x1b -> Unit
+                else -> {
+                    // Unterminated OSC cut off by a new escape sequence: drop the
+                    // string and run that sequence, so its bytes are not swallowed.
+                    oscBuffer = StringBuilder()
+                    state = State.ESCAPE
+                    consumeByte(b)
+                }
             }
         }
     }

@@ -131,6 +131,53 @@ class VtCursorSequencesTest {
     }
 
     @Test
+    fun csiWithAnIntermediateByteIsNotTheBareCommand() {
+        val t = vt()
+        // CSI 2 SP A is not CUU: the cursor must stay on row 3 for the x.
+        t.feedText("\u001b[3;1H\u001b[2 Ax")
+        assertEquals("", t.rowText(0))
+        assertEquals("x", t.rowText(2))
+    }
+
+    @Test
+    fun decRequestWithDollarIsNotASetScrollRegion() {
+        val t = vt()
+        // A real CSI r would send the cursor home; with the $ it is a different command.
+        t.feedText("\u001b[3;1H\u001b[2;3\$rx")
+        assertEquals("", t.rowText(0))
+        assertEquals("x", t.rowText(2))
+    }
+
+    @Test
+    fun oscCutOffByAnEscapeSequenceDoesNotEatItsBytes() {
+        val t = vt()
+        var title: String? = null
+        t.onTitle = { title = it }
+        t.feedText("\u001b]0;half a title\u001b[3;1Hx")
+        assertEquals("", t.rowText(0))
+        assertEquals("x", t.rowText(2))
+        assertEquals(null, title)
+    }
+
+    @Test
+    fun dcsCutOffByAnEscapeSequenceDoesNotEatItsBytes() {
+        val t = vt()
+        t.feedText("\u001bPq half\u001b[3;1Hx")
+        assertEquals("", t.rowText(0))
+        assertEquals("x", t.rowText(2))
+    }
+
+    @Test
+    fun canAbortsAnOscString() {
+        val t = vt()
+        var title: String? = null
+        t.onTitle = { title = it }
+        t.feedText("\u001b]0;abc\u0018d")
+        assertEquals("d", t.rowText(0))
+        assertEquals(null, title)
+    }
+
+    @Test
     fun escHashAndPercentConsumeTheirFinalByte() {
         val t = vt()
         t.feedText("a\u001b#8b\u001b%Gc")
