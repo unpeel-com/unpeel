@@ -64,7 +64,7 @@ class HostTerminalView(
         }
     /** Raw terminal bytes. Enter is already `\r`. A multi-line paste is bracketed and not submitted. */
     var onText: ((String) -> Unit)? = null
-    /** Sticky control from the key row. Read when a letter is committed. */
+    /** Sticky control from the key row. Read for letters and Enter. */
     var controlArmed: () -> Boolean = { false }
     var onControlUsed: () -> Unit = {}
 
@@ -490,7 +490,14 @@ class HostTerminalView(
 
     internal fun handleTerminalKey(keyCode: Int, event: KeyEvent): Boolean {
         val mapped = when (keyCode) {
-            KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> "\r"
+            KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                if (event.isCtrlPressed || controlArmed()) {
+                    onControlUsed()
+                    TerminalInput.ctrlKey("enter")
+                } else {
+                    "\r"
+                }
+            }
             KeyEvent.KEYCODE_DEL -> "\u007f"
             KeyEvent.KEYCODE_FORWARD_DEL -> "\u001b[3~"
             KeyEvent.KEYCODE_TAB -> if (event.isShiftPressed) "\u001b[Z" else "\t"
@@ -518,6 +525,12 @@ class HostTerminalView(
         val normalized = text.replace("\r\n", "\n").replace('\r', '\n')
         if (normalized.isEmpty()) return
         if (normalized.all { it == '\n' }) {
+            if (controlArmed()) {
+                // Soft Ctrl + IME Enter: same bytes as a real Ctrl+Return.
+                onControlUsed()
+                deliver(TerminalInput.ctrlKey("enter"))
+                return
+            }
             deliver("\r".repeat(normalized.length))
             return
         }

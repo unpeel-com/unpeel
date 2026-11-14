@@ -450,6 +450,21 @@ object TerminalInput {
         else -> ""
     }
 
+    /**
+     * xterm `modifyOtherKeys` form for Ctrl+key. Matches the soft Ctrl row
+     * (Ctrl+Tab / Ctrl+Esc) and what agents parse as a real Ctrl+Enter.
+     */
+    fun ctrlKey(name: String): String = when (name) {
+        "enter" -> "\u001b[27;5;13~"
+        "tab" -> "\u001b[27;5;9~"
+        "escape" -> "\u001b[27;5;27~"
+        "arrowUp" -> "\u001b[1;5A"
+        "arrowDown" -> "\u001b[1;5B"
+        "arrowRight" -> "\u001b[1;5C"
+        "arrowLeft" -> "\u001b[1;5D"
+        else -> key(name)
+    }
+
     /** Bracketed paste, no Enter. Voice and image attach use this. */
     fun paste(text: String): String = "\u001b[200~$text\u001b[201~"
 

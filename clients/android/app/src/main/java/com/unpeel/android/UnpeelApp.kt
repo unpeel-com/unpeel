@@ -3168,19 +3168,7 @@ private fun GlassButton(onClick: () -> Unit, content: @Composable () -> Unit) {
 }
 
 private fun sendTerminalKey(controller: Controller, name: String, ctrl: Boolean) {
-    val data = if (!ctrl) {
-        TerminalInput.key(name)
-    } else {
-        when (name) {
-            "arrowUp" -> "\u001b[1;5A"
-            "arrowDown" -> "\u001b[1;5B"
-            "arrowRight" -> "\u001b[1;5C"
-            "arrowLeft" -> "\u001b[1;5D"
-            "tab" -> "\u001b[27;5;9~"
-            "escape" -> "\u001b[27;5;27~"
-            else -> TerminalInput.key(name)
-        }
-    }
+    val data = if (ctrl) TerminalInput.ctrlKey(name) else TerminalInput.key(name)
     if (data.isNotEmpty()) controller.sendRaw(data)
 }
 
