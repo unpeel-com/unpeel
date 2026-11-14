@@ -70,7 +70,8 @@ jobs:
           import re
           text = open("clients/android/app/build.gradle.kts").read()
           code = re.search(r"versionCode\s*=\s*(\d+)", text).group(1)
-          name = re.search(r"versionName\s*=\s*\"([^\"]+)\"", text).group(1)
+          cargo = open("crates/Cargo.toml").read()
+          name = re.search(r"\[workspace\.package\][^\[]*?^version\s*=\s*\"([^\"]+)\"", cargo, re.M | re.S).group(1)
           print(f"{name}-{code}")
           ')
           out="Unpeel-Termit-${ver}.apk"

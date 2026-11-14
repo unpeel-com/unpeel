@@ -26,6 +26,12 @@ clients/android/gradlew -p clients/android :protocol:test :app:assembleRelease
 ```
 
 Release APK: `clients/android/app/build/outputs/apk/release/app-release.apk`.
+
+Versioning: `versionName` is read from `[workspace.package] version` in
+`crates/Cargo.toml` at build time, so a release bumps it there and nowhere
+else. `versionCode` is the Android build number, a separate monotonic space
+(like the Mac app's `CFBundleVersion`); raise it in `app/build.gradle.kts` for
+every APK that is published.
 If a user-level Gradle init script redirects Maven to an unreachable mirror,
 run that command with a clean `GRADLE_USER_HOME`.
 

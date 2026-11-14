@@ -4,6 +4,14 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// One version for everything: `[workspace.package] version` in crates/Cargo.toml
+// (see AGENTS.md). versionName reads it; nothing here restates it.
+val workspaceVersion: String = rootDir.resolve("../../crates/Cargo.toml").readLines()
+    .dropWhile { it.trim() != "[workspace.package]" }
+    .drop(1)
+    .firstNotNullOfOrNull { Regex("""^version\s*=\s*"([^"]+)"""").find(it.trim())?.groupValues?.get(1) }
+    ?: error("could not read [workspace.package] version from crates/Cargo.toml")
+
 android {
     namespace = "com.unpeel.android"
     compileSdk = 35
@@ -13,8 +21,10 @@ android {
         applicationId = "com.unpeel.android"
         minSdk = 26
         targetSdk = 35
+        // Build number, a separate monotonic space from the version (like the
+        // Mac app's CFBundleVersion). Bump it for every APK that is published.
         versionCode = 37
-        versionName = "0.7.7"
+        versionName = workspaceVersion
     }
 
     // Optional release keystore via env (CI secrets). Without it, release is
