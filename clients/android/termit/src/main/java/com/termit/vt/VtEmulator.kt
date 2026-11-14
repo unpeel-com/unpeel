@@ -115,7 +115,12 @@ class VtEmulator(
     private val csiParams = IntArray(16)
     private var csiParamCount = 0
     private var csiPrivate = false
+    /** Bit i set: parameter i followed a ':' rather than a ';'. */
+    private var csiColonMask = 0
     private var oscBuffer = StringBuilder()
+    /** Last printed code point, for REP (CSI b). 0 when nothing was printed. */
+    private var lastPrinted = 0
+    private var tabStops = BooleanArray(0)
     private var utf8Expected = 0
     private var utf8Codepoint = 0
 
@@ -161,6 +166,8 @@ class VtEmulator(
         style.reset()
         state = State.GROUND
         utf8Expected = 0
+        lastPrinted = 0
+        tabStops = BooleanArray(0)
         blinkLit = true
         bumpGeneration()
     }
@@ -189,6 +196,11 @@ class VtEmulator(
             val b = data[i].toInt() and 0xff
             i++
             when {
+                // OSC and DCS/SOS/PM/APC bodies are strings, not text. A window
+                // title carries a braille spinner, an ellipsis or CJK, and those
+                // bytes must never reach the screen; only the string parser takes
+                // them. Without this every title update printed glyphs at the cursor.
+                utf8Expected == 0 && (state == State.OSC || state == State.DCS) -> consumeByte(b)
                 utf8Expected > 0 -> {
                     if (b and 0xc0 == 0x80) {
                         utf8Codepoint = (utf8Codepoint shl 6) or (b and 0x3f)
@@ -287,6 +299,7 @@ class VtEmulator(
                 '['.code -> {
                     csiParamCount = 0
                     csiParams[0] = 0
+                    csiColonMask = 0
                     csiPrivate = false
                     state = State.CSI_PARAM
                 }
@@ -294,9 +307,19 @@ class VtEmulator(
                     oscBuffer = StringBuilder()
                     state = State.OSC
                 }
-                'P'.code -> state = State.DCS // swallow until ST
-                // G0/G1 designate — consume the next intermediate (e.g. ESC ( B)
-                '('.code, ')'.code, '*'.code, '+'.code -> state = State.ESC_IGNORE_ONE
+                // DCS, SOS, PM, APC carry a string that ends at ST or BEL. Swallow
+                // it, or its body prints as text (kitty graphics, tmux passthrough).
+                'P'.code, 'X'.code, '^'.code, '_'.code -> state = State.DCS
+                // G0-G3 designate, ESC # 8, ESC % G, ESC SP F: consume the one
+                // trailing byte so it is not printed as a letter.
+                '('.code, ')'.code, '*'.code, '+'.code, '-'.code, '.'.code, '/'.code,
+                '#'.code, '%'.code, ' '.code -> state = State.ESC_IGNORE_ONE
+                'H'.code -> {
+                    // HTS: set a tab stop at the cursor.
+                    ensureTabStops()
+                    if (cursorCol in tabStops.indices) tabStops[cursorCol] = true
+                    state = State.GROUND
+                }
                 'c'.code -> {
                     reset()
                     state = State.GROUND
@@ -348,6 +371,9 @@ class VtEmulator(
                     if (csiParamCount < csiParams.size) {
                         if (csiParamCount == 0) csiParamCount = 1
                         csiParams[csiParamCount] = 0
+                        // Remember which separators were ':' (sub-parameters), so
+                        // SGR 4:3 and 38:2::r:g:b are not read as separate codes.
+                        if (b == ':'.code) csiColonMask = csiColonMask or (1 shl csiParamCount)
                         csiParamCount++
                     }
                 }
@@ -440,8 +466,38 @@ class VtEmulator(
                 cursorCol = 0
             }
             'm' -> applySgr()
-            'G' -> cursorCol = (param(0, 1) - 1).coerceIn(0, screen.cols - 1)
+            'G', '`' -> cursorCol = (param(0, 1) - 1).coerceIn(0, screen.cols - 1)
+            'a' -> cursorCol = (cursorCol + param(0, 1)).coerceAtMost(screen.cols - 1)
             'd' -> cursorRow = (param(0, 1) - 1).coerceIn(0, screen.rows - 1)
+            'e' -> cursorRow = (cursorRow + param(0, 1)).coerceAtMost(screen.rows - 1)
+            'E' -> {
+                // CNL: down N rows (stops at the region bottom), then column 1.
+                cursorRow = (cursorRow + param(0, 1)).coerceAtMost(screen.scrollBottom)
+                cursorCol = 0
+            }
+            'F' -> {
+                // CPL: up N rows (stops at the region top), then column 1.
+                cursorRow = (cursorRow - param(0, 1)).coerceAtLeast(screen.scrollTop)
+                cursorCol = 0
+            }
+            'I' -> repeat(param(0, 1)) { tab() }
+            'Z' -> repeat(param(0, 1)) { backTab() }
+            'g' -> when (param(0, 0)) {
+                0 -> {
+                    ensureTabStops()
+                    if (cursorCol in tabStops.indices) tabStops[cursorCol] = false
+                }
+                3 -> {
+                    ensureTabStops()
+                    tabStops.fill(false)
+                }
+            }
+            'b' -> {
+                // REP: repeat the last printed character, capped so a stray
+                // huge count cannot stall the UI thread.
+                val cp = lastPrinted
+                if (cp != 0) repeat(param(0, 1).coerceAtMost(screen.cols * screen.rows)) { putCodePoint(cp) }
+            }
             's' -> saveCursor()
             'u' -> restoreCursor()
             'n' -> when (param(0, 0)) {
@@ -505,7 +561,8 @@ class VtEmulator(
     }
 
     private fun finishOsc() {
-        val body = oscBuffer.toString()
+        // The body was collected byte by byte as Latin-1 chars; decode it as UTF-8.
+        val body = String(oscBuffer.toString().toByteArray(Charsets.ISO_8859_1), Charsets.UTF_8)
         oscBuffer = StringBuilder()
         val semi = body.indexOf(';')
         val ps = if (semi < 0) body else body.substring(0, semi)
@@ -603,6 +660,12 @@ class VtEmulator(
         }
         var i = 0
         while (i < csiParamCount) {
+            // 4:N is an underline style, not a new code. 4:0 turns it off.
+            if (csiParams[i] == 4 && i + 1 < csiParamCount && csiColonMask and (1 shl (i + 1)) != 0) {
+                style.underline = csiParams[i + 1] != 0
+                i += 2
+                continue
+            }
             when (val p = csiParams[i]) {
                 0 -> style.reset()
                 1 -> style.bold = true
@@ -621,21 +684,32 @@ class VtEmulator(
                 49 -> style.bg = CellStyle.DEFAULT_BG
                 in 90..97 -> style.fg = p - 90 + 8
                 in 100..107 -> style.bg = p - 100 + 8
-                38, 48 -> {
+                38, 48, 58 -> {
                     val isFg = p == 38
-                    if (i + 1 < csiParamCount && csiParams[i + 1] == 5 && i + 2 < csiParamCount) {
+                    // ':' form carries an empty colorspace slot: 38:2::r:g:b.
+                    val colon = i + 1 < csiParamCount && csiColonMask and (1 shl (i + 1)) != 0
+                    val kind = if (i + 1 < csiParamCount) csiParams[i + 1] else -1
+                    if (kind == 5 && i + 2 < csiParamCount) {
                         val idx = csiParams[i + 2].coerceIn(0, 255)
-                        if (isFg) style.fg = idx else style.bg = idx
+                        if (p == 38) style.fg = idx else if (p == 48) style.bg = idx
                         i += 2
-                    } else if (i + 1 < csiParamCount && csiParams[i + 1] == 2 && i + 4 < csiParamCount) {
-                        val r = csiParams[i + 2].coerceIn(0, 255)
-                        val g = csiParams[i + 3].coerceIn(0, 255)
-                        val b = csiParams[i + 4].coerceIn(0, 255)
-                        val argb = 0xff000000.toInt() or (r shl 16) or (g shl 8) or b
-                        if (isFg) style.fg = argb else style.bg = argb
-                        i += 4
+                    } else if (kind == 2) {
+                        val skip = if (colon && i + 5 < csiParamCount && csiColonMask and (1 shl (i + 3)) != 0) 1 else 0
+                        val base = i + 2 + skip
+                        if (base + 2 < csiParamCount) {
+                            val r = csiParams[base].coerceIn(0, 255)
+                            val g = csiParams[base + 1].coerceIn(0, 255)
+                            val b = csiParams[base + 2].coerceIn(0, 255)
+                            val argb = 0xff000000.toInt() or (r shl 16) or (g shl 8) or b
+                            if (isFg) style.fg = argb else if (p == 48) style.bg = argb
+                            i = base + 2
+                        } else {
+                            i = csiParamCount
+                        }
                     }
                 }
+                // 58 is handled above (colour consumed, not drawn); 59 resets it.
+                59 -> Unit
             }
             i++
         }
@@ -680,6 +754,7 @@ class VtEmulator(
             cont.applyStyle(style)
         }
         cursorCol = col + width
+        lastPrinted = cp
     }
 
     private fun backspace() {
@@ -688,8 +763,24 @@ class VtEmulator(
     }
 
     private fun tab() {
-        cursorCol = ((cursorCol / 8) + 1) * 8
-        if (cursorCol >= screen.cols) cursorCol = screen.cols - 1
+        ensureTabStops()
+        var next = cursorCol + 1
+        while (next < screen.cols && !tabStops[next]) next++
+        cursorCol = next.coerceAtMost(screen.cols - 1)
+    }
+
+    private fun backTab() {
+        ensureTabStops()
+        var prev = cursorCol - 1
+        while (prev > 0 && !tabStops[prev]) prev--
+        cursorCol = prev.coerceAtLeast(0)
+    }
+
+    /** Default stops every 8 columns; rebuilt when the width changes. */
+    private fun ensureTabStops() {
+        val cols = screen.cols
+        if (tabStops.size == cols) return
+        tabStops = BooleanArray(cols) { it % 8 == 0 }
     }
 
     private fun carriageReturn() {
