@@ -1,29 +1,32 @@
 package com.unpeel.android
 
 import android.content.Context
-import androidx.compose.foundation.Canvas
+import android.graphics.Bitmap
+import android.graphics.Canvas as AndroidCanvas
+import android.graphics.Paint as AndroidPaint
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.scale
-import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.asAndroidPath
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import kotlin.math.ceil
 
 /**
  * The same runtime SVGs iOS draws from the shared catalog. A letter is only
@@ -70,6 +73,13 @@ internal fun toolIconAsset(
     return "terminal"
 }
 
+/**
+ * Authored runtime SVGs ship as white marks (`iconIsTemplate` in the catalog).
+ * Tint them with [Foreground] so light chrome is not white-on-white. Multicolor
+ * assets (today: OpenCode) keep their original fills.
+ */
+private val MulticolorToolAssets = setOf("opencode")
+
 @Composable
 internal fun ToolLogo(
     command: String,
@@ -79,7 +89,8 @@ internal fun ToolLogo(
     size: Dp = 22.dp,
 ) {
     val asset = toolIconAsset(command, providerID, activeRuntimeID, running)
-    if (!SvgIcon(asset, size)) {
+    val tint = if (asset in MulticolorToolAssets) null else Foreground
+    if (!SvgIcon(asset, size, tint = tint)) {
         BrandMark(command, size)
     }
 }
@@ -90,47 +101,74 @@ internal fun BranchMark(size: Dp, tint: Color) {
 }
 
 /**
- * Draw a shared SVG asset with an optional tint. Each call gets its own Box +
- * keyed Canvas so folder-open/closed rows do not share one render node and
- * freeze on the first tint (the old "only the first folder is colored" bug).
+ * Draw a shared SVG asset with an optional tint. White catalog marks are
+ * rasterized then color-filtered (iOS `.renderingMode(.template)`), so light
+ * mode never paints white-on-white across sidebar, Activity, or presets.
  */
 @Composable
 internal fun SvgIcon(asset: String, size: Dp, tint: Color? = null, rotation: Float = 0f): Boolean {
     val context = LocalContext.current
+    val density = LocalDensity.current
     val picture = remember(asset) { loadSvg(context, asset) } ?: return false
-    val tintKey = tint?.toArgb() ?: 0
-    key(asset, tintKey, size, rotation) {
+    val ink = tint ?: if (picture.isWhiteTemplate) Foreground else null
+    val px = with(density) { ceil(size.toPx()).toInt().coerceAtLeast(1) }
+    val bitmap = remember(asset, px) { rasterize(picture, px) } ?: return false
+    val tintKey = ink?.toArgb() ?: 0
+    key(asset, tintKey, px, rotation) {
         Box(
             Modifier
                 .size(size)
                 .graphicsLayer { rotationZ = rotation },
         ) {
-            Canvas(Modifier.fillMaxSize()) {
-                val fillColor = tint
-                val sx = this.size.width / picture.width
-                val sy = this.size.height / picture.height
-                scale(sx, sy, pivot = Offset.Zero) {
-                    translate(left = -picture.minX, top = -picture.minY) {
-                        picture.shapes.forEach { shape ->
-                            shape.fill?.let { drawPath(shape.path, fillColor ?: it) }
-                            shape.stroke?.let { stroke ->
-                                drawPath(
-                                    shape.path,
-                                    fillColor ?: stroke,
-                                    style = Stroke(
-                                        width = shape.strokeWidth,
-                                        cap = shape.cap,
-                                        join = shape.join,
-                                    ),
-                                )
-                            }
-                        }
-                    }
-                }
-            }
+            Image(
+                bitmap = bitmap.asImageBitmap(),
+                contentDescription = null,
+                modifier = Modifier.size(size),
+                colorFilter = ink?.let { ColorFilter.tint(it) },
+            )
         }
     }
     return true
+}
+
+/** Draw the SVG into a bitmap at [px]×[px]. Template tints use the alpha mask. */
+private fun rasterize(picture: SvgPicture, px: Int): Bitmap? {
+    if (px <= 0) return null
+    val bitmap = Bitmap.createBitmap(px, px, Bitmap.Config.ARGB_8888)
+    val canvas = AndroidCanvas(bitmap)
+    val sx = px / picture.width
+    val sy = px / picture.height
+    canvas.translate(-picture.minX * sx, -picture.minY * sy)
+    canvas.scale(sx, sy)
+    val fillPaint = AndroidPaint(AndroidPaint.ANTI_ALIAS_FLAG).apply {
+        style = AndroidPaint.Style.FILL
+    }
+    val strokePaint = AndroidPaint(AndroidPaint.ANTI_ALIAS_FLAG).apply {
+        style = AndroidPaint.Style.STROKE
+    }
+    picture.shapes.forEach { shape ->
+        val androidPath = android.graphics.Path(shape.path.asAndroidPath())
+        shape.fill?.let { fill ->
+            fillPaint.color = fill.toArgb()
+            canvas.drawPath(androidPath, fillPaint)
+        }
+        shape.stroke?.let { stroke ->
+            strokePaint.color = stroke.toArgb()
+            strokePaint.strokeWidth = shape.strokeWidth
+            strokePaint.strokeCap = when (shape.cap) {
+                StrokeCap.Round -> AndroidPaint.Cap.ROUND
+                StrokeCap.Square -> AndroidPaint.Cap.SQUARE
+                else -> AndroidPaint.Cap.BUTT
+            }
+            strokePaint.strokeJoin = when (shape.join) {
+                StrokeJoin.Round -> AndroidPaint.Join.ROUND
+                StrokeJoin.Bevel -> AndroidPaint.Join.BEVEL
+                else -> AndroidPaint.Join.MITER
+            }
+            canvas.drawPath(androidPath, strokePaint)
+        }
+    }
+    return bitmap
 }
 
 private data class SvgPicture(
@@ -139,7 +177,17 @@ private data class SvgPicture(
     val width: Float,
     val height: Float,
     val shapes: List<SvgShape>,
-)
+) {
+    /** Catalog / chrome SVGs authored as white glyphs for dark chrome. */
+    val isWhiteTemplate: Boolean
+        get() {
+            val paints = shapes.flatMap { listOfNotNull(it.fill, it.stroke) }
+            return paints.isNotEmpty() && paints.all(::isNearWhite)
+        }
+}
+
+private fun isNearWhite(color: Color): Boolean =
+    color.alpha > 0.5f && color.red >= 0.90f && color.green >= 0.90f && color.blue >= 0.90f
 
 private data class SvgShape(
     val path: Path,

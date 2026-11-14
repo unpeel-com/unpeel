@@ -1,10 +1,9 @@
 package com.unpeel.controller
 
 /**
- * A display-only VT for a Host-owned PTY. The phone may POST
- * `/mobile/resize-desktop` once, after the terminal viewport is measured,
- * so the Host letterboxes to that grid. Callers then size this screen to
- * the confirmed columns and rows. The keyboard does not resize the PTY.
+ * Protocol-module VT harness for unit tests. The phone UI renders through
+ * `:termit` (`HostTerminal`); keep this class for wire/parser coverage only.
+ * The keyboard must not resize a Host PTY — that rule lives on the app fit path.
  */
 class VtScreen(cols: Int, rows: Int) {
     var cols = cols.coerceIn(2, 300)

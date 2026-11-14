@@ -288,7 +288,7 @@
     {
       "id": "session.output.subscribe",
       "method": "WSS",
-      "path": "/api/sessions/{id}/stream",
+      "path": "/api/sessions/{id}/output",
       "native": true,
       "tui": true
     },

@@ -18,6 +18,7 @@ class TerminalModeSignalsTest {
         val signals = TerminalModeSignals()
         signals.feed("\u001b[?1000l".toByteArray())
         assertTrue(signals.sawMouseOrAlternateDisable)
+        assertFalse(signals.mouseTrackingEnabled)
     }
 
     @Test
@@ -25,13 +26,17 @@ class TerminalModeSignalsTest {
         val signals = TerminalModeSignals()
         signals.feed("\u001b[?1000l\u001b[?1000h\u001b[?1006h".toByteArray())
         assertFalse(signals.sawMouseOrAlternateDisable)
+        assertTrue(signals.mouseTrackingEnabled)
     }
 
     @Test
     fun resetCountsAsDisable() {
         val signals = TerminalModeSignals()
+        signals.feed("\u001b[?1000h".toByteArray())
+        assertTrue(signals.mouseTrackingEnabled)
         signals.feed("\u001bc".toByteArray())
         assertTrue(signals.sawMouseOrAlternateDisable)
+        assertFalse(signals.mouseTrackingEnabled)
     }
 
     @Test
@@ -40,8 +45,10 @@ class TerminalModeSignalsTest {
         signals.markHostSnapshot()
         signals.feed("\u001b[?1000h\u001b[?1049h".toByteArray())
         assertTrue(signals.hostModeSnapshot)
+        assertTrue(signals.mouseTrackingEnabled)
         signals.reset()
         assertFalse(signals.hostModeSnapshot)
         assertFalse(signals.sawMouseOrAlternateDisable)
+        assertFalse(signals.mouseTrackingEnabled)
     }
 }

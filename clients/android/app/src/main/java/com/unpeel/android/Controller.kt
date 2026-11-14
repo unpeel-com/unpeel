@@ -10,6 +10,7 @@ import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.unpeel.android.BuildConfig
 import com.unpeel.controller.AgentCatalog
 import com.unpeel.controller.AgentTerminalPolicy
 import com.unpeel.controller.ArtifactSummary
@@ -796,13 +797,24 @@ class Controller(context: Context) {
 
     /** Upload any other file and paste its quoted Host path. Does not submit. */
     fun attachFile(bytes: ByteArray, filename: String) {
+        if (!supportsFileUpload()) {
+            error = "This Host cannot accept file uploads"
+            return
+        }
         uploadAndPaste(bytes, "application/octet-stream", sanitizeUploadName(filename), "Couldn’t upload the file")
     }
+
+    fun supportsFileUpload(): Boolean =
+        snapshot?.capabilities?.contains("artifact.upload.file") == true
 
     private fun uploadAndPaste(bytes: ByteArray, contentType: String, filename: String?, failure: String) {
         val id = openSessionID ?: return
         if (bytes.isEmpty()) {
             error = failure
+            return
+        }
+        if (filename != null && !supportsFileUpload()) {
+            error = "This Host cannot accept file uploads"
             return
         }
         val limit = if (filename == null) 4 * 1024 * 1024 else 64 * 1024 * 1024
@@ -1182,13 +1194,6 @@ class Controller(context: Context) {
                 if (resuming) restartError = failure.message
             }
             if (restartingSessionID == sessionID) restartingSessionID = null
-            refreshOnce()
-        }
-    }
-
-    fun selectWorkspace(id: String) {
-        scope.launch {
-            runCatching { link().post("select-workspace", JSONObject().put("workspaceId", id).toString()) }
             refreshOnce()
         }
     }
@@ -2185,7 +2190,7 @@ class Controller(context: Context) {
             id = deviceId,
             name = Build.MODEL ?: "Android",
             platform = "android",
-            appVersion = "0.7.7",
+            appVersion = BuildConfig.VERSION_NAME,
         )
         val request = JSONObject()
             .put("token", payload.token)

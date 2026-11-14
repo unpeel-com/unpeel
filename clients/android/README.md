@@ -3,17 +3,23 @@
 A remote Controller for an Unpeel Host, matching the iOS app's role: it never
 hosts a session. Pair over the same `/mobile` protocol (`UNPEEL:` codes or the
 JSON payload), then list sessions, stream the live terminal, send input, answer
-approvals, create sessions from Host presets, and open the screenshot gallery.
-Off-LAN traffic uses the Link relay with the same forward-secret handshake as
-Swift and Rust (`protocol/relay-kat-vectors-v1.json`).
+approvals, create sessions from Host presets, and open the screenshot gallery
+(including crop / arrow markup). Off-LAN traffic uses the Link relay with the
+same forward-secret handshake as Swift and Rust
+(`protocol/relay-kat-vectors-v1.json`).
+
+One phone keeps multiple paired Hosts; each pairing is one workspace. The
+Workspaces sheet switches the active pairing locally — it does not call a Host
+cross-workspace RPC.
 
 Not in this client yet: push notifications (the Host route is APNs-shaped),
-voice dictation, image annotation, and a Ghostty-grade terminal. The terminal
-here is a VT parser sized to the Host grid; keyboard focus does not resize
-that grid.
+voice dictation, full-screen ink annotation, and a Ghostty-grade terminal. The
+terminal here is a VT parser sized to the Host grid; keyboard focus does not
+resize that grid.
 
-This tree is the Android client from `native/ui-localization`, with the
-vendored Termux sources replaced by the MIT `:termit` module.
+Runtime presentation (agent vs shell, transcript offer, spinner tint) comes
+from `GeneratedRuntimeCatalog.kt`, regenerated with `bun run generate:runtimes`
+from `runtimes/*/runtime.toml` (same source as the Swift catalog).
 
 ```sh
 clients/android/gradlew -p clients/android :protocol:test :app:assembleRelease

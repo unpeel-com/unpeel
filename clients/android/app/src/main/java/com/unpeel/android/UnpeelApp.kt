@@ -3114,51 +3114,30 @@ private fun SessionSummary.presentationProviderID(): String? {
 
 /**
  * iOS `IOSSidebarTheme.toolSpinnerColor`: Host `spinnerColorHex` first, else
- * runtime-catalog tint by provider/command (Claude terracotta, Codex purple…).
+ * [RuntimeCatalog] spinner tint by provider/command. Light chrome remaps
+ * near-white brand marks so Active / sidebar spinners stay visible.
  */
 @Composable
 @ReadOnlyComposable
 private fun toolSpinnerColor(session: SessionSummary): Color {
-    session.spinnerColorHex?.let { return rgb(it) }
-    val keys = listOfNotNull(
-        session.activeRuntimeID?.takeIf { session.status == "running" && it.isNotBlank() },
-        session.providerID?.takeIf { it.isNotBlank() },
-        AgentCatalog.commandToken(session.command).takeIf { it.isNotEmpty() },
-    ).map { it.trim().lowercase() }
-    for (key in keys) {
-        SpinnerTints[key]?.let { return Color(it) }
-    }
-    return GenericSpinner
+    val raw = session.spinnerColorHex?.let { rgb(it) }
+        ?: run {
+            val provider = session.activeRuntimeID?.takeIf { session.status == "running" && it.isNotBlank() }
+                ?: session.providerID
+            AgentCatalog.spinnerTintArgb(provider, session.command)?.let { Color(it) }
+        }
+        ?: GenericSpinner
+    return readableToolAccent(raw)
 }
 
-/** Subset of `UnpeelRuntimeCatalog` spinnerTintColorHex, keyed by id/slug/alias. */
-private val SpinnerTints: Map<String, Long> = mapOf(
-    "com.anthropic.claude-code" to 0xFFD97757,
-    "claude-code" to 0xFFD97757,
-    "claude" to 0xFFD97757,
-    "com.openai.codex" to 0xFFC292FE,
-    "codex" to 0xFFC292FE,
-    "bot.cline.cli" to 0xFF98C4FA,
-    "cline" to 0xFF98C4FA,
-    "com.sourcegraph.amp" to 0xFFF97316,
-    "amp" to 0xFFF97316,
-    "com.google.gemini-cli" to 0xFF6EA8FF,
-    "gemini" to 0xFF6EA8FF,
-    "dev.mariozechner.pi" to 0xFF7C95FF,
-    "pi" to 0xFF7C95FF,
-    "ai.opencode.cli" to 0xFF8F8787,
-    "opencode" to 0xFF8F8787,
-    "com.cursor.agent" to 0xFFEDEDED,
-    "cursor-agent" to 0xFFEDEDED,
-    "cursor" to 0xFFEDEDED,
-    "ai.x.grok-cli" to 0xFF8F8787,
-    "grok" to 0xFF8F8787,
-    "com.moonshot.kimi-code" to 0xFFB88A2A,
-    "kimi" to 0xFFB88A2A,
-    "dev.kiro.cli" to 0xFFA78BFA,
-    "kiro" to 0xFFA78BFA,
-    "kiro-cli" to 0xFFA78BFA,
-)
+/** Keep agent accents readable on light Mac chrome (white/near-white marks). */
+@Composable
+@ReadOnlyComposable
+private fun readableToolAccent(color: Color): Color {
+    if (phoneNight()) return color
+    val lum = 0.2126f * color.red + 0.7152f * color.green + 0.0722f * color.blue
+    return if (lum > 0.72f) Foreground.copy(alpha = 0.78f) else color
+}
 
 @Composable
 private fun GlassButton(onClick: () -> Unit, content: @Composable () -> Unit) {

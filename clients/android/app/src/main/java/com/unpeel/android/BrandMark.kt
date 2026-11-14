@@ -58,9 +58,11 @@ private val KnownBrands = listOf(
 @Composable
 internal fun BrandMark(command: String, size: Dp = 22.dp) {
     val brand = brandFor(command)
-    val light = 0.2126f * brand.tint.red + 0.7152f * brand.tint.green + 0.0722f * brand.tint.blue > 0.72f
+    // Near-white brand disks (fx / copilot) disappear on light chrome — ink them.
+    val disk = readableBrandDisk(brand.tint)
+    val light = luminance(disk) > 0.72f
     Box(
-        Modifier.size(size).clip(CircleShape).background(brand.tint),
+        Modifier.size(size).clip(CircleShape).background(disk),
         contentAlignment = Alignment.Center,
     ) {
         Text(
@@ -70,4 +72,13 @@ internal fun BrandMark(command: String, size: Dp = 22.dp) {
             fontWeight = FontWeight.SemiBold,
         )
     }
+}
+
+private fun luminance(color: Color): Float =
+    0.2126f * color.red + 0.7152f * color.green + 0.0722f * color.blue
+
+@Composable
+private fun readableBrandDisk(tint: Color): Color {
+    if (phoneNight() || luminance(tint) <= 0.72f) return tint
+    return Foreground.copy(alpha = 0.88f)
 }

@@ -317,46 +317,24 @@ fun folderColorArgb(id: String?): Int? = when (id) {
 }
 
 /**
- * Launch identity only. A runtime seen inside a plain shell may borrow a logo,
- * but not the agent gallery or the transcript action.
+ * Launch identity from [RuntimeCatalog] (generated from runtimes/). A runtime
+ * seen inside a plain shell may borrow a logo, but not the agent gallery or
+ * the transcript action unless the package declares them.
  */
 object AgentCatalog {
-    private val transcript = setOf(
-        "com.anthropic.claude-code", "claude-code", "claude",
-        "com.openai.codex", "codex",
-        "bot.cline.cli", "cline",
-        "com.google.gemini-cli", "gemini",
-        "ai.opencode.cli", "opencode",
-        "com.cursor.agent", "cursor-agent", "cursor",
-        "ai.x.grok-cli", "grok",
-        "com.moonshot.kimi-code", "kimi",
-        "dev.kiro.cli", "kiro", "kiro-cli",
-        "ai.meta.muse-code", "muse-code", "muse",
-        "sh.omp.cli", "omp",
-    )
-    private val agents = transcript + setOf(
-        "com.sourcegraph.amp", "amp",
-        "dev.mariozechner.pi", "pi",
-        "com.github.copilot-cli", "github-copilot", "copilot",
-        "com.vercel.fx", "fx",
-        "com.google.antigravity-cli", "antigravity", "agy",
-    )
-
-    fun commandToken(command: String): String {
-        val word = command.trim().substringBefore(' ').trim('\'', '"')
-        return word.substringAfterLast('/').substringAfterLast('\\').lowercase()
-    }
+    fun commandToken(command: String): String = RuntimeCatalog.commandToken(command)
 
     fun isAgent(providerID: String?, command: String): Boolean =
-        keys(providerID, command).any { it in agents }
+        resolve(providerID, command)?.kind == "agent"
 
     fun supportsTranscript(providerID: String?, command: String): Boolean =
-        keys(providerID, command).any { it in transcript }
+        resolve(providerID, command)?.capabilities?.contains("transcript") == true
 
-    private fun keys(providerID: String?, command: String): List<String> = listOfNotNull(
-        providerID?.trim()?.lowercase()?.takeIf { it.isNotEmpty() },
-        commandToken(command).takeIf { it.isNotEmpty() },
-    )
+    fun spinnerTintArgb(providerID: String?, command: String): Int? =
+        resolve(providerID, command)?.spinnerTintArgb
+
+    private fun resolve(providerID: String?, command: String): RuntimeEntry? =
+        RuntimeCatalog.runtime(providerID) ?: RuntimeCatalog.runtimeForCommand(command)
 }
 
 fun isInlineSidebarProject(project: ProjectSummary): Boolean =

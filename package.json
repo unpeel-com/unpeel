@@ -4,8 +4,8 @@
   "license": "MIT",
   "scripts": {
     "test:release": "node --test scripts/release-*.test.mjs",
-    "generate:runtimes": "bun scripts/generate-runtime-client-catalog.mjs && bun scripts/generate-runtime-client-catalog.mjs --out clients/shared/UnpeelShared/Sources/UnpeelShared/GeneratedRuntimeCatalog.swift",
-    "check:runtimes": "bun scripts/generate-runtime-client-catalog.mjs --check && bun scripts/generate-runtime-client-catalog.mjs --check --out generated/GeneratedRuntimeCatalog.swift && bun scripts/generate-runtime-client-catalog.mjs --check --out clients/shared/UnpeelShared/Sources/UnpeelShared/GeneratedRuntimeCatalog.swift",
+    "generate:runtimes": "bun scripts/generate-runtime-client-catalog.mjs && bun scripts/generate-runtime-client-catalog.mjs --out clients/shared/UnpeelShared/Sources/UnpeelShared/GeneratedRuntimeCatalog.swift && bun scripts/generate-runtime-client-catalog.mjs --out clients/android/protocol/src/main/kotlin/com/unpeel/controller/GeneratedRuntimeCatalog.kt",
+    "check:runtimes": "bun scripts/generate-runtime-client-catalog.mjs --check && bun scripts/generate-runtime-client-catalog.mjs --check --out generated/GeneratedRuntimeCatalog.swift && bun scripts/generate-runtime-client-catalog.mjs --check --out clients/shared/UnpeelShared/Sources/UnpeelShared/GeneratedRuntimeCatalog.swift && bun scripts/generate-runtime-client-catalog.mjs --check --out clients/android/protocol/src/main/kotlin/com/unpeel/controller/GeneratedRuntimeCatalog.kt",
     "test:runtimes": "bun test runtimes/hook-plugins.test.js",
     "validate:runtimes": "bun run check:runtimes && bun run test:runtimes && cargo test --manifest-path crates/Cargo.toml -p unpeel-core runtime_catalog",
     "release:cli": "node scripts/release-cli.mjs",

@@ -159,6 +159,10 @@ class HostTerminalView(
     private var downY = 0f
     private var downOnCursor = false
     private var gestureDecided = false
+    /** True once this touch committed to scroll / cursor-drag (not a tap). */
+    private var gestureMoved = false
+    /** Long-press paste/select already consumed this touch — no click on lift. */
+    private var suppressClick = false
     private var cursorDrag = false
     private var placedCol = 0
     private var placedRow = 0
@@ -213,6 +217,8 @@ class HostTerminalView(
             downY = e.y
             downOnCursor = tapTargetsCursor(terminal.emulator, e)
             gestureDecided = false
+            gestureMoved = false
+            suppressClick = false
             cursorDrag = false
             return true
         }
@@ -222,15 +228,10 @@ class HostTerminalView(
                 clearSelection()
                 return true
             }
-            val emulator = terminal.emulator
-            if (!emulator.isMouseTrackingActive()) {
-                showKeyboard()
-                return true
-            }
-            // The program owns the click (Stop, menus, links). The keyboard
-            // comes up only when the tap lands on the cursor row.
-            sendClick(emulator, e)
-            if (tapTargetsCursor(emulator, e)) showKeyboard() else dismissKeyboard()
+            // Mouse clicks are delivered once from ACTION_UP only. Doing it
+            // here as well double-fires SGR press/release on clean taps.
+            if (mouseClicksEnabled(terminal.emulator)) return true
+            showKeyboard()
             return true
         }
 
@@ -238,10 +239,12 @@ class HostTerminalView(
             val emulator = terminal.emulator
             if (tapTargetsCursor(emulator, e) && pasteClipboard()) {
                 clearSelection()
+                suppressClick = true
                 return
             }
             performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
             if (!selecting || !selectionContains(e)) selectWord(e)
+            suppressClick = true
         }
 
         override fun onScroll(e1: MotionEvent?, e2: MotionEvent, distanceX: Float, distanceY: Float): Boolean {
@@ -256,8 +259,14 @@ class HostTerminalView(
             if (!gestureDecided) {
                 val dx = e2.x - downX
                 val dy = e2.y - downY
-                if (abs(dx) < touchSlop && abs(dy) < touchSlop) return true
+                // Fat-finger hold while mouse tracking: GestureDetector already
+                // left its tap region at touchSlop, so onSingleTapUp will not
+                // fire — we still refuse to scroll until scrollCommitSlop so
+                // ACTION_UP can deliver the click (follow-ups cancel/edit).
+                val slop = scrollCommitSlop(emulator)
+                if (abs(dx) < slop && abs(dy) < slop) return true
                 gestureDecided = true
+                gestureMoved = true
                 cursorDrag = wantsCursorDrag(emulator, dx, dy)
                 if (cursorDrag) {
                     placedCol = emulator.cursorCol
@@ -289,7 +298,9 @@ class HostTerminalView(
         }
 
         override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
-            if (selecting || cursorDrag || zoom > 1f || cellHeight <= 0) return false
+            // A wobble past GestureDetector's slop but under ours must stay a
+            // tap — do not fling-scroll away the follow-up row the finger hit.
+            if (!gestureMoved || selecting || cursorDrag || zoom > 1f || cellHeight <= 0) return false
             val emulator = terminal.emulator
             // velocityY is downward. A positive line count reveals newer rows.
             when (forwarding(emulator)) {
@@ -565,6 +576,23 @@ class HostTerminalView(
                 invalidate()
             }
         }
+        // One click path: lift without a committed scroll. Covers clean taps
+        // and fat-finger wobbles under scrollCommitSlop (GestureDetector's own
+        // touchSlop would otherwise turn those into scroll and drop the tap).
+        if (event.actionMasked == MotionEvent.ACTION_UP &&
+            !pinching && !selecting && !cursorDrag && !gestureMoved && !suppressClick
+        ) {
+            val emulator = terminal.emulator
+            if (mouseClicksEnabled(emulator)) {
+                val dx = event.x - downX
+                val dy = event.y - downY
+                val slop = scrollCommitSlop(emulator)
+                if (abs(dx) < slop && abs(dy) < slop) {
+                    sendClick(emulator, event)
+                    if (tapTargetsCursor(emulator, event)) showKeyboard() else dismissKeyboard()
+                }
+            }
+        }
         return true
     }
 
@@ -733,7 +761,7 @@ class HostTerminalView(
     private fun forwarding(emulator: VtEmulator): AgentTerminalPolicy.Wheel {
         return AgentTerminalPolicy.wheelForwarding(
             modesKnown = terminal.hostModeSnapshot,
-            mouseTracking = emulator.isMouseTrackingActive(),
+            mouseTracking = mouseClicksEnabled(emulator),
             alternateScreen = emulator.isAlternateBufferActive(),
             sawMouseOrAlternateDisable = terminal.sawMouseOrAlternateDisable,
             prefersRemoteMouseWheel = prefersRemoteWheel,
@@ -838,12 +866,32 @@ class HostTerminalView(
         return row to (base + slack)
     }
 
+    /** VT or stream tracker — either means the program wants pointer clicks. */
+    private fun mouseClicksEnabled(emulator: VtEmulator): Boolean =
+        emulator.isMouseTrackingActive() || terminal.mouseTrackingEnabled
+
+    /**
+     * How far the finger may wobble before this touch becomes a scroll.
+     * Larger while the program is in mouse-tracking mode so TUI hit targets
+     * (follow-ups cancel/edit, menus) still receive a click.
+     */
+    private fun scrollCommitSlop(emulator: VtEmulator): Float {
+        if (!mouseClicksEnabled(emulator)) return touchSlop
+        return maxOf(touchSlop * 3f, cellHeight * 0.6f)
+    }
+
     /** Left press then release at the tapped cell. Column and row are 1-based. */
     private fun sendClick(emulator: VtEmulator, event: MotionEvent) {
         val cell = cellAt(event.x, event.y) ?: return
+        // Local scrollback can map a tap into transcript rows; mouse reports
+        // are screen-relative — refuse history hits instead of clamping wrong.
+        if (cell.second !in 0 until emulator.mRows) return
         val column = (cell.first + 1).coerceIn(1, emulator.mColumns)
-        val row = (cell.second + 1).coerceIn(1, emulator.mRows)
-        val payload = if (emulator.isMouseProtocolSgr()) {
+        val row = cell.second + 1
+        // Prefer SGR when the VT lost 1006 but the stream tracker still says
+        // mouse is on (same guess as [sendWheel]).
+        val sgr = emulator.isMouseProtocolSgr() || !emulator.isMouseTrackingActive()
+        val payload = if (sgr) {
             "\u001b[<0;$column;${row}M\u001b[<0;$column;${row}m"
         } else {
             val bytes = byteArrayOf(
@@ -927,7 +975,7 @@ class HostTerminalView(
      * Mouse-tracking programs keep the pointer.
      */
     private fun wantsCursorDrag(emulator: VtEmulator, dx: Float, dy: Float): Boolean {
-        if (!downOnCursor || selecting || offsetRows != 0 || emulator.isMouseTrackingActive()) return false
+        if (!downOnCursor || selecting || offsetRows != 0 || mouseClicksEnabled(emulator)) return false
         if (emulator.isAlternateBufferActive()) return true
         return abs(dx) > abs(dy)
     }

@@ -1,5 +1,6 @@
 package com.unpeel.controller
 
+import java.io.File
 import org.json.JSONObject
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -11,6 +12,50 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ProtocolTest {
+    private fun protocolDir(): File {
+        val fromProp = System.getProperty("unpeel.protocol.dir")
+        val fromEnv = System.getenv("UNPEEL_PROTOCOL_DIR")
+        val dir = File(fromProp ?: fromEnv ?: error("unpeel.protocol.dir / UNPEEL_PROTOCOL_DIR unset"))
+        assertTrue("protocol dir missing: $dir", dir.isDirectory)
+        return dir
+    }
+
+    private fun protocolJson(name: String): JSONObject =
+        JSONObject(File(protocolDir(), name).readText())
+
+    @Test
+    fun relayKnownAnswerLoadsFromProtocolFixture() {
+        val expected = protocolJson("relay-kat-vectors-v1.json")
+        val e2eKey = ByteArray(32) { it.toByte() }
+        val sharedSecret = ByteArray(32) { (0x40 + it).toByte() }
+        val clientSalt = ByteArray(16) { (0x10 + it).toByte() }
+        val hostSalt = ByteArray(16) { (0xA0 + it).toByte() }
+        val clientEph = ByteArray(32) { (0x80 + it).toByte() }
+        val hostEph = ByteArray(32) { (0xC0 + it * 3).toByte() }
+        val mac = RelayHandshake.transcriptMac(e2eKey, "phone-kat-1", clientSalt, hostSalt, clientEph, hostEph)
+        assertEquals(expected.getString("transcriptMAC"), b64(mac))
+
+        val client = RelaySession(e2eKey, sharedSecret, clientSalt, hostSalt, isHost = false)
+        val sealed = client.seal("known-answer-plaintext".toByteArray())
+        assertEquals(expected.getString("sealedFrame"), b64(sealed))
+        val host = RelaySession(e2eKey, sharedSecret, clientSalt, hostSalt, isHost = true)
+        assertEquals("known-answer-plaintext", host.open(sealed).toString(Charsets.UTF_8))
+    }
+
+    @Test
+    fun hostCapabilitiesPinsOutputSubscribePath() {
+        val ledger = protocolJson("host-capabilities-v1.json")
+        val ops = ledger.getJSONArray("capabilities")
+        var found = false
+        for (i in 0 until ops.length()) {
+            val op = ops.getJSONObject(i)
+            if (op.getString("id") != "session.output.subscribe") continue
+            assertEquals("/api/sessions/{id}/output", op.getString("path"))
+            found = true
+        }
+        assertTrue(found)
+        assertTrue(ops.length() > 0)
+    }
     @Test
     fun compactPairingCodeRoundTripsTheEndpoint() {
         val payload = PairingCode.decode("UNPEEL:1:10.0.0.8:53621:AbC-1:TokenValue:1893456000")
@@ -79,24 +124,6 @@ class ProtocolTest {
         val envelope = PairingCrypto.seal(plaintext, "secret-token", "host-id", "http://10.0.0.2:1/mobile", PairingCrypto.REQUEST)
         val opened = PairingCrypto.open(envelope, "secret-token", "host-id", "http://10.0.0.2:1/mobile", PairingCrypto.REQUEST)
         assertArrayEquals(plaintext, opened)
-    }
-
-    @Test
-    fun relayKnownAnswerMatchesSwiftAndRust() {
-        val e2eKey = ByteArray(32) { it.toByte() }
-        val sharedSecret = ByteArray(32) { (0x40 + it).toByte() }
-        val clientSalt = ByteArray(16) { (0x10 + it).toByte() }
-        val hostSalt = ByteArray(16) { (0xA0 + it).toByte() }
-        val clientEph = ByteArray(32) { (0x80 + it).toByte() }
-        val hostEph = ByteArray(32) { (0xC0 + it * 3).toByte() }
-        val mac = RelayHandshake.transcriptMac(e2eKey, "phone-kat-1", clientSalt, hostSalt, clientEph, hostEph)
-        assertEquals("+BBTo0DBUwkP829M9w6eviupf+3pv5XxzrtNnUeYNQc=", b64(mac))
-
-        val client = RelaySession(e2eKey, sharedSecret, clientSalt, hostSalt, isHost = false)
-        val sealed = client.seal("known-answer-plaintext".toByteArray())
-        assertEquals("AAAAAAAAAAFXoFTergM+a27Rbw/LTzDUy/OhPJRbGDcDIEpfVPJbKdy1zzcoCQ==", b64(sealed))
-        val host = RelaySession(e2eKey, sharedSecret, clientSalt, hostSalt, isHost = true)
-        assertEquals("known-answer-plaintext", host.open(sealed).toString(Charsets.UTF_8))
     }
 
     @Test
@@ -182,7 +209,8 @@ class ProtocolTest {
         assertEquals(ResumeOffer.None, resumeOffer(exited.copy(capabilities = null), snapshot.capabilities))
         assertTrue(canNotifyWhenDone(snapshot.sessions.first { it.id == "s2" }))
         assertFalse(canNotifyWhenDone(exited))
-        assertTrue(AgentCatalog.supportsTranscript("cursor", "cursor"))
+        assertTrue(AgentCatalog.supportsTranscript("com.cursor.agent", "cursor-agent"))
+        assertTrue(AgentCatalog.supportsTranscript(null, "cursor-agent"))
         assertFalse(AgentCatalog.supportsTranscript(null, "amp"))
         assertFalse(AgentCatalog.supportsTranscript(null, "/bin/bash"))
         assertTrue(AgentCatalog.isAgent(null, "amp"))
@@ -190,6 +218,7 @@ class ProtocolTest {
         val observed = snapshot.sessions.first { it.id == "s4" }
         assertEquals(ResumeOffer.None, resumeOffer(observed, snapshot.capabilities))
         assertTrue(AgentCatalog.supportsTranscript(null, "claude"))
+        assertTrue(RuntimeCatalog.runtimes.any { it.kind == "agent" && "transcript" in it.capabilities })
     }
 
     @Test

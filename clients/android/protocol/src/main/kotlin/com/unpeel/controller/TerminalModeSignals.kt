@@ -13,11 +13,21 @@ class TerminalModeSignals {
     var sawMouseOrAlternateDisable: Boolean = false
         private set
 
+    /**
+     * iOS `RemoteTerminalMouseModeTracker.mouseTrackingEnabled`. Kept beside
+     * the VT so a mid-stream wipe that rebuilds the emulator without a fresh
+     * DECSET still leaves phone taps clickable while the program expects them.
+     */
+    val mouseTrackingEnabled: Boolean
+        get() = mouseTrackingModes.isNotEmpty()
+
+    private var mouseTrackingModes = linkedSetOf<Int>()
     private var pending = ByteArray(0)
 
     fun reset() {
         hostModeSnapshot = false
         sawMouseOrAlternateDisable = false
+        mouseTrackingModes.clear()
         pending = ByteArray(0)
     }
 
@@ -41,6 +51,7 @@ class TerminalModeSignals {
             }
             if (data[index + 1] == RIS) {
                 sawMouseOrAlternateDisable = true
+                mouseTrackingModes.clear()
                 index += 2
                 continue
             }
@@ -92,9 +103,11 @@ class TerminalModeSignals {
     }
 
     private fun note(mode: Int, enabled: Boolean) {
-        if (mode == 9 || mode == 47 || mode == 1000 || mode == 1002 || mode == 1003 ||
-            mode == 1047 || mode == 1049
-        ) {
+        if (mode == 9 || mode == 1000 || mode == 1002 || mode == 1003) {
+            if (enabled) mouseTrackingModes.add(mode) else mouseTrackingModes.remove(mode)
+            sawMouseOrAlternateDisable = !enabled
+        }
+        if (mode == 47 || mode == 1047 || mode == 1049) {
             sawMouseOrAlternateDisable = !enabled
         }
     }

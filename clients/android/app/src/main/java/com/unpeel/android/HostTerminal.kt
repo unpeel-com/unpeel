@@ -68,6 +68,8 @@ class HostTerminal(
 
     val hostModeSnapshot: Boolean get() = modes.hostModeSnapshot
     val sawMouseOrAlternateDisable: Boolean get() = modes.sawMouseOrAlternateDisable
+    /** Stream-side mouse tracking (iOS mouseModeTracker), independent of VT. */
+    val mouseTrackingEnabled: Boolean get() = modes.mouseTrackingEnabled
     var parkedScroll: Int = 0
 
     private val paintHandler = Handler(Looper.getMainLooper())
