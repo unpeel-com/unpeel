@@ -213,6 +213,7 @@ class HostTerminalView(
             removeCallbacks(flingTick)
             stopGlide()
             wheelRemainder = 0f
+            caretFollowGeneration++
             downX = e.x
             downY = e.y
             downOnCursor = tapTargetsCursor(terminal.emulator, e)
@@ -228,10 +229,10 @@ class HostTerminalView(
                 clearSelection()
                 return true
             }
-            // Mouse clicks are delivered once from ACTION_UP only. Doing it
-            // here as well double-fires SGR press/release on clean taps.
-            if (mouseClicksEnabled(terminal.emulator)) return true
-            showKeyboard()
+            // Pointer-owned TUIs deliver the click from ACTION_UP only (once).
+            // iOS classic path toggles focus — tap again dismisses the keyboard.
+            if (programOwnsPointer(terminal.emulator)) return true
+            if (isFocused) dismissKeyboard() else showKeyboard()
             return true
         }
 
@@ -583,13 +584,12 @@ class HostTerminalView(
             !pinching && !selecting && !cursorDrag && !gestureMoved && !suppressClick
         ) {
             val emulator = terminal.emulator
-            if (mouseClicksEnabled(emulator)) {
+            if (programOwnsPointer(emulator)) {
                 val dx = event.x - downX
                 val dy = event.y - downY
                 val slop = scrollCommitSlop(emulator)
                 if (abs(dx) < slop && abs(dy) < slop) {
-                    sendClick(emulator, event)
-                    if (tapTargetsCursor(emulator, event)) showKeyboard() else dismissKeyboard()
+                    handlePointerTap(emulator, event)
                 }
             }
         }
@@ -866,18 +866,58 @@ class HostTerminalView(
         return row to (base + slack)
     }
 
-    /** VT or stream tracker — either means the program wants pointer clicks. */
+    /** VT or stream tracker — either means DEC mouse reports are live. */
     private fun mouseClicksEnabled(emulator: VtEmulator): Boolean =
         emulator.isMouseTrackingActive() || terminal.mouseTrackingEnabled
 
     /**
+     * iOS `tapClickEnabled` (`mouseTrackingActive`): taps click the cell and
+     * the keyboard follows the caret band — not every empty cell.
+     *
+     * DEC mouse wins when seen. Until the stream reports an explicit mouse/alt
+     * disable, Claude / Grok / OpenCode / cursor-agent keep the same rule via
+     * the wheel identity guess (Android often misses DECSET across a rebuild
+     * while iOS Ghostty keeps tracking).
+     */
+    private fun programOwnsPointer(emulator: VtEmulator): Boolean {
+        if (mouseClicksEnabled(emulator)) return true
+        if (terminal.sawMouseOrAlternateDisable) return false
+        return prefersRemoteWheel || echoesMouseWheel
+    }
+
+    /**
      * How far the finger may wobble before this touch becomes a scroll.
-     * Larger while the program is in mouse-tracking mode so TUI hit targets
+     * Larger while the program owns the pointer so TUI hit targets
      * (follow-ups cancel/edit, menus) still receive a click.
      */
     private fun scrollCommitSlop(emulator: VtEmulator): Float {
-        if (!mouseClicksEnabled(emulator)) return touchSlop
+        if (!programOwnsPointer(emulator)) return touchSlop
         return maxOf(touchSlop * 3f, cellHeight * 0.6f)
+    }
+
+    private var caretFollowGeneration = 0
+
+    /**
+     * iOS `onPointerTapClick`: click the cell; keyboard only on the caret
+     * band. Outside it, wait briefly for the TUI to move the caret (editors)
+     * before deciding — menus/canvases leave the keyboard down.
+     */
+    private fun handlePointerTap(emulator: VtEmulator, event: MotionEvent) {
+        val x = event.x
+        val y = event.y
+        sendClick(emulator, event)
+        if (tapTargetsInput(emulator, x, y)) {
+            caretFollowGeneration++
+            showKeyboard()
+            return
+        }
+        // Keep the keyboard as it is until the check runs (iOS does the same):
+        // an editor click that moves the caret must not flash it shut and open.
+        val generation = ++caretFollowGeneration
+        postDelayed({
+            if (generation != caretFollowGeneration) return@postDelayed
+            if (tapTargetsInput(terminal.emulator, x, y)) showKeyboard() else dismissKeyboard()
+        }, CARET_FOLLOW_MS)
     }
 
     /** Left press then release at the tapped cell. Column and row are 1-based. */
@@ -975,7 +1015,7 @@ class HostTerminalView(
      * Mouse-tracking programs keep the pointer.
      */
     private fun wantsCursorDrag(emulator: VtEmulator, dx: Float, dy: Float): Boolean {
-        if (!downOnCursor || selecting || offsetRows != 0 || mouseClicksEnabled(emulator)) return false
+        if (!downOnCursor || selecting || offsetRows != 0 || programOwnsPointer(emulator)) return false
         if (emulator.isAlternateBufferActive()) return true
         return abs(dx) > abs(dy)
     }
@@ -996,10 +1036,15 @@ class HostTerminalView(
         onText?.invoke(step.keys)
     }
 
-    private fun tapTargetsCursor(emulator: VtEmulator, event: MotionEvent): Boolean {
-        val cell = cellAt(event.x, event.y) ?: return false
+    /** iOS `pointerTapTargetsInput`: caret row band; menus never count. */
+    private fun tapTargetsInput(emulator: VtEmulator, x: Float, y: Float): Boolean {
+        if (menuActive) return false
+        val cell = cellAt(x, y) ?: return false
         return kotlin.math.abs(cell.second - emulator.cursorRow) <= 1
     }
+
+    private fun tapTargetsCursor(emulator: VtEmulator, event: MotionEvent): Boolean =
+        tapTargetsInput(emulator, event.x, event.y)
 
     private fun sendWheel(emulator: VtEmulator, x: Float, y: Float, towardBottom: Boolean, steps: Int) {
         val cell = cellAt(x, y)
@@ -1129,6 +1174,8 @@ class HostTerminalView(
         const val GLIDE_BURST_RELAY = 5
         const val GLIDE_TICK_MS = 50L
         const val GLIDE_TICK_SECONDS = 0.05f
+        /** iOS `schedulePointerCaretFollowCheck` delay. */
+        const val CARET_FOLLOW_MS = 350L
         const val MAX_ZOOM = 3f
     }
 }
