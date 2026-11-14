@@ -1,0 +1,2336 @@
+package com.unpeel.android
+
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.os.Build
+import android.util.Log
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import com.unpeel.android.BuildConfig
+import com.unpeel.controller.AgentCatalog
+import com.unpeel.controller.AgentTerminalPolicy
+import com.unpeel.controller.ArtifactSummary
+import com.unpeel.controller.BootstrapJson
+import com.unpeel.controller.BootstrapSnapshot
+import com.unpeel.controller.DeviceIdentity
+import com.unpeel.controller.PairingCode
+import com.unpeel.controller.PairingCrypto
+import com.unpeel.controller.acceptPairingResponse
+import com.unpeel.controller.TerminalInput
+import com.unpeel.controller.TerminalOutputBinary
+import com.unpeel.controller.TerminalOutputFrames
+import com.unpeel.controller.TerminalOutputText
+import com.unpeel.controller.TerminalQueryFilter
+import com.unpeel.controller.b64d
+import com.unpeel.controller.sha256Hex
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlin.math.roundToInt
+import kotlinx.coroutines.withTimeoutOrNull
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.UUID
+import java.util.concurrent.TimeUnit
+
+data class SavedHost(
+    val macID: String,
+    val macName: String,
+    val endpoint: String,
+    val authToken: String,
+    val fingerprint: String?,
+    val relayURL: String,
+    val relayToken: String,
+    val e2eKeyB64: String,
+    val serverVersion: String?,
+    val publicEndpoint: String? = null,
+    /** Last-known Host App tint — iOS `PairedMacRecord.tintHue`. */
+    val tintHue: Double? = null,
+)
+
+private const val SESSION_CACHE_LIMIT = 3
+/** iOS `RemotePreviewStore.unreachableGraceInterval`. */
+private const val UNREACHABLE_GRACE_MS = 8_000L
+/** How long a just-created session may be missing from bootstrap before we give up holding it. */
+private const val CREATED_SESSION_GRACE_MS = 8_000L
+/**
+ * A fresh output subscribe the Host answers with `snapshot:false` is retried this
+ * many times, waiting [BASELINE_RETRY_DELAY_MS] x attempt between tries, before the
+ * raw journal tail is accepted. A busy PTY can miss the Host's snapshot request once.
+ */
+private const val BASELINE_RETRY_LIMIT = 3
+private const val BASELINE_RETRY_DELAY_MS = 300L
+
+class Controller(context: Context) {
+    private val appContext = context.applicationContext
+    private val prefs = appContext.getSharedPreferences("unpeel", Context.MODE_PRIVATE)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var pollJob: Job? = null
+    private var outputJob: Job? = null
+    /** Bumped every time the output loop restarts, so a cancelled loop cannot paint over the new one. */
+    private var outputGeneration = 0
+    private var link: HostLink? = null
+    private var phoneFitGeneration = 0
+    private var phoneFitSession: String? = null
+    private var phoneFitColumns: Int? = null
+    private var phoneFitRows: Int? = null
+    /**
+     * Another phone already letterboxed this session. We paint that shared
+     * grid and never POST resize-desktop — two phones fighting over cols/rows
+     * is the infinite flicker with Mac + phone A + phone B. The terminal view
+     * width-fits that foreign grid locally so this phone still fills the screen.
+     */
+    var followingSharedFit by mutableStateOf(false)
+        private set
+    private val phoneFitLock = Mutex()
+    /** Keystrokes and wheel reports share one drain, in order. Bytes that arrive during a send leave together. */
+    private val writeLock = Any()
+    private val writeQueue = ArrayDeque<WriteBatch>()
+    private var writeDraining = false
+
+    private class WriteBatch(val sessionID: String, val data: StringBuilder)
+    private var fitWatchJob: Job? = null
+    private var galleryWatchJob: Job? = null
+    private var galleryBaseline: Long? = null
+    private var desiredColumns = 0
+    private var desiredRows = 0
+    private var keyboardOpen = false
+    private var lastFitAttemptMs = 0L
+    private var fitRejected = false
+    var usingRelay by mutableStateOf(false)
+        private set
+    /** The public address is the live dial. A later LAN probe switches back. */
+    private var usingPublic = false
+    /** Address the current direct link actually dialed. */
+    private var dialEndpoint: String? = null
+    /**
+     * Dial the live terminal stream was subscribed on. Recorded after a
+     * successful bootstrap. A later failure does not clear it, so reconnecting
+     * the same path does not redraw. The first success only records it.
+     */
+    private var outputDial: OutputDial? = null
+
+    private data class OutputDial(val relay: Boolean, val endpoint: String?)
+
+    var hosts by mutableStateOf(loadHosts())
+        private set
+    var selectedMacID by mutableStateOf(prefs.getString("selected", null))
+        private set
+    var snapshot by mutableStateOf<BootstrapSnapshot?>(null)
+        private set
+    /**
+     * Folder colors held after a successful project-organization POST until
+     * bootstrap confirms them — same idea as iOS session reorder /
+     * Mac `remoteCommittedOrderHold`. Without this, a poll captured before
+     * the Host overlay refreshes snaps the tint back (flash-then-revert).
+     * Values: color id, or null meaning "cleared to default".
+     */
+    private val pendingFolderColors = linkedMapOf<String, String?>()
+    var connection by mutableStateOf(if (hosts.isEmpty()) "Unpaired" else "Connecting")
+        private set
+    /**
+     * iOS `isUnreachable`: poll failures past the 8s grace. Young outages stay
+     * calm "Connecting…"; only persistent failure flips this.
+     */
+    var isUnreachable by mutableStateOf(false)
+        private set
+    private var outageStartedAtMs: Long? = null
+    /** One restore attempt per Host scope after bootstrap (iOS pendingScopeRestore). */
+    private var pendingScopeRestoreMacID: String? = null
+    /**
+     * Session we just created and opened, until a bootstrap lists it. A
+     * bootstrap that predates the Host's manifest must not fall back to an
+     * unrelated session and pull the user out of the new one (iOS
+     * `pendingCreationSelection`). Expires at [pendingCreatedDeadlineMs].
+     */
+    private var pendingCreatedSessionID: String? = null
+    private var pendingCreatedDeadlineMs = 0L
+    var openSessionID by mutableStateOf<String?>(null)
+        private set
+    /** Covers a session until its first phone-grid replay has painted. A cached session skips this. */
+    var sessionPreparing by mutableStateOf(false)
+        private set
+    /** The current opening replay has fed a chunk. A newer replay clears it. */
+    private var openingFrameReady = false
+    /**
+     * First phone-grid fit waited until the opening WS baseline painted.
+     * Fitting during attach raced column-replay / row-resize and wiped the
+     * scrollback the baseline just restored (Cursor local flick).
+     */
+    private var pendingOpenFit = false
+    var terminal by mutableStateOf(newTerminal())
+        private set
+
+    private class CachedSession(
+        val id: String,
+        val terminal: HostTerminal,
+        var outputOffset: Long? = null,
+        var replayDone: Boolean = false,
+        /** False while a chunk is only partly fed, so the next open replays instead of doubling it. */
+        var coherent: Boolean = false,
+    )
+
+    /** Newest at the end. Keeps the last painted screen and journal offset, same limit as iOS. */
+    private val sessionCache = ArrayDeque<CachedSession>()
+    var busy by mutableStateOf(false)
+        private set
+    var error by mutableStateOf<String?>(null)
+        private set
+    var artifacts by mutableStateOf<List<ArtifactSummary>>(emptyList())
+        private set
+    var artifactsLoading by mutableStateOf(false)
+        private set
+    var artifactImage by mutableStateOf<android.graphics.Bitmap?>(null)
+        private set
+    var showCreate by mutableStateOf(false)
+    var showGallery by mutableStateOf(false)
+    var galleryPulse by mutableStateOf(false)
+        private set
+    var restartingSessionID by mutableStateOf<String?>(null)
+    /** Last resume/restart failure shown on the exited session bar (iOS `restartError`). */
+    var restartError by mutableStateOf<String?>(null)
+        private set
+
+    val deviceId: String
+        get() = prefs.getString("deviceId", null) ?: UUID.randomUUID().toString().also {
+            prefs.edit().putString("deviceId", it).apply()
+        }
+
+    val selectedHost: SavedHost?
+        get() = hosts.firstOrNull { it.macID == selectedMacID } ?: hosts.firstOrNull()
+
+    init {
+        loadPendingFolderColors()
+        pendingScopeRestoreMacID = selectedMacID
+        if (selectedHost != null) startPolling()
+    }
+
+    fun pair(raw: String) {
+        val payload = PairingCode.decode(raw) ?: run {
+            error = "Couldn’t read that pairing code"
+            return
+        }
+        if (payload.expiresAtUnixMs <= System.currentTimeMillis()) {
+            error = "That pairing code has expired"
+            return
+        }
+        scope.launch {
+            busy = true
+            error = null
+            try {
+                val result = withContext(Dispatchers.IO) { exchange(payload) }
+                val host = SavedHost(
+                    macID = result.getString("macID"),
+                    macName = result.optString("macName").ifEmpty { "Unpeel" },
+                    endpoint = result.optString("directEndpoint").ifEmpty { result.getString("endpoint") },
+                    authToken = result.getString("authToken"),
+                    fingerprint = result.optString("remoteServerCertificateFingerprint").ifEmpty { payload.certificateFingerprint },
+                    relayURL = result.getJSONObject("relayCredentials").getString("relayURL"),
+                    relayToken = result.getJSONObject("relayCredentials").getString("relayToken"),
+                    e2eKeyB64 = result.getJSONObject("relayCredentials").getString("e2eKeyB64"),
+                    serverVersion = result.optString("serverVersion").ifEmpty { null },
+                    publicEndpoint = result.optString("publicEndpoint").ifEmpty { null }
+                        ?: payload.publicEndpoint,
+                )
+                hosts = (hosts.filterNot { it.macID == host.macID } + host)
+                saveHosts()
+                select(host.macID)
+            } catch (caught: Exception) {
+                error = caught.message ?: "Pairing failed"
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    fun select(macID: String) {
+        fitWatchJob?.cancel()
+        stopGalleryWatch()
+        releasePhoneFit()
+        flushSessionCache()
+        selectedMacID = macID
+        prefs.edit().putString("selected", macID).apply()
+        snapshot = null
+        openSessionID = null
+        isUnreachable = false
+        outageStartedAtMs = null
+        pendingScopeRestoreMacID = macID
+        loadPendingFolderColors()
+        startPolling()
+    }
+
+    fun forget(macID: String) {
+        if (selectedMacID == macID) {
+            fitWatchJob?.cancel()
+            stopGalleryWatch()
+            releasePhoneFit()
+            flushSessionCache()
+            pendingFolderColors.clear()
+            prefs.edit().remove("pendingFolderColors:$macID").apply()
+        }
+        hosts = hosts.filterNot { it.macID == macID }
+        saveHosts()
+        if (selectedMacID == macID) {
+            selectedMacID = hosts.firstOrNull()?.macID
+            prefs.edit().putString("selected", selectedMacID).apply()
+            snapshot = null
+            openSessionID = null
+            loadPendingFolderColors()
+            if (selectedHost == null) {
+                pollJob?.cancel()
+                connection = "Unpaired"
+            } else {
+                startPolling()
+            }
+        }
+    }
+
+    private fun newTerminal() = HostTerminal(
+        replies = { bytes ->
+            val id = openSessionID ?: return@HostTerminal
+            val text = bytes.toString(Charsets.UTF_8)
+            if (text.isEmpty()) return@HostTerminal
+            // Keep the keystroke when the link is down. drainWrites sends it
+            // on the next link, in order, and does not post into the one closing.
+            write(id, text)
+        },
+        onCopy = { text ->
+            val clipboard = appContext.getSystemService(ClipboardManager::class.java) ?: return@HostTerminal
+            clipboard.setPrimaryClip(ClipData.newPlainText("unpeel", text))
+        },
+        night = PhoneSettings.storedNight(appContext, PhoneSettings.systemNight(appContext)),
+    )
+
+    private fun rememberSession(id: String): CachedSession {
+        sessionCache.firstOrNull { it.id == id }?.let { hit ->
+            sessionCache.remove(hit)
+            sessionCache.addLast(hit)
+            return hit
+        }
+        val created = CachedSession(id, newTerminal())
+        sessionCache.addLast(created)
+        while (sessionCache.size > SESSION_CACHE_LIMIT) {
+            val victim = sessionCache.firstOrNull { it.id != id } ?: break
+            sessionCache.remove(victim)
+            victim.terminal.onFrame = null
+        }
+        return created
+    }
+
+    private fun showTerminal(next: HostTerminal) {
+        if (terminal === next) return
+        terminal.onFrame = null
+        terminal = next
+    }
+
+    private fun flushSessionCache() {
+        outputJob?.cancel()
+        outputGeneration += 1
+        sessionCache.forEach { it.terminal.onFrame = null }
+        sessionCache.clear()
+        terminal = newTerminal()
+        sessionPreparing = false
+        openingFrameReady = false
+    }
+
+    fun openSession(id: String) {
+        if (openSessionID == id) return
+        releasePhoneFit()
+        openSessionID = id
+        persistLastSession(id)
+        desiredColumns = 0
+        desiredRows = 0
+        keyboardOpen = false
+        lastFitAttemptMs = 0L
+        fitRejected = false
+        followingSharedFit = false
+        pendingOpenFit = false
+        val slot = rememberSession(id)
+        showTerminal(slot.terminal)
+        applyLivePresentPolicy(slot.terminal, id)
+        val held = slot.outputOffset
+        val hasPicture = slot.replayDone && held != null
+        val resume = hasPicture && slot.coherent
+        // A painted session that lost its stream keeps that frame. The cover
+        // is only for a session that has nothing to show yet.
+        sessionPreparing = !hasPicture
+        openingFrameReady = false
+        artifacts = emptyList()
+        artifactImage = null
+        showGallery = false
+        scope.launch { runCatching { link()?.post("mark-read", JSONObject().put("sessionID", id).toString()) } }
+        startOutput(
+            id,
+            resumeOffset = if (resume) held else null,
+            keepPicture = hasPicture && !resume,
+        )
+        startFitWatch(id)
+        startGalleryWatch(id)
+    }
+
+    private fun persistLastSession(id: String) {
+        val mac = selectedMacID ?: return
+        prefs.edit().putString(lastSessionKey(mac), id).apply()
+    }
+
+    private fun lastSessionKey(macID: String) = "lastSession:$macID"
+
+    /**
+     * Cursor-style local-scroll agents keep live ED2/DEC2026 settle freeze.
+     * Claude / Grok / OpenCode paint live frames immediately.
+     */
+    private fun applyLivePresentPolicy(screen: HostTerminal, sessionID: String) {
+        val session = snapshot?.sessions?.firstOrNull { it.id == sessionID }
+        screen.holdLiveRepaints = AgentTerminalPolicy.echoesMouseWheel(
+            session?.providerID,
+            session?.command.orEmpty(),
+            session?.activeRuntimeID,
+        )
+    }
+
+    fun closeSession() {
+        fitWatchJob?.cancel()
+        stopGalleryWatch()
+        releasePhoneFit()
+        outputJob?.cancel()
+        openSessionID = null
+        sessionPreparing = false
+        openingFrameReady = false
+        pendingOpenFit = false
+        showGallery = false
+        artifactImage = null
+    }
+
+    /**
+     * The measured terminal box. Keyboard height must not change the grid.
+     * While this session stays open the phone keeps that grid; the Mac
+     * reclaim is its Fit to desktop button, and leaving the session clears it.
+     */
+    fun notePhoneViewport(columns: Int, rows: Int, keyboardOpen: Boolean) {
+        this.keyboardOpen = keyboardOpen
+        if (!keyboardOpen && columns > 0 && rows > 0) {
+            val changed = desiredColumns < 2 ||
+                kotlin.math.abs(columns - desiredColumns) > 2 ||
+                kotlin.math.abs(rows - desiredRows) > 2
+            desiredColumns = columns
+            desiredRows = rows
+            // Orientation / chrome resize: apply now. Waiting for the 1s
+            // metrics poll left landscape on the old portrait letterbox.
+            if (changed && openSessionID != null && !followingSharedFit && !fitRejected) {
+                lastFitAttemptMs = android.os.SystemClock.elapsedRealtime()
+                fitPhone(desiredColumns, desiredRows, force = false)
+            }
+        }
+        revealOpening()
+    }
+
+    private fun startFitWatch(sessionID: String) {
+        fitWatchJob?.cancel()
+        fitWatchJob = scope.launch {
+            while (openSessionID == sessionID) {
+                val metrics = runCatching {
+                    JSONObject(link().get("metrics", mapOf("session_id" to sessionID), timeoutMs = 4_000))
+                }.getOrNull()
+                if (metrics != null && openSessionID == sessionID) {
+                    reconcilePhoneFit(
+                        sessionID,
+                        metrics.optInt("columns", 80),
+                        metrics.optInt("rows", 24),
+                    )
+                }
+                delay(1_000)
+            }
+        }
+    }
+
+    private fun reconcilePhoneFit(sessionID: String, observedColumns: Int, observedRows: Int) {
+        if (keyboardOpen || desiredColumns < 2 || fitRejected) return
+        // Same open-attach gate as fitPhone: do not follow/refit until baseline.
+        if (sessionPreparing && !openingFrameReady) {
+            pendingOpenFit = true
+            return
+        }
+        val ownedColumns = if (phoneFitSession == sessionID) phoneFitColumns else null
+        val ownedRows = if (phoneFitSession == sessionID) phoneFitRows else null
+
+        // Follower: track the shared letterbox; only reclaim if Mac goes wide.
+        if (followingSharedFit) {
+            if (isDesktopReclaim(observedColumns, desiredColumns)) {
+                followingSharedFit = false
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (now - lastFitAttemptMs < 3_000) return
+                lastFitAttemptMs = now
+                fitPhone(desiredColumns, desiredRows, force = true)
+                return
+            }
+            if (ownedColumns == null || ownedRows == null ||
+                kotlin.math.abs(observedColumns - ownedColumns) > 2 ||
+                kotlin.math.abs(observedRows - ownedRows) > 2
+            ) {
+                followSharedGrid(sessionID, observedColumns, observedRows)
+            }
+            return
+        }
+
+        if (ownedColumns == null || ownedRows == null ||
+            kotlin.math.abs(desiredColumns - ownedColumns) > 2 ||
+            kotlin.math.abs(desiredRows - ownedRows) > 2
+        ) {
+            // Session already phone-fitted by someone else — join their grid.
+            if (ownedColumns == null &&
+                isPhoneShaped(observedColumns) &&
+                (kotlin.math.abs(observedColumns - desiredColumns) > 2 ||
+                    kotlin.math.abs(observedRows - desiredRows) > 2)
+            ) {
+                followSharedGrid(sessionID, observedColumns, observedRows)
+                return
+            }
+            lastFitAttemptMs = android.os.SystemClock.elapsedRealtime()
+            fitPhone(desiredColumns, desiredRows, force = false)
+            return
+        }
+        if (kotlin.math.abs(observedColumns - ownedColumns) <= 2 &&
+            kotlin.math.abs(observedRows - ownedRows) <= 2
+        ) {
+            return
+        }
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - lastFitAttemptMs < 3_000) return
+        lastFitAttemptMs = now
+        // Mac Fit to desktop → reclaim. Another phone's letterbox → follow.
+        if (isDesktopReclaim(observedColumns, desiredColumns)) {
+            fitPhone(desiredColumns, desiredRows, force = true)
+        } else {
+            followSharedGrid(sessionID, observedColumns, observedRows)
+        }
+    }
+
+    /**
+     * Rough phone-letterbox width. Landscape phones commonly land past 70
+     * columns; the old 70 cap treated them as non-phone and broke follow/fit
+     * heuristics. Desktop reclaim is still the wide Mac (≥72 / +20) path.
+     */
+    private fun isPhoneShaped(columns: Int): Boolean = columns in 20..120
+
+    private fun isDesktopReclaim(observedColumns: Int, desiredColumns: Int): Boolean =
+        observedColumns >= maxOf(desiredColumns + 20, 72)
+
+    /** Adopt the Host grid without posting resize-desktop. */
+    private fun followSharedGrid(sessionID: String, columns: Int, rows: Int) {
+        val cols = columns.coerceIn(20, 300)
+        val lines = rows.coerceIn(4, 120)
+        followingSharedFit = true
+        phoneFitSession = sessionID
+        phoneFitColumns = cols
+        phoneFitRows = lines
+        if (openSessionID != sessionID) return
+        if (terminal.columns != cols) {
+            replayAfterColumnFit(sessionID, cols, lines, soft = !sessionPreparing)
+        } else if (terminal.rows != lines) {
+            terminal.resizeGrid(cols, lines)
+            revealOpening()
+        } else {
+            revealOpening()
+        }
+    }
+
+    /**
+     * Follower-only: take the Host letterbox for this phone's measured grid.
+     * Owners already fit and never show the claim control.
+     */
+    fun claimPhoneFit() {
+        if (!followingSharedFit || keyboardOpen || fitRejected) return
+        if (desiredColumns < 2 || desiredRows < 2) return
+        lastFitAttemptMs = android.os.SystemClock.elapsedRealtime()
+        fitPhone(desiredColumns, desiredRows, force = true)
+    }
+
+    /**
+     * Ask the Host to letterbox this session to the phone's terminal grid.
+     * The keyboard must not call this. `force` repeats the same grid after
+     * the Mac clears it.
+     */
+    private fun fitPhone(columns: Int, rows: Int, force: Boolean) {
+        val sessionID = openSessionID ?: return
+        val active = link ?: return
+        val cols = columns.coerceIn(20, 300)
+        val lines = rows.coerceIn(4, 120)
+        // Cold open: viewport + fitWatch must not letterbox until the WS
+        // baseline has painted — otherwise column replay / row resize wipes
+        // the scrollback that baseline just restored (Cursor local flick).
+        if (sessionPreparing && !openingFrameReady) {
+            pendingOpenFit = true
+            return
+        }
+        if (!force && !followingSharedFit &&
+            phoneFitSession == sessionID && phoneFitColumns == cols && phoneFitRows == lines
+        ) {
+            return
+        }
+        val generation = phoneFitGeneration
+        scope.launch {
+            phoneFitLock.withLock {
+                if (generation != phoneFitGeneration || openSessionID != sessionID) return@withLock
+                val posted = runCatching {
+                    active.post(
+                        "resize-desktop",
+                        JSONObject()
+                            .put("sessionID", sessionID)
+                            .put("columns", cols)
+                            .put("rows", lines)
+                            .toString(),
+                        8_000,
+                    )
+                }.isSuccess
+                if (generation != phoneFitGeneration || openSessionID != sessionID) {
+                    if (posted) revertPhoneFit(active, sessionID)
+                    return@withLock
+                }
+                if (!posted) {
+                    fitRejected = true
+                    revealOpening()
+                    return@withLock
+                }
+                followingSharedFit = false
+                phoneFitSession = sessionID
+                phoneFitColumns = cols
+                phoneFitRows = lines
+                // Replaying the journal on a row-only change paints the same
+                // frame twice and leaves the Grok screen as a short, miscolored
+                // block. A new column count has to replay; rows just reflow.
+                // Mid-session claim: freeze last pixels — no prepare-cover flash.
+                if (terminal.columns != cols) {
+                    // iOS: settle metrics, one HTTP tail, resume live.
+                    // Old path restarted WS for a second baseline and felt
+                    // much slower than the Mac Host pane (which is local).
+                    replayAfterColumnFit(sessionID, cols, lines, soft = !sessionPreparing)
+                } else {
+                    terminal.resizeGrid(cols, lines)
+                    revealOpening()
+                }
+            }
+        }
+    }
+
+    /**
+     * After a column letterbox: wait for Host metrics (≤800ms, like iOS),
+     * then take a fresh WS Ghostty baseline at the new grid (scrollback
+     * included). The old HTTP journal paint was faster but rebuilt without
+     * Host scrollback — Cursor could only flick a few local rows after open.
+     */
+    private fun replayAfterColumnFit(
+        sessionID: String,
+        columns: Int,
+        rows: Int,
+        soft: Boolean,
+    ) {
+        outputJob?.cancel()
+        val generation = ++outputGeneration
+        val slot = sessionCache.firstOrNull { it.id == sessionID }
+        val screen = slot?.terminal ?: terminal
+        if (soft) {
+            sessionPreparing = false
+            screen.holdPresent()
+        } else {
+            sessionPreparing = true
+            openingFrameReady = false
+        }
+        slot?.outputOffset = null
+        slot?.replayDone = false
+        slot?.coherent = false
+        outputJob = scope.launch {
+            val active = runCatching { link() }.getOrNull() ?: return@launch
+            pollUntilPhoneGrid(active, sessionID, columns, rows)
+            if (generation != outputGeneration || openSessionID != sessionID) return@launch
+            startOutput(sessionID, columns, rows, keepPicture = soft)
+        }
+    }
+
+    /** iOS pollUntilRemoteGridSettles — don't snapshot a transitional grid. */
+    private suspend fun pollUntilPhoneGrid(
+        active: HostLink,
+        sessionID: String,
+        columns: Int,
+        rows: Int,
+        maxWaitMs: Long = 800L,
+    ) {
+        val deadline = android.os.SystemClock.elapsedRealtime() + maxWaitMs
+        while (android.os.SystemClock.elapsedRealtime() < deadline) {
+            if (openSessionID != sessionID) return
+            val metrics = runCatching {
+                JSONObject(
+                    active.get("metrics", mapOf("session_id" to sessionID), timeoutMs = 4_000),
+                )
+            }.getOrNull()
+            if (metrics != null) {
+                val observedCols = metrics.optInt("columns", 0)
+                val observedRows = metrics.optInt("rows", 0)
+                if (kotlin.math.abs(observedCols - columns) <= 2 &&
+                    kotlin.math.abs(observedRows - rows) <= 2
+                ) {
+                    return
+                }
+            }
+            delay(100)
+        }
+    }
+
+    /**
+     * Stop polling, the terminal stream, and the fit watch. [revertFit] tells
+     * the Host to drop the phone grid. A configuration change passes false:
+     * the same process is about to measure the new orientation, and a clear
+     * from this instance would race that fit.
+     */
+    fun close(revertFit: Boolean) {
+        pollJob?.cancel()
+        outputJob?.cancel()
+        outputGeneration += 1
+        fitWatchJob?.cancel()
+        stopGalleryWatch()
+        val wasFollower = followingSharedFit
+        val revertSession = if (revertFit && !wasFollower) phoneFitSession else null
+        val revertLink = if (revertFit && !wasFollower) link else null
+        phoneFitGeneration += 1
+        phoneFitSession = null
+        phoneFitColumns = null
+        phoneFitRows = null
+        followingSharedFit = false
+        scope.cancel()
+        if (revertSession == null || revertLink == null) return
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            revertPhoneFit(revertLink, revertSession)
+        }
+    }
+
+    /** Drop a phone letterbox. Extra clears are safe; the Host treats them as a no-op success. */
+    fun releasePhoneFit() {
+        val generation = ++phoneFitGeneration
+        val sessionID = phoneFitSession
+        val active = link
+        val wasFollower = followingSharedFit
+        phoneFitSession = null
+        phoneFitColumns = null
+        phoneFitRows = null
+        followingSharedFit = false
+        // Followers must not clear — that would expand the Mac under the other phone.
+        if (wasFollower || sessionID == null || active == null) return
+        scope.launch {
+            phoneFitLock.withLock {
+                if (generation != phoneFitGeneration && phoneFitSession == sessionID) return@withLock
+                revertPhoneFit(active, sessionID)
+            }
+        }
+    }
+
+    private suspend fun revertPhoneFit(active: HostLink, sessionID: String) {
+        runCatching {
+            active.post(
+                "resize-desktop",
+                JSONObject().put("sessionID", sessionID).put("clear", true).toString(),
+            )
+        }
+    }
+
+    fun sendRaw(text: String) {
+        val id = openSessionID ?: return
+        if (text.isEmpty()) return
+        write(id, text)
+    }
+
+    /**
+     * iOS gallery "Add image": upload into `artifacts/uploads/` and return the
+     * Host path. Does not paste into the composer.
+     */
+    fun addGalleryImage(jpeg: ByteArray, onDone: (path: String?, error: String?) -> Unit) {
+        val id = openSessionID ?: run {
+            onDone(null, "Couldn't read the selected image.")
+            return
+        }
+        if (jpeg.isEmpty()) {
+            onDone(null, "Couldn't read the selected image.")
+            return
+        }
+        if (jpeg.size > 4 * 1024 * 1024) {
+            onDone(null, "Image is over 4 MB")
+            return
+        }
+        scope.launch {
+            busy = true
+            try {
+                val path = uploadChunks(id, jpeg, "image/jpeg", null)
+                artifacts = runCatching {
+                    BootstrapJson.artifacts(link().get("artifacts", mapOf("session_id" to id)))
+                }.getOrDefault(artifacts)
+                onDone(path, null)
+            } catch (caught: Exception) {
+                onDone(null, caught.message ?: "Couldn't read the selected image.")
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    /** iOS gallery context menu Delete. */
+    fun deleteArtifact(kind: String, name: String, onDone: (String?) -> Unit) {
+        val id = openSessionID ?: return
+        scope.launch {
+            try {
+                link().postBinary(
+                    "artifact-delete",
+                    mapOf("session_id" to id, "kind" to kind, "name" to name),
+                    "application/json",
+                    ByteArray(0),
+                )
+                artifacts = artifacts.filterNot { it.kind == kind && it.name == name }
+                onDone(null)
+            } catch (caught: Exception) {
+                onDone(caught.message)
+            }
+        }
+    }
+
+    /** Upload a JPEG and paste its quoted Host path. Does not submit. */
+    fun attachImage(jpeg: ByteArray) {
+        uploadAndPaste(jpeg, "image/jpeg", filename = null, failure = "Couldn’t upload the image")
+    }
+
+    /** Upload any other file and paste its quoted Host path. Does not submit. */
+    fun attachFile(bytes: ByteArray, filename: String) {
+        if (!supportsFileUpload()) {
+            error = "This Host cannot accept file uploads"
+            return
+        }
+        uploadAndPaste(bytes, "application/octet-stream", sanitizeUploadName(filename), "Couldn’t upload the file")
+    }
+
+    fun supportsFileUpload(): Boolean =
+        snapshot?.capabilities?.contains("artifact.upload.file") == true
+
+    private fun uploadAndPaste(bytes: ByteArray, contentType: String, filename: String?, failure: String) {
+        val id = openSessionID ?: return
+        if (bytes.isEmpty()) {
+            error = failure
+            return
+        }
+        if (filename != null && !supportsFileUpload()) {
+            error = "This Host cannot accept file uploads"
+            return
+        }
+        val limit = if (filename == null) 4 * 1024 * 1024 else 64 * 1024 * 1024
+        if (bytes.size > limit) {
+            error = if (filename == null) "Image is over 4 MB" else "File is over 64 MB"
+            return
+        }
+        scope.launch {
+            busy = true
+            try {
+                val path = uploadChunks(id, bytes, contentType, filename)
+                val quoted = "'" + path.replace("'", "'\\''") + "' "
+                write(id, TerminalInput.paste(quoted))
+            } catch (caught: Exception) {
+                error = caught.message ?: failure
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    private suspend fun pasteUploaded(sessionID: String, bytes: ByteArray, contentType: String) {
+        if (bytes.size > 4 * 1024 * 1024) {
+            error = "Image is over 4 MB"
+            return
+        }
+        val path = uploadChunks(sessionID, bytes, contentType, null)
+        val quoted = "'" + path.replace("'", "'\\''") + "' "
+        write(sessionID, TerminalInput.paste(quoted))
+    }
+
+    /**
+     * iOS `RemoteGalleryAttachmentNormalizer`: JPEG and PNG stay as they are.
+     * Anything else becomes PNG, or JPEG quality 0.88 when the PNG would pass
+     * 4 MB. Longest edge 2048.
+     */
+    private fun prepareGalleryUpload(bytes: ByteArray, contentType: String): Pair<ByteArray, String>? {
+        if (contentType == "image/jpeg" || contentType == "image/png") return bytes to contentType
+        val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
+        val largest = maxOf(decoded.width, decoded.height)
+        val bitmap = if (largest > 2048) {
+            val scale = 2048f / largest
+            Bitmap.createScaledBitmap(
+                decoded,
+                (decoded.width * scale).roundToInt().coerceAtLeast(1),
+                (decoded.height * scale).roundToInt().coerceAtLeast(1),
+                true,
+            )
+        } else {
+            decoded
+        }
+        val png = java.io.ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.PNG, 100, png)
+        if (png.size() <= 4 * 1024 * 1024) {
+            if (bitmap !== decoded) bitmap.recycle()
+            decoded.recycle()
+            return png.toByteArray() to "image/png"
+        }
+        val jpeg = java.io.ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 88, jpeg)
+        if (bitmap !== decoded) bitmap.recycle()
+        decoded.recycle()
+        if (jpeg.size() > 4 * 1024 * 1024) return null
+        return jpeg.toByteArray() to "image/jpeg"
+    }
+
+    private suspend fun uploadChunks(
+        sessionID: String,
+        bytes: ByteArray,
+        contentType: String,
+        filename: String?,
+    ): String {
+        val uploadID = UUID.randomUUID().toString()
+        val digest = sha256Hex(bytes)
+        val total = bytes.size.toString()
+        val route = if (filename == null) "upload-chunk" else "file-upload-chunk"
+        var offset = 0
+        var path = ""
+        while (offset < bytes.size) {
+            val end = minOf(offset + 256 * 1024, bytes.size)
+            val query = linkedMapOf(
+                "session_id" to sessionID,
+                "upload_id" to uploadID,
+                "offset" to offset.toString(),
+                "total_size" to total,
+                "sha256" to digest,
+            )
+            if (filename != null) query["filename"] = filename
+            val body = link().postBinary(route, query, contentType, bytes.copyOfRange(offset, end), 60_000)
+            val returned = JSONObject(body).optString("path")
+            if (returned.startsWith("/")) path = returned
+            offset = end
+        }
+        if (!path.startsWith("/")) throw HostException(0, "Upload returned no path")
+        return path
+    }
+
+    /** Host file names cannot contain a path, `..`, or control characters, and stay within 180 bytes. */
+    private fun sanitizeUploadName(raw: String): String {
+        val base = raw.substringAfterLast('/').substringAfterLast('\\')
+            .filter { !it.isISOControl() }
+            .trim()
+            .ifEmpty { "file" }
+        var flattened = base
+        while (".." in flattened) flattened = flattened.replace("..", ".")
+        flattened = flattened.trim('.', ' ').ifEmpty { "file" }
+        val limited = utf8Prefix(flattened, 180).trim('.', ' ')
+        return if (limited.isEmpty() || limited == "." || limited == "..") "file" else limited
+    }
+
+    private fun utf8Prefix(value: String, maxBytes: Int): String {
+        if (value.toByteArray(Charsets.UTF_8).size <= maxBytes) return value
+        var end = value.length
+        while (end > 0 && value.substring(0, end).toByteArray(Charsets.UTF_8).size > maxBytes) end -= 1
+        return value.substring(0, end)
+    }
+
+    fun createSession(projectID: String, presetID: String?, initialText: String) {
+        scope.launch {
+            busy = true
+            try {
+                val body = JSONObject().put("projectID", projectID).put("initialTextSubmitMode", "pasteAndSubmit")
+                if (!presetID.isNullOrEmpty()) body.put("presetID", presetID)
+                if (initialText.isNotEmpty()) body.put("initialText", initialText)
+                val response = JSONObject(link().post("sessions", body.toString(), 20_000))
+                showCreate = false
+                val createdID = response.getString("sessionID")
+                // Set before opening: a bootstrap already in flight can land
+                // right after openSession and would otherwise reset the view.
+                pendingCreatedSessionID = createdID
+                pendingCreatedDeadlineMs = System.currentTimeMillis() + CREATED_SESSION_GRACE_MS
+                openSession(createdID)
+                refreshOnce()
+            } catch (caught: Exception) {
+                pendingCreatedSessionID = null
+                error = caught.message
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    fun answer(id: String, approved: Boolean) {
+        scope.launch {
+            runCatching {
+                link().post("approvals/answer", JSONObject().put("id", id).put("approved", approved).toString())
+            }
+            refreshOnce()
+        }
+    }
+
+    fun organize(sessionID: String, title: String? = null, pinned: Boolean? = null) {
+        saveSession(sessionID, title, pinned, null) {}
+    }
+
+    /** Null fields stay unchanged. `onDone` receives the Host error, or null. */
+    fun saveSession(
+        sessionID: String,
+        title: String?,
+        pinned: Boolean?,
+        notifyWhenDone: Boolean?,
+        onDone: (String?) -> Unit,
+    ) {
+        scope.launch {
+            val body = JSONObject().put("sessionID", sessionID)
+            if (title != null) body.put("title", title)
+            if (pinned != null) body.put("pinned", pinned)
+            if (notifyWhenDone != null) body.put("notifyWhenDone", notifyWhenDone)
+            val failure = runCatching { link().post("session-organization", body.toString()) }.exceptionOrNull()
+            refreshOnce()
+            onDone(failure?.message)
+        }
+    }
+
+    fun supportsProjectOrganization(): Boolean =
+        snapshot?.capabilities?.contains("project.organization.set") == true
+
+    fun saveProject(
+        projectID: String,
+        displayName: String?,
+        colorID: String?,
+        dateSorted: Boolean?,
+        onDone: (String?) -> Unit,
+    ) {
+        scope.launch {
+            val body = JSONObject().put("projectID", projectID)
+            if (displayName != null) body.put("displayName", displayName)
+            if (colorID != null) body.put("colorID", colorID)
+            if (dateSorted != null) body.put("dateSorted", dateSorted)
+            val failure = runCatching { link().post("project-organization", body.toString()) }.exceptionOrNull()
+            if (failure == null) {
+                // iOS session-reorder / Mac order-hold: paint locally first, and
+                // keep that tint across stale bootstraps until Host confirms.
+                if (colorID != null) {
+                    pendingFolderColors[projectID] = colorID.takeIf { it.isNotEmpty() }
+                    persistPendingFolderColors()
+                }
+                applyLocalProjectPatch(projectID, displayName, colorID, dateSorted)
+            }
+            // Same as iOS applyProjectOrganization → loadFromBridge.
+            refreshOnce()
+            onDone(failure?.message)
+        }
+    }
+
+    /** Local sidebar patch after a successful project-organization POST. */
+    private fun applyLocalProjectPatch(
+        projectID: String,
+        displayName: String?,
+        colorID: String?,
+        dateSorted: Boolean?,
+    ) {
+        val current = snapshot ?: return
+        snapshot = overlayPendingFolderColors(
+            current.copy(
+                projects = current.projects.map { project ->
+                    if (project.id != projectID) return@map project
+                    project.copy(
+                        name = displayName?.takeIf { it.isNotBlank() } ?: project.name,
+                        colorID = when {
+                            colorID == null -> project.colorID
+                            colorID.isEmpty() -> null
+                            else -> colorID
+                        },
+                        dateSorted = dateSorted ?: project.dateSorted,
+                    )
+                },
+            ),
+        )
+    }
+
+    /**
+     * Adopt a Host bootstrap, but keep unconfirmed folder-color holds on top
+     * (iOS/Mac "hold until bootstrap confirms" for in-flight organization).
+     */
+    private fun adoptBootstrap(parsed: BootstrapSnapshot) {
+        if (pendingFolderColors.isNotEmpty()) {
+            var changed = false
+            for (id in pendingFolderColors.keys.toList()) {
+                val want = pendingFolderColors[id]
+                val got = parsed.projects.firstOrNull { it.id == id }?.colorID
+                    ?: parsed.folders.firstOrNull { it.id == id }?.colorID
+                if (got == want) {
+                    pendingFolderColors.remove(id)
+                    changed = true
+                }
+            }
+            if (changed) persistPendingFolderColors()
+        }
+        snapshot = overlayPendingFolderColors(parsed)
+        rememberHostTint(parsed.hostTintHue)
+        outageStartedAtMs = null
+        isUnreachable = false
+        maybeRestoreOrDefaultSession()
+    }
+
+    /**
+     * iOS launch restore: scoped last-open session, else approval/blocked/
+     * first session. Only runs once per Host scope until the next switch.
+     */
+    private fun maybeRestoreOrDefaultSession() {
+        val remote = snapshot ?: return
+        val sessions = remote.sessions
+        val created = pendingCreatedSessionID
+        if (created != null) {
+            val listed = sessions.any { it.id == created }
+            val expired = System.currentTimeMillis() > pendingCreatedDeadlineMs
+            when {
+                // Still the open session and the Host has not listed it yet: hold.
+                !listed && !expired && openSessionID == created -> return
+                else -> pendingCreatedSessionID = null
+            }
+        }
+        if (sessions.isEmpty()) return
+        val openValid = openSessionID?.let { id -> sessions.any { it.id == id } } == true
+        if (openValid) {
+            pendingScopeRestoreMacID = null
+            return
+        }
+        val mac = selectedMacID
+        if (mac != null && pendingScopeRestoreMacID == mac) {
+            pendingScopeRestoreMacID = null
+            val saved = prefs.getString(lastSessionKey(mac), null)
+            if (saved != null && sessions.any { it.id == saved }) {
+                openSession(saved)
+                return
+            }
+        } else if (openSessionID != null) {
+            // Stale id after prune — fall through to default.
+        }
+        val fallback = defaultSelectedSessionID(remote) ?: return
+        openSession(fallback)
+    }
+
+    /** iOS `defaultSelectedSessionID`: approval → blocked → first. */
+    private fun defaultSelectedSessionID(remote: BootstrapSnapshot): String? {
+        val known = remote.sessions.map { it.id }.toSet()
+        remote.pendingApprovals.firstOrNull()?.let { approval ->
+            val sid = approval.targetSessionID?.takeIf { it.isNotEmpty() }
+                ?: approval.callerSessionID.takeIf { it.isNotEmpty() }
+            if (sid != null && sid in known) return sid
+        }
+        return remote.sessions.firstOrNull { it.activity == "blocked" }?.id
+            ?: remote.sessions.firstOrNull()?.id
+    }
+
+    /** Persist live bootstrap tint onto the active pairing (iOS paired-record refresh). */
+    private fun rememberHostTint(hue: Double?) {
+        val id = selectedMacID ?: return
+        if (hue == null || hue.isNaN()) return
+        val current = hosts.firstOrNull { it.macID == id } ?: return
+        if (current.tintHue == hue) return
+        hosts = hosts.map { if (it.macID == id) it.copy(tintHue = hue) else it }
+        saveHosts()
+    }
+
+    private fun overlayPendingFolderColors(source: BootstrapSnapshot): BootstrapSnapshot {
+        if (pendingFolderColors.isEmpty()) return source
+        return source.copy(
+            projects = source.projects.map { project ->
+                if (!pendingFolderColors.containsKey(project.id)) return@map project
+                project.copy(colorID = pendingFolderColors[project.id])
+            },
+            folders = source.folders.map { folder ->
+                if (!pendingFolderColors.containsKey(folder.id)) return@map folder
+                folder.copy(colorID = pendingFolderColors[folder.id])
+            },
+        )
+    }
+
+    private fun pendingFolderColorsKey(): String =
+        "pendingFolderColors:${selectedMacID ?: "_"}"
+
+    private fun loadPendingFolderColors() {
+        pendingFolderColors.clear()
+        val raw = prefs.getString(pendingFolderColorsKey(), null) ?: return
+        runCatching {
+            val json = JSONObject(raw)
+            for (key in json.keys()) {
+                pendingFolderColors[key] = if (json.isNull(key)) null else json.optString(key)
+            }
+        }
+    }
+
+    private fun persistPendingFolderColors() {
+        if (pendingFolderColors.isEmpty()) {
+            prefs.edit().remove(pendingFolderColorsKey()).apply()
+            return
+        }
+        val json = JSONObject()
+        for ((id, color) in pendingFolderColors) {
+            json.put(id, color ?: JSONObject.NULL)
+        }
+        prefs.edit().putString(pendingFolderColorsKey(), json.toString()).apply()
+    }
+
+    fun copyTranscript(sessionID: String, entries: Int, onResult: (String?, String?) -> Unit) {
+        scope.launch {
+            busy = true
+            try {
+                val body = link().get(
+                    "transcript-markdown",
+                    mapOf("session_id" to sessionID, "entries" to entries.toString()),
+                    timeoutMs = 20_000,
+                )
+                val markdown = JSONObject(body).optString("markdown").trim()
+                if (markdown.isEmpty()) onResult(null, "This session has no readable transcript yet")
+                else onResult(markdown, null)
+            } catch (caught: Exception) {
+                onResult(null, caught.message ?: "Couldn’t copy")
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    fun sessionAction(sessionID: String, action: String) {
+        scope.launch {
+            val resuming = action == "restart" || action == "resume_agent"
+            if (resuming) {
+                restartingSessionID = sessionID
+                restartError = null
+            }
+            val failure = runCatching {
+                link().post(
+                    "session-action",
+                    JSONObject().put("sessionID", sessionID).put("action", action).toString(),
+                )
+            }.exceptionOrNull()
+            if (failure == null && action == "remove" && openSessionID == sessionID) closeSession()
+            if (failure != null) {
+                error = failure.message
+                if (resuming) restartError = failure.message
+            }
+            if (restartingSessionID == sessionID) restartingSessionID = null
+            refreshOnce()
+        }
+    }
+
+    fun requestScreenshot() {
+        val id = openSessionID ?: return
+        scope.launch {
+            runCatching { link().post("request-screenshot", JSONObject().put("sessionID", id).toString(), 20_000) }
+            loadArtifacts()
+        }
+    }
+
+    fun loadArtifacts() {
+        val id = openSessionID ?: return
+        galleryPulse = false
+        artifactsLoading = true
+        scope.launch {
+            artifacts = runCatching { BootstrapJson.artifacts(link().get("artifacts", mapOf("session_id" to id))) }
+                .getOrDefault(emptyList())
+            artifactsLoading = false
+            showGallery = true
+        }
+    }
+
+    /** Grid thumbnail or full artifact. `maxDim` is iOS `max_dim`; null is the original bytes. */
+    fun loadGalleryBytes(kind: String, name: String, maxDim: Int?, onDone: (ByteArray?, String) -> Unit) {
+        val id = openSessionID ?: run {
+            onDone(null, "")
+            return
+        }
+        scope.launch {
+            val loaded = runCatching {
+                withContext(Dispatchers.IO) { fetchArtifact(id, kind, name, maxDim) }
+            }.getOrNull()
+            if (loaded == null) onDone(null, "") else onDone(loaded.first, loaded.second)
+        }
+    }
+
+    /**
+     * iOS "Add to message": original JPEG/PNG bytes pass through. GIF/WebP are
+     * transcoded the way `RemoteGalleryAttachmentNormalizer` does for a
+     * resumable upload. Does not submit.
+     */
+    fun pasteArtifact(kind: String, name: String) {
+        val id = openSessionID ?: return
+        scope.launch {
+            busy = true
+            try {
+                val (bytes, type) = withContext(Dispatchers.IO) { fetchArtifact(id, kind, name, null) }
+                val prepared = withContext(Dispatchers.IO) { prepareGalleryUpload(bytes, type) }
+                showGallery = false
+                if (prepared == null) {
+                    error = "Couldn't prepare this image for upload."
+                } else {
+                    pasteUploaded(id, prepared.first, prepared.second)
+                }
+            } catch (caught: Exception) {
+                error = caught.message ?: "Couldn't upload the image"
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    /** Paste bytes the detail view already flattened (crop or arrows). Does not submit. */
+    fun pasteImageBytes(bytes: ByteArray, contentType: String) {
+        val id = openSessionID ?: return
+        scope.launch {
+            val prepared = withContext(Dispatchers.IO) { prepareGalleryUpload(bytes, contentType) }
+            if (prepared == null) {
+                error = "Couldn't prepare this image for upload."
+                return@launch
+            }
+            uploadAndPaste(prepared.first, prepared.second, null, "Couldn't upload the image")
+        }
+    }
+
+    fun openArtifact(kind: String, name: String) {
+        val id = openSessionID ?: return
+        scope.launch {
+            busy = true
+            try {
+                val (bytes, _) = withContext(Dispatchers.IO) { fetchArtifact(id, kind, name, null) }
+                artifactImage = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            } catch (caught: Exception) {
+                error = caught.message
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    fun reportError(message: String) {
+        error = message
+    }
+
+    fun clearError() {
+        error = null
+    }
+
+    fun dismissArtifact() {
+        artifactImage = null
+    }
+
+    fun dismissError() {
+        error = null
+    }
+
+    private fun stopGalleryWatch() {
+        galleryWatchJob?.cancel()
+        galleryWatchJob = null
+        galleryBaseline = null
+        galleryPulse = false
+    }
+
+    private fun startGalleryWatch(sessionID: String) {
+        stopGalleryWatch()
+        galleryWatchJob = scope.launch {
+            while (true) {
+                val session = snapshot?.sessions?.firstOrNull { it.id == sessionID }
+                if (session != null && AgentCatalog.isAgent(session.providerID, session.command)) {
+                    val list = runCatching {
+                        BootstrapJson.artifacts(
+                            link().get("artifacts", mapOf("session_id" to sessionID), timeoutMs = 8_000),
+                        )
+                    }.getOrNull()
+                    if (list != null) {
+                        val newest = list
+                            .filter { it.kind == "screenshots" || it.kind == "computer" }
+                            .maxOfOrNull { it.modifiedAtUnixMs } ?: 0L
+                        val floor = galleryBaseline
+                        if (floor == null) {
+                            galleryBaseline = newest
+                        } else if (newest > floor) {
+                            galleryBaseline = newest
+                            galleryPulse = true
+                            delay(2_200)
+                            galleryPulse = false
+                        }
+                    }
+                }
+                delay(5_000)
+            }
+        }
+    }
+
+    private fun write(sessionID: String, data: String) {
+        if (data.isEmpty()) return
+        synchronized(writeLock) {
+            val tail = writeQueue.lastOrNull()
+            if (tail != null && tail.sessionID == sessionID) {
+                tail.data.append(data)
+            } else {
+                writeQueue.addLast(WriteBatch(sessionID, StringBuilder(data)))
+            }
+        }
+        kickWrites()
+    }
+
+    /** Send queued input once a link exists. A missing link leaves the queue in order. */
+    private fun kickWrites() {
+        val start = synchronized(writeLock) {
+            if (writeDraining || writeQueue.isEmpty() || link == null) {
+                false
+            } else {
+                writeDraining = true
+                true
+            }
+        }
+        if (start) scope.launch { drainWrites() }
+    }
+
+    private fun setLink(next: HostLink?) {
+        link = next
+        if (next != null) kickWrites()
+    }
+
+    private suspend fun drainWrites() {
+        while (true) {
+            val batch = synchronized(writeLock) {
+                val active = link
+                if (active == null) {
+                    writeDraining = false
+                    null
+                } else {
+                    val next = writeQueue.removeFirstOrNull()
+                    if (next == null) {
+                        writeDraining = false
+                        null
+                    } else {
+                        active to next
+                    }
+                }
+            } ?: return
+            postWrite(batch.first, batch.second.sessionID, batch.second.data.toString())
+        }
+    }
+
+    private suspend fun postWrite(active: HostLink, sessionID: String, data: String): Boolean {
+        return runCatching {
+            active.post(
+                "write",
+                JSONObject()
+                    .put("sessionID", sessionID)
+                    .put("data", data)
+                    .put("wid", UUID.randomUUID().toString())
+                    .toString(),
+            )
+        }.onFailure { error = it.message }.isSuccess
+    }
+
+    private fun startPolling() {
+        pollJob?.cancel()
+        outputJob?.cancel()
+        setLink(null)
+        outputDial = null
+        connection = "Connecting"
+        pollJob = scope.launch {
+            while (true) {
+                refreshOnce()
+                delay(if (usingPublic) 1_000 else 2_000)
+            }
+        }
+    }
+
+    private suspend fun refreshOnce() {
+        val host = selectedHost ?: return
+        try {
+            if (usingPublic && !host.publicEndpoint.isNullOrEmpty() && lanAnswers(host)) {
+                setLink(null)
+                usingPublic = false
+                dialEndpoint = null
+            }
+            val body = connectedLink(host).get("bootstrap", timeoutMs = 8_000)
+            adoptBootstrap(BootstrapJson.parse(body))
+            connection = when {
+                usingRelay -> "Link"
+                usingPublic -> "Public"
+                else -> pathLabel(dialEndpoint ?: host.endpoint)
+            }
+            error = null
+            snapshot?.remoteServerCertificateFingerprint?.let { pin ->
+                if (host.fingerprint != pin) updateFingerprint(host.macID, pin)
+            }
+            noteDial()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (caught: Exception) {
+            setLink(null)
+            usingPublic = false
+            dialEndpoint = null
+            val now = System.currentTimeMillis()
+            val started = outageStartedAtMs ?: now.also { outageStartedAtMs = it }
+            val unreachable = now - started >= UNREACHABLE_GRACE_MS
+            isUnreachable = unreachable
+            connection = if (unreachable) "Connection lost" else "Connecting"
+            if (unreachable) error = caught.message ?: "Looking for your Mac…"
+        }
+    }
+
+    /** LAN bootstrap succeeded, so the next connection attempt should take it. */
+    private suspend fun lanAnswers(host: SavedHost): Boolean {
+        return try {
+            DirectLink(host.endpoint, host.authToken, host.fingerprint)
+                .get("bootstrap", timeoutMs = 1_200)
+            true
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * A real path change (LAN, public, or Link) subscribes again from the
+     * Host's current screen. The same dial coming back does not.
+     */
+    private fun noteDial() {
+        val next = OutputDial(relay = usingRelay, endpoint = dialEndpoint)
+        val previous = outputDial
+        outputDial = next
+        if (previous == null || previous == next) return
+        for (cached in sessionCache) cached.coherent = false
+        val sessionID = openSessionID ?: return
+        val slot = sessionCache.firstOrNull { it.id == sessionID }
+        val keep = slot?.replayDone == true && slot.outputOffset != null
+        startOutput(sessionID, keepPicture = keep)
+    }
+
+    private suspend fun connectedLink(host: SavedHost): HostLink {
+        link?.let { return it }
+        val lan = DirectLink(host.endpoint, host.authToken, host.fingerprint)
+        try {
+            lan.get("bootstrap", timeoutMs = if (host.publicEndpoint.isNullOrEmpty()) 4_000 else 1_500)
+            usingRelay = false
+            usingPublic = false
+            dialEndpoint = host.endpoint
+            setLink(lan)
+            return lan
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            val publicURL = host.publicEndpoint
+            if (!publicURL.isNullOrEmpty() && publicURL != host.endpoint) {
+                val pub = DirectLink(publicURL, host.authToken, host.fingerprint)
+                try {
+                    pub.get("bootstrap", timeoutMs = 4_000)
+                    usingRelay = false
+                    usingPublic = true
+                    dialEndpoint = publicURL
+                    setLink(pub)
+                    return pub
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    // The public address missed too. Link remains the last dial.
+                }
+            }
+        }
+        usingPublic = false
+        dialEndpoint = null
+        usingRelay = true
+        return RelayLink(
+            relayUrl = host.relayURL,
+            macID = host.macID,
+            relayToken = host.relayToken,
+            e2eKey = b64d(host.e2eKeyB64),
+            deviceID = deviceId,
+            authToken = host.authToken,
+        ).also { setLink(it) }
+    }
+
+    private fun link(): HostLink = link ?: throw HostException(0, "Not connected")
+
+    private fun pathLabel(endpoint: String): String {
+        val host = runCatching { java.net.URI(endpoint).host }.getOrNull().orEmpty()
+        return if (isPrivateHost(host)) "LAN" else "Public"
+    }
+
+    private fun isPrivateHost(host: String): Boolean {
+        if (host == "localhost" || host.endsWith(".local")) return true
+        val parts = host.split('.')
+        if (parts.size != 4) return false
+        val nums = parts.map { it.toIntOrNull() ?: return false }
+        return nums[0] == 10 ||
+            (nums[0] == 192 && nums[1] == 168) ||
+            (nums[0] == 172 && nums[1] in 16..31) ||
+            (nums[0] == 169 && nums[1] == 254) ||
+            nums[0] == 127
+    }
+
+    private fun noteOpeningFrame(generation: Int) {
+        if (generation != outputGeneration || !sessionPreparing) return
+        openingFrameReady = true
+        flushPendingOpenFit()
+        if (revealOpening()) return
+        val sessionID = openSessionID
+        scope.launch {
+            delay(2_500)
+            if (generation != outputGeneration || openSessionID != sessionID) return@launch
+            // The box never reported a grid. Show the frame we have.
+            if (sessionPreparing && openingFrameReady && desiredColumns < 2) {
+                sessionPreparing = false
+            }
+        }
+    }
+
+    /** Run the open-time letterbox after the first attach frame is in. */
+    private fun flushPendingOpenFit() {
+        if (!pendingOpenFit) return
+        pendingOpenFit = false
+        if (openSessionID == null || followingSharedFit || fitRejected) return
+        if (desiredColumns < 2 || desiredRows < 2) return
+        lastFitAttemptMs = android.os.SystemClock.elapsedRealtime()
+        fitPhone(desiredColumns, desiredRows, force = false)
+    }
+
+    /** The cover stays up while this frame is still the desktop width. */
+    private fun revealOpening(): Boolean {
+        if (!sessionPreparing || !openingFrameReady) return false
+        if (!fitRejected && !phoneGridReady()) return false
+        sessionPreparing = false
+        return true
+    }
+
+    private fun phoneGridReady(): Boolean {
+        if (desiredColumns < 2 || desiredRows < 2) return false
+        if (kotlin.math.abs(terminal.columns - desiredColumns) <= 2 &&
+            kotlin.math.abs(terminal.rows - desiredRows) <= 2
+        ) {
+            return true
+        }
+        // Following another phone's letterbox — ready when we match that grid.
+        val fitCols = phoneFitColumns ?: return false
+        val fitRows = phoneFitRows ?: return false
+        return phoneFitSession == openSessionID &&
+            kotlin.math.abs(terminal.columns - fitCols) <= 2 &&
+            kotlin.math.abs(terminal.rows - fitRows) <= 2
+    }
+
+    /**
+     * Feeds one chunk in a single append. A Grok redraw is one cursor-addressed
+     * frame; yielding between slices lets a phone-fit resize land in the middle
+     * of it, and the rest of the frame paints on the reflowed screen.
+     */
+    private fun feedBytes(
+        bytes: ByteArray,
+        live: Boolean,
+        notify: Boolean,
+        generation: Int,
+        hostSnapshot: Boolean = false,
+    ): Boolean {
+        if (generation != outputGeneration) return false
+        if (bytes.isNotEmpty()) {
+            terminal.feed(bytes, live = live, notify = notify, hostSnapshot = hostSnapshot)
+        }
+        return generation == outputGeneration
+    }
+
+    private enum class SocketStream { Stop, Restart, Fallback, Retry }
+
+    private data class OutputSocketTarget(val url: String, val fingerprint: String?)
+
+    /**
+     * Direct remote-server socket, on a LAN address or a public one.
+     * This is not the Link tunnel: the phone dials `remoteServerPort` on the
+     * Mac's direct host. If that connect fails, output falls back to GET.
+     */
+    private fun outputSocketTarget(sessionID: String, offset: Long?): OutputSocketTarget? {
+        val host = selectedHost ?: return null
+        val port = snapshot?.remoteServerPort ?: return null
+        val endpoint = if (usingPublic) {
+            dialEndpoint ?: host.publicEndpoint ?: host.endpoint
+        } else {
+            snapshot?.directEndpoint ?: dialEndpoint ?: host.endpoint
+        }
+        val pin = snapshot?.remoteServerCertificateFingerprint ?: host.fingerprint
+        val url = TerminalOutputFrames.webSocketUrl(
+            endpoint = endpoint,
+            port = port,
+            sessionID = sessionID,
+            token = host.authToken,
+            offset = offset,
+        ) ?: return null
+        return OutputSocketTarget(url, pin)
+    }
+
+    /**
+     * The iOS output socket. A fresh subscribe asks the Host for the current
+     * screen, then keeps the journal that follows. A dropped socket returns
+     * [SocketStream.Fallback] and the HTTP long-poll takes that cursor.
+     */
+    private suspend fun streamOutputSocket(
+        target: OutputSocketTarget,
+        sessionID: String,
+        screen: HostTerminal,
+        slot: CachedSession?,
+        generation: Int,
+        queries: TerminalQueryFilter,
+        fresh: Boolean,
+        canRetryBaseline: Boolean,
+        onReplaced: () -> Unit,
+    ): SocketStream {
+        val socket = TerminalOutputSocket(target.fingerprint)
+        try {
+            if (!socket.open(target.url)) return SocketStream.Fallback
+            val helloEvent = withTimeoutOrNull(10_000) { socket.receive() } ?: return SocketStream.Fallback
+            val helloText = (helloEvent as? TerminalOutputSocket.Event.Text)?.text ?: return SocketStream.Fallback
+            val hello = withContext(Dispatchers.Default) {
+                TerminalOutputFrames.parseText(helloText) as? TerminalOutputText.Hello
+            } ?: return SocketStream.Fallback
+            if (generation != outputGeneration || openSessionID != sessionID) return SocketStream.Stop
+            if (hello.sessionId != sessionID) return SocketStream.Fallback
+            // A fresh subscribe that asked for a baseline and was told no gets
+            // the raw journal tail. A Grok redraw is cursor-addressed diffs, so
+            // that tail on an empty grid is a half-painted, ghosted screen.
+            // Close and ask again before anything is fed.
+            if (fresh && hello.snapshotDeclined && canRetryBaseline) {
+                Log.i("Unpeel", "output websocket: Host declined the baseline, retrying")
+                return SocketStream.Retry
+            }
+            if (!fresh && hello.cols != null && hello.cols != screen.columns) {
+                slot?.outputOffset = null
+                slot?.coherent = false
+                slot?.replayDone = false
+                return SocketStream.Restart
+            }
+            var pendingReset = fresh || hello.rebased ||
+                (slot?.outputOffset != null && hello.startOffset != slot.outputOffset)
+            if (pendingReset && !fresh) {
+                // Mid-stream rebase: keep last pixels. Cover is only for a blank open.
+                if (slot?.replayDone == true) {
+                    screen.holdPresent()
+                } else {
+                    sessionPreparing = true
+                    openingFrameReady = false
+                }
+                slot?.coherent = false
+            }
+            var expectBaseline = hello.snapshot && pendingReset
+            var held = if (pendingReset) null else slot?.outputOffset
+            // The Host sends the baseline text before any journal frame. Hold a
+            // frame that arrives early so it cannot splice onto the kept screen.
+            val beforeBaseline = ArrayDeque<TerminalOutputBinary>()
+            while (openSessionID == sessionID && generation == outputGeneration && currentCoroutineContext().isActive) {
+                when (val event = socket.receive()) {
+                    TerminalOutputSocket.Event.End -> return SocketStream.Fallback
+                    is TerminalOutputSocket.Event.Text -> {
+                        when (val message = withContext(Dispatchers.Default) { TerminalOutputFrames.parseText(event.text) }) {
+                            is TerminalOutputText.Baseline -> {
+                                if (!expectBaseline) continue
+                                expectBaseline = false
+                                if (!applyBaseline(message, screen, slot, generation, queries)) return SocketStream.Stop
+                                onReplaced()
+                                pendingReset = false
+                                held = message.journalOffset
+                                for (queued in beforeBaseline) {
+                                    val appended = appendOutputFrame(
+                                        queued, hello, screen, slot, generation, queries, sessionID,
+                                        pendingReset = false,
+                                        held,
+                                    )
+                                    if (appended.stream != null) return appended.stream
+                                    held = appended.held
+                                }
+                                beforeBaseline.clear()
+                            }
+                            is TerminalOutputText.Error -> Log.i("Unpeel", "output websocket: ${message.message}")
+                            else -> Unit
+                        }
+                    }
+                    is TerminalOutputSocket.Event.Binary -> {
+                        val frame = withContext(Dispatchers.Default) {
+                            TerminalOutputFrames.parseBinary(event.bytes)
+                        } ?: return SocketStream.Fallback
+                        if (expectBaseline) {
+                            if (beforeBaseline.size >= 32) return SocketStream.Fallback
+                            beforeBaseline.addLast(frame)
+                            continue
+                        }
+                        val reset = pendingReset
+                        val appended = appendOutputFrame(
+                            frame, hello, screen, slot, generation, queries, sessionID, pendingReset, held,
+                        )
+                        if (appended.stream != null) return appended.stream
+                        if (reset) onReplaced()
+                        pendingReset = false
+                        held = appended.held
+                    }
+                }
+            }
+            return if (generation != outputGeneration || openSessionID != sessionID) {
+                SocketStream.Stop
+            } else {
+                SocketStream.Fallback
+            }
+        } catch (cancelled: CancellationException) {
+            if (currentCoroutineContext().isActive) return SocketStream.Fallback
+            throw cancelled
+        } catch (error: Exception) {
+            Log.i("Unpeel", "output websocket fell back to http", error)
+            return SocketStream.Fallback
+        } finally {
+            socket.close()
+        }
+    }
+
+    /**
+     * Paint the Host's screen in one frame. Strip off the main thread first.
+     * The cursor is the journal offset, not the snapshot's length.
+     */
+    private suspend fun applyBaseline(
+        baseline: TerminalOutputText.Baseline,
+        screen: HostTerminal,
+        slot: CachedSession?,
+        generation: Int,
+        queries: TerminalQueryFilter,
+    ): Boolean {
+        queries.reset()
+        val columns = baseline.cols.takeIf { it >= 2 } ?: screen.columns
+        val rows = baseline.rows.takeIf { it >= 2 } ?: screen.rows
+        val visible = withContext(Dispatchers.Default) { queries.strip(baseline.bytes) }
+        if (generation != outputGeneration) return false
+        // Silent until the bytes are in hand, then one paint. An empty
+        // snapshot still publishes the cleared screen. Mid-session baselines
+        // hold the previous present so reclaim/reconnect does not flash.
+        screen.prepare(
+            columns,
+            rows,
+            notify = visible.isEmpty(),
+            holdPixels = visible.isNotEmpty(),
+        )
+        slot?.coherent = false
+        if (visible.isNotEmpty() && !feedBytes(
+                visible,
+                live = false,
+                notify = false,
+                generation = generation,
+                hostSnapshot = true,
+            )
+        ) {
+            return false
+        }
+        if (visible.isNotEmpty()) screen.publishFrame()
+        slot?.outputOffset = baseline.journalOffset
+        slot?.replayDone = true
+        slot?.coherent = true
+        noteOpeningFrame(generation)
+        return generation == outputGeneration
+    }
+
+    private data class FrameAppend(val stream: SocketStream?, val held: Long?)
+
+    private suspend fun appendOutputFrame(
+        frame: TerminalOutputBinary,
+        hello: TerminalOutputText.Hello,
+        screen: HostTerminal,
+        slot: CachedSession?,
+        generation: Int,
+        queries: TerminalQueryFilter,
+        sessionID: String,
+        pendingReset: Boolean,
+        held: Long?,
+    ): FrameAppend {
+        var payload = frame.payload
+        var origin = frame.offset
+        if (!pendingReset && held != null) {
+            val end = frame.offset + frame.payload.size
+            if (end <= held) return FrameAppend(null, held)
+            if (frame.offset > held) {
+                if (!fillOutputGap(sessionID, held, frame.offset, slot, generation, queries)) {
+                    return FrameAppend(SocketStream.Fallback, slot?.outputOffset ?: held)
+                }
+                origin = frame.offset
+            } else {
+                val drop = (held - frame.offset).toInt()
+                if (drop >= payload.size) return FrameAppend(null, held)
+                if (drop > 0) payload = payload.copyOfRange(drop, payload.size)
+                origin = held
+            }
+        }
+        if (pendingReset) {
+            queries.reset()
+            val preamble = hello.modePreamble
+            val visible = withContext(Dispatchers.Default) { queries.strip(payload) }
+            if (generation != outputGeneration) return FrameAppend(SocketStream.Stop, held)
+            val willFeed = (preamble != null && preamble.isNotEmpty()) || visible.isNotEmpty()
+            // Keep the previous picture up until the catch-up VT state is ready.
+            screen.prepare(
+                (hello.cols ?: screen.columns).coerceIn(2, 300),
+                (hello.rows ?: screen.rows).coerceIn(2, 120),
+                notify = !willFeed,
+                holdPixels = true,
+            )
+            slot?.coherent = false
+            if (preamble != null && preamble.isNotEmpty() && !feedBytes(
+                    preamble,
+                    live = false,
+                    notify = false,
+                    generation = generation,
+                    hostSnapshot = true,
+                )
+            ) {
+                return FrameAppend(SocketStream.Stop, held)
+            }
+            if (visible.isNotEmpty() && !feedBytes(visible, live = false, notify = false, generation)) {
+                return FrameAppend(SocketStream.Stop, held)
+            }
+            screen.publishFrame()
+            val next = origin + payload.size
+            slot?.outputOffset = next
+            slot?.replayDone = true
+            slot?.coherent = true
+            noteOpeningFrame(generation)
+            return FrameAppend(null, next)
+        }
+        val visible = withContext(Dispatchers.Default) { queries.strip(payload) }
+        if (generation != outputGeneration) return FrameAppend(SocketStream.Stop, held)
+        slot?.coherent = false
+        // Live frames still coalesce inside HostTerminal — notify=true is fine.
+        if (visible.isNotEmpty() && !feedBytes(visible, live = true, notify = true, generation)) {
+            return FrameAppend(SocketStream.Stop, held)
+        }
+        val next = origin + payload.size
+        slot?.outputOffset = next
+        slot?.replayDone = true
+        slot?.coherent = true
+        noteOpeningFrame(generation)
+        return FrameAppend(null, next)
+    }
+
+    /** Journal bytes the socket skipped. Read only up to the live frame so it is not painted twice. */
+    private suspend fun fillOutputGap(
+        sessionID: String,
+        from: Long,
+        until: Long,
+        slot: CachedSession?,
+        generation: Int,
+        queries: TerminalQueryFilter,
+    ): Boolean {
+        var cursor = from
+        while (cursor < until && generation == outputGeneration) {
+            val body = try {
+                link().get(
+                    "output",
+                    mapOf(
+                        "session_id" to sessionID,
+                        "offset" to cursor.toString(),
+                        "limit" to (until - cursor).coerceAtMost(524_288L).toString(),
+                        "wait_ms" to "0",
+                    ),
+                    timeoutMs = 10_000,
+                )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                return false
+            }
+            if (generation != outputGeneration) return false
+            val chunk = withContext(Dispatchers.Default) { BootstrapJson.outputChunk(body) }
+            if (chunk.truncated || chunk.offset != cursor || chunk.data.isEmpty()) return false
+            val take = (until - chunk.offset).toInt().coerceAtMost(chunk.data.size)
+            val piece = if (take == chunk.data.size) chunk.data else chunk.data.copyOfRange(0, take.coerceAtLeast(0))
+            val visible = withContext(Dispatchers.Default) { queries.strip(piece) }
+            if (generation != outputGeneration) return false
+            // Silent catch-up: feed every byte for VT truth, paint once at the end.
+            if (visible.isNotEmpty() && !feedBytes(visible, live = false, notify = false, generation)) return false
+            cursor = chunk.offset + take
+            slot?.outputOffset = cursor
+        }
+        if (cursor == until && generation == outputGeneration) {
+            (slot?.terminal ?: terminal).publishFrame()
+            return true
+        }
+        return false
+    }
+
+    private fun startOutput(
+        sessionID: String,
+        columns: Int? = null,
+        rows: Int? = null,
+        resumeOffset: Long? = null,
+        keepPicture: Boolean = false,
+    ) {
+        outputJob?.cancel()
+        val generation = ++outputGeneration
+        val slot = sessionCache.firstOrNull { it.id == sessionID }
+        val screen = slot?.terminal ?: terminal
+        val refit = columns != null && rows != null
+        if (columns != null && rows != null) {
+            if (keepPicture) {
+                // Claim / mid-session column change: freeze last present, rebuild under it.
+                sessionPreparing = false
+                screen.prepare(columns, rows, notify = false, holdPixels = true)
+            } else {
+                // First paint for this session — cover the blank reset.
+                sessionPreparing = true
+                openingFrameReady = false
+                screen.prepare(columns, rows)
+            }
+            slot?.outputOffset = null
+            slot?.replayDone = false
+            slot?.coherent = false
+        } else if (keepPicture) {
+            // Leave the last frame up. The snapshot replaces it in one paint.
+            sessionPreparing = false
+            screen.holdPresent()
+            slot?.coherent = false
+        } else if (resumeOffset == null && sessionPreparing) {
+            openingFrameReady = false
+        }
+        val preset = refit
+        val resume = resumeOffset != null && !refit && !keepPicture
+        outputJob = scope.launch {
+            var offset: Long? = if (resume) resumeOffset else null
+            var sized = preset || resume || keepPicture
+            var replaceWithSnapshot = !resume
+            var socketGaveUp = false
+            var baselineRetries = 0
+            var holdingPicture = keepPicture
+            val queries = TerminalQueryFilter()
+            while (openSessionID == sessionID && generation == outputGeneration) {
+                if (!socketGaveUp) {
+                    val target = outputSocketTarget(sessionID, if (replaceWithSnapshot) null else offset)
+                    if (target != null) {
+                        when (
+                            streamOutputSocket(
+                                target, sessionID, screen, slot, generation, queries, replaceWithSnapshot,
+                                canRetryBaseline = baselineRetries < BASELINE_RETRY_LIMIT,
+                            ) { holdingPicture = false }
+                        ) {
+                            SocketStream.Stop -> return@launch
+                            SocketStream.Retry -> {
+                                baselineRetries++
+                                delay(BASELINE_RETRY_DELAY_MS * baselineRetries)
+                                continue
+                            }
+                            SocketStream.Restart -> {
+                                replaceWithSnapshot = true
+                                offset = null
+                                sized = false
+                                continue
+                            }
+                            SocketStream.Fallback -> {
+                                socketGaveUp = true
+                                // A kept picture is incoherent with this dial.
+                                // Resuming its offset would splice the new tail on.
+                                if (!holdingPicture && slot?.replayDone == true) {
+                                    replaceWithSnapshot = false
+                                    offset = slot.outputOffset ?: offset
+                                    sized = true
+                                }
+                            }
+                        }
+                        if (generation != outputGeneration || openSessionID != sessionID) return@launch
+                    }
+                }
+                try {
+                    val active = link()
+                    if (!sized) {
+                        val metrics = runCatching {
+                            JSONObject(active.get("metrics", mapOf("session_id" to sessionID)))
+                        }.getOrNull()
+                        if (generation != outputGeneration) return@launch
+                        if (metrics != null) {
+                            screen.prepare(
+                                metrics.optInt("columns", 80).coerceIn(2, 300),
+                                metrics.optInt("rows", 24).coerceIn(2, 120),
+                            )
+                        }
+                        sized = true
+                    }
+                    val query = mutableMapOf(
+                        "session_id" to sessionID,
+                        "limit" to if (usingRelay) "200000" else "524288",
+                        "wait_ms" to if (offset == null) "0" else "8000",
+                    )
+                    if (offset != null) query["offset"] = offset.toString()
+                    val requested = offset
+                    val body = active.get("output", query, timeoutMs = if (offset == null) 10_000 else 14_000)
+                    if (generation != outputGeneration) return@launch
+                    // Base64 of a full-screen redraw is hundreds of kilobytes.
+                    // Decode it off the main thread so a wheel can still be drawn.
+                    val chunk = withContext(Dispatchers.Default) { BootstrapJson.outputChunk(body) }
+                    if (generation != outputGeneration) return@launch
+                    // A fresh tail, or a journal that moved under us, is a new
+                    // screen. Queries are removed from every chunk: the Mac
+                    // terminal already answered them.
+                    val replay = requested == null || chunk.truncated || chunk.offset != requested
+                    if (replay && requested != null && chunk.modePreamble == null) {
+                        // Held offset fell out of the journal — refetch the tail.
+                        // Already painted: freeze, don't raise the prepare cover.
+                        val soft = slot?.replayDone == true || !sessionPreparing
+                        if (soft) {
+                            screen.holdPresent()
+                            holdingPicture = true
+                        } else {
+                            sessionPreparing = true
+                            openingFrameReady = false
+                            holdingPicture = false
+                        }
+                        slot?.coherent = false
+                        offset = null
+                        continue
+                    }
+                    if (replay && holdingPicture) {
+                        queries.reset()
+                        val preambleBytes = chunk.modePreamble
+                        val visible = withContext(Dispatchers.Default) { queries.strip(chunk.data) }
+                        if (generation != outputGeneration) return@launch
+                        val willFeed = (preambleBytes != null && preambleBytes.isNotEmpty()) || visible.isNotEmpty()
+                        // Stay on the frozen bitmap until publishFrame below.
+                        screen.prepare(
+                            screen.columns,
+                            screen.rows,
+                            notify = !willFeed,
+                            holdPixels = true,
+                        )
+                        slot?.coherent = false
+                        if (preambleBytes != null && preambleBytes.isNotEmpty() && !feedBytes(
+                                preambleBytes,
+                                live = false,
+                                notify = false,
+                                generation = generation,
+                                hostSnapshot = true,
+                            )
+                        ) {
+                            return@launch
+                        }
+                        if (visible.isNotEmpty() && !feedBytes(
+                                visible,
+                                live = false,
+                                notify = false,
+                                generation = generation,
+                            )
+                        ) {
+                            return@launch
+                        }
+                        screen.publishFrame()
+                        holdingPicture = false
+                        slot?.outputOffset = chunk.nextOffset
+                        slot?.replayDone = true
+                        slot?.coherent = true
+                        noteOpeningFrame(generation)
+                        offset = chunk.nextOffset
+                        continue
+                    }
+                    if (replay) {
+                        queries.reset()
+                        // Do not flash an empty grid — paint once after the tail is fed.
+                        // Soft when we already had a frame (cover only on cold open).
+                        screen.prepare(
+                            screen.columns,
+                            screen.rows,
+                            notify = false,
+                            holdPixels = !sessionPreparing,
+                        )
+                        slot?.replayDone = false
+                        slot?.coherent = false
+                    }
+                    val visible = withContext(Dispatchers.Default) { queries.strip(chunk.data) }
+                    if (generation != outputGeneration) return@launch
+                    val preamble = if (replay) chunk.modePreamble else null
+                    slot?.coherent = false
+                    if (preamble != null && !feedBytes(
+                            preamble,
+                            live = false,
+                            notify = false,
+                            generation = generation,
+                            hostSnapshot = true,
+                        )
+                    ) {
+                        return@launch
+                    }
+                    if (!feedBytes(
+                            visible,
+                            live = !replay,
+                            notify = !replay,
+                            generation = generation,
+                        )
+                    ) {
+                        return@launch
+                    }
+                    if (replay) screen.publishFrame()
+                    slot?.outputOffset = chunk.nextOffset
+                    slot?.replayDone = true
+                    slot?.coherent = true
+                    noteOpeningFrame(generation)
+                    offset = chunk.nextOffset
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    if (generation != outputGeneration) return@launch
+                    socketGaveUp = false
+                    setLink(null)
+                    delay(1_000)
+                }
+            }
+        }
+    }
+
+    private suspend fun fetchArtifact(
+        sessionID: String,
+        kind: String,
+        name: String,
+        maxDim: Int?,
+    ): Pair<ByteArray, String> {
+        val out = java.io.ByteArrayOutputStream()
+        var offset = 0L
+        var total = Long.MAX_VALUE
+        var contentType = "application/octet-stream"
+        while (out.size() < total) {
+            val query = linkedMapOf(
+                "session_id" to sessionID,
+                "kind" to kind,
+                "name" to name,
+                "offset" to offset.toString(),
+            )
+            if (maxDim != null) query["max_dim"] = maxDim.toString()
+            val body = link().get("artifact", query, timeoutMs = 20_000)
+            val json = JSONObject(body)
+            val type = json.optString("contentType")
+            if (type.isNotEmpty()) contentType = type
+            val bytes = b64d(json.optString("dataBase64"))
+            if (bytes.isEmpty()) break
+            out.write(bytes)
+            total = json.optLong("totalSize", out.size().toLong())
+            offset = json.optLong("nextOffset", out.size().toLong())
+        }
+        return out.toByteArray() to contentType
+    }
+
+    private fun exchange(payload: com.unpeel.controller.PairingPayload): JSONObject {
+        val dials = LinkedHashSet<String>()
+        dials.add(payload.endpoint)
+        payload.publicEndpoint?.let { dials.add(it) }
+        var last: java.io.IOException? = null
+        for (dial in dials) {
+            try {
+                return exchangeAt(payload, dial)
+            } catch (error: java.io.IOException) {
+                last = error
+            }
+        }
+        throw last ?: java.io.IOException("Pairing failed")
+    }
+
+    private fun exchangeAt(payload: com.unpeel.controller.PairingPayload, dial: String): JSONObject {
+        val identity = DeviceIdentity(
+            id = deviceId,
+            name = Build.MODEL ?: "Android",
+            platform = "android",
+            appVersion = BuildConfig.VERSION_NAME,
+        )
+        val request = JSONObject()
+            .put("token", payload.token)
+            .put(
+                "device",
+                JSONObject()
+                    .put("id", identity.id)
+                    .put("name", identity.name)
+                    .put("platform", identity.platform)
+                    .put("appVersion", identity.appVersion),
+            )
+        val envelope = PairingCrypto.seal(
+            request.toString().toByteArray(),
+            payload.token,
+            payload.macID,
+            payload.endpoint,
+            PairingCrypto.REQUEST,
+        )
+        val http = OkHttpClient.Builder()
+            .connectTimeout(4, TimeUnit.SECONDS)
+            .callTimeout(8, TimeUnit.SECONDS)
+            .build()
+        val call = http.newCall(
+            Request.Builder()
+                .url(dial.trimEnd('/') + "/pair")
+                .post(envelope.toString().toRequestBody("application/json".toMediaType()))
+                .build(),
+        )
+        call.execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                val message = runCatching { JSONObject(body).optString("error") }.getOrDefault(body)
+                throw HostException(response.code, message.ifEmpty { "Pairing failed" })
+            }
+            val plain = PairingCrypto.open(
+                JSONObject(body),
+                payload.token,
+                payload.macID,
+                payload.endpoint,
+                PairingCrypto.RESPONSE,
+            )
+            val opened = JSONObject(plain.toString(Charsets.UTF_8))
+            acceptPairingResponse(opened, payload, identity.id)
+            return opened
+        }
+    }
+
+    private fun updateFingerprint(macID: String, fingerprint: String) {
+        hosts = hosts.map { if (it.macID == macID) it.copy(fingerprint = fingerprint) else it }
+        saveHosts()
+    }
+
+    private fun loadHosts(): List<SavedHost> {
+        val raw = prefs.getString("hosts", null) ?: return emptyList()
+        val array = runCatching { JSONArray(raw) }.getOrNull() ?: return emptyList()
+        return (0 until array.length()).map { index ->
+            val item = array.getJSONObject(index)
+            SavedHost(
+                macID = item.getString("macID"),
+                macName = item.optString("macName"),
+                endpoint = item.getString("endpoint"),
+                authToken = item.getString("authToken"),
+                fingerprint = item.optString("fingerprint").ifEmpty { null },
+                relayURL = item.optString("relayURL"),
+                relayToken = item.optString("relayToken"),
+                e2eKeyB64 = item.optString("e2eKeyB64"),
+                serverVersion = item.optString("serverVersion").ifEmpty { null },
+                publicEndpoint = item.optString("publicEndpoint").ifEmpty { null },
+                tintHue = if (item.has("tintHue") && !item.isNull("tintHue")) item.optDouble("tintHue") else null,
+            )
+        }
+    }
+
+    private fun saveHosts() {
+        val array = JSONArray()
+        hosts.forEach { host ->
+            array.put(
+                JSONObject()
+                    .put("macID", host.macID)
+                    .put("macName", host.macName)
+                    .put("endpoint", host.endpoint)
+                    .put("authToken", host.authToken)
+                    .put("fingerprint", host.fingerprint ?: JSONObject.NULL)
+                    .put("relayURL", host.relayURL)
+                    .put("relayToken", host.relayToken)
+                    .put("e2eKeyB64", host.e2eKeyB64)
+                    .put("serverVersion", host.serverVersion)
+                    .put("publicEndpoint", host.publicEndpoint ?: JSONObject.NULL)
+                    .put("tintHue", host.tintHue ?: JSONObject.NULL),
+            )
+        }
+        prefs.edit().putString("hosts", array.toString()).apply()
+    }
+}

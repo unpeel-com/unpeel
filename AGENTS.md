@@ -5,9 +5,9 @@ for any task, not just code. This repository is the whole product apart from
 the website and the operated Link service: the **server** (the Rust
 multiplexer that hosts terminal sessions, the Host protocol, the runtime
 packages, the unified Unpeel MCP server, and the CLI packaging) and the
-**Apple clients** (the Mac app, the iPhone/iPad app, the Swift package they
-share, and the C-ABI bridge the Mac app links). App and server build from one
-tree at one version, so they can never skew.
+**clients** (the Mac app, the iPhone/iPad app, the Android Controller, the
+Swift package Apple apps share, and the C-ABI bridge the Mac app links). App
+and server build from one tree at one version, so they can never skew.
 
 This file is the practical map for anyone (human or agent) changing this
 repository. Design records, decision logs, and plans live in a private
@@ -36,7 +36,8 @@ makes sense for coding, it does not belong here.
 | `crates/apps/` | The first-party Unpeel Apps — shown as **Plugins** in the app since 0.7; the `apps` MCP capability and `unpeel apps` keep the name — (`markdown`, `filetree`, `diffs`, `usage`) and `app-kit`, their Ratatui App Kit — a separate Cargo workspace, released per App by `release:app`, run in dev mode with `bun run apps:link` |
 | `clients/native` | The macOS app (Swift + SwiftUI + libghostty) and its build/release scripts |
 | `clients/ios` | The iPhone/iPad Controller (xcodegen project `UnpeelIOS/`) |
-| `clients/shared/UnpeelShared` | Swift package shared by both apps: pairing, Host protocol client, Relay E2E, icon art, the runtime catalog copy |
+| `clients/android` | The Android remote Controller (`:app` + `:protocol` + `:termit`); see `clients/android/README.md` |
+| `clients/shared/UnpeelShared` | Swift package shared by both Apple apps: pairing, Host protocol client, Relay E2E, icon art, the runtime catalog copy |
 | `protocol/` | Host protocol contracts: capabilities, conformance cases, engine pins, App registry, relay test vectors |
 | `runtimes/` | Built-in agent runtime packages (descriptor, adapter, hook assets, fixtures); `runtimes/README.md` is the contribution contract |
 | `generated/` | The client-safe runtime catalog, regenerated from `runtimes/` and shipped in every CLI archive |
@@ -151,16 +152,16 @@ protocol), run the full matrix. `compat_*` cases are upgrade guards: a
 failure there means someone's install would break, not that the test needs
 adjusting. The client suites are listed in the next section.
 
-## Apple clients
+## Apple and Android clients
 
 The Mac app is a **Controller** of the bundled `unpeel serve` Host service
 plus a platform-capability adapter (notifications, Keychain, APNs, approval
-dialogs); the iOS app is a remote
-Controller only. Neither hosts sessions: "the server" is exactly `crates/`.
-Detail lives in `docs/agents/clients/` (`dev-builds.md`, `terminal.md`,
-`panes.md`, `workspaces.md`, `presets.md`, `session-activity.md`,
-`transcripts.md`, `remote-control.md`, `controller-assisted-pairing.md`,
-`worktrees.md`); the root rules below always apply.
+dialogs); the iOS and Android apps are remote Controllers only. None of them
+hosts sessions: "the server" is exactly `crates/`. Detail lives in
+`docs/agents/clients/` (`dev-builds.md`, `terminal.md`, `panes.md`,
+`workspaces.md`, `presets.md`, `session-activity.md`, `transcripts.md`,
+`remote-control.md`, `controller-assisted-pairing.md`, `worktrees.md`); the
+root rules below always apply. Android specifics: `clients/android/README.md`.
 
 ### Layout
 
@@ -175,6 +176,11 @@ Detail lives in `docs/agents/clients/` (`dev-builds.md`, `terminal.md`,
 - `clients/ios/UnpeelIOS/` — xcodegen project (`project.yml` → `xcodegen` after
   adding or renaming Swift files); `Tools/dev_bridge.py` drives the
   simulator against a local Host.
+- `clients/android/` — Gradle project (`:app`, `:protocol`, `:termit`). Pure
+  remote Controller over `/mobile` + Link; pairs multiple Hosts (one pairing =
+  one workspace); pins Relay KAT and host-capabilities from repo `protocol/`
+  in `:protocol` tests (`UNPEEL_PROTOCOL_DIR` overrides); runtime catalog is
+  `GeneratedRuntimeCatalog.kt` from `bun run generate:runtimes`.
 - `clients/shared/UnpeelShared/` — `RemoteControlProtocol.swift`,
   `RemotePairingClient.swift`, `RelayProtocol.swift` /
   `RemoteRelayConnection.swift` (forward-secret E2E over the Link relay,
@@ -211,8 +217,10 @@ Detail lives in `docs/agents/clients/` (`dev-builds.md`, `terminal.md`,
   `UNPEEL_IOS_TEST_DESTINATION` picks it; plain `swift test` is broken for
   the iOS package on macOS, never use it as the iOS gate);
   `python3 -m py_compile clients/ios/UnpeelIOS/Tools/dev_bridge.py`;
+  `clients/android/gradlew -p clients/android :protocol:test :app:assembleRelease`;
   `bun run check:runtimes`. CI: `.github/workflows/clients.yml` (unsigned
-  Mac build, iOS simulator tests, shared package tests; no signing secrets).
+  Mac build, iOS simulator tests, shared package tests; no signing secrets)
+  and `.github/workflows/android-apk.yml` (release APK artifact).
 - iOS device builds need the signing team from `project.yml`
   (`UNPEEL_DEVELOPMENT_TEAM`, overridable per build) and a registered device;
   simulator builds stay unsigned. Recipes: `docs/agents/clients/dev-builds.md`.
