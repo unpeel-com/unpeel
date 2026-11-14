@@ -147,8 +147,10 @@ class HostTerminalView(
      */
     var pictureShiftPx: Float = 0f
         set(value) {
-            if (field == value) return
-            field = value
+            // Whole pixels only — subpixel translate + bitmap blit smeared Grok.
+            val snapped = value.roundToInt().toFloat()
+            if (field == snapped) return
+            field = snapped
             invalidate()
         }
 
@@ -185,7 +187,8 @@ class HostTerminalView(
     private var freezeActive = false
     /** 0 = show only [lastGoodBitmap]; 1 = fully live. Grows bottom→top while revealing. */
     private var revealProgress = 1f
-    private val bitmapPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+    /** No FILTER — bilinear blit of a shifted grid softens into glyph ghosts. */
+    private val bitmapPaint = Paint()
 
     private val frameListener: () -> Unit = {
         noteEmulator(terminal.emulator)
@@ -682,11 +685,11 @@ class HostTerminalView(
     }
 
     private fun renderLiveInto(canvas: Canvas, emulator: VtEmulator) {
-        canvas.drawColor(canvasColor)
+        canvas.drawColor(canvasColor, android.graphics.PorterDuff.Mode.SRC)
         clampZoom()
         val scale = displayScale(emulator)
         canvas.save()
-        canvas.translate(zoomPanX, zoomPanY)
+        canvas.translate(zoomPanX.roundToInt().toFloat(), zoomPanY.roundToInt().toFloat())
         canvas.scale(scale, scale)
         canvas.save()
         val placed = place(emulator)

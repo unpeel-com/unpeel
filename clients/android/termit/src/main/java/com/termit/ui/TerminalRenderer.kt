@@ -21,6 +21,9 @@ class TerminalRenderer(
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         this.typeface = typeface
         this.textSize = textSize.toFloat()
+        // Subpixel + fractional cell origins stacked into a soft double image
+        // on Grok's rapid CUP redraws (looks like leftover glyphs).
+        isSubpixelText = false
         // Keep →↑ in JetBrains Mono; never promote them to Noto Color Emoji.
         runCatching {
             val m = Paint::class.java.getMethod("setEmojiFallbackEnabled", Boolean::class.javaPrimitiveType)
@@ -37,9 +40,10 @@ class TerminalRenderer(
 
     // Cell slightly wider than the glyph advance so Latin/CJK are not jammed;
     // do NOT use Paint.letterSpacing — it desyncs monospace runs and clipped
-    // the arms off "K" when a wide char followed.
+    // the arms off "K" when a wide char followed. Snap to whole pixels so
+    // column origins stay on the pixel grid (fractional pitch left AA ghosts).
     private val glyphAdvance: Float = textPaint.measureText("X").coerceAtLeast(1f)
-    val fontWidth: Float = glyphAdvance * 1.08f
+    val fontWidth: Float = kotlin.math.ceil(glyphAdvance * 1.08f).toFloat().coerceAtLeast(1f)
     val fontLineSpacing: Int = kotlin.math.ceil(textPaint.fontSpacing.toDouble()).toInt().coerceAtLeast(1)
     private val fontAscent: Int = kotlin.math.ceil(textPaint.ascent().toDouble()).toInt()
     val fontLineSpacingAndAscent: Int = fontLineSpacing + fontAscent
@@ -98,8 +102,10 @@ class TerminalRenderer(
                 // Always fill — skipping default-bg left uncleared glyphs when a
                 // prior frame / truecolor cell occupied the slot (Grok composer
                 // ghosts until a longer rewrite or a full TUI repaint).
+                // Overhang 0.5px so AA fringes from the previous glyph cannot
+                // survive between abutting cells.
                 bgPaint.color = runBg
-                canvas.drawRect(left, cellTop, right, y, bgPaint)
+                canvas.drawRect(left - 0.5f, cellTop, right + 0.5f, y, bgPaint)
                 textPaint.color = runFg
                 textPaint.isFakeBoldText = runBold
                 textPaint.isUnderlineText = runUnderline
@@ -165,14 +171,25 @@ class TerminalRenderer(
                     // cannot survive when the head cell changed this frame.
                     val left = c * fontWidth
                     bgPaint.color = resolveBg(cell, palette)
-                    canvas.drawRect(left, cellTop, left + fontWidth, y, bgPaint)
+                    canvas.drawRect(left - 0.5f, cellTop, left + fontWidth + 0.5f, y, bgPaint)
                     c++
                     continue
                 }
                 val cp = cell.char.code
-                // Width from wcwidth — never infer from a leftover \u0000 trailer
-                // (that used to stretch │ into 2 cells and jog the box border).
-                val widthCells = WcWidth.width(cp).coerceIn(1, 2)
+                // wcwidth first. Astral codepoints are stored as U+FFFD but still
+                // keep a \0 trailer from write time — honor that slot only then,
+                // never for ordinary glyphs (that used to stretch │ into 2 cells).
+                val measured = WcWidth.width(cp).coerceIn(1, 2)
+                val widthCells = if (
+                    measured == 1 &&
+                    cp == 0xFFFD &&
+                    c + 1 < cols &&
+                    screen.cellAtTranscript(row, c + 1).char == '\u0000'
+                ) {
+                    2
+                } else {
+                    measured
+                }
                 val selected = selectionY1 >= 0 && row in selectionY1..selectionY2 &&
                     c >= (if (row == selectionY1) selectionX1 else 0) &&
                     c <= (if (row == selectionY2) selectionX2 else cols - 1)
