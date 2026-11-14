@@ -55,6 +55,19 @@ package, binary reference, and licenses live under
 `clients/native/vendor/libghostty-spm/`. Its release cycle is independent
 of the Host library above.
 
+## Android Controller: termit, JetBrains Mono, wcwidth
+
+`clients/android/termit/` is the Android terminal view and VT emulator
+(MIT, `clients/android/termit/LICENSE`). It bundles JetBrains Mono Regular
+and Bold (SIL OFL 1.1; the license text is next to the fonts in
+`src/main/assets/fonts/OFL-JetBrainsMono.txt` and ships inside the APK), and
+its Unicode width tables in `WcWidth.java` come from
+[jquast/wcwidth](https://github.com/jquast/wcwidth) (MIT, license next to it
+in `WcWidth.LICENSE`). The Android Gradle dependencies (AndroidX, Compose,
+OkHttp, ZXing, kotlinx-coroutines, Bouncy Castle, org.json) are fetched at
+build time from Maven and are not vendored or covered by
+`THIRD_PARTY_NOTICES.txt`, which only lists the Rust graph.
+
 ## Runtime marks
 
 `runtimes/<slug>/assets/icon.svg` are the marks of third-party agent CLIs
