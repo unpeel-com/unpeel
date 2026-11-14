@@ -29,8 +29,9 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
@@ -38,6 +39,8 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
@@ -382,75 +385,92 @@ private fun GalleryDetail(
         onDismissRequest = onClose,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
     ) {
-        Column(
+        // Edge-to-edge dialog: keep chrome inside safeDrawing so "Add to
+        // message" is never under the nav/gesture bar. Short screens
+        // (arrow mode + landscape) can scroll the bottom chrome.
+        BoxWithConstraints(
             Modifier
                 .fillMaxSize()
                 .background(Color.Black)
-                .windowInsetsPadding(androidx.compose.foundation.layout.WindowInsets.statusBars),
+                .windowInsetsPadding(androidx.compose.foundation.layout.WindowInsets.safeDrawing),
         ) {
-            Row(
-                Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                RoundIconButton("✕", onClose)
-                Spacer(Modifier.weight(1f))
-                val shareBytes = sharePayload(bitmap, raw, contentType, arrows, artifact.name, edited)
-                if (shareBytes != null) {
-                    RoundIconButton("↑") {
-                        shareGalleryFile(context, shareBytes.first, shareBytes.second, shareBytes.third)
-                    }
-                }
-            }
-            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                val shown = bitmap
-                when {
-                    shown != null -> ArrowImage(
-                        bitmap = shown,
-                        arrows = arrows,
-                        arrowMode = arrowMode,
-                        color = arrowColor,
-                        onArrow = { arrows = arrows + it },
-                    )
-                    failed -> Text(t("Couldn't load this file"), color = Color.White.copy(alpha = 0.6f), fontSize = 14.sp)
-                    else -> CircularProgressIndicator(color = Color.White)
-                }
-            }
-            if (imageName && bitmap != null) {
-                if (arrowMode) {
-                    ArrowControls(
-                        color = arrowColor,
-                        onColor = { arrowColor = it },
-                        onUndo = { if (arrows.isNotEmpty()) arrows = arrows.dropLast(1) },
-                        onClear = { arrows = emptyList() },
-                        onDone = { arrowMode = false },
-                    )
-                } else {
-                    Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        ToolButton(t("Crop"), Modifier.weight(1f)) { cropping = true }
-                        ToolButton(t("Arrows"), Modifier.weight(1f)) { arrowMode = true }
-                    }
-                }
-                val plate = RoundedCornerShape(14.dp)
-                Text(
-                    t("Add to message"),
-                    color = Color.White,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier
-                        .padding(start = 16.dp, end = 16.dp, bottom = 20.dp)
-                        .windowInsetsPadding(androidx.compose.foundation.layout.WindowInsets.navigationBars)
-                        .fillMaxWidth()
-                        .clip(plate)
-                        .background(Color.White.copy(alpha = 0.14f))
-                        .border(1.dp, Color.White.copy(alpha = 0.14f), plate)
-                        .combinedClickable {
-                            val payload = attachmentPayload(bitmap, raw, contentType, arrows)
-                            if (payload == null) onFailed("Couldn't prepare this image for upload.")
-                            else onApply(payload.first, payload.second)
+            val chromeMax = maxHeight * 0.5f
+            Column(Modifier.fillMaxSize()) {
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RoundIconButton("✕", onClose)
+                    Spacer(Modifier.weight(1f))
+                    val shareBytes = sharePayload(bitmap, raw, contentType, arrows, artifact.name, edited)
+                    if (shareBytes != null) {
+                        RoundIconButton("↑") {
+                            shareGalleryFile(context, shareBytes.first, shareBytes.second, shareBytes.third)
                         }
-                        .padding(vertical = 14.dp),
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                )
+                    }
+                }
+                Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                    val shown = bitmap
+                    when {
+                        shown != null -> ArrowImage(
+                            bitmap = shown,
+                            arrows = arrows,
+                            arrowMode = arrowMode,
+                            color = arrowColor,
+                            onArrow = { arrows = arrows + it },
+                        )
+                        failed -> Text(t("Couldn't load this file"), color = Color.White.copy(alpha = 0.6f), fontSize = 14.sp)
+                        else -> CircularProgressIndicator(color = Color.White)
+                    }
+                }
+                if (imageName && bitmap != null) {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = chromeMax)
+                            .verticalScroll(rememberScrollState()),
+                    ) {
+                        if (arrowMode) {
+                            ArrowControls(
+                                color = arrowColor,
+                                onColor = { arrowColor = it },
+                                onUndo = { if (arrows.isNotEmpty()) arrows = arrows.dropLast(1) },
+                                onClear = { arrows = emptyList() },
+                                onDone = { arrowMode = false },
+                            )
+                        } else {
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 10.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                ToolButton(t("Crop"), Modifier.weight(1f)) { cropping = true }
+                                ToolButton(t("Arrows"), Modifier.weight(1f)) { arrowMode = true }
+                            }
+                        }
+                        val plate = RoundedCornerShape(14.dp)
+                        Text(
+                            t("Add to message"),
+                            color = Color.White,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier
+                                .padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
+                                .fillMaxWidth()
+                                .clip(plate)
+                                .background(Color.White.copy(alpha = 0.14f))
+                                .border(1.dp, Color.White.copy(alpha = 0.14f), plate)
+                                .combinedClickable {
+                                    val payload = attachmentPayload(bitmap, raw, contentType, arrows)
+                                    if (payload == null) onFailed("Couldn't prepare this image for upload.")
+                                    else onApply(payload.first, payload.second)
+                                }
+                                .padding(vertical = 14.dp),
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        )
+                    }
+                }
             }
         }
     }
