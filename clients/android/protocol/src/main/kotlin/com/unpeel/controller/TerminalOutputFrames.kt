@@ -54,6 +54,7 @@ object TerminalOutputFrames {
                             runCatching { b64d(encoded) }.getOrNull()?.takeIf { it.isNotEmpty() }
                         },
                         snapshot = json.has("snapshot") && !json.isNull("snapshot") && json.optBoolean("snapshot"),
+                        snapshotAnswered = json.has("snapshot") && !json.isNull("snapshot"),
                     )
                 }
             }
@@ -100,7 +101,16 @@ sealed class TerminalOutputText {
         val rows: Int?,
         val modePreamble: ByteArray?,
         val snapshot: Boolean,
-    ) : TerminalOutputText()
+        /**
+         * The Host wrote a `snapshot` key at all. It does so only for a client
+         * that asked, so a missing key is an older Host (nothing to retry) and
+         * `answered && !snapshot` is a Host that could not produce a baseline.
+         */
+        val snapshotAnswered: Boolean = false,
+    ) : TerminalOutputText() {
+        /** The Host declined to send a screen baseline; the stream that follows is a raw journal tail. */
+        val snapshotDeclined: Boolean get() = snapshotAnswered && !snapshot
+    }
 
     data class Baseline(
         val journalOffset: Long,

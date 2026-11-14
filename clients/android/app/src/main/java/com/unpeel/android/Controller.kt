@@ -71,6 +71,13 @@ private const val SESSION_CACHE_LIMIT = 3
 private const val UNREACHABLE_GRACE_MS = 8_000L
 /** How long a just-created session may be missing from bootstrap before we give up holding it. */
 private const val CREATED_SESSION_GRACE_MS = 8_000L
+/**
+ * A fresh output subscribe the Host answers with `snapshot:false` is retried this
+ * many times, waiting [BASELINE_RETRY_DELAY_MS] x attempt between tries, before the
+ * raw journal tail is accepted. A busy PTY can miss the Host's snapshot request once.
+ */
+private const val BASELINE_RETRY_LIMIT = 3
+private const val BASELINE_RETRY_DELAY_MS = 300L
 
 class Controller(context: Context) {
     private val appContext = context.applicationContext
@@ -1639,7 +1646,7 @@ class Controller(context: Context) {
         return generation == outputGeneration
     }
 
-    private enum class SocketStream { Stop, Restart, Fallback }
+    private enum class SocketStream { Stop, Restart, Fallback, Retry }
 
     private data class OutputSocketTarget(val url: String, val fingerprint: String?)
 
@@ -1680,6 +1687,7 @@ class Controller(context: Context) {
         generation: Int,
         queries: TerminalQueryFilter,
         fresh: Boolean,
+        canRetryBaseline: Boolean,
         onReplaced: () -> Unit,
     ): SocketStream {
         val socket = TerminalOutputSocket(target.fingerprint)
@@ -1692,6 +1700,14 @@ class Controller(context: Context) {
             } ?: return SocketStream.Fallback
             if (generation != outputGeneration || openSessionID != sessionID) return SocketStream.Stop
             if (hello.sessionId != sessionID) return SocketStream.Fallback
+            // A fresh subscribe that asked for a baseline and was told no gets
+            // the raw journal tail. A Grok redraw is cursor-addressed diffs, so
+            // that tail on an empty grid is a half-painted, ghosted screen.
+            // Close and ask again before anything is fed.
+            if (fresh && hello.snapshotDeclined && canRetryBaseline) {
+                Log.i("Unpeel", "output websocket: Host declined the baseline, retrying")
+                return SocketStream.Retry
+            }
             if (!fresh && hello.cols != null && hello.cols != screen.columns) {
                 slot?.outputOffset = null
                 slot?.coherent = false
@@ -1989,6 +2005,7 @@ class Controller(context: Context) {
             var sized = preset || resume || keepPicture
             var replaceWithSnapshot = !resume
             var socketGaveUp = false
+            var baselineRetries = 0
             var holdingPicture = keepPicture
             val queries = TerminalQueryFilter()
             while (openSessionID == sessionID && generation == outputGeneration) {
@@ -1998,9 +2015,15 @@ class Controller(context: Context) {
                         when (
                             streamOutputSocket(
                                 target, sessionID, screen, slot, generation, queries, replaceWithSnapshot,
+                                canRetryBaseline = baselineRetries < BASELINE_RETRY_LIMIT,
                             ) { holdingPicture = false }
                         ) {
                             SocketStream.Stop -> return@launch
+                            SocketStream.Retry -> {
+                                baselineRetries++
+                                delay(BASELINE_RETRY_DELAY_MS * baselineRetries)
+                                continue
+                            }
                             SocketStream.Restart -> {
                                 replaceWithSnapshot = true
                                 offset = null

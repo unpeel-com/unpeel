@@ -70,6 +70,42 @@ class TerminalOutputFramesTest {
     }
 
     @Test
+    fun helloWithSnapshotFalseIsADeclinedBaseline() {
+        val text = """
+            {"type":"hello","protocol":1,"session_id":"s","state":"running",
+             "output_size":90,"requested_offset":null,"start_offset":10,"rebased":false,
+             "cols":54,"rows":28,"snapshot":false}
+        """.trimIndent()
+        val hello = TerminalOutputFrames.parseText(text) as TerminalOutputText.Hello
+        assertFalse(hello.snapshot)
+        assertTrue(hello.snapshotAnswered)
+        assertTrue(hello.snapshotDeclined)
+    }
+
+    @Test
+    fun helloWithoutTheSnapshotKeyIsAnOlderHostNotADecline() {
+        val text = """
+            {"type":"hello","protocol":1,"session_id":"s","state":"running",
+             "output_size":90,"requested_offset":null,"start_offset":10,"rebased":false}
+        """.trimIndent()
+        val hello = TerminalOutputFrames.parseText(text) as TerminalOutputText.Hello
+        assertFalse(hello.snapshotAnswered)
+        assertFalse(hello.snapshotDeclined)
+    }
+
+    @Test
+    fun helloWithSnapshotTrueIsNotDeclined() {
+        val text = """
+            {"type":"hello","protocol":1,"session_id":"s","state":"running",
+             "output_size":90,"requested_offset":null,"start_offset":10,"rebased":false,
+             "snapshot":true}
+        """.trimIndent()
+        val hello = TerminalOutputFrames.parseText(text) as TerminalOutputText.Hello
+        assertTrue(hello.snapshotAnswered)
+        assertFalse(hello.snapshotDeclined)
+    }
+
+    @Test
     fun baselineIsTheScreenAtAJournalOffset() {
         val text = """
             {"type":"baseline","journal_offset":80,"cols":54,"rows":28,"bytes_base64":"aGk="}
