@@ -9,11 +9,11 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        // Same package as the published phone app, so this APK replaces android-0.7.7-32.
+        // Same package as the published phone app, so this APK replaces android-0.7.7-33.
         applicationId = "com.unpeel.android"
         minSdk = 26
         targetSdk = 35
-        versionCode = 33
+        versionCode = 34
         versionName = "0.7.7"
     }
 

@@ -20,6 +20,18 @@ object AgentTerminalPolicy {
     private val remoteMouseWheelProviders = setOf("claude", "grok", "opencode")
 
     /**
+     * Grok paints truecolor from groknight / grokday. Command head covers
+     * `process_aliases` before the Host resolves `activeRuntimeID`.
+     */
+    private val grokTruecolorProviders = setOf("grok", "grok-build")
+
+    /**
+     * OpenCode's published table is the TUI canvas pair in
+     * `OpenCodeThemeResolver.builtInBackgrounds`, not a cell palette.
+     */
+    private val openCodeCanvasProviders = setOf("opencode", "opencode2")
+
+    /**
      * cursor-agent enables mouse for clicks (Run Everything, etc.) but echoes
      * SGR wheel into the composer as `[<65;…M`. Arrow-key alt-scroll is also
      * wrong — it steps prompt history. Phone and Mac each scroll local
@@ -42,6 +54,16 @@ object AgentTerminalPolicy {
 
     fun prefersRemoteMouseWheel(providerID: String?, command: String, activeRuntimeID: String?): Boolean {
         return identityMatches(providerID, command, activeRuntimeID, remoteMouseWheelProviders)
+    }
+
+    /** GrokNight / GrokDay cell pairs. Every other agent leaves truecolor alone. */
+    fun rewritesGrokTruecolor(providerID: String?, command: String, activeRuntimeID: String?): Boolean {
+        return identityMatches(providerID, command, activeRuntimeID, grokTruecolorProviders)
+    }
+
+    /** OpenCode built-in canvas pairs. Cell truecolor is not in that table. */
+    fun rewritesOpenCodeCanvas(providerID: String?, command: String, activeRuntimeID: String?): Boolean {
+        return identityMatches(providerID, command, activeRuntimeID, openCodeCanvasProviders)
     }
 
     /** cursor-agent: clicks ok, wheel becomes `[<65;…M` in the prompt. */

@@ -14,6 +14,7 @@ import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import com.termit.TerminalSession
 import com.termit.vt.Cell
+import com.termit.vt.CellStyle
 import kotlin.math.max
 import kotlin.math.min
 
@@ -132,12 +133,19 @@ class TerminalView @JvmOverloads constructor(
 
     private fun drawCell(canvas: Canvas, row: Int, col: Int, cell: Cell, forceFg: Boolean = false) {
         val palette = session?.emulator?.colors ?: AnsiColors.buildDefaultPalette()
-        var fg = AnsiColors.resolve(cell.fg, palette, bold = cell.bold, dim = cell.dim)
-        var bg = AnsiColors.resolve(cell.bg, palette)
+        fun painted(color: Int, bold: Boolean = false, dim: Boolean = false): Int {
+            return AnsiColors.resolve(color, palette, bold, dim)
+        }
+        var bg = painted(cell.bg)
+        var fg = if (!cell.inverse && cell.fg == CellStyle.DEFAULT_FG) {
+            AnsiColors.resolve(AnsiColors.contrastingDefaultForeground(bg), palette, dim = cell.dim)
+        } else {
+            painted(cell.fg, bold = cell.bold, dim = cell.dim)
+        }
         if (cell.inverse) {
-            val tmp = fg
+            val swapped = fg
             fg = bg
-            bg = tmp
+            bg = swapped
         }
         val left = col * cellWidth
         val top = row * cellHeight

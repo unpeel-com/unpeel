@@ -3,6 +3,7 @@ package com.unpeel.android
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Build
 import android.util.Log
@@ -38,6 +39,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlin.math.roundToInt
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -176,6 +178,8 @@ class Controller(context: Context) {
         private set
     var artifacts by mutableStateOf<List<ArtifactSummary>>(emptyList())
         private set
+    var artifactsLoading by mutableStateOf(false)
+        private set
     var artifactImage by mutableStateOf<android.graphics.Bitmap?>(null)
         private set
     var showCreate by mutableStateOf(false)
@@ -294,6 +298,7 @@ class Controller(context: Context) {
             val clipboard = appContext.getSystemService(ClipboardManager::class.java) ?: return@HostTerminal
             clipboard.setPrimaryClip(ClipData.newPlainText("unpeel", text))
         },
+        night = PhoneSettings.storedNight(appContext, PhoneSettings.systemNight(appContext)),
     )
 
     private fun rememberSession(id: String): CachedSession {
@@ -732,6 +737,58 @@ class Controller(context: Context) {
         write(id, text)
     }
 
+    /**
+     * iOS gallery "Add image": upload into `artifacts/uploads/` and return the
+     * Host path. Does not paste into the composer.
+     */
+    fun addGalleryImage(jpeg: ByteArray, onDone: (path: String?, error: String?) -> Unit) {
+        val id = openSessionID ?: run {
+            onDone(null, "Couldn't read the selected image.")
+            return
+        }
+        if (jpeg.isEmpty()) {
+            onDone(null, "Couldn't read the selected image.")
+            return
+        }
+        if (jpeg.size > 4 * 1024 * 1024) {
+            onDone(null, "Image is over 4 MB")
+            return
+        }
+        scope.launch {
+            busy = true
+            try {
+                val path = uploadChunks(id, jpeg, "image/jpeg", null)
+                artifacts = runCatching {
+                    BootstrapJson.artifacts(link().get("artifacts", mapOf("session_id" to id)))
+                }.getOrDefault(artifacts)
+                onDone(path, null)
+            } catch (caught: Exception) {
+                onDone(null, caught.message ?: "Couldn't read the selected image.")
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    /** iOS gallery context menu Delete. */
+    fun deleteArtifact(kind: String, name: String, onDone: (String?) -> Unit) {
+        val id = openSessionID ?: return
+        scope.launch {
+            try {
+                link().postBinary(
+                    "artifact-delete",
+                    mapOf("session_id" to id, "kind" to kind, "name" to name),
+                    "application/json",
+                    ByteArray(0),
+                )
+                artifacts = artifacts.filterNot { it.kind == kind && it.name == name }
+                onDone(null)
+            } catch (caught: Exception) {
+                onDone(caught.message)
+            }
+        }
+    }
+
     /** Upload a JPEG and paste its quoted Host path. Does not submit. */
     fun attachImage(jpeg: ByteArray) {
         uploadAndPaste(jpeg, "image/jpeg", filename = null, failure = "Couldn’t upload the image")
@@ -765,6 +822,51 @@ class Controller(context: Context) {
                 busy = false
             }
         }
+    }
+
+    private suspend fun pasteUploaded(sessionID: String, bytes: ByteArray, contentType: String) {
+        if (bytes.size > 4 * 1024 * 1024) {
+            error = "Image is over 4 MB"
+            return
+        }
+        val path = uploadChunks(sessionID, bytes, contentType, null)
+        val quoted = "'" + path.replace("'", "'\\''") + "' "
+        write(sessionID, TerminalInput.paste(quoted))
+    }
+
+    /**
+     * iOS `RemoteGalleryAttachmentNormalizer`: JPEG and PNG stay as they are.
+     * Anything else becomes PNG, or JPEG quality 0.88 when the PNG would pass
+     * 4 MB. Longest edge 2048.
+     */
+    private fun prepareGalleryUpload(bytes: ByteArray, contentType: String): Pair<ByteArray, String>? {
+        if (contentType == "image/jpeg" || contentType == "image/png") return bytes to contentType
+        val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
+        val largest = maxOf(decoded.width, decoded.height)
+        val bitmap = if (largest > 2048) {
+            val scale = 2048f / largest
+            Bitmap.createScaledBitmap(
+                decoded,
+                (decoded.width * scale).roundToInt().coerceAtLeast(1),
+                (decoded.height * scale).roundToInt().coerceAtLeast(1),
+                true,
+            )
+        } else {
+            decoded
+        }
+        val png = java.io.ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.PNG, 100, png)
+        if (png.size() <= 4 * 1024 * 1024) {
+            if (bitmap !== decoded) bitmap.recycle()
+            decoded.recycle()
+            return png.toByteArray() to "image/png"
+        }
+        val jpeg = java.io.ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 88, jpeg)
+        if (bitmap !== decoded) bitmap.recycle()
+        decoded.recycle()
+        if (jpeg.size() > 4 * 1024 * 1024) return null
+        return jpeg.toByteArray() to "image/jpeg"
     }
 
     private suspend fun uploadChunks(
@@ -1102,35 +1204,65 @@ class Controller(context: Context) {
     fun loadArtifacts() {
         val id = openSessionID ?: return
         galleryPulse = false
+        artifactsLoading = true
         scope.launch {
             artifacts = runCatching { BootstrapJson.artifacts(link().get("artifacts", mapOf("session_id" to id))) }
                 .getOrDefault(emptyList())
+            artifactsLoading = false
             showGallery = true
         }
     }
 
-    /** Re-upload an existing capture into the terminal. Does not submit. */
+    /** Grid thumbnail or full artifact. `maxDim` is iOS `max_dim`; null is the original bytes. */
+    fun loadGalleryBytes(kind: String, name: String, maxDim: Int?, onDone: (ByteArray?, String) -> Unit) {
+        val id = openSessionID ?: run {
+            onDone(null, "")
+            return
+        }
+        scope.launch {
+            val loaded = runCatching {
+                withContext(Dispatchers.IO) { fetchArtifact(id, kind, name, maxDim) }
+            }.getOrNull()
+            if (loaded == null) onDone(null, "") else onDone(loaded.first, loaded.second)
+        }
+    }
+
+    /**
+     * iOS "Add to message": original JPEG/PNG bytes pass through. GIF/WebP are
+     * transcoded the way `RemoteGalleryAttachmentNormalizer` does for a
+     * resumable upload. Does not submit.
+     */
     fun pasteArtifact(kind: String, name: String) {
         val id = openSessionID ?: return
         scope.launch {
             busy = true
             try {
-                val bytes = withContext(Dispatchers.IO) { fetchArtifact(id, kind, name) }
-                val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                val (bytes, type) = withContext(Dispatchers.IO) { fetchArtifact(id, kind, name, null) }
+                val prepared = withContext(Dispatchers.IO) { prepareGalleryUpload(bytes, type) }
                 showGallery = false
-                if (bitmap == null) {
-                    attachFile(bytes, name)
+                if (prepared == null) {
+                    error = "Couldn't prepare this image for upload."
                 } else {
-                    val jpeg = java.io.ByteArrayOutputStream()
-                    bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, jpeg)
-                    bitmap.recycle()
-                    attachImage(jpeg.toByteArray())
+                    pasteUploaded(id, prepared.first, prepared.second)
                 }
             } catch (caught: Exception) {
-                error = caught.message ?: "Couldn’t paste"
+                error = caught.message ?: "Couldn't upload the image"
             } finally {
                 busy = false
             }
+        }
+    }
+
+    /** Paste bytes the detail view already flattened (crop or arrows). Does not submit. */
+    fun pasteImageBytes(bytes: ByteArray, contentType: String) {
+        val id = openSessionID ?: return
+        scope.launch {
+            val prepared = withContext(Dispatchers.IO) { prepareGalleryUpload(bytes, contentType) }
+            if (prepared == null) {
+                error = "Couldn't prepare this image for upload."
+                return@launch
+            }
+            uploadAndPaste(prepared.first, prepared.second, null, "Couldn't upload the image")
         }
     }
 
@@ -1139,7 +1271,7 @@ class Controller(context: Context) {
         scope.launch {
             busy = true
             try {
-                val bytes = withContext(Dispatchers.IO) { fetchArtifact(id, kind, name) }
+                val (bytes, _) = withContext(Dispatchers.IO) { fetchArtifact(id, kind, name, null) }
                 artifactImage = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
             } catch (caught: Exception) {
                 error = caught.message
@@ -2002,30 +2134,35 @@ class Controller(context: Context) {
         }
     }
 
-    private suspend fun fetchArtifact(sessionID: String, kind: String, name: String): ByteArray {
+    private suspend fun fetchArtifact(
+        sessionID: String,
+        kind: String,
+        name: String,
+        maxDim: Int?,
+    ): Pair<ByteArray, String> {
         val out = java.io.ByteArrayOutputStream()
         var offset = 0L
         var total = Long.MAX_VALUE
+        var contentType = "application/octet-stream"
         while (out.size() < total) {
-            val body = link().get(
-                "artifact",
-                mapOf(
-                    "session_id" to sessionID,
-                    "kind" to kind,
-                    "name" to name,
-                    "offset" to offset.toString(),
-                    "max_dim" to "1600",
-                ),
-                timeoutMs = 20_000,
+            val query = linkedMapOf(
+                "session_id" to sessionID,
+                "kind" to kind,
+                "name" to name,
+                "offset" to offset.toString(),
             )
+            if (maxDim != null) query["max_dim"] = maxDim.toString()
+            val body = link().get("artifact", query, timeoutMs = 20_000)
             val json = JSONObject(body)
+            val type = json.optString("contentType")
+            if (type.isNotEmpty()) contentType = type
             val bytes = b64d(json.optString("dataBase64"))
             if (bytes.isEmpty()) break
             out.write(bytes)
             total = json.optLong("totalSize", out.size().toLong())
             offset = json.optLong("nextOffset", out.size().toLong())
         }
-        return out.toByteArray()
+        return out.toByteArray() to contentType
     }
 
     private fun exchange(payload: com.unpeel.controller.PairingPayload): JSONObject {

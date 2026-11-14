@@ -4,6 +4,7 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Typeface
 import com.termit.vt.Cell
+import com.termit.vt.CellStyle
 import com.termit.vt.ScreenBuffer
 import com.termit.vt.VtEmulator
 import com.termit.vt.WcWidth
@@ -43,6 +44,12 @@ class TerminalRenderer(
     private val fontAscent: Int = kotlin.math.ceil(textPaint.ascent().toDouble()).toInt()
     val fontLineSpacingAndAscent: Int = fontLineSpacing + fontAscent
 
+    /** Phone appearance for the GrokNight / GrokDay truecolor table. */
+    private var phoneNight = true
+
+    /** Grok sessions only. Other agents have no cell-color pair table. */
+    private var mapGrokTruecolor = false
+
     fun render(
         emulator: VtEmulator,
         canvas: Canvas,
@@ -52,7 +59,11 @@ class TerminalRenderer(
         selectionX1: Int,
         selectionX2: Int,
         cursorVisible: Boolean,
+        night: Boolean = true,
+        mapGrokTruecolor: Boolean = false,
     ) {
+        phoneNight = night
+        this.mapGrokTruecolor = mapGrokTruecolor
         val cols = emulator.mColumns
         val rows = emulator.mRows
         val palette = emulator.colors
@@ -221,25 +232,47 @@ class TerminalRenderer(
     }
 
     private fun resolveFg(cell: Cell, palette: IntArray): Int {
-        var fg = AnsiColors.resolve(cell.fg, palette, bold = cell.bold, dim = cell.dim)
-        var bg = AnsiColors.resolve(cell.bg, palette)
-        if (cell.inverse) {
-            val tmp = fg
-            fg = bg
-            bg = tmp
+        // Default ink follows the cell's real background. A light bubble the
+        // CLI painted keeps that background and gets dark ink; an unpainted
+        // dark cell keeps light ink. Explicit SGR foreground is left alone,
+        // except a Grok session's GrokNight / GrokDay truecolor.
+        if (!cell.inverse && cell.fg == CellStyle.DEFAULT_FG) {
+            val bg = resolvePainted(cell.bg, palette)
+            return AnsiColors.resolve(
+                AnsiColors.contrastingDefaultForeground(bg),
+                palette,
+                dim = cell.dim,
+            )
         }
+        var fg = resolvePainted(cell.fg, palette, bold = cell.bold, dim = cell.dim)
+        val bg = resolvePainted(cell.bg, palette)
+        if (cell.inverse) fg = bg
         return fg
     }
 
     private fun resolveBg(cell: Cell, palette: IntArray): Int {
-        var fg = AnsiColors.resolve(cell.fg, palette, bold = cell.bold, dim = cell.dim)
-        var bg = AnsiColors.resolve(cell.bg, palette)
+        var fg = resolvePainted(cell.fg, palette, bold = cell.bold, dim = cell.dim)
+        var bg = resolvePainted(cell.bg, palette)
         if (cell.inverse) {
             val tmp = fg
             fg = bg
             bg = tmp
         }
         return bg
+    }
+
+    private fun resolvePainted(
+        color: Int,
+        palette: IntArray,
+        bold: Boolean = false,
+        dim: Boolean = false,
+    ): Int {
+        val source = if (mapGrokTruecolor && AnsiColors.isTruecolor(color)) {
+            GrokTruecolor.map(color, phoneNight)
+        } else {
+            color
+        }
+        return AnsiColors.resolve(source, palette, bold, dim)
     }
 
     private fun paintBuiltin(
@@ -283,13 +316,13 @@ class TerminalRenderer(
     ) {
         var col = emulator.cursorCol.coerceIn(0, cols - 1)
         if (col > 0 && screen.cellAtTranscript(row, col).char == '\u0000') col--
-        val lead = screen.cellAtTranscript(row, col)
-        val widthCells = WcWidth.width(lead.char.code).coerceIn(1, 2)
-        cursorPaint.color = palette[AnsiColors.INDEX_CURSOR]
+        val cell = screen.cellAtTranscript(row, col)
+        val widthCells = WcWidth.width(cell.char.code).coerceIn(1, 2)
+        val cellBg = resolveBg(cell, palette)
+        cursorPaint.color = AnsiColors.contrastingDefaultForeground(cellBg)
         val left = col * fontWidth
         val cursorHeight = (fontLineSpacingAndAscent - fontAscent).toFloat()
         canvas.drawRect(left, y - cursorHeight, left + fontWidth * widthCells, y, cursorPaint)
-        val cell = screen.cellAtTranscript(row, col)
         if (cell.char == '\u0000' || cell.char == ' ') return
         val cp = cell.char.code
         if (BuiltinGlyphs.handles(cp)) {
@@ -300,7 +333,7 @@ class TerminalRenderer(
             }
             paintBuiltin(canvas, inverted, palette, palette[AnsiColors.INDEX_BG], col, y, cellTop, widthCells, false)
         } else {
-            textPaint.color = palette[AnsiColors.INDEX_BG]
+            textPaint.color = cellBg
             textPaint.isFakeBoldText = cell.bold
             textPaint.isUnderlineText = false
             runChars[0] = cell.char

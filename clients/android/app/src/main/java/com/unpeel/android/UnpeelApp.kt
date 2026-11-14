@@ -8,6 +8,7 @@ package com.unpeel.android
 
 import android.Manifest
 import android.app.Activity
+import android.app.Application
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
@@ -17,6 +18,7 @@ import androidx.activity.BackEventCompat
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.CubicBezierEasing
@@ -85,12 +87,16 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -111,6 +117,7 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeCap
@@ -144,6 +151,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import com.termit.ui.AnsiColors
 import com.unpeel.controller.AgentCatalog
 import com.unpeel.controller.AgentTerminalPolicy
 import com.unpeel.controller.PendingApproval
@@ -154,7 +163,6 @@ import com.unpeel.controller.SidebarEntry
 import com.unpeel.controller.TerminalInput
 import com.unpeel.controller.canNotifyWhenDone
 import com.unpeel.controller.canStopSession
-import com.unpeel.controller.folderColorArgb
 import com.unpeel.controller.isInlineSidebarProject
 import com.unpeel.controller.resumeOffer
 import com.unpeel.controller.sidebarEntries
@@ -171,36 +179,10 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
- * iOS session chrome after `ultraThinMaterial` — sampled ~#0A0A0C near-black.
- * Token `frameBackgroundHex` is #121314; material on device reads darker.
+ * SwiftUI `.cyan` has no hex in `Theme.swift` or the iOS sources.
+ * This stand-in stays only on the call sites that use `.tint(.cyan)`.
  */
-private val HeaderInk = Color(0xFF0A0A0C)
-/** iOS `TerminalChrome.backgroundHex` — terminal surface / pair / lock. */
-private val Canvas = Color(0xFF1A1B1D)
-/** iOS glass sheet (`glassSheetBackground`) — Organize / Preset / Approval. */
-private val Sheet = Color(0xFF1B1C22)
-/** iOS Activity / Gallery panel (`0x16171C`). */
-private val Panel = Color(0xFF16171C)
-private val Foreground = Color(0xFFF3F5FB)
-private val Muted = Color(0xA8F3F5FB)
-private val Hover = Color(0x1AF3F5FB)
-private val ActiveRow = Color(0x29FFFFFF)
-private val Attention = Color(0xFFF59E0B)
-private val Unread = Color(0xFF60A5FA)
-/** Sidebar / drawer edge — white @ 0.10. */
-private val Hairline = Color(0x1AFFFFFF)
-/** Sheet / approval edge — white @ 0.08 (iOS glassSheet stroke). */
-private val SheetHairline = Color(0x14FFFFFF)
-/** iOS destructive / Form `.red` (dark). */
-private val Danger = Color(0xFFFF453A)
-/** iOS `Color.accentColor` dark blue for Resume pill. */
-private val Accent = Color(0xFF0A84FF)
-/** iOS system cyan — Connect / checkmark / Add a Workspace. */
 private val Cyan = Color(0xFF32ADE6)
-/** Soft white card fill used in PairingView sections. */
-private val SoftCard = Color.White.copy(alpha = 0.06f)
-/** Mac `Theme.genericSpinner` / iOS fallback when no tool tint. */
-private val GenericSpinner = Color(0xFFB9BDC9)
 /**
  * iOS session chrome + terminal card (`SessionDetailLayout` / `TerminalChrome`
  * / Ghostty window padding).
@@ -216,8 +198,6 @@ private object SessionDetailLayout {
     /** Key row above the IME: 4dp top + 36dp keys + 6dp bottom. */
     val keyboardAccessory = 46.dp
 }
-
-private val KeyFill = Color(0x1AFFFFFF)
 
 /** Classic CLI braille spinner as bitmasks (dots 1–8 → bits 0–7). No glyphs. */
 private val SpinnerDotMasks = intArrayOf(
@@ -240,28 +220,77 @@ fun UnpeelApp(controller: Controller) {
     val context = LocalContext.current
     val activity = context as? Activity
     val lock = remember { AppLock(context) }
-    val lifecycleOwner = LocalLifecycleOwner.current
     val credential = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         lock.finishCredential(result.resultCode == Activity.RESULT_OK)
     }
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) lock.onBackground()
-            if (event == Lifecycle.Event.ON_START && activity != null) {
-                lock.onForeground(activity)?.let { credential.launch(it) }
+    // iOS locks on scenePhase .background only. .inactive (Face ID, a system
+    // picker) does not lock and there is no timed grace. Count started
+    // activities so a picker or the biometric sheet covering this activity
+    // is not "left the app".
+    DisposableEffect(activity) {
+        val host = activity ?: return@DisposableEffect onDispose {}
+        var started = 1
+        val callbacks = object : Application.ActivityLifecycleCallbacks {
+            override fun onActivityStarted(startedActivity: Activity) {
+                val fromBackground = started == 0
+                started += 1
+                if (fromBackground) {
+                    lock.onForeground(startedActivity)?.let { credential.launch(it) }
+                }
             }
+
+            override fun onActivityStopped(stoppedActivity: Activity) {
+                started = (started - 1).coerceAtLeast(0)
+                if (started == 0) lock.onBackground()
+            }
+
+            override fun onActivityCreated(a: Activity, b: android.os.Bundle?) {}
+            override fun onActivityResumed(a: Activity) {}
+            override fun onActivityPaused(a: Activity) {}
+            override fun onActivitySaveInstanceState(a: Activity, b: android.os.Bundle) {}
+            override fun onActivityDestroyed(a: Activity) {}
         }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        host.application.registerActivityLifecycleCallbacks(callbacks)
+        lock.onForeground(host)?.let { credential.launch(it) }
+        onDispose { host.application.unregisterActivityLifecycleCallbacks(callbacks) }
     }
-    LaunchedEffect(activity) {
-        if (activity != null) lock.onForeground(activity)?.let { credential.launch(it) }
-    }
+    val settings = remember { PhoneSettings(context) }
+    CompositionLocalProvider(LocalPhoneSettings provides settings) {
+    val night = phoneNight()
     val chrome = hostChrome(controller.snapshot?.hostTintHue)
+    val view = LocalView.current
+    SideEffect {
+        val window = (view.context as? Activity)?.window ?: return@SideEffect
+        WindowCompat.getInsetsController(window, view).apply {
+            isAppearanceLightStatusBars = !night
+            isAppearanceLightNavigationBars = !night
+        }
+    }
     // The session screen is the root. A system back swipe must not finish the
     // activity. The terminal screen replaces that gesture with the drawer.
     BackHandler { }
-    MaterialTheme(colorScheme = darkColorScheme(background = chrome, surface = Sheet, primary = Foreground)) {
+    val scheme = if (night) {
+        darkColorScheme(
+            background = chrome,
+            surface = Sheet,
+            primary = Foreground,
+            onPrimary = Color(0xFF121314),
+            onBackground = Foreground,
+            onSurface = Foreground,
+            onSurfaceVariant = Muted,
+        )
+    } else {
+        lightColorScheme(
+            background = chrome,
+            surface = Sheet,
+            primary = Foreground,
+            onPrimary = Color.White,
+            onBackground = Foreground,
+            onSurface = Foreground,
+            onSurfaceVariant = Muted,
+        )
+    }
+    MaterialTheme(colorScheme = scheme) {
         // Status bars are consumed inside TerminalHome so the sidebar can
         // paint under the notch like iOS (`ignoresSafeArea` + header inset).
         Box(Modifier.fillMaxSize().background(chrome)) {
@@ -284,6 +313,7 @@ fun UnpeelApp(controller: Controller) {
             }
         }
     }
+    }
 }
 
 @Composable
@@ -298,27 +328,11 @@ private fun TerminalHome(
     var organizeID by remember { mutableStateOf<String?>(null) }
     var organizeProjectID by remember { mutableStateOf<String?>(null) }
     var confirmingRemove by remember { mutableStateOf(false) }
-    var annotate by remember { mutableStateOf<Bitmap?>(null) }
     var drawerPosition by remember { mutableFloatStateOf(0f) }
     var drawerDragging by remember { mutableStateOf(false) }
     var drawerOpen by remember { mutableStateOf(false) }
     var terminalSelecting by remember { mutableStateOf(false) }
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     val session = controller.snapshot?.sessions?.firstOrNull { it.id == controller.openSessionID }
-    val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        scope.launch {
-            when (val loaded = withContext(Dispatchers.IO) { loadAttachment(context, uri) }) {
-                is LoadedAttachment.Image -> annotate = loaded.bitmap
-                is LoadedAttachment.File -> controller.attachFile(loaded.bytes, loaded.name)
-                is LoadedAttachment.Failed -> controller.reportError(loaded.message)
-            }
-        }
-    }
-    fun chooseFile() {
-        pickFile.launch(arrayOf("*/*"))
-    }
     LaunchedEffect(controller.openSessionID) {
         terminalSelecting = false
         if (controller.openSessionID != null) {
@@ -507,7 +521,7 @@ private fun TerminalHome(
                 controller.openSession(chosen)
             },
         )
-        HomeSheet.Gallery -> GallerySheet(controller, onPickFile = ::chooseFile) { sheet = null }
+        HomeSheet.Gallery -> GallerySheet(controller) { sheet = null }
         HomeSheet.Organize -> {
             val target = controller.snapshot?.sessions?.firstOrNull { it.id == organizeID } ?: session
             if (target != null) {
@@ -534,32 +548,12 @@ private fun TerminalHome(
                     sheet = null
                     val id = organizeID ?: controller.openSessionID
                     if (id != null) controller.sessionAction(id, "remove")
-                }) { Text("Remove", color = Danger) }
+                }) { Text(t("Remove"), color = Danger) }
             },
-            dismissButton = { TextButton(onClick = { confirmingRemove = false }) { Text("Cancel") } },
-            title = { Text("Remove this session") },
-            text = { Text("Running processes will stop first. The session leaves the list; the conversation itself stays.") },
+            dismissButton = { TextButton(onClick = { confirmingRemove = false }) { Text(t("Cancel")) } },
+            title = { Text(t("Remove this session")) },
+            text = { Text(t("Running processes will stop first. The session leaves the list; the conversation itself stays.")) },
             containerColor = Sheet,
-        )
-    }
-    controller.artifactImage?.let { bitmap ->
-        AlertDialog(
-            onDismissRequest = controller::dismissArtifact,
-            confirmButton = { TextButton(onClick = controller::dismissArtifact) { Text("Close") } },
-            text = { Image(bitmap = bitmap.asImageBitmap(), contentDescription = null) },
-            containerColor = Sheet,
-        )
-    }
-    annotate?.let { bitmap ->
-        ImageAnnotator(
-            source = bitmap,
-            onCancel = { annotate = null },
-            onDone = { painted ->
-                annotate = null
-                val maxBytes = if (controller.usingRelay) 250_000 else 3_500_000
-                controller.attachImage(compressJpeg(painted, maxBytes))
-                if (painted !== bitmap) painted.recycle()
-            },
         )
     }
     }
@@ -587,19 +581,19 @@ private fun EmptyTerminal(
         when {
             unreachable -> {
                 Text(
-                    hostName?.let { "Can't reach $it" } ?: "Not connected to a Mac",
-                    color = Color.White.copy(alpha = 0.60f),
+                    hostName?.let { t("Can't reach %s").replace("%s", it) } ?: t("Not connected to a Mac"),
+                    color = Foreground.copy(alpha = 0.60f),
                     fontSize = 15.sp,
                 )
                 EmptyGlassButton(
-                    label = if (!paired) "Pair with your Mac" else "Connection…",
+                    label = if (!paired) t("Pair with your Mac") else t("Connection…"),
                     tint = Cyan,
                     onClick = onPair,
                 )
                 if (paired) {
                     Text(
-                        "Make sure this phone and your Mac are on the same network, or that Unpeel Link is available.",
-                        color = Color.White.copy(alpha = 0.50f),
+                        t("Make sure this phone and your Mac are on the same network, or that Unpeel Link is available."),
+                        color = Foreground.copy(alpha = 0.50f),
                         fontSize = 13.sp,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.padding(horizontal = 24.dp),
@@ -608,19 +602,19 @@ private fun EmptyTerminal(
             }
             connecting -> {
                 Text(
-                    hostName?.let { "Connecting to $it…" } ?: "Connecting…",
-                    color = Color.White.copy(alpha = 0.60f),
+                    hostName?.let { t("Connecting to %s…").replace("%s", it) } ?: t("Connecting…"),
+                    color = Foreground.copy(alpha = 0.60f),
                     fontSize = 15.sp,
                 )
             }
             else -> {
                 EmptyGlassButton(
-                    label = "Open Sessions",
+                    label = t("Open Sessions"),
                     tint = null,
                     onClick = onOpenSessions,
                     leading = {
                         if (!SvgIcon("sidebar-toggle", 16.dp, tint = Foreground)) {
-                            Text("☰", color = Foreground, fontSize = 14.sp)
+                            Text(t("☰"), color = Foreground, fontSize = 14.sp)
                         }
                     },
                 )
@@ -640,14 +634,14 @@ private fun EmptyGlassButton(
         Brush.verticalGradient(listOf(tint, tint.copy(alpha = 0.85f)))
     } else {
         Brush.verticalGradient(
-            listOf(Color.White.copy(alpha = 0.22f), Color.White.copy(alpha = 0.10f)),
+            listOf(Foreground.copy(alpha = 0.22f), Foreground.copy(alpha = 0.10f)),
         )
     }
     Row(
         Modifier
             .clip(RoundedCornerShape(percent = 50))
             .background(fill)
-            .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(percent = 50))
+            .border(1.dp, Foreground.copy(alpha = 0.12f), RoundedCornerShape(percent = 50))
             .clickable(onClick = onClick)
             .padding(horizontal = 18.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -702,7 +696,7 @@ private fun PixelMascot(size: Dp) {
             Modifier.size(size).clip(RoundedCornerShape(22.dp)).background(Color(0xFF2A2118)),
             contentAlignment = Alignment.Center,
         ) {
-            Text("U", color = Color(0xFFF2A05A), fontSize = 32.sp, fontWeight = FontWeight.SemiBold)
+            Text(t("U"), color = Color(0xFFF2A05A), fontSize = 32.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }
@@ -726,6 +720,16 @@ private fun TerminalSurface(
     // Compose may revoke focus until this is true. Set from the tap, before
     // the posted showSoftInput.
     var keyboardWanted by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val jpeg = withContext(Dispatchers.IO) { photoAttachJpeg(context.contentResolver, uri) }
+            if (jpeg == null) controller.reportError("Couldn't read that photo")
+            else controller.attachImage(jpeg)
+        }
+    }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, session.id) {
         val observer = LifecycleEventObserver { _, event ->
@@ -906,8 +910,8 @@ private fun TerminalSurface(
         ) {
             controller.error?.let { message ->
                 Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(message, color = Danger, fontSize = 12.sp, modifier = Modifier.weight(1f), maxLines = 2)
-                    TextButton(onClick = controller::dismissError) { Text("Close") }
+                    Text(t(message), color = Danger, fontSize = 12.sp, modifier = Modifier.weight(1f), maxLines = 2)
+                    TextButton(onClick = controller::dismissError) { Text(t("Close")) }
                 }
             }
             // iOS accessory bar: only while this terminal's keyboard is up.
@@ -917,22 +921,36 @@ private fun TerminalSurface(
                     Modifier
                         .fillMaxWidth()
                         .height(accessory)
-                        .clipToBounds()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        .clipToBounds(),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    TerminalKey("Paste", 12) {
-                        if (terminalView?.pasteClipboard() != true) controller.reportError("Nothing to paste")
+                    Row(
+                        Modifier
+                            .weight(1f)
+                            .horizontalScroll(rememberScrollState())
+                            .padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TerminalKey(t("Paste"), 12) {
+                            if (terminalView?.pasteClipboard() != true) controller.reportError("Nothing to paste")
+                        }
+                        TerminalKey("◀") { sendTerminalKey(controller, "arrowLeft", ctrlArmed); ctrlArmed = false }
+                        TerminalKey("▲") { sendTerminalKey(controller, "arrowUp", ctrlArmed); ctrlArmed = false }
+                        TerminalKey("▼") { sendTerminalKey(controller, "arrowDown", ctrlArmed); ctrlArmed = false }
+                        TerminalKey("▶") { sendTerminalKey(controller, "arrowRight", ctrlArmed); ctrlArmed = false }
+                        TerminalKey("esc", 11) { sendTerminalKey(controller, "escape", ctrlArmed); ctrlArmed = false }
+                        TerminalKey("Tab", 12) { sendTerminalKey(controller, "tab", ctrlArmed); ctrlArmed = false }
+                        TerminalKey("Ctrl", 12, armed = ctrlArmed) { ctrlArmed = !ctrlArmed }
                     }
-                    TerminalKey("◀") { sendTerminalKey(controller, "arrowLeft", ctrlArmed); ctrlArmed = false }
-                    TerminalKey("▲") { sendTerminalKey(controller, "arrowUp", ctrlArmed); ctrlArmed = false }
-                    TerminalKey("▼") { sendTerminalKey(controller, "arrowDown", ctrlArmed); ctrlArmed = false }
-                    TerminalKey("▶") { sendTerminalKey(controller, "arrowRight", ctrlArmed); ctrlArmed = false }
-                    TerminalKey("esc", 11) { sendTerminalKey(controller, "escape", ctrlArmed); ctrlArmed = false }
-                    TerminalKey("Tab", 12) { sendTerminalKey(controller, "tab", ctrlArmed); ctrlArmed = false }
-                    TerminalKey("Ctrl", 12, armed = ctrlArmed) { ctrlArmed = !ctrlArmed }
+                    // iOS pins Attach Image at the trailing edge. No Dictate.
+                    Box(Modifier.padding(end = 10.dp, top = 4.dp, bottom = 6.dp)) {
+                        AttachImageKey {
+                            pickPhoto.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -1090,9 +1108,20 @@ private fun TerminalGrid(
     var menuActive by remember { mutableStateOf(false) }
     var surface by remember { mutableStateOf<HostTerminalView?>(null) }
     val openSession = controller.snapshot?.sessions?.firstOrNull { it.id == controller.openSessionID }
-    // Provider theme hex wins; otherwise wash the default canvas with Host App color
-    // (same contract as iOS TerminalChrome / Mac Theme.appTinted).
-    val canvas = terminalCanvas(openSession?.terminalBackgroundHex, controller.snapshot?.hostTintHue)
+    // The phone's own light/dark, not the Host appearance. A provider hex
+    // (Grok paints its own background) still fills the blank rows.
+    val night = phoneNight()
+    val mapGrok = AgentTerminalPolicy.rewritesGrokTruecolor(
+        openSession?.providerID,
+        openSession?.command.orEmpty(),
+        openSession?.activeRuntimeID,
+    )
+    val mapOpenCode = AgentTerminalPolicy.rewritesOpenCodeCanvas(
+        openSession?.providerID,
+        openSession?.command.orEmpty(),
+        openSession?.activeRuntimeID,
+    )
+    val canvas = terminalCanvas(openSession?.terminalBackgroundHex, night, mapGrok, mapOpenCode)
     val shownTerminal = controller.terminal
     val prefersRemoteWheel = AgentTerminalPolicy.prefersRemoteMouseWheel(
         openSession?.providerID,
@@ -1156,7 +1185,7 @@ private fun TerminalGrid(
                 )
                 .clip(cardShape)
                 .background(Color(canvas))
-                .border(1.dp, Color.White.copy(alpha = 0.15f), cardShape)
+                .border(1.dp, SheetHairline, cardShape)
                 .padding(
                     horizontal = SessionDetailLayout.cardPadH,
                     vertical = SessionDetailLayout.cardPadV,
@@ -1201,7 +1230,7 @@ private fun TerminalGrid(
                     view.echoesMouseWheel = echoesMouseWheel
                     // Keep in sync when activeRuntimeID arrives after open.
                     shownTerminal.holdLiveRepaints = echoesMouseWheel
-                    shownTerminal.applyCanvas(canvas)
+                    shownTerminal.applySurface(night, canvas, mapGrok)
                     view.canvasColor = canvas
                     view.fitWidthToSharedGrid = controller.followingSharedFit
                     view.bind(shownTerminal)
@@ -1217,13 +1246,13 @@ private fun TerminalGrid(
                         .align(Alignment.TopCenter)
                         .zIndex(2f)
                         .padding(8.dp)
-                        .background(Color(0xF01A1B1D), RoundedCornerShape(18.dp))
-                        .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(18.dp)),
+                        .background(Canvas.copy(alpha = 0xF0 / 255f), RoundedCornerShape(18.dp))
+                        .border(1.dp, Foreground.copy(alpha = 0.12f), RoundedCornerShape(18.dp)),
                 ) {
                     TextButton(onClick = {
                         if (surface?.copySelection() != true) controller.reportError("Nothing to copy")
-                    }) { Text("Copy", color = Foreground) }
-                    TextButton(onClick = { surface?.clearSelection() }) { Text("Cancel", color = Muted) }
+                    }) { Text(t("Copy"), color = Foreground) }
+                    TextButton(onClick = { surface?.clearSelection() }) { Text(t("Cancel"), color = Muted) }
                 }
             }
             // Hide with the keyboard target latch — not the interpolating ime height.
@@ -1247,10 +1276,10 @@ private fun TerminalGrid(
                         .align(Alignment.TopEnd)
                         .zIndex(2f)
                         .padding(10.dp)
-                        .background(Color(0xF01A1B1D), RoundedCornerShape(18.dp))
-                        .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(18.dp)),
+                        .background(Canvas.copy(alpha = 0xF0 / 255f), RoundedCornerShape(18.dp))
+                        .border(1.dp, Foreground.copy(alpha = 0.12f), RoundedCornerShape(18.dp)),
                 ) {
-                    Text("Fit to this phone", color = Foreground, fontSize = 13.sp)
+                    Text(t("Fit to this phone"), color = Foreground, fontSize = 13.sp)
                 }
             }
             if (controller.sessionPreparing) {
@@ -1310,8 +1339,9 @@ private fun TerminalPrepareCover(canvas: Int, modifier: Modifier = Modifier) {
             },
     ) {
         val lineWidth = (maxWidth - 64.dp).coerceAtLeast(0.dp)
+        val ink = Color(AnsiColors.contrastingDefaultForeground(canvas))
         Column(Modifier.padding(start = 32.dp, end = 32.dp, top = 22.dp).graphicsLayer { this.alpha = alpha }) {
-            Text("Preparing", color = Color.White.copy(alpha = 0.72f), fontSize = 13.sp)
+            Text(t("Preparing"), color = ink.copy(alpha = 0.72f), fontSize = 13.sp)
             Spacer(Modifier.height(18.dp))
             fractions.forEach { fraction ->
                 Box(
@@ -1319,7 +1349,7 @@ private fun TerminalPrepareCover(canvas: Int, modifier: Modifier = Modifier) {
                         .padding(bottom = 13.dp)
                         .width(lineWidth * fraction)
                         .height(12.dp)
-                        .background(Color.White.copy(alpha = 0.07f)),
+                        .background(ink.copy(alpha = 0.07f)),
                 )
             }
         }
@@ -1327,13 +1357,22 @@ private fun TerminalPrepareCover(canvas: Int, modifier: Modifier = Modifier) {
 }
 
 /**
- * Terminal surface color. A per-session [hex] from the Mac (OpenCode/Grok)
- * wins unchanged; otherwise the default canvas is Host-tint washed so App
- * color shows on the phone the way it does on Mac/iOS.
+ * Terminal surface color. A per-session [hex] fills blank rows.
+ * Grok rewrites it through GrokNight / GrokDay. OpenCode rewrites it
+ * through its built-in canvas pairs. Every other agent keeps the hex,
+ * or the phone's own light (`#ffffff`) / dark (`#1A1B1D`) canvas when
+ * the Host sent none.
  */
-private fun terminalCanvas(hex: Int?, tintHue: Double?): Int {
-    if (hex != null) return 0xFF000000.toInt() or (hex and 0xFFFFFF)
-    return hostTintedArgb(0x1A1B1D, tintHue)
+private fun terminalCanvas(hex: Int?, night: Boolean, mapGrok: Boolean, mapOpenCode: Boolean): Int {
+    if (hex != null) {
+        val argb = 0xFF000000.toInt() or (hex and 0xFFFFFF)
+        return when {
+            mapGrok -> com.termit.ui.GrokTruecolor.map(argb, night)
+            mapOpenCode -> com.termit.ui.OpenCodeCanvas.map(argb, night)
+            else -> argb
+        }
+    }
+    return if (night) AnsiColors.DARK_BACKGROUND else AnsiColors.LIGHT_BACKGROUND
 }
 
 /**
@@ -1380,11 +1419,12 @@ private fun SessionDrawer(
         expanded = expanded + listOfNotNull(projectID, project?.parentProjectID, parent?.parentProjectID)
     }
     val tintHue = snapshot?.hostTintHue
-    // iOS `IOSSidebarTheme.background`: top canvas → bottom frame, Host-tint washed.
+    val night = phoneNight()
+    // Mac surface over app background, Host-tint washed. Light is white on white.
     val sidebarBrush = Brush.verticalGradient(
         colors = listOf(
-            Color(hostTintedArgb(0x1A1B1D, tintHue)),
-            Color(hostTintedArgb(0x121314, tintHue)),
+            Color(hostTintedArgb(MacChrome.surface(night) and 0xFFFFFF, tintHue)),
+            Color(hostTintedArgb(MacChrome.appBackground(night) and 0xFFFFFF, tintHue)),
         ),
     )
     val drawerShape = RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp)
@@ -1480,7 +1520,7 @@ private fun SessionDrawer(
                 .align(Alignment.CenterEnd)
                 .fillMaxHeight()
                 .width(1.dp)
-                .background(Color.White.copy(alpha = 0.10f)),
+                .background(Hairline),
         )
     }
 }
@@ -1497,15 +1537,15 @@ private fun WorkspaceHeader(controller: Controller, onClick: () -> Unit) {
     val title = current?.name?.takeIf { it.isNotBlank() }
         ?: snapshot?.macName
         ?: controller.selectedHost?.macName
-        ?: "Workspace"
+        ?: t("Workspace")
     val failing = snapshot == null && controller.connection != "Connecting" && controller.connection != "Unpaired"
     val subtitle = when {
         snapshot == null -> when (controller.connection) {
-            "Unpaired" -> "Unpaired"
-            "Connecting" -> "Connecting…"
-            else -> "Disconnected"
+            "Unpaired" -> t("Unpaired")
+            "Connecting" -> t("Connecting…")
+            else -> t("Disconnected")
         }
-        controller.usingRelay -> "via Unpeel Remote"
+        controller.usingRelay -> t("via Unpeel Remote")
         else -> null
     }
     val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
@@ -1625,7 +1665,7 @@ private fun ProjectBlock(
             is SidebarEntry.Project -> index.sessionsByProject[entry.project.id].orEmpty().any(::sessionNeedsAttention)
         }
     }
-    val tint = folderColorArgb(project.colorID)?.let { Color(it) } ?: Muted
+    val tint = folderSwatch(project.colorID) ?: Muted
     val child = isInlineSidebarProject(project)
     val leading = if (child) (18 + (depth - 1).coerceAtLeast(0) * 14).dp else (7 + depth * 14).dp
     val folderAsset = if (open) "folder-open" else "folder-closed"
@@ -1668,7 +1708,7 @@ private fun ProjectBlock(
             )
             if (project.pinned == true) {
                 Spacer(Modifier.width(4.dp))
-                if (!SvgIcon("pin", 11.dp, tint = Muted)) Text("📌", fontSize = 11.sp)
+                if (!SvgIcon("pin", 11.dp, tint = Muted)) Text(t("📌"), fontSize = 11.sp)
             }
             // iOS: worktreeBranch always shows the icon; label only when ≠ name.
             val branch = project.worktreeBranch
@@ -1699,7 +1739,7 @@ private fun ProjectBlock(
                     .clickable { onNewSession(project) },
                 contentAlignment = Alignment.Center,
             ) {
-                if (!SvgIcon("plus", 17.dp, tint = Muted)) Text("+", color = Muted, fontSize = 16.sp)
+                if (!SvgIcon("plus", 17.dp, tint = Muted)) Text(t("+"), color = Muted, fontSize = 16.sp)
             }
         }
     }
@@ -1781,13 +1821,13 @@ private fun SessionLine(
             )
             if (session.pinned) {
                 Spacer(Modifier.width(4.dp))
-                if (!SvgIcon("pin", 11.dp, tint = Muted)) Text("📌", fontSize = 11.sp)
+                if (!SvgIcon("pin", 11.dp, tint = Muted)) Text(t("📌"), fontSize = 11.sp)
             }
         }
         Spacer(Modifier.width(4.dp))
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             if (session.notifyWhenDone) {
-                if (!SvgIcon("bell", 11.dp, tint = Muted)) Text("🔔", fontSize = 11.sp)
+                if (!SvgIcon("bell", 11.dp, tint = Muted)) Text(t("🔔"), fontSize = 11.sp)
             }
             Text(
                 if (blocked) "blocked" else relativeAge(session.updatedAtUnixMs),
@@ -1823,19 +1863,19 @@ private fun ApprovalOverlay(approval: PendingApproval, more: Int, onAnswer: (Str
             Modifier.widthIn(max = 340.dp).padding(horizontal = 28.dp).clip(RoundedCornerShape(22.dp)).background(Sheet).border(1.dp, SheetHairline, RoundedCornerShape(22.dp)).padding(22.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text("?", color = Color.Yellow, fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
+            Text(t("?"), color = Color.Yellow, fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(10.dp))
             Text(approval.title, color = Foreground, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(8.dp))
             Text(approval.body, color = Muted, fontSize = 13.sp)
             if (more > 0) {
                 Spacer(Modifier.height(6.dp))
-                Text("$more more waiting", color = Muted.copy(alpha = 0.7f), fontSize = 11.sp)
+                Text(t("%d more waiting").replace("%d", more.toString()), color = Muted.copy(alpha = 0.7f), fontSize = 11.sp)
             }
             Spacer(Modifier.height(14.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                TextButton(onClick = { onAnswer(approval.id, false) }, modifier = Modifier.weight(1f)) { Text("Don’t allow") }
-                Button(onClick = { onAnswer(approval.id, true) }, modifier = Modifier.weight(1f)) { Text("Allow") }
+                TextButton(onClick = { onAnswer(approval.id, false) }, modifier = Modifier.weight(1f)) { Text(t("Don’t allow")) }
+                Button(onClick = { onAnswer(approval.id, true) }, modifier = Modifier.weight(1f)) { Text(t("Allow")) }
             }
         }
     }
@@ -1885,14 +1925,14 @@ private fun HostSheet(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    if (empty) "Pair with a workspace" else "Workspaces",
+                    if (empty) t("Pair with a workspace") else t("Workspaces"),
                     color = Foreground,
                     fontSize = 17.sp,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.weight(1f),
                 )
                 TextButton(onClick = onDismiss) {
-                    Text("Done", color = Cyan, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                    Text(t("Done"), color = Cyan, fontSize = 16.sp, fontWeight = FontWeight.Medium)
                 }
             }
             if (empty) {
@@ -1900,6 +1940,7 @@ private fun HostSheet(
                 UnpairedGuidanceCard()
                 PairFields(controller, context)
                 PairingErrorLine(controller.error)
+                PhonePreferenceCard()
                 SecuritySettingsCard(lock, onCredential)
             } else {
                 WorkspacesListCard(
@@ -1923,8 +1964,8 @@ private fun HostSheet(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            "Pair the new workspace",
-                            color = Color.White.copy(alpha = 0.85f),
+                            t("Pair the new workspace"),
+                            color = Foreground.copy(alpha = 0.85f),
                             fontSize = 14.sp,
                             fontWeight = FontWeight.SemiBold,
                             modifier = Modifier.weight(1f),
@@ -1933,12 +1974,13 @@ private fun HostSheet(
                             addingMac = false
                             controller.clearError()
                         }) {
-                            Text("Cancel", color = Cyan, fontSize = 14.sp)
+                            Text(t("Cancel"), color = Cyan, fontSize = 14.sp)
                         }
                     }
                     PairFields(controller, context)
                     PairingErrorLine(controller.error)
                 }
+                PhonePreferenceCard()
                 SecuritySettingsCard(lock, onCredential)
             }
             Spacer(Modifier.height(8.dp))
@@ -1957,11 +1999,10 @@ private fun HostSheet(
     forgetHost?.let { host ->
         AlertDialog(
             onDismissRequest = { forgetHost = null },
-            title = { Text("Forget ${host.macName}?") },
+            title = { Text(t("Forget %s?").replace("%s", host.macName)) },
             text = {
                 Text(
-                    "This phone will no longer be able to control this workspace. " +
-                        "You can also revoke this phone in the workspace's Settings on the Mac.",
+                    t("This phone will no longer be able to control this workspace. You can also revoke this phone in the workspace's Settings on the Mac."),
                 )
             },
             confirmButton = {
@@ -1969,11 +2010,11 @@ private fun HostSheet(
                     controller.forget(host.macID)
                     forgetHost = null
                 }) {
-                    Text("Forget ${host.macName}", color = Danger)
+                    Text(t("Forget %s").replace("%s", host.macName), color = Danger)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { forgetHost = null }) { Text("Cancel") }
+                TextButton(onClick = { forgetHost = null }) { Text(t("Cancel")) }
             },
             containerColor = Sheet,
         )
@@ -1991,9 +2032,9 @@ private fun PairingBrandHeader() {
             Modifier.size(68.dp).clip(RoundedCornerShape(20.dp)).background(Color(0xFF2A2118)),
             contentAlignment = Alignment.Center,
         ) {
-            Text("U", color = Color(0xFFF2A05A), fontSize = 32.sp, fontWeight = FontWeight.SemiBold)
+            Text(t("U"), color = Color(0xFFF2A05A), fontSize = 32.sp, fontWeight = FontWeight.SemiBold)
         }
-        Text("Unpeel", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+        Text(t("Unpeel"), color = Foreground, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -2008,12 +2049,12 @@ private fun UnpairedGuidanceCard() {
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            WifiSlash(16.dp, Color.White.copy(alpha = 0.7f))
-            Text("Not paired", color = Color.White.copy(alpha = 0.7f), fontSize = 14.sp)
+            WifiSlash(16.dp, Foreground.copy(alpha = 0.7f))
+            Text(t("Not paired"), color = Foreground.copy(alpha = 0.7f), fontSize = 14.sp)
         }
         Text(
-            "Open Unpeel on your Mac, switch to the workspace you want, and show the pairing code in Settings ▸ iPhone. Each workspace pairs separately.",
-            color = Color.White.copy(alpha = 0.5f),
+            t("Open Unpeel on your Mac, switch to the workspace you want, and show the pairing code in Settings ▸ iPhone. Each workspace pairs separately."),
+            color = Foreground.copy(alpha = 0.5f),
             fontSize = 13.sp,
         )
     }
@@ -2057,7 +2098,7 @@ private fun WorkspacesListCard(
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(
                             host.macName,
-                            color = Color.White,
+                            color = Foreground,
                             fontSize = 14.sp,
                             fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
                             maxLines = 1,
@@ -2065,7 +2106,7 @@ private fun WorkspacesListCard(
                         )
                         Text(
                             if (active && usingRelay) "via Unpeel Remote" else host.endpoint,
-                            color = Color.White.copy(alpha = 0.55f),
+                            color = Foreground.copy(alpha = 0.55f),
                             fontSize = 12.sp,
                             fontFamily = FontFamily.Monospace,
                             maxLines = 1,
@@ -2082,7 +2123,7 @@ private fun WorkspacesListCard(
                         .clickable { onForget(host) },
                     contentAlignment = Alignment.Center,
                 ) {
-                    MinusCircle(Color.White.copy(alpha = 0.45f))
+                    MinusCircle(Foreground.copy(alpha = 0.45f))
                 }
             }
         }
@@ -2095,9 +2136,75 @@ private fun WorkspacesListCard(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 PlusCircle(Cyan)
-                Text("Add a Workspace", color = Cyan, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Text(t("Add a Workspace"), color = Cyan, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
             }
         }
+    }
+}
+
+@Composable
+private fun PhonePreferenceCard() {
+    val settings = LocalPhoneSettings.current ?: return
+    val tracking = if (phoneSimplifiedChinese()) 0.sp else 0.6.sp
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(SoftCard)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            t("THEME"),
+            color = Foreground.copy(alpha = 0.5f),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = tracking,
+        )
+        ThemeChoice.entries.forEach { choice ->
+            PreferenceChoice(
+                label = when (choice) {
+                    ThemeChoice.System -> t("Follow system")
+                    ThemeChoice.Dark -> t("Dark")
+                    ThemeChoice.Light -> t("Light")
+                },
+                selected = settings.theme == choice,
+                onClick = { settings.chooseTheme(choice) },
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            t("LANGUAGE"),
+            color = Foreground.copy(alpha = 0.5f),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = tracking,
+        )
+        LanguageChoice.entries.forEach { choice ->
+            PreferenceChoice(
+                label = when (choice) {
+                    LanguageChoice.System -> t("Follow system")
+                    LanguageChoice.English -> t("English")
+                    LanguageChoice.SimplifiedChinese -> "简体中文"
+                },
+                selected = settings.language == choice,
+                onClick = { settings.chooseLanguage(choice) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun PreferenceChoice(label: String, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 40.dp)
+            .clickable(onClick = onClick),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, color = Foreground, fontSize = 15.sp, modifier = Modifier.weight(1f))
+        if (selected) Text(t("✓"), color = Accent, fontSize = 16.sp)
     }
 }
 
@@ -2114,25 +2221,31 @@ private fun SecuritySettingsCard(lock: AppLock, onCredential: (Intent) -> Unit) 
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        val tracking = if (phoneSimplifiedChinese()) 0.sp else 0.6.sp
         Text(
-            "SECURITY",
-            color = Color.White.copy(alpha = 0.5f),
+            t("SECURITY"),
+            color = Foreground.copy(alpha = 0.5f),
             fontSize = 11.sp,
             fontWeight = FontWeight.SemiBold,
-            letterSpacing = 0.6.sp,
+            letterSpacing = tracking,
         )
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text("Require ${lock.methodLabel()}", color = Color.White, fontSize = 15.sp)
+                Text(t("Require ${lock.methodLabel()}"), color = Foreground, fontSize = 15.sp)
                 Text(
-                    "Locks Unpeel when you leave the app.",
-                    color = Color.White.copy(alpha = 0.5f),
+                    t("Locks Unpeel when you leave the app."),
+                    color = Foreground.copy(alpha = 0.5f),
                     fontSize = 12.sp,
                 )
             }
             Switch(
                 checked = lock.enabled,
                 enabled = available,
+                colors = SwitchDefaults.colors(
+                    checkedTrackColor = Accent,
+                    checkedThumbColor = Color.White,
+                    checkedBorderColor = Accent,
+                ),
                 onCheckedChange = { armed ->
                     if (activity == null) return@Switch
                     if (armed) lock.arm(activity)?.let(onCredential) else lock.disarm()
@@ -2141,13 +2254,13 @@ private fun SecuritySettingsCard(lock: AppLock, onCredential: (Intent) -> Unit) 
         }
         if (!available) {
             Text(
-                "Set a device screen lock (and enroll biometrics) in system Settings to use the app lock.",
-                color = Color.White.copy(alpha = 0.5f),
+                t("Set a device screen lock (and enroll biometrics) in system Settings to use the app lock."),
+                color = Foreground.copy(alpha = 0.5f),
                 fontSize = 12.sp,
             )
         }
         lock.lastError?.let {
-            Text(it, color = Danger, fontSize = 12.sp)
+            Text(t(it), color = Danger, fontSize = 12.sp)
         }
     }
 }
@@ -2246,15 +2359,15 @@ private fun ActivitySheet(controller: Controller, onDismiss: () -> Unit, onSelec
         ) {
             if (blocked.isEmpty() && active.isEmpty() && recent.isEmpty()) {
                 Text(
-                    "No active sessions",
-                    color = Color.White.copy(alpha = 0.62f),
+                    t("No active sessions"),
+                    color = Foreground.copy(alpha = 0.62f),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
                     modifier = Modifier.padding(18.dp),
                 )
             } else {
                 if (blocked.isNotEmpty()) {
-                    ActivityPanelSectionTitle("Blocked")
+                    ActivityPanelSectionTitle(t("Blocked"))
                     blocked.forEach { session ->
                         ActivityPanelRow(
                             session = session,
@@ -2267,7 +2380,7 @@ private fun ActivitySheet(controller: Controller, onDismiss: () -> Unit, onSelec
                 }
                 if (active.isNotEmpty()) {
                     if (blocked.isNotEmpty()) ActivityPanelDivider()
-                    ActivityPanelSectionTitle("Active")
+                    ActivityPanelSectionTitle(t("Active"))
                     active.forEach { session ->
                         ActivityPanelRow(
                             session = session,
@@ -2280,7 +2393,7 @@ private fun ActivitySheet(controller: Controller, onDismiss: () -> Unit, onSelec
                 }
                 if (recent.isNotEmpty()) {
                     if (blocked.isNotEmpty() || active.isNotEmpty()) ActivityPanelDivider()
-                    ActivityPanelSectionTitle("Recent")
+                    ActivityPanelSectionTitle(t("Recent"))
                     recent.forEach { session ->
                         ActivityPanelRow(
                             session = session,
@@ -2301,7 +2414,7 @@ private fun ActivitySheet(controller: Controller, onDismiss: () -> Unit, onSelec
 private fun ActivityPanelSectionTitle(title: String) {
     Text(
         title.uppercase(),
-        color = Color.White.copy(alpha = 0.46f),
+        color = Foreground.copy(alpha = 0.46f),
         fontSize = 11.sp,
         fontWeight = FontWeight.SemiBold,
         modifier = Modifier.padding(start = 8.dp, top = 3.dp, end = 8.dp, bottom = 6.dp),
@@ -2315,7 +2428,7 @@ private fun ActivityPanelDivider() {
             .fillMaxWidth()
             .padding(vertical = 8.dp)
             .height(1.dp)
-            .background(Color.White.copy(alpha = 0.10f)),
+            .background(Hairline),
     )
 }
 
@@ -2329,16 +2442,16 @@ private fun ActivityPanelRow(
 ) {
     val context = projectName?.takeIf { it.isNotEmpty() }
         ?: session.presentationProviderID()
-        ?: "Terminal"
+        ?: t("Terminal")
     val subtitle = listOfNotNull(context, session.worktreeBranch).joinToString("  ")
     val trailing = when {
-        blocked -> "Blocked"
-        working -> "run"
+        blocked -> t("Blocked")
+        working -> t("run")
         else -> relativeAge(session.updatedAtUnixMs)
     }
     val trailingColor = when {
         blocked -> Attention
-        else -> Color.White.copy(alpha = 0.42f)
+        else -> Foreground.copy(alpha = 0.42f)
     }
     Row(
         Modifier
@@ -2361,7 +2474,7 @@ private fun ActivityPanelRow(
         Column(Modifier.weight(1f)) {
             Text(
                 session.title,
-                color = Color.White.copy(alpha = 0.90f),
+                color = Foreground.copy(alpha = 0.90f),
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium,
                 maxLines = 1,
@@ -2369,7 +2482,7 @@ private fun ActivityPanelRow(
             )
             Text(
                 subtitle,
-                color = Color.White.copy(alpha = 0.48f),
+                color = Foreground.copy(alpha = 0.48f),
                 fontSize = 11.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -2378,7 +2491,7 @@ private fun ActivityPanelRow(
         Spacer(Modifier.width(6.dp))
         if (trailing.isNotEmpty()) {
             Text(
-                trailing,
+                t(trailing),
                 color = trailingColor,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Medium,
@@ -2400,39 +2513,6 @@ private fun ActivityPanelRow(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun GallerySheet(controller: Controller, onPickFile: () -> Unit, onDismiss: () -> Unit) {
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Panel) {
-        Column(Modifier.padding(horizontal = 16.dp).verticalScroll(rememberScrollState())) {
-            Text("Screenshots & library", color = Foreground, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-            TextButton(onClick = controller::requestScreenshot) { Text("Capture now", color = Foreground) }
-            TextButton(onClick = {
-                onPickFile()
-                onDismiss()
-            }) { Text("Attach a file", color = Foreground) }
-            if (controller.artifacts.isEmpty()) Text("No screenshots yet.", color = Muted, fontSize = 13.sp)
-            controller.artifacts.forEach { artifact ->
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(
-                        onClick = { controller.openArtifact(artifact.kind, artifact.name) },
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text("${artifact.kind}  ${artifact.name}", color = Foreground, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                    if (canPasteArtifact(artifact.kind, artifact.name)) {
-                        TextButton(onClick = {
-                            controller.pasteArtifact(artifact.kind, artifact.name)
-                            onDismiss()
-                        }) { Text("Paste", color = Foreground) }
-                    }
-                }
-            }
-            Spacer(Modifier.height(20.dp))
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
 private fun OrganizeSheet(controller: Controller, session: SessionSummary, onDismiss: () -> Unit, onRemove: () -> Unit) {
     var title by remember(session.id) { mutableStateOf(session.title) }
     var notify by remember(session.id, session.notifyWhenDone) { mutableStateOf(session.notifyWhenDone) }
@@ -2444,14 +2524,14 @@ private fun OrganizeSheet(controller: Controller, session: SessionSummary, onDis
     val showTranscript = AgentCatalog.supportsTranscript(session.providerID, session.command)
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Sheet) {
         Column(Modifier.padding(horizontal = 18.dp).verticalScroll(rememberScrollState())) {
-            Text("Edit session", color = Foreground, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+            Text(t("Edit session"), color = Foreground, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(10.dp))
             OutlinedTextField(value = title, onValueChange = { title = it }, singleLine = true, modifier = Modifier.fillMaxWidth())
             if (showNotify) {
                 Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text("Notify when done", color = Foreground, fontSize = 15.sp)
-                        Text("Alert you when this turn finishes", color = Muted, fontSize = 12.sp)
+                        Text(t("Notify when done"), color = Foreground, fontSize = 15.sp)
+                        Text(t("Alert you when this turn finishes"), color = Muted, fontSize = 12.sp)
                     }
                     Switch(checked = notify, onCheckedChange = { notify = it })
                 }
@@ -2471,15 +2551,15 @@ private fun OrganizeSheet(controller: Controller, session: SessionSummary, onDis
                         }
                     },
                     enabled = title.isNotBlank(),
-                ) { Text("Save") }
+                ) { Text(t("Save")) }
                 TextButton(onClick = { controller.organize(session.id, pinned = !session.pinned) }) {
                     Text(if (session.pinned) "Unpin" else "Pin")
                 }
             }
             if (showTranscript) {
-                Text("Copy transcript", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
+                Text(t("Copy transcript"), color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
                 Row {
-                    listOf(20 to "Last 20", 50 to "Last 50", 0 to "All").forEach { (entries, label) ->
+                    listOf(20 to t("Last 20"), 50 to t("Last 50"), 0 to t("All")).forEach { (entries, label) ->
                         TextButton(onClick = {
                             controller.copyTranscript(session.id, entries) { markdown, failure ->
                                 if (markdown != null) {
@@ -2498,19 +2578,19 @@ private fun OrganizeSheet(controller: Controller, session: SessionSummary, onDis
                 ResumeOffer.Agent -> TextButton(onClick = {
                     controller.sessionAction(session.id, "resume_agent")
                     onDismiss()
-                }) { Text("Resume agent") }
+                }) { Text(t("Resume agent")) }
                 ResumeOffer.Session -> TextButton(onClick = {
                     controller.sessionAction(session.id, "restart")
                     onDismiss()
-                }) { Text("Resume") }
+                }) { Text(t("Resume")) }
                 ResumeOffer.None -> Unit
             }
             if (canStopSession(session)) {
-                TextButton(onClick = { confirmStop = true }) { Text("Stop") }
+                TextButton(onClick = { confirmStop = true }) { Text(t("Stop")) }
             }
-            TextButton(onClick = onRemove) { Text(if (session.status == "running") "Remove session" else "Remove from list", color = Danger) }
-            note?.let { Text(it, color = if (it.startsWith("Copied")) Muted else Danger, fontSize = 12.sp) }
-            Text(organizeHint(session, offer), color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp, bottom = 18.dp))
+            TextButton(onClick = onRemove) { Text(if (session.status == "running") t("Remove session") else t("Remove from list"), color = Danger) }
+            note?.let { Text(t(it), color = if (it.startsWith("Copied")) Muted else Danger, fontSize = 12.sp) }
+            Text(t(organizeHint(session, offer)), color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp, bottom = 18.dp))
         }
     }
     if (confirmStop) {
@@ -2521,11 +2601,11 @@ private fun OrganizeSheet(controller: Controller, session: SessionSummary, onDis
                     confirmStop = false
                     controller.sessionAction(session.id, "stop")
                     onDismiss()
-                }) { Text("Stop") }
+                }) { Text(t("Stop")) }
             },
-            dismissButton = { TextButton(onClick = { confirmStop = false }) { Text("Cancel") } },
-            title = { Text("Stop this session") },
-            text = { Text("The process stops. The session stays in the list so you can resume later.") },
+            dismissButton = { TextButton(onClick = { confirmStop = false }) { Text(t("Cancel")) } },
+            title = { Text(t("Stop this session")) },
+            text = { Text(t("The process stops. The session stays in the list so you can resume later.")) },
             containerColor = Sheet,
         )
     }
@@ -2542,59 +2622,132 @@ private fun ProjectOrganizeSheet(controller: Controller, project: ProjectSummary
     val canRename = canEdit && project.isGroup
     val canColor = canEdit && !project.isGroup && project.parentProjectID == null
     val colors = listOf(null, "sky", "blue", "violet", "rose", "amber", "moss", "teal", "graphite")
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Sheet) {
+    val saveEnabled = canEdit && (!canRename || name.isNotBlank())
+    val barButtonColors = ButtonDefaults.textButtonColors(
+        contentColor = Accent,
+        disabledContentColor = Muted,
+    )
+    fun save() {
+        if (!saveEnabled) return
+        val trimmed = name.trim()
+        val namePatch = trimmed.takeIf { canRename && it.isNotEmpty() && it != project.name }
+        val colorPatch = when {
+            !canColor || colorID == project.colorID -> null
+            else -> colorID ?: ""
+        }
+        val sortPatch = dateSorted.takeIf { it != (project.dateSorted == true) }
+        if (namePatch == null && colorPatch == null && sortPatch == null) {
+            onDismiss()
+            return
+        }
+        controller.saveProject(project.id, namePatch, colorPatch, sortPatch) { failure ->
+            if (failure == null) onDismiss() else note = failure
+        }
+    }
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = HeaderInk) {
         Column(Modifier.padding(horizontal = 18.dp).verticalScroll(rememberScrollState())) {
-            Text(if (project.isGroup) "Edit group" else "Edit folder", color = Foreground, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                TextButton(
+                    onClick = onDismiss,
+                    contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp),
+                    colors = barButtonColors,
+                ) { Text(t("Cancel"), fontSize = 17.sp) }
+                Text(
+                    if (project.isGroup) t("Edit group") else t("Edit folder"),
+                    color = Foreground,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.weight(1f),
+                )
+                if (canEdit) {
+                    TextButton(
+                        onClick = ::save,
+                        enabled = saveEnabled,
+                        contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp),
+                        colors = barButtonColors,
+                    ) { Text(t("Save"), fontSize = 17.sp, fontWeight = FontWeight.SemiBold) }
+                }
+            }
             Spacer(Modifier.height(10.dp))
             if (!canEdit) {
-                Text("Update Unpeel on the Mac first to organize folders from the phone.", color = Muted, fontSize = 14.sp)
+                Text(t("Update Unpeel on the Mac first to organize folders from the phone."), color = Muted, fontSize = 14.sp)
             }
             if (canRename) {
-                OutlinedTextField(value = name, onValueChange = { name = it }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Text(t("Folder name"), color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp, bottom = 6.dp))
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Color.Transparent,
+                        unfocusedBorderColor = Color.Transparent,
+                        focusedContainerColor = Canvas,
+                        unfocusedContainerColor = Canvas,
+                        cursorColor = Accent,
+                        focusedTextColor = Foreground,
+                        unfocusedTextColor = Foreground,
+                    ),
+                )
             }
             if (canEdit) {
-                Text("Session order", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
-                Row {
-                    TextButton(onClick = { dateSorted = false }) { Text(if (!dateSorted) "Custom order ✓" else "Custom order") }
-                    TextButton(onClick = { dateSorted = true }) { Text(if (dateSorted) "By date ✓" else "By date") }
+                Text(t("Sort sessions"), color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 14.dp, bottom = 6.dp))
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Canvas),
+                ) {
+                    listOf(false to t("Custom order"), true to t("Date (newest first)")).forEach { (value, label) ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { dateSorted = value }
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(label, color = Foreground, fontSize = 17.sp, modifier = Modifier.weight(1f))
+                            if (dateSorted == value) Text(t("✓"), color = Accent, fontSize = 17.sp)
+                        }
+                    }
                 }
             }
             if (canColor) {
-                Text("Color", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp, bottom = 6.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                Text(t("Folder color"), color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 14.dp, bottom = 6.dp))
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Canvas)
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 12.dp, vertical = 12.dp),
+                ) {
                     colors.forEach { id ->
-                        val fill = folderColorArgb(id)?.let { Color(it) }
+                        val fill = folderSwatch(id)
                         val selected = colorID == id
                         Box(
                             Modifier
                                 .size(28.dp)
                                 .clip(CircleShape)
                                 .background(fill ?: Color.Transparent)
-                                .border(2.dp, if (selected) Foreground else Hairline, CircleShape)
+                                .border(
+                                    if (selected) 2.dp else 1.5.dp,
+                                    when {
+                                        selected -> Accent
+                                        fill == null -> Muted
+                                        else -> Color.Transparent
+                                    },
+                                    CircleShape,
+                                )
                                 .clickable { colorID = id },
                         )
                     }
                 }
             }
-            if (canEdit) {
-                TextButton(onClick = {
-                    val trimmed = name.trim()
-                    val namePatch = trimmed.takeIf { canRename && it.isNotEmpty() && it != project.name }
-                    val colorPatch = when {
-                        !canColor || colorID == project.colorID -> null
-                        else -> colorID ?: ""
-                    }
-                    val sortPatch = dateSorted.takeIf { it != (project.dateSorted == true) }
-                    if (namePatch == null && colorPatch == null && sortPatch == null) {
-                        onDismiss()
-                        return@TextButton
-                    }
-                    controller.saveProject(project.id, namePatch, colorPatch, sortPatch) { failure ->
-                        if (failure == null) onDismiss() else note = failure
-                    }
-                }, enabled = !canRename || name.isNotBlank()) { Text("Save") }
-            }
-            note?.let { Text(it, color = Danger, fontSize = 12.sp) }
+            note?.let { Text(t(it), color = Danger, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp)) }
             Spacer(Modifier.height(18.dp))
         }
     }
@@ -2606,7 +2759,7 @@ private fun PresetSheet(controller: Controller, project: ProjectSummary, onDismi
     val presets = controller.snapshot?.presets?.filter { it.enabled }.orEmpty()
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Sheet) {
         Column(Modifier.padding(horizontal = 12.dp)) {
-            Text("New session", color = Foreground, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 8.dp))
+            Text(t("New session"), color = Foreground, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 8.dp))
             Text(project.name, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
             presets.forEach { preset ->
                 Row(
@@ -2629,7 +2782,7 @@ private fun PresetSheet(controller: Controller, project: ProjectSummary, onDismi
                     }
                 }
             }
-            if (presets.isEmpty()) Text("This Host has no presets available.", color = Muted, modifier = Modifier.padding(12.dp))
+            if (presets.isEmpty()) Text(t("This Host has no presets available."), color = Muted, modifier = Modifier.padding(12.dp))
             Spacer(Modifier.height(20.dp))
         }
     }
@@ -2658,6 +2811,7 @@ private fun PairScreen(
         PairFields(controller, context)
         PairingErrorLine(controller.error)
         if (firstRun && lock != null && onCredential != null) {
+            PhonePreferenceCard()
             SecuritySettingsCard(lock, onCredential)
         }
     }
@@ -2715,8 +2869,8 @@ private fun PairFields(controller: Controller, context: android.content.Context)
         if (scannerSupported) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
-                    "Scan the pairing code",
-                    color = Color.White.copy(alpha = 0.85f),
+                    t("Scan the pairing code"),
+                    color = Foreground.copy(alpha = 0.85f),
                     fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,
                 )
@@ -2740,7 +2894,7 @@ private fun PairFields(controller: Controller, context: android.content.Context)
                         }
                     } else {
                         Text(
-                            "Camera permission is required to scan a pairing code",
+                            t("Camera permission is required to scan a pairing code"),
                             color = Color.White.copy(alpha = 0.7f),
                             fontSize = 14.sp,
                             textAlign = TextAlign.Center,
@@ -2758,8 +2912,8 @@ private fun PairFields(controller: Controller, context: android.content.Context)
         }
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(
-                "Or paste the pairing code",
-                color = Color.White.copy(alpha = 0.85f),
+                t("Or paste the pairing code"),
+                color = Foreground.copy(alpha = 0.85f),
                 fontSize = 14.sp,
                 fontWeight = FontWeight.SemiBold,
             )
@@ -2768,7 +2922,7 @@ private fun PairFields(controller: Controller, context: android.content.Context)
                 onValueChange = { code = it },
                 modifier = Modifier.fillMaxWidth(),
                 placeholder = {
-                    Text("Pairing code", color = Color.White.copy(alpha = 0.35f), fontSize = 12.sp)
+                    Text(t("Pairing code"), color = Foreground.copy(alpha = 0.35f), fontSize = 12.sp)
                 },
                 minLines = 3,
                 maxLines = 5,
@@ -2806,7 +2960,7 @@ private fun PairFields(controller: Controller, context: android.content.Context)
                         modifier = Modifier.size(18.dp),
                     )
                 } else {
-                    Text("Connect", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    Text(t("Connect"), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
         }
@@ -2839,7 +2993,7 @@ private fun TerminalTopBar(
     val indicator = when {
         hasBlockers -> Attention
         spinning -> spinnerColor
-        else -> Color.White
+        else -> Foreground
     }
     // Same paddings as iOS TerminalTopBar (12 / top 10 / bottom 8); 44dp controls.
     Box(
@@ -2855,7 +3009,7 @@ private fun TerminalTopBar(
         ) {
             Text(
                 session.title,
-                color = Color.White,
+                color = Foreground,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
@@ -2869,7 +3023,7 @@ private fun TerminalTopBar(
                     if (!contextLabel.isNullOrEmpty()) {
                         Text(
                             contextLabel,
-                            color = Color.White.copy(alpha = 0.55f),
+                            color = Foreground.copy(alpha = 0.55f),
                             fontSize = 11.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -2878,11 +3032,11 @@ private fun TerminalTopBar(
                     }
                     if (!branch.isNullOrEmpty()) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            BranchMark(9.dp, Color.White.copy(alpha = 0.55f))
+                            BranchMark(9.dp, Foreground.copy(alpha = 0.55f))
                             Spacer(Modifier.width(2.dp))
                             Text(
                                 branch,
-                                color = Color.White.copy(alpha = 0.55f),
+                                color = Foreground.copy(alpha = 0.55f),
                                 fontSize = 11.sp,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
@@ -2899,7 +3053,7 @@ private fun TerminalTopBar(
         ) {
             GlassButton(onClick = onSessions) {
                 if (!SvgIcon("sidebar-toggle", 18.dp, tint = Foreground)) {
-                    Text("≡", color = Foreground, fontSize = 18.sp)
+                    Text(t("≡"), color = Foreground, fontSize = 18.sp)
                 }
             }
             Spacer(Modifier.weight(1f))
@@ -2920,7 +3074,7 @@ private fun TerminalTopBar(
                                     tint = if (galleryPulse) Attention else Foreground,
                                 )
                             ) {
-                                Text("▣", color = if (galleryPulse) Attention else Foreground, fontSize = 16.sp)
+                                Text(t("▣"), color = if (galleryPulse) Attention else Foreground, fontSize = 16.sp)
                             }
                         }
                     }
@@ -2930,7 +3084,7 @@ private fun TerminalTopBar(
                         if (spinning) {
                             BrailleSpinner(indicator)
                         } else if (!SvgIcon("bell", 17.dp, tint = indicator)) {
-                            Text("🔔", fontSize = 14.sp)
+                            Text(t("🔔"), fontSize = 14.sp)
                         }
                     }
                     if (hasBlockers) {
@@ -2962,6 +3116,8 @@ private fun SessionSummary.presentationProviderID(): String? {
  * iOS `IOSSidebarTheme.toolSpinnerColor`: Host `spinnerColorHex` first, else
  * runtime-catalog tint by provider/command (Claude terracotta, Codex purple…).
  */
+@Composable
+@ReadOnlyComposable
 private fun toolSpinnerColor(session: SessionSummary): Color {
     session.spinnerColorHex?.let { return rgb(it) }
     val keys = listOfNotNull(
@@ -3006,18 +3162,26 @@ private val SpinnerTints: Map<String, Long> = mapOf(
 
 @Composable
 private fun GlassButton(onClick: () -> Unit, content: @Composable () -> Unit) {
-    // iOS `.ultraThinMaterial` circle on near-black chrome samples ~#151516 —
-    // a soft lift, not a bright frost disc. Black base + thin white wash.
-    val fill = Brush.verticalGradient(
-        listOf(Color.White.copy(alpha = 0.10f), Color.White.copy(alpha = 0.03f)),
-    )
+    // Dark keeps the near-black disc (white wash on black @ 0.42). Light uses
+    // Mac hoverRow, because that disc would hide Foreground ink on white.
+    val night = phoneNight()
     Box(
         Modifier
             .size(44.dp)
             .clip(CircleShape)
-            .background(Color.Black.copy(alpha = 0.42f))
-            .background(fill)
-            .border(1.dp, Color.White.copy(alpha = 0.10f), CircleShape)
+            .background(if (night) Color.Black.copy(alpha = 0.42f) else Hover)
+            .then(
+                if (night) {
+                    Modifier.background(
+                        Brush.verticalGradient(
+                            listOf(Color.White.copy(alpha = 0.10f), Color.White.copy(alpha = 0.03f)),
+                        ),
+                    )
+                } else {
+                    Modifier
+                },
+            )
+            .border(1.dp, if (night) Color.White.copy(alpha = 0.10f) else Hairline, CircleShape)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) { content() }
@@ -3040,6 +3204,42 @@ private fun sendTerminalKey(controller: Controller, name: String, ctrl: Boolean)
     if (data.isNotEmpty()) controller.sendRaw(data)
 }
 
+/** iOS accessory `attach-image`: the photo glyph, not a text key. */
+@Composable
+private fun AttachImageKey(onClick: () -> Unit) {
+    val click = rememberUpdatedState(onClick)
+    Box(
+        Modifier
+            .size(36.dp)
+            .clip(CircleShape)
+            .background(KeyFill)
+            .pointerInput(Unit) { detectTapGestures(onTap = { click.value() }) },
+        contentAlignment = Alignment.Center,
+    ) {
+        PhotoMark(Foreground.copy(alpha = 0.92f))
+    }
+}
+
+@Composable
+private fun PhotoMark(tint: Color) {
+    Canvas(Modifier.size(16.dp)) {
+        val stroke = Stroke(width = 1.3.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+        val w = size.width
+        val h = size.height
+        drawRoundRect(
+            tint,
+            topLeft = Offset(w * 0.08f, h * 0.16f),
+            size = androidx.compose.ui.geometry.Size(w * 0.84f, h * 0.68f),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(1.5.dp.toPx()),
+            style = stroke,
+        )
+        drawCircle(tint, radius = w * 0.07f, center = Offset(w * 0.32f, h * 0.36f))
+        drawLine(tint, Offset(w * 0.16f, h * 0.72f), Offset(w * 0.40f, h * 0.50f), strokeWidth = stroke.width, cap = StrokeCap.Round)
+        drawLine(tint, Offset(w * 0.40f, h * 0.50f), Offset(w * 0.58f, h * 0.64f), strokeWidth = stroke.width, cap = StrokeCap.Round)
+        drawLine(tint, Offset(w * 0.58f, h * 0.64f), Offset(w * 0.84f, h * 0.42f), strokeWidth = stroke.width, cap = StrokeCap.Round)
+    }
+}
+
 @Composable
 private fun TerminalKey(label: String, textSize: Int = 14, armed: Boolean = false, onClick: () -> Unit) {
     val shape = if (label.length <= 1) CircleShape else RoundedCornerShape(percent = 50)
@@ -3049,7 +3249,7 @@ private fun TerminalKey(label: String, textSize: Int = 14, armed: Boolean = fals
             .height(36.dp)
             .widthIn(min = 36.dp)
             .clip(shape)
-            .background(if (armed) Color(0xFF32ADE6) else Color.White.copy(alpha = 0.10f))
+            .background(if (armed) Cyan else KeyFill)
             // A clickable key would take focus and dismiss the IME.
             .pointerInput(Unit) { detectTapGestures(onTap = { click.value() }) }
             .padding(horizontal = if (label.length > 1) 10.dp else 0.dp),
@@ -3057,7 +3257,7 @@ private fun TerminalKey(label: String, textSize: Int = 14, armed: Boolean = fals
     ) {
         Text(
             label,
-            color = if (armed) Color.Black else Color.White.copy(alpha = 0.92f),
+            color = if (armed) Color.Black else Foreground.copy(alpha = 0.92f),
             fontSize = textSize.sp,
             fontWeight = FontWeight.SemiBold,
             fontFamily = if (label.length == 1) FontFamily.Monospace else FontFamily.Default,
@@ -3142,15 +3342,15 @@ private fun AppLockCover(lock: AppLock, onUnlock: () -> Unit) {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("Locked", color = Foreground, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+        Text(t("Locked"), color = Foreground, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(8.dp))
-        Text("Authenticate to keep viewing sessions", color = Muted, fontSize = 14.sp)
+        Text(t("Authenticate to keep viewing sessions"), color = Muted, fontSize = 14.sp)
         lock.lastError?.let {
             Spacer(Modifier.height(8.dp))
-            Text(it, color = Danger, fontSize = 13.sp)
+            Text(t(it), color = Danger, fontSize = 13.sp)
         }
         Spacer(Modifier.height(18.dp))
-        Button(onClick = onUnlock, enabled = !lock.authInFlight) { Text(if (lock.authInFlight) "Verifying…" else "Unlock") }
+        Button(onClick = onUnlock, enabled = !lock.authInFlight) { Text(if (lock.authInFlight) t("Verifying…") else t("Unlock")) }
     }
 }
 
@@ -3189,7 +3389,7 @@ private fun ExitedRestartBar(
         )
         Spacer(Modifier.width(12.dp))
         Text(
-            status,
+            t(status),
             color = Color.White.copy(alpha = 0.85f),
             fontSize = 14.sp,
             fontWeight = FontWeight.Medium,
@@ -3213,9 +3413,9 @@ private fun ExitedRestartBar(
                     modifier = Modifier.size(14.dp),
                 )
             } else {
-                Text("↻", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Text(t("↻"), color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
             }
-            Text("Resume", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            Text(t("Resume"), color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }
@@ -3229,7 +3429,7 @@ private fun FolderHeader(
     attention: Boolean,
     onToggle: () -> Unit,
 ) {
-    val tint = folderColorArgb(colorID)?.let { Color(it) } ?: Muted
+    val tint = folderSwatch(colorID) ?: Muted
     Row(
         Modifier.fillMaxWidth().heightIn(min = 30.dp).clickable(onClick = onToggle).padding(start = 6.dp, end = 9.dp, top = 8.dp, bottom = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -3253,13 +3453,14 @@ private fun SidebarFeedbackFooter() {
     val context = LocalContext.current
     // iOS: padding.bottom = max(safeBottom, 12) — not navBars + 12.
     val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    val hairline = Hairline
     Row(
         Modifier
             .fillMaxWidth()
             .drawWithContent {
                 drawContent()
                 drawLine(
-                    Color.White.copy(alpha = 0.08f),
+                    hairline,
                     start = Offset.Zero,
                     end = Offset(size.width, 0f),
                     strokeWidth = 1.dp.toPx(),
@@ -3273,7 +3474,7 @@ private fun SidebarFeedbackFooter() {
     ) {
         FeedbackMark(Muted)
         Spacer(Modifier.width(8.dp))
-        Text("Feedback & bugs", color = Muted, fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+        Text(t("Feedback & bugs"), color = Muted, fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
         ExternalArrow(Muted.copy(alpha = 0.7f))
     }
 }
@@ -3289,9 +3490,9 @@ private fun SidebarDisconnected(connection: String) {
     ) {
         Text(
             when {
-                unpaired -> "Unpaired"
-                connecting -> "Connecting…"
-                else -> "Connection lost"
+                unpaired -> t("Unpaired")
+                connecting -> t("Connecting…")
+                else -> t("Connection lost")
             },
             color = Foreground,
             fontSize = 14.sp,
@@ -3299,9 +3500,9 @@ private fun SidebarDisconnected(connection: String) {
         )
         Text(
             when {
-                unpaired -> "Pair a Mac first — sessions will show up here."
-                connecting -> "Connecting to this Mac."
-                else -> "Reconnecting automatically. Your sessions will reappear once your Mac is reachable."
+                unpaired -> t("Pair a Mac first — sessions will show up here.")
+                connecting -> t("Connecting to this Mac.")
+                else -> t("Reconnecting automatically. Your sessions will reappear once your Mac is reachable.")
             },
             color = Muted,
             fontSize = 12.sp,
@@ -3313,31 +3514,45 @@ private fun SidebarDisconnected(connection: String) {
     }
 }
 
-/** iOS `SidebarListFadeMask`: fixed 16pt top + 34pt bottom bands. */
-private fun Modifier.sidebarListFade(): Modifier = drawWithContent {
-    drawContent()
-    val top = 16.dp.toPx()
-    val bottom = 34.dp.toPx()
-    val h = size.height.coerceAtLeast(1f)
-    drawRect(
-        brush = Brush.verticalGradient(
-            colorStops = arrayOf(
-                0f to Color.Transparent,
-                (top * 0.5f / h).coerceIn(0f, 1f) to Color.Black.copy(alpha = 0.5f),
-                (top / h).coerceIn(0f, 1f) to Color.Black,
-                ((h - bottom) / h).coerceIn(0f, 1f) to Color.Black,
-                ((h - bottom * 0.52f) / h).coerceIn(0f, 1f) to Color.Black.copy(alpha = 0.65f),
-                1f to Color.Transparent,
-            ),
-        ),
-        blendMode = BlendMode.DstIn,
-    )
-}
+/**
+ * Mac `SidebarListFadeMask`. Black is the mask (keep the row), clear drops
+ * it. The offscreen layer keeps that mask off the window, so the fade is
+ * the sidebar surface already behind the list: light `#FFFFFF`, dark
+ * `#1A1B1D` over `#121314` (`MacChrome.surface` / `appBackground`).
+ */
+private fun Modifier.sidebarListFade(): Modifier =
+    graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+        .drawWithContent {
+            drawContent()
+            val top = 16.dp.toPx()
+            val bottom = 34.dp.toPx()
+            val h = size.height.coerceAtLeast(1f)
+            drawRect(
+                brush = Brush.verticalGradient(
+                    colorStops = arrayOf(
+                        0f to Color.Transparent,
+                        (top * 0.5f / h).coerceIn(0f, 1f) to Color.Black.copy(alpha = 0.5f),
+                        (top / h).coerceIn(0f, 1f) to Color.Black,
+                        ((h - bottom) / h).coerceIn(0f, 1f) to Color.Black,
+                        ((h - bottom * 0.52f) / h).coerceIn(0f, 1f) to Color.Black.copy(alpha = 0.65f),
+                        1f to Color.Transparent,
+                    ),
+                ),
+                blendMode = BlendMode.DstIn,
+            )
+        }
 
+@Composable
+@ReadOnlyComposable
 private fun selectedRowTint(hue: Double?): Color {
     if (hue == null || hue.isNaN()) return ActiveRow
     val wrapped = ((hue % 360.0) + 360.0) % 360.0
-    return Color.hsv(wrapped.toFloat(), 0.55f, 0.52f, 0.30f)
+    // Theme.activeRowGlassTint at full strength.
+    return if (phoneNight()) {
+        Color.hsv(wrapped.toFloat(), 0.55f, 0.52f, 0.30f)
+    } else {
+        Color.hsv(wrapped.toFloat(), 0.22f, 0.98f, 1f)
+    }
 }
 
 @Composable
@@ -3353,7 +3568,7 @@ private fun WorkspaceTintDot(hue: Double?, size: Dp = 9.dp) {
             .size(size)
             .clip(CircleShape)
             .background(fill)
-            .border(0.5.dp, Color.White.copy(alpha = 0.18f), CircleShape),
+            .border(0.5.dp, Foreground.copy(alpha = 0.18f), CircleShape),
     )
 }
 
@@ -3462,9 +3677,13 @@ private fun ExternalArrow(tint: Color) {
     }
 }
 
-/** Session/page chrome — iOS header after material (~#0A0A0C), Host-tint washed. */
-private fun hostChrome(hue: Double?): Color =
-    if (hue == null) HeaderInk else Color(hostTintedArgb(0x0A0A0C, hue))
+/** Session/page chrome — Mac `appBackground`, Host-tint washed. */
+@Composable
+@ReadOnlyComposable
+private fun hostChrome(hue: Double?): Color {
+    val base = MacChrome.appBackground(phoneNight()) and 0xFFFFFF
+    return if (hue == null) Color(0xFF000000.toInt() or base) else Color(hostTintedArgb(base, hue))
+}
 
 /**
  * Mac `Theme.appTinted` / iOS `TerminalChrome.hostTinted`: keep the base

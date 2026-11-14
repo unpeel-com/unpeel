@@ -332,13 +332,19 @@ class VtEmulator(
             }
             State.DCS_ESC -> state = State.GROUND // ESC \ (ST) or any final
             State.CSI_PARAM -> when (b) {
-                '?'.code -> if (csiParamCount == 0 && csiParams[0] == 0) csiPrivate = true
+                // ECMA-48 parameter bytes 0x3C–0x3F. A leading one marks a
+                // private sequence (DEC ? modes, kitty CSI < u / CSI > n u,
+                // modifyOtherKeys CSI > 4 ; 2 m). The tail must not be printed:
+                // dropping only the marker left "u5u4;2m" on the input line.
+                '?'.code, '>'.code, '<'.code, '='.code -> {
+                    if (csiParamCount == 0 && csiParams[0] == 0) csiPrivate = true
+                }
                 in '0'.code..'9'.code -> {
                     if (csiParamCount == 0) csiParamCount = 1
                     val idx = (csiParamCount - 1).coerceAtMost(csiParams.lastIndex)
                     csiParams[idx] = csiParams[idx] * 10 + (b - '0'.code)
                 }
-                ';'.code -> {
+                ';'.code, ':'.code -> {
                     if (csiParamCount < csiParams.size) {
                         if (csiParamCount == 0) csiParamCount = 1
                         csiParams[csiParamCount] = 0
@@ -350,6 +356,7 @@ class VtEmulator(
                     execCsi(b.toChar())
                     state = State.GROUND
                 }
+                0x1b -> state = State.ESCAPE
                 else -> state = State.GROUND
             }
             State.OSC -> when (b) {

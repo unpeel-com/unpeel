@@ -1,10 +1,14 @@
 package com.unpeel.android
 
+import android.content.ContentResolver
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
+import android.media.ExifInterface
+import android.net.Uri
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -43,7 +47,9 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
+import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 internal sealed class LoadedAttachment {
     class Image(val bitmap: Bitmap) : LoadedAttachment()
@@ -101,6 +107,82 @@ internal fun decodeUploadBitmap(source: InputStream): Bitmap? {
     while (longEdge / sample > 1600) sample *= 2
     val opts = BitmapFactory.Options().apply { inSampleSize = sample }
     return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+}
+
+/**
+ * iOS accessory `compressedJPEG`: longest edge 2048, JPEG quality 0.85.
+ * EXIF orientation is baked in, the same way `UIImage.draw` does.
+ */
+internal fun photoAttachJpeg(
+    resolver: ContentResolver,
+    uri: Uri,
+    maxEdge: Int = 2048,
+    quality: Int = 85,
+): ByteArray? {
+    val bytes = try {
+        resolver.openInputStream(uri)?.use { readBounded(it, 40 * 1024 * 1024) }
+            ?: return null
+    } catch (_: Exception) {
+        return null
+    }
+    if (bytes.isEmpty()) return null
+    val orientation = runCatching {
+        ExifInterface(java.io.ByteArrayInputStream(bytes)).getAttributeInt(
+            ExifInterface.TAG_ORIENTATION,
+            ExifInterface.ORIENTATION_NORMAL,
+        )
+    }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+    val decoded = decodeForPhotoAttach(bytes, maxEdge) ?: return null
+    val oriented = applyExifOrientation(decoded, orientation)
+    val largest = max(oriented.width, oriented.height)
+    val output = if (largest > maxEdge) {
+        val scale = maxEdge.toFloat() / largest
+        Bitmap.createScaledBitmap(
+            oriented,
+            (oriented.width * scale).roundToInt().coerceAtLeast(1),
+            (oriented.height * scale).roundToInt().coerceAtLeast(1),
+            true,
+        )
+    } else {
+        oriented
+    }
+    val jpeg = output.jpeg(quality)
+    if (output !== oriented) output.recycle()
+    if (oriented !== decoded) oriented.recycle()
+    decoded.recycle()
+    return jpeg
+}
+
+private fun decodeForPhotoAttach(bytes: ByteArray, maxEdge: Int): Bitmap? {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+    var sample = 1
+    val longEdge = max(bounds.outWidth, bounds.outHeight)
+    while (maxEdge < Int.MAX_VALUE / 2 && longEdge / (sample * 2) > maxEdge) sample *= 2
+    val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+    return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+}
+
+private fun applyExifOrientation(bitmap: Bitmap, orientation: Int): Bitmap {
+    val matrix = Matrix()
+    when (orientation) {
+        ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+        ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+        ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+        ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.postScale(-1f, 1f)
+        ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.postScale(1f, -1f)
+        ExifInterface.ORIENTATION_TRANSPOSE -> {
+            matrix.postRotate(90f)
+            matrix.postScale(-1f, 1f)
+        }
+        ExifInterface.ORIENTATION_TRANSVERSE -> {
+            matrix.postRotate(270f)
+            matrix.postScale(-1f, 1f)
+        }
+        else -> return bitmap
+    }
+    return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
 }
 
 /** JPEG small enough for a one-shot Link frame (512 KiB sealed, body is base64). */
@@ -204,20 +286,20 @@ internal fun ImageAnnotator(source: Bitmap, onCancel: () -> Unit, onDone: (Bitma
     var erase by remember { mutableStateOf(false) }
     var tick by remember { mutableIntStateOf(0) }
     val palette = listOf(Color.White, Color(0xFFE85D5D), Color(0xFFF5C16C), Color(0xFF7CB7FF), Color(0xFF7DDE92))
-    Column(Modifier.fillMaxSize().background(Color(0xFF121314))) {
+    Column(Modifier.fillMaxSize().background(HeaderInk)) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = onCancel) { Text("Cancel") }
+            TextButton(onClick = onCancel) { Text(t("Cancel")) }
             TextButton(onClick = {
                 if (strokes.isNotEmpty()) strokes.removeAt(strokes.lastIndex)
                 tick += 1
-            }) { Text("Undo") }
+            }) { Text(t("Undo")) }
             TextButton(onClick = {
                 strokes.clear()
                 current = emptyList()
                 tick += 1
-            }) { Text("Clear") }
+            }) { Text(t("Clear")) }
             Box(Modifier.weight(1f))
-            TextButton(onClick = { onDone(flattenAnnotation(source, strokes.toList())) }) { Text("Done") }
+            TextButton(onClick = { onDone(flattenAnnotation(source, strokes.toList())) }) { Text(t("Done")) }
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             Image(
@@ -290,10 +372,10 @@ internal fun ImageAnnotator(source: Bitmap, onCancel: () -> Unit, onDone: (Bitma
             }
             Text(
                 "Eraser",
-                color = if (erase) Color(0xFF121314) else Color.White,
+                color = if (erase) Color(0xFF121314) else Foreground,
                 modifier = Modifier
                     .clip(CircleShape)
-                    .background(if (erase) Color.White else Color.White.copy(alpha = 0.12f))
+                    .background(if (erase) Color.White else Foreground.copy(alpha = 0.12f))
                     .clickable { erase = true }
                     .padding(horizontal = 12.dp, vertical = 6.dp),
             )

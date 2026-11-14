@@ -25,6 +25,7 @@ import com.unpeel.controller.TerminalModeSignals
 class HostTerminal(
     @Suppress("UNUSED_PARAMETER") private val replies: (ByteArray) -> Unit,
     @Suppress("UNUSED_PARAMETER") private val onCopy: (String) -> Unit,
+    night: Boolean = true,
 ) {
     var onFrame: (() -> Unit)? = null
         internal set
@@ -52,7 +53,16 @@ class HostTerminal(
     val holdingFrame: Boolean get() = holdArmed
 
     private var live = false
-    private var appliedCanvas = CANVAS
+    private var appliedCanvas = if (night) CANVAS else com.termit.ui.AnsiColors.LIGHT_BACKGROUND
+    /** Phone light/dark. Set at construction so the first replay uses it. */
+    private var phoneNight: Boolean? = night
+
+    /** True when the phone appearance is dark. */
+    val isPhoneNight: Boolean get() = phoneNight != false
+
+    /** Grok sessions rewrite groknight / grokday truecolor. Other agents do not. */
+    var mapGrokTruecolor: Boolean = false
+        private set
 
     private val modes = TerminalModeSignals()
 
@@ -102,6 +112,7 @@ class HostTerminal(
 
     private fun newEmulator(columns: Int, rows: Int): VtEmulator =
         VtEmulator(columns, rows, TRANSCRIPT_ROWS).also { emu ->
+            phoneNight?.let { com.termit.ui.AnsiColors.installTheme(emu.colors, it) }
             emu.setDefaultBackground(appliedCanvas)
             emu.onPresentHold = {
                 paintHandler.post {
@@ -173,11 +184,25 @@ class HostTerminal(
         if (notify) publishFrame()
     }
 
-    fun applyCanvas(argb: Int) {
-        if (argb == appliedCanvas) return
-        appliedCanvas = argb
-        emulator.setDefaultBackground(argb)
-        // Host App color / provider theme changed — repaint, don't keep a stale freeze.
+    /**
+     * Phone light/dark plus the surface behind default cells.
+     * One paint: installing the palette and the canvas together avoids a
+     * frame of light ink on the previous background.
+     * ANSI 0–15 and the default ink follow the phone. A Grok session swaps
+     * GrokNight / GrokDay truecolor at draw time. Other agents do not.
+     */
+    fun applySurface(night: Boolean, canvas: Int, mapGrokTruecolor: Boolean = false) {
+        val nightChanged = phoneNight != night
+        if (nightChanged) {
+            phoneNight = night
+            com.termit.ui.AnsiColors.installTheme(emulator.colors, night)
+        }
+        val canvasChanged = canvas != appliedCanvas
+        val mapChanged = this.mapGrokTruecolor != mapGrokTruecolor
+        if (!nightChanged && !canvasChanged && !mapChanged) return
+        this.mapGrokTruecolor = mapGrokTruecolor
+        appliedCanvas = canvas
+        emulator.setDefaultBackground(canvas)
         publishFrame()
     }
 

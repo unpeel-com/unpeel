@@ -315,7 +315,10 @@ class HostTerminalView(
         cellWidth = metrics.fontWidth.coerceAtLeast(1f)
         cellHeight = metrics.fontLineSpacing.coerceAtLeast(1)
         topPad = metrics.fontLineSpacingAndAscent
-        setBackgroundColor(CANVAS)
+        val night = (context.resources.configuration.uiMode and
+            android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+            android.content.res.Configuration.UI_MODE_NIGHT_YES
+        setBackgroundColor(if (night) CANVAS else 0xFFFFFFFF.toInt())
         importantForAutofill = IMPORTANT_FOR_AUTOFILL_NO
         // Stay unfocusable until a tap asks for the keyboard. A focusable
         // text editor here makes Compose focus it on open and pop the IME.
@@ -647,9 +650,9 @@ class HostTerminalView(
         canvas.translate(shift.toFloat(), y.toFloat())
         val sel = selectionArgs()
         if (sel == null) {
-            renderer.render(emulator, canvas, topRow, -1, -1, -1, -1, blinkOn)
+            renderer.render(emulator, canvas, topRow, -1, -1, -1, -1, blinkOn, terminal.isPhoneNight, terminal.mapGrokTruecolor)
         } else {
-            renderer.render(emulator, canvas, topRow, sel[0], sel[1], sel[2], sel[3], blinkOn)
+            renderer.render(emulator, canvas, topRow, sel[0], sel[1], sel[2], sel[3], blinkOn, terminal.isPhoneNight, terminal.mapGrokTruecolor)
         }
         canvas.restore()
         canvas.restore()

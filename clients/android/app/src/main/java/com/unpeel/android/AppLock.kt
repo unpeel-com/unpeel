@@ -54,6 +54,8 @@ class AppLock(context: Context) {
     }
 
     fun onBackground() {
+        // The biometric sheet itself must not count as leaving. iOS keeps the
+        // scene at .inactive while Face ID is up, so it never locks there.
         if (!enabled || authInFlight) return
         locked = true
         autoPrompted = false
@@ -63,18 +65,18 @@ class AppLock(context: Context) {
     fun onForeground(activity: Activity): Intent? {
         if (!locked || autoPrompted || authInFlight) return null
         autoPrompted = true
-        return begin(activity, "Unlock Unpeel") { ok -> if (ok) unlock() }
+        return begin(activity, phrase("Unlock Unpeel")) { ok -> if (ok) unlock() }
     }
 
     fun unlock(activity: Activity): Intent? {
         if (!locked || authInFlight) return null
-        return begin(activity, "Unlock Unpeel") { ok -> if (ok) unlock() }
+        return begin(activity, phrase("Unlock Unpeel")) { ok -> if (ok) unlock() }
     }
 
     /** Confirms the method works before the next background depends on it. */
     fun arm(activity: Activity): Intent? {
         if (enabled || authInFlight) return null
-        return begin(activity, "Confirm to lock Unpeel when you leave the app") { ok ->
+        return begin(activity, phrase("Confirm to lock Unpeel when you leave the app")) { ok ->
             if (!ok) return@begin
             enabled = true
             locked = false
@@ -160,6 +162,9 @@ class AppLock(context: Context) {
             },
         )
     }
+
+    private fun phrase(english: String): String =
+        L10n.text(english, PhoneSettings.usesSimplifiedChinese(appContext))
 
     private companion object {
         const val KEY = "unpeel.android.appLockEnabled"

@@ -102,6 +102,32 @@ class AgentTerminalPolicyTest {
     }
 
     @Test
+    fun grokUsesItsTruecolorTableAndOpenCodeUsesItsCanvas() {
+        assertTrue(AgentTerminalPolicy.rewritesGrokTruecolor(null, "/opt/homebrew/bin/grok --always-approve", null))
+        assertTrue(AgentTerminalPolicy.rewritesGrokTruecolor("grok", "/bin/zsh", null))
+        assertTrue(AgentTerminalPolicy.rewritesGrokTruecolor(null, "grok-build", null))
+        assertFalse(AgentTerminalPolicy.rewritesOpenCodeCanvas("grok", "grok", null))
+
+        assertTrue(AgentTerminalPolicy.rewritesOpenCodeCanvas(null, "opencode", null))
+        assertTrue(AgentTerminalPolicy.rewritesOpenCodeCanvas(null, "/usr/local/bin/opencode2", null))
+        assertTrue(AgentTerminalPolicy.rewritesOpenCodeCanvas(null, "/bin/zsh", "opencode"))
+        assertFalse(AgentTerminalPolicy.rewritesGrokTruecolor("opencode", "opencode", null))
+    }
+
+    @Test
+    fun agentsWithoutAPublishedPairTableStayUnmapped() {
+        val agents = listOf(
+            "claude", "claude-code", "codex", "cline", "cursor-agent", "gemini",
+            "copilot", "github-copilot", "kimi", "kimi-code", "kiro", "kiro-cli",
+            "muse", "omp", "amp", "amp-local", "pi", "fx", "agy",
+        )
+        for (agent in agents) {
+            assertFalse(agent, AgentTerminalPolicy.rewritesGrokTruecolor(agent, agent, agent))
+            assertFalse(agent, AgentTerminalPolicy.rewritesOpenCodeCanvas(agent, agent, agent))
+        }
+    }
+
+    @Test
     fun onlyClaudeGrokAndOpenCodeAreGuessed() {
         assertTrue(AgentTerminalPolicy.prefersRemoteMouseWheel(null, "/bin/zsh", "Claude"))
         assertTrue(AgentTerminalPolicy.prefersRemoteMouseWheel("claude", "/bin/zsh", null))
