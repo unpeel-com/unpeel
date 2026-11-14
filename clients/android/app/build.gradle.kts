@@ -23,7 +23,7 @@ android {
         targetSdk = 35
         // Build number, a separate monotonic space from the version (like the
         // Mac app's CFBundleVersion). Bump it for every APK that is published.
-        versionCode = 37
+        versionCode = 38
         versionName = workspaceVersion
     }
 

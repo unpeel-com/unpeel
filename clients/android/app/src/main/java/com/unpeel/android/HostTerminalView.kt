@@ -140,6 +140,18 @@ class HostTerminalView(
     /** Bumped by [dismissKeyboard] so a posted show cannot run after a hide. */
     private var showGeneration = 0
 
+    /**
+     * Keyboard avoidance shift applied inside [onDraw], not via View.translationY.
+     * Translating the View left uncleared strips in the card (Grok composer
+     * ghosts smeared above/below the input until a full TUI repaint).
+     */
+    var pictureShiftPx: Float = 0f
+        set(value) {
+            if (field == value) return
+            field = value
+            invalidate()
+        }
+
     var fitWidthToSharedGrid: Boolean = false
         set(value) {
             if (field == value) return
@@ -613,12 +625,17 @@ class HostTerminalView(
     override fun onDraw(canvas: Canvas) {
         val emulator = terminal.emulator
         noteEmulator(emulator)
+        // Full-bounds clear first so a keyboard picture-shift cannot leave a
+        // smeared strip of the previous composer line in the card.
         canvas.drawColor(canvasColor)
+        canvas.save()
+        if (pictureShiftPx != 0f) canvas.translate(0f, -pictureShiftPx)
         val held = lastGoodBitmap
         if (held != null && !held.isRecycled && (held.width != width || held.height != height)) {
             // Bottom-pin the previous picture. The new strip is just the
             // frame color until the size settles and one real paint runs.
             canvas.drawBitmap(held, 0f, (height - held.height).toFloat(), null)
+            canvas.restore()
             return
         }
         if (freezeActive && revealProgress < 1f && held != null && !held.isRecycled &&
@@ -626,6 +643,7 @@ class HostTerminalView(
         ) {
             // Hold last coherent present through Cursor ED2 / sync floods.
             canvas.drawBitmap(held, 0f, 0f, bitmapPaint)
+            canvas.restore()
             return
         }
         // Live path: render into lastGood, then blit — next hold already has frame 0.
@@ -636,6 +654,7 @@ class HostTerminalView(
         } else {
             renderLiveInto(canvas, emulator)
         }
+        canvas.restore()
     }
 
     private fun ensureLastGood(): Bitmap? {

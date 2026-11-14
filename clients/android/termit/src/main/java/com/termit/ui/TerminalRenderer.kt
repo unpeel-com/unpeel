@@ -67,7 +67,6 @@ class TerminalRenderer(
         val cols = emulator.mColumns
         val rows = emulator.mRows
         val palette = emulator.colors
-        val defaultBg = palette[AnsiColors.INDEX_BG]
         val screen = emulator.screen
         var y = fontLineSpacingAndAscent.toFloat()
 
@@ -96,10 +95,11 @@ class TerminalRenderer(
                 }
                 val left = runCol * fontWidth
                 val right = left + runCells * fontWidth
-                if (runSelected || runBg != defaultBg) {
-                    bgPaint.color = runBg
-                    canvas.drawRect(left, cellTop, right, y, bgPaint)
-                }
+                // Always fill — skipping default-bg left uncleared glyphs when a
+                // prior frame / truecolor cell occupied the slot (Grok composer
+                // ghosts until a longer rewrite or a full TUI repaint).
+                bgPaint.color = runBg
+                canvas.drawRect(left, cellTop, right, y, bgPaint)
                 textPaint.color = runFg
                 textPaint.isFakeBoldText = runBold
                 textPaint.isUnderlineText = runUnderline
@@ -132,10 +132,8 @@ class TerminalRenderer(
                 val left = column * fontWidth
                 val slot = fontWidth * widthCells
                 val right = left + slot
-                if (selected || inverse || bg != defaultBg) {
-                    bgPaint.color = bg
-                    canvas.drawRect(left, cellTop, right, y, bgPaint)
-                }
+                bgPaint.color = bg
+                canvas.drawRect(left, cellTop, right, y, bgPaint)
                 textPaint.color = fg
                 textPaint.isFakeBoldText = bold
                 textPaint.isUnderlineText = underline
@@ -163,6 +161,11 @@ class TerminalRenderer(
                 val cell = screen.cellAtTranscript(row, c)
                 if (cell.char == '\u0000') {
                     flushRun()
+                    // Wide-char trailer or wiped slot: fill so a previous glyph
+                    // cannot survive when the head cell changed this frame.
+                    val left = c * fontWidth
+                    bgPaint.color = resolveBg(cell, palette)
+                    canvas.drawRect(left, cellTop, left + fontWidth, y, bgPaint)
                     c++
                     continue
                 }
@@ -177,7 +180,7 @@ class TerminalRenderer(
                 // Builtin glyphs break runs — flush then paint one cell.
                 if (BuiltinGlyphs.handles(cp)) {
                     flushRun()
-                    paintBuiltin(canvas, cell, palette, defaultBg, c, y, cellTop, widthCells, selected)
+                    paintBuiltin(canvas, cell, palette, c, y, cellTop, widthCells, selected)
                     c += widthCells
                     continue
                 }
@@ -279,7 +282,6 @@ class TerminalRenderer(
         canvas: Canvas,
         cell: Cell,
         palette: IntArray,
-        defaultBg: Int,
         column: Int,
         y: Float,
         cellTop: Float,
@@ -295,11 +297,11 @@ class TerminalRenderer(
         val left = column * fontWidth
         val right = left + fontWidth * widthCells
         val cp = cell.char.code
+        // Powerline wedges still paint their own triangle; everything else
+        // fills the cell so stale ink cannot remain.
         if (cp !in 0xE0B0..0xE0BF) {
-            if (selected || cell.inverse || bg != defaultBg) {
-                bgPaint.color = bg
-                canvas.drawRect(left, cellTop, right, y, bgPaint)
-            }
+            bgPaint.color = bg
+            canvas.drawRect(left, cellTop, right, y, bgPaint)
         }
         BuiltinGlyphs.draw(canvas, cp, left, cellTop, right - left, fontLineSpacing.toFloat(), fg, bg)
     }
@@ -331,7 +333,7 @@ class TerminalRenderer(
                 it.copyFrom(cell)
                 it.inverse = !cell.inverse
             }
-            paintBuiltin(canvas, inverted, palette, palette[AnsiColors.INDEX_BG], col, y, cellTop, widthCells, false)
+            paintBuiltin(canvas, inverted, palette, col, y, cellTop, widthCells, false)
         } else {
             textPaint.color = cellBg
             textPaint.isFakeBoldText = cell.bold

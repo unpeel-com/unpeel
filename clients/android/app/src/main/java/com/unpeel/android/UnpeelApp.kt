@@ -1215,9 +1215,10 @@ private fun TerminalGrid(
                 },
                 update = { view ->
                     surface = view
-                    // Slide the already-drawn picture. translationY does not
-                    // resize the view and does not record a new display list.
-                    view.translationY = -pictureShiftPx
+                    // Shift inside onDraw (full clear + translate). View
+                    // translationY left smeared composer glyphs in the card.
+                    view.translationY = 0f
+                    view.pictureShiftPx = pictureShiftPx
                     view.onSelectionChanged = {
                         selecting = it
                         onSelectionChanged(it)
